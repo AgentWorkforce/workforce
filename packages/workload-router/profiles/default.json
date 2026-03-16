@@ -1,0 +1,10 @@
+{
+  "$schema": "./schema.json",
+  "version": 1,
+  "lanes": [
+    {"id":"qa-cheap","harness":"opencode","models":["opencode/mimo-v2-flash-free","opencode/minimax-m2.5-free"]},
+    {"id":"impl-mid","harness":"opencode","models":["opencode/gpt-5-nano"]},
+    {"id":"architecture-high","harness":"codex","models":["openai-codex/gpt-5.3-codex"]},
+    {"id":"review-audit","harness":"codex","models":["openai-codex/gpt-5.3-codex"]}
+  ]
+}

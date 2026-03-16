@@ -1,0 +1,21 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "title": "Workforce routing profile",
+  "type": "object",
+  "required": ["version", "lanes"],
+  "properties": {
+    "version": {"type": "number"},
+    "lanes": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": ["id", "harness", "models"],
+        "properties": {
+          "id": {"type": "string"},
+          "harness": {"type": "string"},
+          "models": {"type": "array", "items": {"type": "string"}}
+        }
+      }
+    }
+  }
+}
