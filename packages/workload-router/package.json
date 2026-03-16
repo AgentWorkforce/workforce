@@ -3,13 +3,17 @@
   "version": "0.1.0",
   "private": true,
   "type": "module",
-  "main": "src/index.js",
+  "main": "dist/index.js",
+  "types": "dist/index.d.ts",
   "exports": {
-    ".": "./src/index.js"
+    ".": {
+      "types": "./dist/index.d.ts",
+      "default": "./dist/index.js"
+    }
   },
   "scripts": {
-    "build": "echo 'no build yet'",
-    "test": "node --test",
-    "lint": "echo 'no lint yet'"
+    "build": "tsc -p tsconfig.json",
+    "test": "node --test dist/index.test.js",
+    "lint": "echo 'lint: add biome/eslint in next pass'"
   }
 }

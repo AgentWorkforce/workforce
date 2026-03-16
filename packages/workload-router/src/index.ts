@@ -1,4 +1,31 @@
-export const lanes = {
+export type Harness = 'opencode' | 'codex';
+
+export type TaskType =
+  | 'lint'
+  | 'test-triage'
+  | 'docs'
+  | 'minor-fix'
+  | 'feature'
+  | 'bugfix'
+  | 'refactor-scoped'
+  | 'architecture'
+  | 'protocol'
+  | 'security'
+  | 'migration'
+  | 'pr-review'
+  | 'audit'
+  | 'risk-assessment';
+
+export type RiskLevel = 'low' | 'medium' | 'high';
+
+export interface Lane {
+  id: string;
+  harness: Harness;
+  models: string[];
+  allowed: TaskType[];
+}
+
+export const lanes: Record<string, Lane> = {
   qaCheap: {
     id: 'qa-cheap',
     harness: 'opencode',
@@ -25,7 +52,7 @@ export const lanes = {
   }
 };
 
-export function routeWorkload(taskType, risk = 'low') {
+export function routeWorkload(taskType: TaskType, risk: RiskLevel = 'low'): Lane {
   if (risk === 'high' || ['architecture', 'protocol', 'security', 'migration'].includes(taskType)) {
     return lanes.architectureHigh;
   }
