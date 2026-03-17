@@ -66,7 +66,13 @@ Then publish a versioned “recommended tier map” so default routing is data-b
 ## Quick start
 
 ```bash
+corepack enable
 pnpm install
-pnpm -r build
-pnpm -r test
+pnpm run check
 ```
+
+This runs minimal guardrails across the workspace:
+
+- `lint` (currently TypeScript-only)
+- `typecheck` (package + examples)
+- `test` (Node test runner)

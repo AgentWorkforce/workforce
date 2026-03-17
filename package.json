@@ -2,13 +2,17 @@
   "name": "workforce",
   "private": true,
   "version": "0.1.0",
-  "packageManager": "pnpm@10",
+  "packageManager": "pnpm@10.17.1",
   "devDependencies": {
+    "@types/node": "^22.18.0",
     "typescript": "^5.9.2"
   },
   "scripts": {
-    "build": "pnpm -r build",
-    "test": "pnpm -r test",
-    "lint": "pnpm -r lint"
+    "build": "corepack pnpm -r build",
+    "typecheck": "corepack pnpm -r typecheck && corepack pnpm run typecheck:examples",
+    "typecheck:examples": "tsc -p examples/tsconfig.json --noEmit",
+    "test": "corepack pnpm -r test",
+    "lint": "corepack pnpm -r lint",
+    "check": "corepack pnpm run lint && corepack pnpm run typecheck && corepack pnpm run test"
   }
 }

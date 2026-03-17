@@ -20,7 +20,11 @@ export interface EvalResult {
  * Placeholder for a future benchmark runner that executes persona/tier combinations
  * and computes quality/cost/latency tradeoffs.
  */
-export function summarizeEval(results: EvalResult[]) {
+export function summarizeEval(results: readonly EvalResult[]): {
+  avgScore: number;
+  avgCostUsd: number;
+  avgLatencyMs: number;
+} {
   if (!results.length) {
     return { avgScore: 0, avgCostUsd: 0, avgLatencyMs: 0 };
   }
