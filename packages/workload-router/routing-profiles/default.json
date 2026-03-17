@@ -1,0 +1,19 @@
+{
+  "$schema": "./schema.json",
+  "id": "balanced-default",
+  "description": "Default routing policy balancing quality and cost.",
+  "intents": {
+    "implement-frontend": {
+      "tier": "best-value",
+      "rationale": "Most frontend tasks are iterative and benefit from strong quality-per-dollar defaults."
+    },
+    "review": {
+      "tier": "best-value",
+      "rationale": "Code review usually needs careful reasoning without always requiring max-cost models."
+    },
+    "architecture-plan": {
+      "tier": "best",
+      "rationale": "Architecture decisions are high leverage; prioritize depth and stronger reasoning."
+    }
+  }
+}

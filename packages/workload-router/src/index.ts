@@ -1,6 +1,7 @@
 import frontendImplementer from '../../../personas/frontend-implementer.json' with { type: 'json' };
 import codeReviewer from '../../../personas/code-reviewer.json' with { type: 'json' };
 import architecturePlanner from '../../../personas/architecture-planner.json' with { type: 'json' };
+import defaultRoutingProfileJson from '../routing-profiles/default.json' with { type: 'json' };
 
 export const HARNESS_VALUES = ['opencode', 'codex'] as const;
 export const PERSONA_TIERS = ['best', 'best-value', 'minimum'] as const;
@@ -29,11 +30,22 @@ export interface PersonaSpec {
   tiers: Record<PersonaTier, PersonaRuntime>;
 }
 
+export interface RoutingProfileRule {
+  tier: PersonaTier;
+  rationale: string;
+}
+
+export interface RoutingProfile {
+  id: string;
+  description: string;
+  intents: Record<PersonaIntent, RoutingProfileRule>;
+}
+
 export interface PersonaSelection {
   personaId: string;
-  intent: PersonaIntent;
   tier: PersonaTier;
   runtime: PersonaRuntime;
+  rationale: string;
 }
 
 function isObject(value: unknown): value is Record<string, unknown> {
@@ -116,9 +128,6 @@ function parsePersonaSpec(value: unknown, expectedIntent: PersonaIntent): Person
 
   const parsedTiers = {} as Record<PersonaTier, PersonaRuntime>;
   for (const tier of PERSONA_TIERS) {
-    if (!isTier(tier)) {
-      continue;
-    }
     parsedTiers[tier] = parseRuntime(tiers[tier], `persona[${expectedIntent}].tiers.${tier}`);
   }
 
@@ -130,20 +139,81 @@ function parsePersonaSpec(value: unknown, expectedIntent: PersonaIntent): Person
   };
 }
 
+function parseRoutingProfile(value: unknown, context: string): RoutingProfile {
+  if (!isObject(value)) {
+    throw new Error(`${context} must be an object`);
+  }
+
+  const { id, description, intents } = value;
+  if (typeof id !== 'string' || !id.trim()) {
+    throw new Error(`${context}.id must be a non-empty string`);
+  }
+  if (typeof description !== 'string' || !description.trim()) {
+    throw new Error(`${context}.description must be a non-empty string`);
+  }
+  if (!isObject(intents)) {
+    throw new Error(`${context}.intents must be an object`);
+  }
+
+  const parsedIntents = {} as Record<PersonaIntent, RoutingProfileRule>;
+  for (const intent of PERSONA_INTENTS) {
+    const rule = intents[intent];
+    if (!isObject(rule)) {
+      throw new Error(`${context}.intents.${intent} must be an object`);
+    }
+    const { tier, rationale } = rule;
+    if (!isTier(tier)) {
+      throw new Error(`${context}.intents.${intent}.tier must be one of: ${PERSONA_TIERS.join(', ')}`);
+    }
+    if (typeof rationale !== 'string' || !rationale.trim()) {
+      throw new Error(`${context}.intents.${intent}.rationale must be a non-empty string`);
+    }
+    parsedIntents[intent] = { tier, rationale };
+  }
+
+  return {
+    id,
+    description,
+    intents: parsedIntents
+  };
+}
+
 export const personaCatalog: Record<PersonaIntent, PersonaSpec> = {
   'implement-frontend': parsePersonaSpec(frontendImplementer, 'implement-frontend'),
   review: parsePersonaSpec(codeReviewer, 'review'),
   'architecture-plan': parsePersonaSpec(architecturePlanner, 'architecture-plan')
 };
 
-export function resolvePersona(intent: PersonaIntent, tier: PersonaTier = 'best-value'): PersonaSelection {
+export const routingProfiles = {
+  default: parseRoutingProfile(defaultRoutingProfileJson, 'routingProfiles.default')
+} as const;
+
+export type RoutingProfileId = keyof typeof routingProfiles;
+
+export function resolvePersona(intent: PersonaIntent, profile: RoutingProfile | RoutingProfileId = 'default'): PersonaSelection {
+  const profileSpec = typeof profile === 'string' ? routingProfiles[profile] : profile;
+  const rule = profileSpec.intents[intent];
   const spec = personaCatalog[intent];
-  const runtime = spec.tiers[tier];
+
   return {
     personaId: spec.id,
-    intent,
+    tier: rule.tier,
+    runtime: spec.tiers[rule.tier],
+    rationale: `${profileSpec.id}: ${rule.rationale}`
+  };
+}
+
+/**
+ * Backward-compatible helper for callers that already selected a tier directly.
+ * Prefer resolvePersona(intent, profile) for policy-driven selection.
+ */
+export function resolvePersonaByTier(intent: PersonaIntent, tier: PersonaTier = 'best-value'): PersonaSelection {
+  const spec = personaCatalog[intent];
+  return {
+    personaId: spec.id,
     tier,
-    runtime
+    runtime: spec.tiers[tier],
+    rationale: `legacy-tier-override: ${tier}`
   };
 }
 

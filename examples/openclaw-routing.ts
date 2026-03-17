@@ -1,4 +1,4 @@
-import { resolvePersona, type PersonaIntent, type PersonaTier } from '../packages/workload-router/src/index.js';
+import { resolvePersona, type PersonaIntent } from '../packages/workload-router/src/index.js';
 
 type OpenClawSpawnPayload = {
   runtime: 'subagent' | 'acp';
@@ -9,12 +9,8 @@ type OpenClawSpawnPayload = {
   metadata?: Record<string, unknown>;
 };
 
-function mapToOpenClawSpawn(
-  intent: PersonaIntent,
-  tier: PersonaTier,
-  task: string,
-): OpenClawSpawnPayload {
-  const selection = resolvePersona(intent, tier);
+function mapToOpenClawSpawn(intent: PersonaIntent, task: string): OpenClawSpawnPayload {
+  const selection = resolvePersona(intent);
 
   const runtime = selection.runtime.harness === 'codex' ? 'acp' : 'subagent';
 
@@ -26,18 +22,17 @@ function mapToOpenClawSpawn(
     timeoutSeconds: selection.runtime.harnessSettings.timeoutSeconds,
     metadata: {
       personaId: selection.personaId,
-      intent: selection.intent,
       tier: selection.tier,
-      systemPrompt: selection.runtime.systemPrompt,
-    },
+      rationale: selection.rationale,
+      systemPrompt: selection.runtime.systemPrompt
+    }
   };
 }
 
 // Example usage
 const payload = mapToOpenClawSpawn(
   'review',
-  'best-value',
-  'Review PR #123 for correctness, risk, and missing tests.',
+  'Review PR #123 for correctness, risk, and missing tests.'
 );
 
 console.log(JSON.stringify(payload, null, 2));
