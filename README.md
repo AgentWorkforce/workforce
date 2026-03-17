@@ -13,9 +13,9 @@ Shared AgentWorkforce primitives for agent orchestration.
 
 - `packages/workload-router` — TypeScript router for lane selection based on task/risk.
 
-## Agent profiles
+## Agent personas
 
-- `agents/workforce-router.toml` — starter metadata + system prompt for routing responsibilities.
+- `personas/workforce-router.json` — starter metadata + system prompt for routing responsibilities.
 
 ## Quick start
 
