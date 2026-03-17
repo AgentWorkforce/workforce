@@ -48,6 +48,9 @@ const selection = resolvePersona('review', 'best-value');
 3. Call `resolvePersona(intent, tier)`.
 4. Spawn subagent with returned harness/model/settings/prompt.
 
+See runnable mapping example:
+- `examples/openclaw-routing.ts`
+
 This keeps routing typed, auditable, and reusable across Relay workflows.
 
 ## Eval framework (scaffold direction)
