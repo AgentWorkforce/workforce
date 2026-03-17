@@ -15,7 +15,8 @@ Shared AgentWorkforce primitives for agent orchestration.
 
 ## Agent personas
 
-- `personas/workforce-router.json` — starter metadata + system prompt for routing responsibilities.
+- `personas/workforce-router.json` — router metadata + system prompt for routing responsibilities.
+- `personas/workforce-reviewer.json` — reviewer metadata + system prompt for auditing routing decisions.
 
 ## Quick start
 
