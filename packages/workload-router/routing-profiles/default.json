@@ -1,7 +1,7 @@
 {
   "$schema": "./schema.json",
   "id": "balanced-default",
-  "description": "Default routing policy balancing quality and cost.",
+  "description": "Default routing policy balancing depth/latency and cost while keeping a fixed quality bar.",
   "intents": {
     "implement-frontend": {
       "tier": "best-value",

@@ -11,11 +11,14 @@ A **persona** is the runtime source of truth:
 - harness
 - harness settings
 
-Each persona supports quality/cost tiers:
+Each persona supports service tiers:
 
 - `best`
 - `best-value`
 - `minimum`
+
+Tiering controls depth, latency budget, and model cost envelope — **not** the quality bar.
+All tiers should enforce the same correctness/safety standards; lower tiers should be more concise, not lower-quality.
 
 A **routing profile** is policy-only. It does not carry runtime fields; it only selects which persona tier to use per intent and explains why.
 
