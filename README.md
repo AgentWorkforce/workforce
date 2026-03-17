@@ -59,12 +59,6 @@ See runnable mapping example:
 
 This keeps runtime configuration in personas, while routing policy stays explicit, typed, and auditable.
 
-## Migration notes
-
-- Legacy directory `packages/workload-router/profiles/` has been replaced by `packages/workload-router/routing-profiles/`.
-- `resolvePersona(intent, tier)` has been replaced by profile-driven `resolvePersona(intent, profile?)`.
-- For temporary compatibility with tier-first callers, use `resolvePersonaByTier(intent, tier)`.
-
 ## Eval framework (scaffold direction)
 
 Next step is a benchmark harness to score persona/tier combinations on:
