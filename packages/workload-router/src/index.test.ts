@@ -1,15 +1,22 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { routeWorkload } from './index.js';
+import { resolvePersona } from './index.js';
 
-test('routes cheap QA tasks to qa-cheap lane', () => {
-  assert.equal(routeWorkload('lint').id, 'qa-cheap');
+test('resolves frontend implementer default tier', () => {
+  const result = resolvePersona('implement-frontend');
+  assert.equal(result.personaId, 'frontend-implementer');
+  assert.equal(result.tier, 'best-value');
+  assert.equal(result.runtime.harness, 'opencode');
 });
 
-test('routes architecture tasks to high lane', () => {
-  assert.equal(routeWorkload('architecture').id, 'architecture-high');
+test('resolves reviewer minimum tier', () => {
+  const result = resolvePersona('review', 'minimum');
+  assert.equal(result.personaId, 'code-reviewer');
+  assert.equal(result.runtime.harness, 'opencode');
 });
 
-test('routes unknown low-risk tasks to impl-mid', () => {
-  assert.equal(routeWorkload('feature').id, 'impl-mid');
+test('resolves architecture best tier to codex high reasoning', () => {
+  const result = resolvePersona('architecture-plan', 'best');
+  assert.equal(result.runtime.harness, 'codex');
+  assert.equal(result.runtime.harnessSettings.reasoning, 'high');
 });

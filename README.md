@@ -1,22 +1,64 @@
 # workforce
 
-Shared AgentWorkforce primitives for agent orchestration.
+Shared AgentWorkforce primitives for persona-driven orchestration.
 
-## Initial scope
+## Core frame
 
-- Workload routing (job -> lane -> harness/model)
-- Policy gates (risk/cost/escalation)
-- Reusable lane profiles for coding workflows
-- Agent metadata + system prompts for orchestration roles
+A **persona** is the unit of execution selection:
+
+- prompt (`systemPrompt`)
+- model
+- harness
+- harness settings
+
+Each persona supports quality/cost tiers:
+
+- `best`
+- `best-value`
+- `minimum`
 
 ## Packages
 
-- `packages/workload-router` — TypeScript router for lane selection based on task/risk.
+- `packages/workload-router` — TypeScript SDK for typed persona resolution.
 
-## Agent personas
+## Personas
 
-- `personas/workforce-router.json` — router metadata + system prompt for routing responsibilities.
-- `personas/workforce-reviewer.json` — reviewer metadata + system prompt for auditing routing decisions.
+- `personas/frontend-implementer.json`
+- `personas/code-reviewer.json`
+- `personas/architecture-planner.json`
+
+## TypeScript SDK usage
+
+```ts
+import { resolvePersona } from '@agentworkforce/workload-router';
+
+const selection = resolvePersona('review', 'best-value');
+// selection.runtime.harness -> opencode|codex
+// selection.runtime.model -> concrete model
+// selection.runtime.systemPrompt -> persona prompt
+```
+
+## OpenClaw integration pattern
+
+1. Map user request to `intent`:
+   - `implement-frontend`
+   - `review`
+   - `architecture-plan`
+2. Choose tier (`best`, `best-value`, `minimum`) based on budget/risk.
+3. Call `resolvePersona(intent, tier)`.
+4. Spawn subagent with returned harness/model/settings/prompt.
+
+This keeps routing typed, auditable, and reusable across Relay workflows.
+
+## Eval framework (scaffold direction)
+
+Next step is a benchmark harness to score persona/tier combinations on:
+
+- quality (task pass rate)
+- cost
+- latency
+
+Then publish a versioned “recommended tier map” so default routing is data-backed.
 
 ## Quick start
 
@@ -25,42 +67,3 @@ pnpm install
 pnpm -r build
 pnpm -r test
 ```
-
-## Using this with OpenClaw (Barry setup)
-
-This repo is designed to be consumed by an orchestration layer (like OpenClaw) before spawning coding subagents.
-
-### 1) Classify the incoming job
-Map each request to a `taskType` and `risk` (for example: `lint` + `low`, or `architecture` + `high`).
-
-### 2) Route to a lane
-Use `routeWorkload(taskType, risk)` from `@agentworkforce/workload-router` to select:
-- lane id
-- harness (`opencode` or `codex`)
-- primary/fallback model family
-
-### 3) Spawn with lane-specific runtime
-In OpenClaw, use the selected lane to drive subagent runtime decisions:
-- **qa-cheap** → OpenCode + cheap/free models
-- **impl-mid** → OpenCode + low-cost implementation model
-- **architecture-high** → Codex high-reasoning model
-- **review-audit** → Codex reviewer lane
-
-### 4) Enforce policy gates
-Before running:
-- block risky tasks in cheap lanes
-- escalate ambiguous/high-risk tasks
-- require rationale on routing decision
-
-### 5) Optional reviewer pass
-Run `personas/workforce-reviewer.json` as a second-pass checker for high-risk tasks/PRs.
-
-### Example flow (OpenClaw)
-
-1. User asks for a task (eg. "fix flaky test in module X").
-2. OpenClaw classifies: `taskType=test-triage`, `risk=low`.
-3. Router returns `qa-cheap` lane.
-4. OpenClaw spawns a subagent with OpenCode and low-cost model profile.
-5. For sensitive changes, OpenClaw triggers reviewer persona before merge.
-
-This gives you consistent cost control without sacrificing safety on high-impact changes.

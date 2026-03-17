@@ -1,0 +1,25 @@
+{
+  "id": "frontend-implementer",
+  "intent": "implement-frontend",
+  "description": "Implements frontend UI features with strong UX and maintainable code.",
+  "tiers": {
+    "best": {
+      "harness": "codex",
+      "model": "openai-codex/gpt-5.3-codex",
+      "systemPrompt": "You are a senior frontend implementer. Ship production-quality UI with tests and accessibility.",
+      "harnessSettings": { "reasoning": "high", "timeoutSeconds": 1200 }
+    },
+    "best-value": {
+      "harness": "opencode",
+      "model": "opencode/gpt-5-nano",
+      "systemPrompt": "You are a practical frontend engineer. Optimize for quality per dollar.",
+      "harnessSettings": { "reasoning": "medium", "timeoutSeconds": 900 }
+    },
+    "minimum": {
+      "harness": "opencode",
+      "model": "opencode/mimo-v2-flash-free",
+      "systemPrompt": "You are a budget frontend implementer. Meet minimum quality bar and avoid risky refactors.",
+      "harnessSettings": { "reasoning": "low", "timeoutSeconds": 600 }
+    }
+  }
+}

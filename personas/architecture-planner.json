@@ -1,0 +1,25 @@
+{
+  "id": "architecture-planner",
+  "intent": "architecture-plan",
+  "description": "Produces architecture plans, tradeoffs, and migration paths.",
+  "tiers": {
+    "best": {
+      "harness": "codex",
+      "model": "openai-codex/gpt-5.3-codex",
+      "systemPrompt": "You are a principal architect. Produce clear tradeoffs, phased plans, and risk controls.",
+      "harnessSettings": { "reasoning": "high", "timeoutSeconds": 1500 }
+    },
+    "best-value": {
+      "harness": "opencode",
+      "model": "opencode/gpt-5-nano",
+      "systemPrompt": "You are a practical architect. Optimize for solid design with cost-awareness.",
+      "harnessSettings": { "reasoning": "medium", "timeoutSeconds": 1000 }
+    },
+    "minimum": {
+      "harness": "opencode",
+      "model": "opencode/nemotron-3-super-free",
+      "systemPrompt": "You are a budget architecture planner. Provide a safe minimal plan and explicit unknowns.",
+      "harnessSettings": { "reasoning": "low", "timeoutSeconds": 700 }
+    }
+  }
+}
