@@ -27,6 +27,26 @@ test('resolves review from custom routing profile rule', () => {
         tier: 'best-value',
         rationale: 'still needs decent quality'
       },
+      'requirements-analysis': {
+        tier: 'minimum',
+        rationale: 'quick scope triage is enough here'
+      },
+      debugging: {
+        tier: 'best',
+        rationale: 'debugging still needs deeper reasoning'
+      },
+      'security-review': {
+        tier: 'best',
+        rationale: 'security stays on the strongest tier'
+      },
+      documentation: {
+        tier: 'minimum',
+        rationale: 'docs tweaks can be short'
+      },
+      verification: {
+        tier: 'best-value',
+        rationale: 'fresh evidence review needs balanced depth'
+      },
       'test-strategy': {
         tier: 'best-value',
         rationale: 'needs balanced coverage planning'
@@ -67,4 +87,28 @@ test('resolves testing personas from the default routing profile', () => {
   assert.equal(flake.personaId, 'flake-hunter');
   assert.equal(flake.tier, 'best');
   assert.equal(flake.runtime.harness, 'codex');
+});
+
+
+test('resolves newly added personas from the default routing profile', () => {
+  const analyst = resolvePersona('requirements-analysis');
+  assert.equal(analyst.personaId, 'requirements-analyst');
+  assert.equal(analyst.tier, 'best-value');
+
+  const debuggerSelection = resolvePersona('debugging');
+  assert.equal(debuggerSelection.personaId, 'debugger');
+  assert.equal(debuggerSelection.tier, 'best');
+  assert.equal(debuggerSelection.runtime.harness, 'codex');
+
+  const security = resolvePersona('security-review');
+  assert.equal(security.personaId, 'security-reviewer');
+  assert.equal(security.tier, 'best');
+
+  const docs = resolvePersona('documentation');
+  assert.equal(docs.personaId, 'technical-writer');
+  assert.equal(docs.tier, 'best-value');
+
+  const verification = resolvePersona('verification');
+  assert.equal(verification.personaId, 'verifier');
+  assert.equal(verification.tier, 'best-value');
 });

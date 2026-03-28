@@ -15,6 +15,26 @@
       "tier": "best",
       "rationale": "Architecture decisions are high leverage; prioritize depth and stronger reasoning."
     },
+    "requirements-analysis": {
+      "tier": "best-value",
+      "rationale": "Most scope clarification work benefits from careful synthesis without needing the slowest tier by default."
+    },
+    "debugging": {
+      "tier": "best",
+      "rationale": "Root-cause debugging is expensive when wrong; default to deeper reasoning and stronger verification."
+    },
+    "security-review": {
+      "tier": "best",
+      "rationale": "Security review has asymmetric downside; favor deeper analysis on default policy."
+    },
+    "documentation": {
+      "tier": "best-value",
+      "rationale": "Most docs work benefits from solid code-grounded synthesis without always needing the top tier."
+    },
+    "verification": {
+      "tier": "best-value",
+      "rationale": "Completion checks need disciplined evidence review, but usually not the most expensive model."
+    },
     "test-strategy": {
       "tier": "best-value",
       "rationale": "Test planning benefits from strong reasoning, but usually does not require the slowest or most expensive tier."
