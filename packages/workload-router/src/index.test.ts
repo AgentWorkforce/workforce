@@ -26,6 +26,18 @@ test('resolves review from custom routing profile rule', () => {
       'architecture-plan': {
         tier: 'best-value',
         rationale: 'still needs decent quality'
+      },
+      'test-strategy': {
+        tier: 'best-value',
+        rationale: 'needs balanced coverage planning'
+      },
+      'tdd-enforcement': {
+        tier: 'minimum',
+        rationale: 'short process reminders are enough'
+      },
+      'flake-investigation': {
+        tier: 'best',
+        rationale: 'deep debugging is worth the cost'
       }
     }
   });
@@ -40,4 +52,19 @@ test('legacy tier override remains available via resolvePersonaByTier', () => {
   assert.equal(result.runtime.harness, 'codex');
   assert.equal(result.runtime.harnessSettings.reasoning, 'high');
   assert.match(result.rationale, /legacy-tier-override/);
+});
+
+test('resolves testing personas from the default routing profile', () => {
+  const testStrategy = resolvePersona('test-strategy');
+  assert.equal(testStrategy.personaId, 'test-strategist');
+  assert.equal(testStrategy.tier, 'best-value');
+
+  const tdd = resolvePersona('tdd-enforcement');
+  assert.equal(tdd.personaId, 'tdd-guard');
+  assert.equal(tdd.tier, 'best-value');
+
+  const flake = resolvePersona('flake-investigation');
+  assert.equal(flake.personaId, 'flake-hunter');
+  assert.equal(flake.tier, 'best');
+  assert.equal(flake.runtime.harness, 'codex');
 });

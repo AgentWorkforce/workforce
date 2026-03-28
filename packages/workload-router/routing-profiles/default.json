@@ -14,6 +14,18 @@
     "architecture-plan": {
       "tier": "best",
       "rationale": "Architecture decisions are high leverage; prioritize depth and stronger reasoning."
+    },
+    "test-strategy": {
+      "tier": "best-value",
+      "rationale": "Test planning benefits from strong reasoning, but usually does not require the slowest or most expensive tier."
+    },
+    "tdd-enforcement": {
+      "tier": "best-value",
+      "rationale": "TDD coaching needs reliable process enforcement and concise feedback more than maximum-depth output."
+    },
+    "flake-investigation": {
+      "tier": "best",
+      "rationale": "Intermittent failures are expensive and subtle; prioritize deeper reasoning for reproduction and root-cause analysis."
     }
   }
 }

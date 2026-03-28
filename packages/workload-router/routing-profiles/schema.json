@@ -10,11 +10,14 @@
     "intents": {
       "type": "object",
       "additionalProperties": false,
-      "required": ["implement-frontend", "review", "architecture-plan"],
+      "required": ["implement-frontend", "review", "architecture-plan", "test-strategy", "tdd-enforcement", "flake-investigation"],
       "properties": {
         "implement-frontend": { "$ref": "#/definitions/rule" },
         "review": { "$ref": "#/definitions/rule" },
-        "architecture-plan": { "$ref": "#/definitions/rule" }
+        "architecture-plan": { "$ref": "#/definitions/rule" },
+        "test-strategy": { "$ref": "#/definitions/rule" },
+        "tdd-enforcement": { "$ref": "#/definitions/rule" },
+        "flake-investigation": { "$ref": "#/definitions/rule" }
       }
     }
   },
