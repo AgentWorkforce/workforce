@@ -10,6 +10,7 @@ A **persona** is the runtime source of truth:
 - model
 - harness
 - harness settings
+- optional `skills` array of `{ id, source, description }` entries for reusable capability guidance (e.g. prpm.dev packages)
 
 Each persona supports service tiers:
 
@@ -39,6 +40,7 @@ A **routing profile** is policy-only. It does not carry runtime fields; it only 
 - `personas/test-strategist.json`
 - `personas/tdd-guard.json`
 - `personas/flake-hunter.json`
+- `personas/npm-provenance-publisher.json`
 
 ## Routing profiles
 
@@ -48,12 +50,20 @@ A **routing profile** is policy-only. It does not carry runtime fields; it only 
 ## TypeScript SDK usage
 
 ```ts
-import { resolvePersona } from '@agentworkforce/workload-router';
+import { resolvePersona, materializeSkillsFor } from '@agentworkforce/workload-router';
 
-const selection = resolvePersona('review');
-// selection -> { personaId, tier, runtime, rationale }
-// selection.runtime.harness -> opencode|codex
-// selection.runtime.model -> concrete model
+const selection = resolvePersona('npm-provenance');
+// selection -> { personaId, tier, runtime, skills, rationale }
+// selection.runtime.harness -> opencode | codex | claude
+// selection.runtime.model   -> concrete model
+// selection.skills          -> [{ id, source, description }, ...]
+
+// Turn the persona's declared skills into a harness-correct install plan.
+const plan = materializeSkillsFor(selection);
+for (const install of plan.installs) {
+  // e.g. ['npx', '-y', 'prpm', 'install', 'prpm/npm-trusted-publishing', '--as', 'codex']
+  spawnSync(install.installCommand[0], install.installCommand.slice(1), { stdio: 'inherit' });
+}
 ```
 
 ## OpenClaw integration pattern
@@ -70,6 +80,7 @@ const selection = resolvePersona('review');
    - `test-strategy`
    - `tdd-enforcement`
    - `flake-investigation`
+   - `npm-provenance`
 2. Resolve profile policy + persona runtime via `resolvePersona(intent)`.
 3. Spawn subagent with returned harness/model/settings/prompt.
 
@@ -77,6 +88,30 @@ See runnable mapping example:
 - `examples/openclaw-routing.ts`
 
 This keeps runtime configuration in personas, while routing policy stays explicit, typed, and auditable.
+
+## Skills on personas
+
+A persona can declare a `skills` array of reusable capability packages (e.g. from [prpm.dev](https://prpm.dev)):
+
+```json
+"skills": [
+  {
+    "id": "prpm/npm-trusted-publishing",
+    "source": "https://prpm.dev/packages/prpm/npm-trusted-publishing",
+    "description": "OIDC-based npm publish without long-lived tokens"
+  }
+]
+```
+
+Persona JSON is harness-agnostic — it declares *what* skill is needed, not *how* to install it. The SDK's `materializeSkills(skills, harness)` / `materializeSkillsFor(selection)` helper turns the declaration into a concrete install plan, routing each skill to the right on-disk convention per harness:
+
+| Harness    | Install flag       | Skill directory    |
+| ---------- | ------------------ | ------------------ |
+| `claude`   | `prpm install --as claude`   | `.claude/skills/` |
+| `codex`    | `prpm install --as codex`    | `.agents/skills/` |
+| `opencode` | `prpm install --as opencode` | `.agents/skills/` |
+
+Each returned `SkillInstall` carries an argv-style `installCommand`, `installedDir`, and `installedManifest` path. The helper is pure — it never shells out or touches disk — so callers (relay workflows, OpenClaw spawners, ad-hoc scripts) decide how to execute it. Once installed, Claude Code auto-discovers skills from `.claude/skills/`; for other harnesses, read the manifest off disk and inject it into the agent's task body.
 
 ## Eval framework (scaffold direction)
 

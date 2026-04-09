@@ -9,9 +9,10 @@ import verifierPersona from '../../../personas/verifier.json' with { type: 'json
 import testStrategist from '../../../personas/test-strategist.json' with { type: 'json' };
 import tddGuard from '../../../personas/tdd-guard.json' with { type: 'json' };
 import flakeHunter from '../../../personas/flake-hunter.json' with { type: 'json' };
+import npmProvenancePublisher from '../../../personas/npm-provenance-publisher.json' with { type: 'json' };
 import defaultRoutingProfileJson from '../routing-profiles/default.json' with { type: 'json' };
 
-export const HARNESS_VALUES = ['opencode', 'codex'] as const;
+export const HARNESS_VALUES = ['opencode', 'codex', 'claude'] as const;
 export const PERSONA_TIERS = ['best', 'best-value', 'minimum'] as const;
 export const PERSONA_INTENTS = [
   'implement-frontend',
@@ -24,7 +25,8 @@ export const PERSONA_INTENTS = [
   'verification',
   'test-strategy',
   'tdd-enforcement',
-  'flake-investigation'
+  'flake-investigation',
+  'npm-provenance'
 ] as const;
 
 export type Harness = (typeof HARNESS_VALUES)[number];
@@ -43,10 +45,22 @@ export interface PersonaRuntime {
   harnessSettings: HarnessSettings;
 }
 
+/**
+ * A skill is a named, reusable capability attached to a persona.
+ * `source` points to canonical guidance the persona should apply
+ * (e.g. a prpm.dev package URL, an internal runbook, a docs page).
+ */
+export interface PersonaSkill {
+  id: string;
+  source: string;
+  description: string;
+}
+
 export interface PersonaSpec {
   id: string;
   intent: PersonaIntent;
   description: string;
+  skills: PersonaSkill[];
   tiers: Record<PersonaTier, PersonaRuntime>;
 }
 
@@ -65,7 +79,144 @@ export interface PersonaSelection {
   personaId: string;
   tier: PersonaTier;
   runtime: PersonaRuntime;
+  skills: PersonaSkill[];
   rationale: string;
+}
+
+// ---------------------------------------------------------------------------
+// Skill materialization
+// ---------------------------------------------------------------------------
+//
+// Personas declare *what* skill they need via `skills: [{ id, source, ... }]`.
+// The SDK is the only layer that knows *how* to make that skill available to
+// a given harness — because each harness has its own on-disk convention and
+// its own prpm install flag. Keeping this mapping here means:
+//
+//   1. Workflow authors never hand-type `prpm install ... --as codex`.
+//   2. Changing install rules is a one-line SDK edit, not a repo-wide grep.
+//   3. Persona JSON stays harness-agnostic and forward-compatible.
+//
+// `materializeSkills` is a pure function: it returns the install plan but
+// never touches the filesystem or spawns processes. Callers (relay workflows,
+// the OpenClaw spawner, ad-hoc scripts) decide how to execute it.
+
+export const SKILL_SOURCE_KINDS = ['prpm'] as const;
+export type SkillSourceKind = (typeof SKILL_SOURCE_KINDS)[number];
+
+/** Per-harness rules for where skills land on disk and how to ask prpm for them. */
+export interface HarnessSkillTarget {
+  /** Value passed to `prpm install --as <flag>`. */
+  asFlag: string;
+  /** Directory (relative to repo root) where prpm drops the skill package. */
+  dir: string;
+}
+
+export const HARNESS_SKILL_TARGETS: Record<Harness, HarnessSkillTarget> = {
+  claude: { asFlag: 'claude', dir: '.claude/skills' },
+  codex: { asFlag: 'codex', dir: '.agents/skills' },
+  opencode: { asFlag: 'opencode', dir: '.agents/skills' }
+};
+
+export interface SkillInstall {
+  skillId: string;
+  /** Original `source` string from the persona JSON. */
+  source: string;
+  sourceKind: SkillSourceKind;
+  /** Normalized package reference used by prpm (e.g. `prpm/npm-trusted-publishing`). */
+  packageRef: string;
+  harness: Harness;
+  /** argv-style command — safer than a shell string for execFile/spawn callers. */
+  installCommand: readonly string[];
+  /** Directory the skill is expected to land in after install. */
+  installedDir: string;
+  /** Path to the installed SKILL.md manifest (for prompt injection fallback). */
+  installedManifest: string;
+}
+
+export interface SkillMaterializationPlan {
+  harness: Harness;
+  installs: SkillInstall[];
+}
+
+const PRPM_URL_RE =
+  /^https?:\/\/prpm\.dev\/packages\/([^/\s?#]+)\/([^/\s?#]+)\/?(?:[?#].*)?$/i;
+const PRPM_BARE_REF_RE = /^([^/\s]+)\/([^/\s]+)$/;
+
+interface ResolvedSkillSource {
+  kind: SkillSourceKind;
+  packageRef: string;
+}
+
+function resolveSkillSource(source: string): ResolvedSkillSource {
+  const urlMatch = source.match(PRPM_URL_RE);
+  if (urlMatch) {
+    return { kind: 'prpm', packageRef: `${urlMatch[1]}/${urlMatch[2]}` };
+  }
+  const bareMatch = source.match(PRPM_BARE_REF_RE);
+  if (bareMatch) {
+    return { kind: 'prpm', packageRef: source };
+  }
+  throw new Error(
+    `Unsupported skill source: ${source}. ` +
+      `Supported forms: prpm.dev package URL (https://prpm.dev/packages/<scope>/<name>) ` +
+      `or a bare "<scope>/<name>" reference.`
+  );
+}
+
+function deriveInstalledName(packageRef: string): string {
+  const slash = packageRef.lastIndexOf('/');
+  return slash >= 0 ? packageRef.slice(slash + 1) : packageRef;
+}
+
+/**
+ * Given a set of persona skills and the harness the persona will run under,
+ * produce the concrete install plan: which `prpm install` invocations to run
+ * and where the skill will land on disk once installed.
+ *
+ * Pure function — does not execute commands or touch the filesystem.
+ */
+export function materializeSkills(
+  skills: readonly PersonaSkill[],
+  harness: Harness
+): SkillMaterializationPlan {
+  const target = HARNESS_SKILL_TARGETS[harness];
+  if (!target) {
+    throw new Error(`No skill install target configured for harness: ${harness}`);
+  }
+
+  const installs = skills.map((skill): SkillInstall => {
+    const { kind, packageRef } = resolveSkillSource(skill.source);
+    const installedName = deriveInstalledName(packageRef);
+    const installedDir = `${target.dir}/${installedName}`;
+    return {
+      skillId: skill.id,
+      source: skill.source,
+      sourceKind: kind,
+      packageRef,
+      harness,
+      installCommand: Object.freeze([
+        'npx',
+        '-y',
+        'prpm',
+        'install',
+        packageRef,
+        '--as',
+        target.asFlag
+      ]) as readonly string[],
+      installedDir,
+      installedManifest: `${installedDir}/SKILL.md`
+    };
+  });
+
+  return { harness, installs };
+}
+
+/**
+ * Convenience wrapper: derive the install plan directly from a resolved
+ * persona selection, using its tier's harness automatically.
+ */
+export function materializeSkillsFor(selection: PersonaSelection): SkillMaterializationPlan {
+  return materializeSkills(selection.skills, selection.runtime.harness);
 }
 
 function isObject(value: unknown): value is Record<string, unknown> {
@@ -123,12 +274,39 @@ function parseRuntime(value: unknown, context: string): PersonaRuntime {
   };
 }
 
+function parseSkills(value: unknown, context: string): PersonaSkill[] {
+  if (value === undefined) {
+    return [];
+  }
+  if (!Array.isArray(value)) {
+    throw new Error(`${context} must be an array if provided`);
+  }
+
+  return value.map((entry, idx) => {
+    const entryContext = `${context}[${idx}]`;
+    if (!isObject(entry)) {
+      throw new Error(`${entryContext} must be an object`);
+    }
+    const { id, source, description } = entry;
+    if (typeof id !== 'string' || !id.trim()) {
+      throw new Error(`${entryContext}.id must be a non-empty string`);
+    }
+    if (typeof source !== 'string' || !source.trim()) {
+      throw new Error(`${entryContext}.source must be a non-empty string`);
+    }
+    if (typeof description !== 'string' || !description.trim()) {
+      throw new Error(`${entryContext}.description must be a non-empty string`);
+    }
+    return { id, source, description };
+  });
+}
+
 function parsePersonaSpec(value: unknown, expectedIntent: PersonaIntent): PersonaSpec {
   if (!isObject(value)) {
     throw new Error(`persona[${expectedIntent}] must be an object`);
   }
 
-  const { id, intent, description, tiers } = value;
+  const { id, intent, description, tiers, skills } = value;
 
   if (typeof id !== 'string' || !id.trim()) {
     throw new Error(`persona[${expectedIntent}].id must be a non-empty string`);
@@ -151,10 +329,13 @@ function parsePersonaSpec(value: unknown, expectedIntent: PersonaIntent): Person
     parsedTiers[tier] = parseRuntime(tiers[tier], `persona[${expectedIntent}].tiers.${tier}`);
   }
 
+  const parsedSkills = parseSkills(skills, `persona[${expectedIntent}].skills`);
+
   return {
     id,
     intent,
     description,
+    skills: parsedSkills,
     tiers: parsedTiers
   };
 }
@@ -209,7 +390,8 @@ export const personaCatalog: Record<PersonaIntent, PersonaSpec> = {
   verification: parsePersonaSpec(verifierPersona, 'verification'),
   'test-strategy': parsePersonaSpec(testStrategist, 'test-strategy'),
   'tdd-enforcement': parsePersonaSpec(tddGuard, 'tdd-enforcement'),
-  'flake-investigation': parsePersonaSpec(flakeHunter, 'flake-investigation')
+  'flake-investigation': parsePersonaSpec(flakeHunter, 'flake-investigation'),
+  'npm-provenance': parsePersonaSpec(npmProvenancePublisher, 'npm-provenance')
 };
 
 export const routingProfiles = {
@@ -227,6 +409,7 @@ export function resolvePersona(intent: PersonaIntent, profile: RoutingProfile | 
     personaId: spec.id,
     tier: rule.tier,
     runtime: spec.tiers[rule.tier],
+    skills: spec.skills,
     rationale: `${profileSpec.id}: ${rule.rationale}`
   };
 }
@@ -241,6 +424,7 @@ export function resolvePersonaByTier(intent: PersonaIntent, tier: PersonaTier = 
     personaId: spec.id,
     tier,
     runtime: spec.tiers[tier],
+    skills: spec.skills,
     rationale: `legacy-tier-override: ${tier}`
   };
 }
