@@ -17,6 +17,10 @@
     "README.md",
     "package.json"
   ],
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/AgentWorkforce/workforce"
+  },
   "publishConfig": {
     "access": "public"
   },

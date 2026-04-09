@@ -1,6 +1,14 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { resolvePersona, resolvePersonaByTier } from './index.js';
+import {
+  HARNESS_SKILL_TARGETS,
+  HARNESS_VALUES,
+  materializeSkills,
+  materializeSkillsFor,
+  personaCatalog,
+  resolvePersona,
+  resolvePersonaByTier
+} from './index.js';
 
 test('resolves frontend implementer from default routing profile', () => {
   const result = resolvePersona('implement-frontend');
@@ -58,6 +66,10 @@ test('resolves review from custom routing profile rule', () => {
       'flake-investigation': {
         tier: 'best',
         rationale: 'deep debugging is worth the cost'
+      },
+      'npm-provenance': {
+        tier: 'best-value',
+        rationale: 'mechanical workflow wiring'
       }
     }
   });
@@ -111,4 +123,116 @@ test('resolves newly added personas from the default routing profile', () => {
   const verification = resolvePersona('verification');
   assert.equal(verification.personaId, 'verifier');
   assert.equal(verification.tier, 'best-value');
+});
+
+test('claude is a recognized harness value', () => {
+  assert.ok(HARNESS_VALUES.includes('claude'));
+});
+
+test('personas default to an empty skills array when none declared', () => {
+  const reviewer = personaCatalog.review;
+  assert.ok(Array.isArray(reviewer.skills));
+  assert.equal(reviewer.skills.length, 0);
+});
+
+test('resolves npm-provenance persona with the trusted publishing skill attached', () => {
+  const selection = resolvePersona('npm-provenance');
+  assert.equal(selection.personaId, 'npm-provenance-publisher');
+  assert.equal(selection.tier, 'best-value');
+  assert.equal(selection.skills.length, 1);
+  const [skill] = selection.skills;
+  assert.equal(skill.id, 'prpm/npm-trusted-publishing');
+  assert.match(skill.source, /prpm\.dev\/packages\/prpm\/npm-trusted-publishing/);
+  assert.match(selection.runtime.systemPrompt, /prpm\/npm-trusted-publishing/);
+});
+
+test('resolvePersonaByTier carries persona skills through legacy path', () => {
+  const selection = resolvePersonaByTier('npm-provenance', 'best');
+  assert.equal(selection.runtime.harness, 'codex');
+  assert.equal(selection.skills[0]?.id, 'prpm/npm-trusted-publishing');
+});
+
+test('HARNESS_SKILL_TARGETS covers every harness value', () => {
+  for (const harness of HARNESS_VALUES) {
+    const target = HARNESS_SKILL_TARGETS[harness];
+    assert.ok(target, `missing target for harness ${harness}`);
+    assert.ok(target.asFlag.length > 0);
+    assert.ok(target.dir.length > 0);
+  }
+});
+
+test('materializeSkills emits a codex-scoped prpm install for a prpm.dev URL', () => {
+  const plan = materializeSkills(
+    [
+      {
+        id: 'prpm/npm-trusted-publishing',
+        source: 'https://prpm.dev/packages/prpm/npm-trusted-publishing',
+        description: 'trusted publishing skill'
+      }
+    ],
+    'codex'
+  );
+
+  assert.equal(plan.harness, 'codex');
+  assert.equal(plan.installs.length, 1);
+  const [install] = plan.installs;
+  assert.equal(install.sourceKind, 'prpm');
+  assert.equal(install.packageRef, 'prpm/npm-trusted-publishing');
+  assert.deepEqual(
+    [...install.installCommand],
+    ['npx', '-y', 'prpm', 'install', 'prpm/npm-trusted-publishing', '--as', 'codex']
+  );
+  assert.equal(install.installedDir, '.agents/skills/npm-trusted-publishing');
+  assert.equal(install.installedManifest, '.agents/skills/npm-trusted-publishing/SKILL.md');
+});
+
+test('materializeSkills routes claude skills to .claude/skills via --as claude', () => {
+  const plan = materializeSkills(
+    [
+      {
+        id: 'prpm/npm-trusted-publishing',
+        source: 'prpm/npm-trusted-publishing',
+        description: 'bare ref form'
+      }
+    ],
+    'claude'
+  );
+
+  const [install] = plan.installs;
+  assert.deepEqual(
+    [...install.installCommand],
+    ['npx', '-y', 'prpm', 'install', 'prpm/npm-trusted-publishing', '--as', 'claude']
+  );
+  assert.equal(install.installedDir, '.claude/skills/npm-trusted-publishing');
+});
+
+test('materializeSkillsFor derives an install plan from a resolved persona', () => {
+  const selection = resolvePersona('npm-provenance');
+  const plan = materializeSkillsFor(selection);
+  assert.equal(plan.harness, selection.runtime.harness);
+  assert.equal(plan.installs.length, 1);
+  const cmd = plan.installs[0].installCommand.join(' ');
+  assert.match(cmd, /prpm install prpm\/npm-trusted-publishing --as /);
+});
+
+test('materializeSkills rejects unknown skill sources', () => {
+  assert.throws(
+    () =>
+      materializeSkills(
+        [
+          {
+            id: 'x',
+            source: 'https://example.com/random',
+            description: 'not a prpm source'
+          }
+        ],
+        'claude'
+      ),
+    /Unsupported skill source/
+  );
+});
+
+test('materializeSkills handles personas with no skills', () => {
+  const plan = materializeSkills([], 'claude');
+  assert.equal(plan.installs.length, 0);
 });

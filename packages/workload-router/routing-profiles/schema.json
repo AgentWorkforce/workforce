@@ -10,7 +10,7 @@
     "intents": {
       "type": "object",
       "additionalProperties": false,
-      "required": ["implement-frontend", "review", "architecture-plan", "requirements-analysis", "debugging", "security-review", "documentation", "verification", "test-strategy", "tdd-enforcement", "flake-investigation"],
+      "required": ["implement-frontend", "review", "architecture-plan", "requirements-analysis", "debugging", "security-review", "documentation", "verification", "test-strategy", "tdd-enforcement", "flake-investigation", "npm-provenance"],
       "properties": {
         "implement-frontend": { "$ref": "#/definitions/rule" },
         "review": { "$ref": "#/definitions/rule" },
@@ -22,7 +22,8 @@
         "verification": { "$ref": "#/definitions/rule" },
         "test-strategy": { "$ref": "#/definitions/rule" },
         "tdd-enforcement": { "$ref": "#/definitions/rule" },
-        "flake-investigation": { "$ref": "#/definitions/rule" }
+        "flake-investigation": { "$ref": "#/definitions/rule" },
+        "npm-provenance": { "$ref": "#/definitions/rule" }
       }
     }
   },

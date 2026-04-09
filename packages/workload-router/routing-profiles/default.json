@@ -46,6 +46,10 @@
     "flake-investigation": {
       "tier": "best",
       "rationale": "Intermittent failures are expensive and subtle; prioritize deeper reasoning for reproduction and root-cause analysis."
+    },
+    "npm-provenance": {
+      "tier": "best-value",
+      "rationale": "Publishing setup is mostly mechanical workflow configuration; best-value is sufficient when guided by the prpm/npm-trusted-publishing skill."
     }
   }
 }
