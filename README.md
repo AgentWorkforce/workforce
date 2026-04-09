@@ -31,6 +31,14 @@ A **routing profile** is policy-only. It does not carry runtime fields; it only 
 - `personas/frontend-implementer.json`
 - `personas/code-reviewer.json`
 - `personas/architecture-planner.json`
+- `personas/requirements-analyst.json`
+- `personas/debugger.json`
+- `personas/security-reviewer.json`
+- `personas/technical-writer.json`
+- `personas/verifier.json`
+- `personas/test-strategist.json`
+- `personas/tdd-guard.json`
+- `personas/flake-hunter.json`
 
 ## Routing profiles
 
@@ -54,6 +62,14 @@ const selection = resolvePersona('review');
    - `implement-frontend`
    - `review`
    - `architecture-plan`
+   - `requirements-analysis`
+   - `debugging`
+   - `security-review`
+   - `documentation`
+   - `verification`
+   - `test-strategy`
+   - `tdd-enforcement`
+   - `flake-investigation`
 2. Resolve profile policy + persona runtime via `resolvePersona(intent)`.
 3. Spawn subagent with returned harness/model/settings/prompt.
 

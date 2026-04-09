@@ -1,11 +1,31 @@
 import frontendImplementer from '../../../personas/frontend-implementer.json' with { type: 'json' };
 import codeReviewer from '../../../personas/code-reviewer.json' with { type: 'json' };
 import architecturePlanner from '../../../personas/architecture-planner.json' with { type: 'json' };
+import requirementsAnalyst from '../../../personas/requirements-analyst.json' with { type: 'json' };
+import debuggerPersona from '../../../personas/debugger.json' with { type: 'json' };
+import securityReviewer from '../../../personas/security-reviewer.json' with { type: 'json' };
+import technicalWriter from '../../../personas/technical-writer.json' with { type: 'json' };
+import verifierPersona from '../../../personas/verifier.json' with { type: 'json' };
+import testStrategist from '../../../personas/test-strategist.json' with { type: 'json' };
+import tddGuard from '../../../personas/tdd-guard.json' with { type: 'json' };
+import flakeHunter from '../../../personas/flake-hunter.json' with { type: 'json' };
 import defaultRoutingProfileJson from '../routing-profiles/default.json' with { type: 'json' };
 
 export const HARNESS_VALUES = ['opencode', 'codex'] as const;
 export const PERSONA_TIERS = ['best', 'best-value', 'minimum'] as const;
-export const PERSONA_INTENTS = ['implement-frontend', 'review', 'architecture-plan'] as const;
+export const PERSONA_INTENTS = [
+  'implement-frontend',
+  'review',
+  'architecture-plan',
+  'requirements-analysis',
+  'debugging',
+  'security-review',
+  'documentation',
+  'verification',
+  'test-strategy',
+  'tdd-enforcement',
+  'flake-investigation'
+] as const;
 
 export type Harness = (typeof HARNESS_VALUES)[number];
 export type PersonaTier = (typeof PERSONA_TIERS)[number];
@@ -181,7 +201,15 @@ function parseRoutingProfile(value: unknown, context: string): RoutingProfile {
 export const personaCatalog: Record<PersonaIntent, PersonaSpec> = {
   'implement-frontend': parsePersonaSpec(frontendImplementer, 'implement-frontend'),
   review: parsePersonaSpec(codeReviewer, 'review'),
-  'architecture-plan': parsePersonaSpec(architecturePlanner, 'architecture-plan')
+  'architecture-plan': parsePersonaSpec(architecturePlanner, 'architecture-plan'),
+  'requirements-analysis': parsePersonaSpec(requirementsAnalyst, 'requirements-analysis'),
+  debugging: parsePersonaSpec(debuggerPersona, 'debugging'),
+  'security-review': parsePersonaSpec(securityReviewer, 'security-review'),
+  documentation: parsePersonaSpec(technicalWriter, 'documentation'),
+  verification: parsePersonaSpec(verifierPersona, 'verification'),
+  'test-strategy': parsePersonaSpec(testStrategist, 'test-strategy'),
+  'tdd-enforcement': parsePersonaSpec(tddGuard, 'tdd-enforcement'),
+  'flake-investigation': parsePersonaSpec(flakeHunter, 'flake-investigation')
 };
 
 export const routingProfiles = {
