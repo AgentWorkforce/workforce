@@ -67,6 +67,10 @@ test('resolves review from custom routing profile rule', () => {
         tier: 'best',
         rationale: 'deep debugging is worth the cost'
       },
+      'opencode-workflow-correctness': {
+        tier: 'best',
+        rationale: 'cross-layer workflow failures need deeper investigation'
+      },
       'npm-provenance': {
         tier: 'best-value',
         rationale: 'mechanical workflow wiring'
@@ -123,6 +127,11 @@ test('resolves newly added personas from the default routing profile', () => {
   const verification = resolvePersona('verification');
   assert.equal(verification.personaId, 'verifier');
   assert.equal(verification.tier, 'best-value');
+
+  const opencodeWorkflow = resolvePersona('opencode-workflow-correctness');
+  assert.equal(opencodeWorkflow.personaId, 'opencode-workflow-specialist');
+  assert.equal(opencodeWorkflow.tier, 'best');
+  assert.equal(opencodeWorkflow.runtime.harness, 'codex');
 });
 
 test('claude is a recognized harness value', () => {

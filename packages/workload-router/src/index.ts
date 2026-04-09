@@ -9,6 +9,7 @@ import verifierPersona from '../../../personas/verifier.json' with { type: 'json
 import testStrategist from '../../../personas/test-strategist.json' with { type: 'json' };
 import tddGuard from '../../../personas/tdd-guard.json' with { type: 'json' };
 import flakeHunter from '../../../personas/flake-hunter.json' with { type: 'json' };
+import opencodeWorkflowSpecialist from '../../../personas/opencode-workflow-specialist.json' with { type: 'json' };
 import npmProvenancePublisher from '../../../personas/npm-provenance-publisher.json' with { type: 'json' };
 import defaultRoutingProfileJson from '../routing-profiles/default.json' with { type: 'json' };
 
@@ -26,6 +27,7 @@ export const PERSONA_INTENTS = [
   'test-strategy',
   'tdd-enforcement',
   'flake-investigation',
+  'opencode-workflow-correctness',
   'npm-provenance'
 ] as const;
 
@@ -391,6 +393,10 @@ export const personaCatalog: Record<PersonaIntent, PersonaSpec> = {
   'test-strategy': parsePersonaSpec(testStrategist, 'test-strategy'),
   'tdd-enforcement': parsePersonaSpec(tddGuard, 'tdd-enforcement'),
   'flake-investigation': parsePersonaSpec(flakeHunter, 'flake-investigation'),
+  'opencode-workflow-correctness': parsePersonaSpec(
+    opencodeWorkflowSpecialist,
+    'opencode-workflow-correctness'
+  ),
   'npm-provenance': parsePersonaSpec(npmProvenancePublisher, 'npm-provenance')
 };
 
