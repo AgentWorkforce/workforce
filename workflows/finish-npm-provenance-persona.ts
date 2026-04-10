@@ -114,10 +114,10 @@ async function main() {
       type: 'deterministic',
       dependsOn: ['install-skills'],
       // The npm-provenance persona uses opencode at best-value, so prpm
-      // lands the skill under .opencode/skills/. Derive the path from the
+      // lands the skill under .skills/. Derive the path from the
       // SDK's HARNESS_SKILL_TARGETS if the persona ever changes harness.
       command:
-        '(test -d .opencode/skills/npm-trusted-publishing || test -d .opencode/skill/npm-trusted-publishing) && echo "OK" || (echo "SKILL MISSING" >&2; exit 1)',
+        '(test -d .skills/npm-trusted-publishing || test -d .skills/npm-trusted-publishing) && echo "OK" || (echo "SKILL MISSING" >&2; exit 1)',
       failOnError: true
     })
 
@@ -135,7 +135,7 @@ async function main() {
     .step('create-publish-workflow', {
       agent: 'publisher',
       dependsOn: ['verify-skill-installed', 'read-router-pkg'],
-      task: `Apply the @prpm/npm-trusted-publishing skill (already installed at .opencode/skills/npm-trusted-publishing/) to configure OIDC trusted publishing for @agentworkforce/workload-router.
+      task: `Apply the @prpm/npm-trusted-publishing skill (already installed at .skills/npm-trusted-publishing/) to configure OIDC trusted publishing for @agentworkforce/workload-router.
 
 Current packages/workload-router/package.json:
 {{steps.read-router-pkg.output}}

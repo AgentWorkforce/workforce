@@ -59,7 +59,7 @@
       "subtype": "skill",
       "sourceFormat": "claude",
       "sourceSubtype": "skill",
-      "installedPath": ".opencode/skill/npm-trusted-publishing/npm-trusted-publishing.md"
+      "installedPath": ".skills/npm-trusted-publishing/npm-trusted-publishing.md"
     },
     "@prpm/npm-trusted-publishing#claude": {
       "version": "1.0.0",
