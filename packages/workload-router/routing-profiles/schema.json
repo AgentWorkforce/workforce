@@ -10,7 +10,7 @@
     "intents": {
       "type": "object",
       "additionalProperties": false,
-      "required": ["implement-frontend", "review", "architecture-plan", "requirements-analysis", "debugging", "security-review", "documentation", "verification", "test-strategy", "tdd-enforcement", "flake-investigation", "opencode-workflow-correctness", "npm-provenance"],
+      "required": ["implement-frontend", "review", "architecture-plan", "requirements-analysis", "debugging", "security-review", "documentation", "verification", "test-strategy", "tdd-enforcement", "flake-investigation", "opencode-workflow-correctness", "workflow-cli-compatibility", "npm-provenance"],
       "properties": {
         "implement-frontend": { "$ref": "#/definitions/rule" },
         "review": { "$ref": "#/definitions/rule" },
@@ -24,6 +24,7 @@
         "tdd-enforcement": { "$ref": "#/definitions/rule" },
         "flake-investigation": { "$ref": "#/definitions/rule" },
         "opencode-workflow-correctness": { "$ref": "#/definitions/rule" },
+        "workflow-cli-compatibility": { "$ref": "#/definitions/rule" },
         "npm-provenance": { "$ref": "#/definitions/rule" }
       }
     }

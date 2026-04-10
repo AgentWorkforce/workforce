@@ -71,6 +71,10 @@ test('resolves review from custom routing profile rule', () => {
         tier: 'best',
         rationale: 'cross-layer workflow failures need deeper investigation'
       },
+      'workflow-cli-compatibility': {
+        tier: 'best',
+        rationale: 'provider matrix failures need deeper investigation'
+      },
       'npm-provenance': {
         tier: 'best-value',
         rationale: 'mechanical workflow wiring'
@@ -132,6 +136,12 @@ test('resolves newly added personas from the default routing profile', () => {
   assert.equal(opencodeWorkflow.personaId, 'opencode-workflow-specialist');
   assert.equal(opencodeWorkflow.tier, 'best');
   assert.equal(opencodeWorkflow.runtime.harness, 'codex');
+
+  const workflowCliCompatibility = resolvePersona('workflow-cli-compatibility');
+  assert.equal(workflowCliCompatibility.personaId, 'workflow-cli-compatibility-specialist');
+  assert.equal(workflowCliCompatibility.tier, 'best');
+  assert.equal(workflowCliCompatibility.runtime.harness, 'codex');
+  assert.match(workflowCliCompatibility.runtime.systemPrompt, /Gemini-specific checklist/);
 });
 
 test('claude is a recognized harness value', () => {

@@ -51,6 +51,10 @@
       "tier": "best",
       "rationale": "Cross-layer opencode workflow failures are expensive to misdiagnose; default to the deepest tier for end-to-end reproduction and root-cause analysis."
     },
+    "workflow-cli-compatibility": {
+      "tier": "best",
+      "rationale": "Provider-matrix workflow regressions can falsely pass or hang in one CLI while sharing runner code with others; default to the deepest tier for cross-provider reproduction and verification."
+    },
     "npm-provenance": {
       "tier": "best-value",
       "rationale": "Publishing setup is mostly mechanical workflow configuration; best-value is sufficient when guided by the prpm/npm-trusted-publishing skill."

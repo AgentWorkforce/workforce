@@ -41,6 +41,7 @@ A **routing profile** is policy-only. It does not carry runtime fields; it only 
 - `personas/tdd-guard.json`
 - `personas/flake-hunter.json`
 - `personas/opencode-workflow-specialist.json`
+- `personas/workflow-cli-compatibility-specialist.json`
 - `personas/npm-provenance-publisher.json`
 
 ## Routing profiles
@@ -82,6 +83,7 @@ for (const install of plan.installs) {
    - `tdd-enforcement`
    - `flake-investigation`
    - `opencode-workflow-correctness`
+   - `workflow-cli-compatibility`
    - `npm-provenance`
 2. Resolve profile policy + persona runtime via `resolvePersona(intent)`.
 3. Spawn subagent with returned harness/model/settings/prompt.
