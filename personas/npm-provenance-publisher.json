@@ -5,7 +5,7 @@
   "skills": [
     {
       "id": "prpm/npm-trusted-publishing",
-      "source": "https://prpm.dev/packages/prpm/npm-trusted-publishing",
+      "source": "https://prpm.dev/packages/@prpm/npm-trusted-publishing",
       "description": "Claude skill for configuring npm OIDC trusted publishing and --provenance via GitHub Actions, including monorepo support and id-token: write permissions."
     }
   ],
