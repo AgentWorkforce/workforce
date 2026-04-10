@@ -75,19 +75,18 @@ jobs:
           git add packages/workload-router/package.json
           git commit -m "chore(release): @agentworkforce/workload-router v${{ steps.bump.outputs.version }}"
 
+      - name: Install latest npm
+        run: npm install -g npm@latest
+
       - name: Publish (dry run)
         if: ${{ github.event.inputs.dry_run == 'true' }}
         working-directory: packages/workload-router
         run: npm publish --dry-run --access public --tag ${{ github.event.inputs.tag }}
-        env:
-          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
 
       - name: Publish to npm
         if: ${{ github.event.inputs.dry_run != 'true' }}
         working-directory: packages/workload-router
-        run: npm publish --access public --provenance --tag ${{ github.event.inputs.tag }}
-        env:
-          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
+        run: npm publish --provenance --access public --tag ${{ github.event.inputs.tag }}
 
       - name: Tag + push
         if: ${{ github.event.inputs.dry_run != 'true' }}
