@@ -151,7 +151,7 @@ test('resolves npm-provenance persona with the trusted publishing skill attached
   assert.equal(selection.skills.length, 1);
   const [skill] = selection.skills;
   assert.equal(skill.id, 'prpm/npm-trusted-publishing');
-  assert.match(skill.source, /prpm\.dev\/packages\/prpm\/npm-trusted-publishing/);
+  assert.match(skill.source, /prpm\.dev\/packages\/@prpm\/npm-trusted-publishing/);
   assert.match(selection.runtime.systemPrompt, /prpm\/npm-trusted-publishing/);
 });
 
@@ -175,7 +175,7 @@ test('materializeSkills emits a codex-scoped prpm install for a prpm.dev URL', (
     [
       {
         id: 'prpm/npm-trusted-publishing',
-        source: 'https://prpm.dev/packages/prpm/npm-trusted-publishing',
+        source: 'https://prpm.dev/packages/@prpm/npm-trusted-publishing',
         description: 'trusted publishing skill'
       }
     ],
@@ -186,10 +186,10 @@ test('materializeSkills emits a codex-scoped prpm install for a prpm.dev URL', (
   assert.equal(plan.installs.length, 1);
   const [install] = plan.installs;
   assert.equal(install.sourceKind, 'prpm');
-  assert.equal(install.packageRef, 'prpm/npm-trusted-publishing');
+  assert.equal(install.packageRef, '@prpm/npm-trusted-publishing');
   assert.deepEqual(
     [...install.installCommand],
-    ['npx', '-y', 'prpm', 'install', 'prpm/npm-trusted-publishing', '--as', 'codex']
+    ['npx', '-y', 'prpm', 'install', '@prpm/npm-trusted-publishing', '--as', 'codex']
   );
   assert.equal(install.installedDir, '.agents/skills/npm-trusted-publishing');
   assert.equal(install.installedManifest, '.agents/skills/npm-trusted-publishing/SKILL.md');
@@ -200,7 +200,7 @@ test('materializeSkills routes claude skills to .claude/skills via --as claude',
     [
       {
         id: 'prpm/npm-trusted-publishing',
-        source: 'prpm/npm-trusted-publishing',
+        source: '@prpm/npm-trusted-publishing',
         description: 'bare ref form'
       }
     ],
@@ -210,7 +210,7 @@ test('materializeSkills routes claude skills to .claude/skills via --as claude',
   const [install] = plan.installs;
   assert.deepEqual(
     [...install.installCommand],
-    ['npx', '-y', 'prpm', 'install', 'prpm/npm-trusted-publishing', '--as', 'claude']
+    ['npx', '-y', 'prpm', 'install', '@prpm/npm-trusted-publishing', '--as', 'claude']
   );
   assert.equal(install.installedDir, '.claude/skills/npm-trusted-publishing');
 });
@@ -221,7 +221,7 @@ test('materializeSkillsFor derives an install plan from a resolved persona', () 
   assert.equal(plan.harness, selection.runtime.harness);
   assert.equal(plan.installs.length, 1);
   const cmd = plan.installs[0].installCommand.join(' ');
-  assert.match(cmd, /prpm install prpm\/npm-trusted-publishing --as /);
+  assert.match(cmd, /prpm install @prpm\/npm-trusted-publishing --as /);
 });
 
 test('materializeSkills rejects unknown skill sources', () => {

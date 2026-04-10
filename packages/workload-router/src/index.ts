@@ -116,7 +116,7 @@ export interface HarnessSkillTarget {
 export const HARNESS_SKILL_TARGETS: Record<Harness, HarnessSkillTarget> = {
   claude: { asFlag: 'claude', dir: '.claude/skills' },
   codex: { asFlag: 'codex', dir: '.agents/skills' },
-  opencode: { asFlag: 'opencode', dir: '.opencode/skills' }
+  opencode: { asFlag: 'opencode', dir: '.opencode/skill' }
 };
 
 export interface SkillInstall {
