@@ -113,12 +113,11 @@ async function main() {
     .step('verify-skill-installed', {
       type: 'deterministic',
       dependsOn: ['install-skills'],
-      // The npm-provenance persona currently runs on claude at best-value, so
-      // prpm lands the skill under .claude/skills/. If the persona ever moves
-      // to codex, flip this path to .agents/skills/ (and ideally derive it
-      // from materializeSkillsFor like above).
+      // The npm-provenance persona uses opencode at best-value, so prpm
+      // lands the skill under .opencode/skills/. Derive the path from the
+      // SDK's HARNESS_SKILL_TARGETS if the persona ever changes harness.
       command:
-        'test -f .claude/skills/npm-trusted-publishing/SKILL.md && echo "OK" || (echo "SKILL MANIFEST MISSING" >&2; exit 1)',
+        '(test -d .opencode/skills/npm-trusted-publishing || test -d .opencode/skill/npm-trusted-publishing) && echo "OK" || (echo "SKILL MISSING" >&2; exit 1)',
       failOnError: true
     })
 
@@ -136,7 +135,7 @@ async function main() {
     .step('create-publish-workflow', {
       agent: 'publisher',
       dependsOn: ['verify-skill-installed', 'read-router-pkg'],
-      task: `Apply the prpm/npm-trusted-publishing skill (already installed at .claude/skills/npm-trusted-publishing/SKILL.md — Claude Code should have auto-loaded it) to configure OIDC trusted publishing for @agentworkforce/workload-router.
+      task: `Apply the @prpm/npm-trusted-publishing skill (already installed at .opencode/skills/npm-trusted-publishing/) to configure OIDC trusted publishing for @agentworkforce/workload-router.
 
 Current packages/workload-router/package.json:
 {{steps.read-router-pkg.output}}
