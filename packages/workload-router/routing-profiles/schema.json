@@ -10,7 +10,7 @@
     "intents": {
       "type": "object",
       "additionalProperties": false,
-      "required": ["implement-frontend", "review", "architecture-plan", "requirements-analysis", "debugging", "security-review", "documentation", "verification", "test-strategy", "tdd-enforcement", "flake-investigation", "opencode-workflow-correctness", "npm-provenance"],
+      "required": ["implement-frontend", "review", "architecture-plan", "requirements-analysis", "debugging", "security-review", "documentation", "verification", "test-strategy", "tdd-enforcement", "flake-investigation", "opencode-workflow-correctness", "npm-provenance", "cloud-sandbox-infra"],
       "properties": {
         "implement-frontend": { "$ref": "#/definitions/rule" },
         "review": { "$ref": "#/definitions/rule" },
@@ -24,7 +24,8 @@
         "tdd-enforcement": { "$ref": "#/definitions/rule" },
         "flake-investigation": { "$ref": "#/definitions/rule" },
         "opencode-workflow-correctness": { "$ref": "#/definitions/rule" },
-        "npm-provenance": { "$ref": "#/definitions/rule" }
+        "npm-provenance": { "$ref": "#/definitions/rule" },
+        "cloud-sandbox-infra": { "$ref": "#/definitions/rule" }
       }
     }
   },
