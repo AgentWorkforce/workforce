@@ -54,6 +54,10 @@
     "npm-provenance": {
       "tier": "best-value",
       "rationale": "Publishing setup is mostly mechanical workflow configuration; best-value is sufficient when guided by the prpm/npm-trusted-publishing skill."
+    },
+    "cloud-sandbox-infra": {
+      "tier": "best",
+      "rationale": "Cloud infrastructure changes (sandbox provisioning, credential handling, session durability) have high blast radius; prioritize deeper reasoning and thorough verification."
     }
   }
 }

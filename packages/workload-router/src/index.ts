@@ -11,6 +11,7 @@ import tddGuard from '../../../personas/tdd-guard.json' with { type: 'json' };
 import flakeHunter from '../../../personas/flake-hunter.json' with { type: 'json' };
 import opencodeWorkflowSpecialist from '../../../personas/opencode-workflow-specialist.json' with { type: 'json' };
 import npmProvenancePublisher from '../../../personas/npm-provenance-publisher.json' with { type: 'json' };
+import cloudSandboxInfra from '../../../personas/cloud-sandbox-infra.json' with { type: 'json' };
 import defaultRoutingProfileJson from '../routing-profiles/default.json' with { type: 'json' };
 
 export const HARNESS_VALUES = ['opencode', 'codex', 'claude'] as const;
@@ -28,7 +29,8 @@ export const PERSONA_INTENTS = [
   'tdd-enforcement',
   'flake-investigation',
   'opencode-workflow-correctness',
-  'npm-provenance'
+  'npm-provenance',
+  'cloud-sandbox-infra'
 ] as const;
 
 export type Harness = (typeof HARNESS_VALUES)[number];
@@ -397,7 +399,8 @@ export const personaCatalog: Record<PersonaIntent, PersonaSpec> = {
     opencodeWorkflowSpecialist,
     'opencode-workflow-correctness'
   ),
-  'npm-provenance': parsePersonaSpec(npmProvenancePublisher, 'npm-provenance')
+  'npm-provenance': parsePersonaSpec(npmProvenancePublisher, 'npm-provenance'),
+  'cloud-sandbox-infra': parsePersonaSpec(cloudSandboxInfra, 'cloud-sandbox-infra')
 };
 
 export const routingProfiles = {

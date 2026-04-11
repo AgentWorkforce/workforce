@@ -74,6 +74,10 @@ test('resolves review from custom routing profile rule', () => {
       'npm-provenance': {
         tier: 'best-value',
         rationale: 'mechanical workflow wiring'
+      },
+      'cloud-sandbox-infra': {
+        tier: 'best',
+        rationale: 'infra changes need deep reasoning'
       }
     }
   });
