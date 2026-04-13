@@ -25,9 +25,10 @@
     "access": "public"
   },
   "scripts": {
-    "build": "tsc -p tsconfig.json",
+    "generate:personas": "node ./scripts/generate-personas.mjs",
+    "build": "npm run generate:personas && tsc -p tsconfig.json",
     "typecheck": "tsc -p tsconfig.json --noEmit",
-    "test": "tsc -p tsconfig.json && node --test dist/index.test.js",
-    "lint": "tsc -p tsconfig.json --noEmit"
+    "test": "npm run generate:personas && tsc -p tsconfig.json && node --test dist/index.test.js",
+    "lint": "npm run generate:personas && tsc -p tsconfig.json --noEmit"
   }
 }
