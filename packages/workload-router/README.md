@@ -30,13 +30,22 @@ steps. Pick one.
 ```ts
 const { execute } = usePersona('npm-provenance');
 
-const result = await execute('Set up npm trusted publishing for this repo', {
-  workingDirectory: '.',
-  timeoutSeconds: 600,
-});
-
-if (result.status !== 'completed') {
-  console.error('persona run failed', result.status, result.stderr);
+try {
+  const result = await execute('Set up npm trusted publishing for this repo', {
+    workingDirectory: '.',
+    timeoutSeconds: 600,
+  });
+  // result.status is guaranteed to be 'completed' here — any other
+  // outcome is delivered via the catch block below.
+} catch (err) {
+  const execErr = err as Error & {
+    result?: { status: string; stderr: string; exitCode: number | null };
+  };
+  console.error(
+    'persona run failed',
+    execErr.result?.status,
+    execErr.result?.stderr,
+  );
 }
 ```
 
@@ -44,6 +53,15 @@ if (result.status !== 'completed') {
 `prpm install` the persona's skills, then (2) invoke the persona's harness
 agent with your task. `installSkills` defaults to `true`, so the first step
 runs automatically — no manual install needed.
+
+> **Outcome contract:** `await execute(...)` only resolves when the
+> persona completes successfully. A non-zero exit from the agent
+> subprocess (or a timeout) throws a `PersonaExecutionError`, and
+> cancellation throws an `AbortError`; both carry the typed
+> `ExecuteResult` on `err.result` so you can inspect
+> `err.result.status`, `err.result.stderr`, `err.result.exitCode`, etc.
+> Wrap `await execute(...)` in `try/catch` whenever you need to
+> observe non-completed outcomes.
 
 #### Mode B — pre-stage install out-of-band, then run without re-install
 
@@ -91,8 +109,17 @@ run.runId.then((id) => console.log('workflow run id:', id));
 // ...later, from another code path:
 abort.abort();           // or: run.cancel('user requested');
 
-const result = await run; // ExecuteResult — note: settled, not thrown,
-                          // even when status is 'cancelled' / 'failed' / 'timeout'.
+try {
+  const result = await run; // only returns when status === 'completed'
+} catch (err) {
+  // Cancellation throws AbortError; failure throws PersonaExecutionError.
+  // Both carry the typed ExecuteResult on `err.result` — inspect
+  // `err.result.status`, `err.result.stderr`, `err.result.exitCode`, etc.
+  const execErr = err as Error & {
+    result?: { status: string; stderr: string; exitCode: number | null };
+  };
+  console.error('run did not complete', execErr.name, execErr.result?.status);
+}
 ```
 
 `run.runId` is a `Promise<string>` — it is *not* available synchronously

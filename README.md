@@ -63,13 +63,25 @@ const { execute } = usePersona('npm-provenance');
 // Installs the persona's skills, then runs the persona's harness agent
 // with your task. Returns a PersonaExecution — awaitable, with
 // `cancel()` and a `runId` promise attached.
-const result = await execute('Set up npm trusted publishing for this repo', {
-  workingDirectory: '.',
-  timeoutSeconds: 600,
-});
-
-if (result.status !== 'completed') {
-  console.error('persona run failed', result.status, result.stderr);
+//
+// `await execute(...)` only resolves on `status: 'completed'`. Non-zero
+// exits / timeouts throw PersonaExecutionError; cancellation throws
+// AbortError. Both carry the typed ExecuteResult on `err.result`.
+try {
+  const result = await execute('Set up npm trusted publishing for this repo', {
+    workingDirectory: '.',
+    timeoutSeconds: 600,
+  });
+  // result.status === 'completed' here
+} catch (err) {
+  const execErr = err as Error & {
+    result?: { status: string; stderr: string; exitCode: number | null };
+  };
+  console.error(
+    'persona run failed',
+    execErr.result?.status,
+    execErr.result?.stderr,
+  );
 }
 ```
 

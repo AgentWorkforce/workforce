@@ -163,11 +163,36 @@ export interface ExecuteOptions {
 }
 
 /**
- * Final result of a {@link PersonaContext.execute} call. A resolved result —
- * including `status: 'failed' | 'cancelled' | 'timeout'` — is the normal
- * return path; `PersonaExecutionError` is thrown only when the workflow
- * itself could not be built or run (e.g. a bad config), not when the agent
- * task merely exited non-zero.
+ * Final result of a {@link PersonaContext.execute} call.
+ *
+ * **Only `status: 'completed'` is returned as a resolved promise.** Any
+ * other outcome is delivered as a thrown error with a typed `.result`
+ * property carrying this interface, so callers can `try/catch` and then
+ * inspect `err.result.status`, `err.result.stderr`, `err.result.exitCode`
+ * etc. just as they would read the resolved value:
+ *
+ * - `status: 'failed'` — the agent subprocess exited non-zero, or the
+ *   workflow settled in a failed state for any other reason. Thrown as
+ *   a {@link PersonaExecutionError}.
+ * - `status: 'timeout'` — the workflow's hard timeout fired before the
+ *   run completed. Also thrown as a {@link PersonaExecutionError} (the
+ *   status is derived from the underlying timeout error).
+ * - `status: 'cancelled'` — the caller aborted via
+ *   {@link ExecuteOptions.signal} or {@link PersonaExecution.cancel}.
+ *   Thrown as an `AbortError` (with `error.result.status === 'cancelled'`).
+ *
+ * So the typical shape of a caller is:
+ *
+ * ```ts
+ * try {
+ *   const result = await execute(task, opts);
+ *   // result.status is guaranteed to be 'completed' here.
+ * } catch (err) {
+ *   // err.result.status is 'failed' | 'cancelled' | 'timeout'.
+ *   // err.result.stderr / err.result.exitCode are populated from
+ *   // whatever the agent subprocess produced.
+ * }
+ * ```
  */
 export interface ExecuteResult {
   status: 'completed' | 'failed' | 'cancelled' | 'timeout';
@@ -248,6 +273,12 @@ export interface PersonaExecution extends Promise<ExecuteResult> {
  * caching, hermeticity, offline runtime, or split-trust reasons — or
  * when you want to wrap the install with your own process management
  * (custom timeout, logging, retry, alternative runner, etc.).
+ *
+ * In both modes, the `await execute(...)` call above **only resolves
+ * when `status === 'completed'`**. Non-zero exits / timeouts throw a
+ * {@link PersonaExecutionError}, and cancellation throws an `AbortError`;
+ * both carry a typed `.result` for inspection. See {@link ExecuteResult}
+ * for the full outcome contract.
  *
  * ⚠️ **Do not combine the two modes without `installSkills: false`.**
  * Running `spawnSync(installCommandString, ...)` *and then* calling
@@ -973,14 +1004,20 @@ export function resolvePersonaByTier(intent: PersonaIntent, tier: PersonaTier = 
  * and the double-install caveat.
  *
  * @example
- * // Mode A — let execute() install skills and run the agent in one call:
+ * // Mode A — let execute() install skills and run the agent in one call.
+ * // Only `status: 'completed'` resolves; non-zero exits / timeouts throw
+ * // PersonaExecutionError and cancellation throws AbortError, both with
+ * // the typed ExecuteResult attached as `err.result`.
  * const { execute } = usePersona('npm-provenance');
- * const result = await execute('Set up npm trusted publishing for this repo', {
- *   workingDirectory: '.',
- *   timeoutSeconds: 600,
- * });
- * if (result.status !== 'completed') {
- *   console.error('persona run failed', result.status, result.stderr);
+ * try {
+ *   const result = await execute('Set up npm trusted publishing for this repo', {
+ *     workingDirectory: '.',
+ *     timeoutSeconds: 600,
+ *   });
+ *   // result.status === 'completed' here
+ * } catch (err) {
+ *   const execErr = err as Error & { result?: ExecuteResult };
+ *   console.error('persona run failed', execErr.result?.status, execErr.result?.stderr);
  * }
  *
  * @example
@@ -996,7 +1033,9 @@ export function resolvePersonaByTier(intent: PersonaIntent, tier: PersonaTier = 
  * });
  *
  * @example
- * // Cancellation + streaming progress:
+ * // Cancellation + streaming progress. Aborting causes `await run` to
+ * // throw an AbortError with `err.result.status === 'cancelled'`, so
+ * // wrap in try/catch if you plan to abort.
  * const abort = new AbortController();
  * const run = usePersona('npm-provenance').execute('Your task', {
  *   signal: abort.signal,
@@ -1005,7 +1044,13 @@ export function resolvePersonaByTier(intent: PersonaIntent, tier: PersonaTier = 
  * run.runId.then((id) => console.log('workflow run id:', id));
  * // ...later:
  * abort.abort(); // or: run.cancel('user requested');
- * const result = await run;
+ * try {
+ *   const result = await run;
+ *   // result.status === 'completed'
+ * } catch (err) {
+ *   const execErr = err as Error & { result?: ExecuteResult };
+ *   // execErr.name === 'AbortError' and execErr.result?.status === 'cancelled'
+ * }
  *
  * @param intent   The persona intent to resolve (e.g. `'npm-provenance'`).
  * @param options  Optional overrides. `harness` forces a specific harness
