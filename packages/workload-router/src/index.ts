@@ -1,16 +1,16 @@
-import frontendImplementer from '../personas/frontend-implementer.json' with { type: 'json' };
-import codeReviewer from '../personas/code-reviewer.json' with { type: 'json' };
-import architecturePlanner from '../personas/architecture-planner.json' with { type: 'json' };
-import requirementsAnalyst from '../personas/requirements-analyst.json' with { type: 'json' };
-import debuggerPersona from '../personas/debugger.json' with { type: 'json' };
-import securityReviewer from '../personas/security-reviewer.json' with { type: 'json' };
-import technicalWriter from '../personas/technical-writer.json' with { type: 'json' };
-import verifierPersona from '../personas/verifier.json' with { type: 'json' };
-import testStrategist from '../personas/test-strategist.json' with { type: 'json' };
-import tddGuard from '../personas/tdd-guard.json' with { type: 'json' };
-import flakeHunter from '../personas/flake-hunter.json' with { type: 'json' };
-import opencodeWorkflowSpecialist from '../personas/opencode-workflow-specialist.json' with { type: 'json' };
-import npmProvenancePublisher from '../personas/npm-provenance-publisher.json' with { type: 'json' };
+import { frontendImplementer, codeReviewer, architecturePlanner, requirementsAnalyst, debuggerPersona, securityReviewer, technicalWriter, verifierPersona, testStrategist, tddGuard, flakeHunter, opencodeWorkflowSpecialist, npmProvenancePublisher } from './generated/personas.js';
+
+
+
+
+
+
+
+
+
+
+
+
 import defaultRoutingProfileJson from '../routing-profiles/default.json' with { type: 'json' };
 
 export const HARNESS_VALUES = ['opencode', 'codex', 'claude'] as const;
