@@ -14,24 +14,41 @@ npm install @agentworkforce/workload-router
 
 Despite the `use*` prefix, **this is not a React hook.** It is a plain
 synchronous factory: call it, get back a `PersonaContext` bundling the
-resolved persona, its skill install plan, and an `execute()` closure.
+resolved persona, grouped install metadata, and a `sendMessage()` closure.
 Nothing is installed, spawned, or written to disk until you call
-`execute()` (or run the install command yourself).
+`sendMessage()` (or run the install command yourself).
 
 ```ts
 import { usePersona } from '@agentworkforce/workload-router';
 ```
 
+#### Return shape
+
+```ts
+const {
+  selection,
+  install,
+  sendMessage,
+} = usePersona('npm-provenance');
+```
+
+- `selection`: the resolved persona choice for the given intent/profile. Includes `personaId`, `tier`, `runtime`, `skills`, and `rationale`.
+- `install`: grouped install metadata.
+- `install.plan`: a pure description of what skill installs would be needed for that persona on that harness. No processes run when you read this.
+- `install.command`: the full install command as an argv array for `spawn`/`execFile`.
+- `install.commandString`: the same full install command as a shell-escaped string.
+- `sendMessage(task, options?)`: runs the persona against a task and returns a `PersonaExecution` that you can `await`, `cancel()`, or inspect via `runId`.
+
 There are **two usage modes**, and they are alternatives — not sequential
 steps. Pick one.
 
-#### Mode A — let `execute()` install skills and run the agent (recommended)
+#### Mode A — let `sendMessage()` install skills and run the agent (recommended)
 
 ```ts
-const { execute } = usePersona('npm-provenance');
+const { sendMessage } = usePersona('npm-provenance');
 
 try {
-  const result = await execute('Set up npm trusted publishing for this repo', {
+  const result = await sendMessage('Set up npm trusted publishing for this repo', {
     workingDirectory: '.',
     timeoutSeconds: 600,
   });
@@ -49,18 +66,18 @@ try {
 }
 ```
 
-`execute()` builds an ad-hoc agent-relay workflow with two steps: (1)
+`sendMessage()` builds an ad-hoc agent-relay workflow with two steps: (1)
 `prpm install` the persona's skills, then (2) invoke the persona's harness
 agent with your task. `installSkills` defaults to `true`, so the first step
 runs automatically — no manual install needed.
 
-> **Outcome contract:** `await execute(...)` only resolves when the
+> **Outcome contract:** `await sendMessage(...)` only resolves when the
 > persona completes successfully. A non-zero exit from the agent
 > subprocess (or a timeout) throws a `PersonaExecutionError`, and
 > cancellation throws an `AbortError`; both carry the typed
 > `ExecuteResult` on `err.result` so you can inspect
 > `err.result.status`, `err.result.stderr`, `err.result.exitCode`, etc.
-> Wrap `await execute(...)` in `try/catch` whenever you need to
+> Wrap `await sendMessage(...)` in `try/catch` whenever you need to
 > observe non-completed outcomes.
 
 #### Mode B — pre-stage install out-of-band, then run without re-install
@@ -68,13 +85,13 @@ runs automatically — no manual install needed.
 ```ts
 import { spawnSync } from 'node:child_process';
 
-const { installCommandString, execute } = usePersona('npm-provenance');
+const { install, sendMessage } = usePersona('npm-provenance');
 
 // build time (Dockerfile RUN, CI bootstrap step, first-run setup, etc.):
-spawnSync(installCommandString, { shell: true, stdio: 'inherit' });
+spawnSync(install.commandString, { shell: true, stdio: 'inherit' });
 
 // runtime — skip re-install because skills are already staged:
-const result = await execute('Your task', {
+const result = await sendMessage('Your task', {
   workingDirectory: '.',
   installSkills: false,
 });
@@ -87,11 +104,11 @@ logging, retry, alternative runner, etc.).
 
 A third usage is **install-only**: if all you want is to materialize the
 persona's skills into the repo for a human or another tool to use, run
-`installCommandString` and never call `execute()`.
+`install.commandString` and never call `sendMessage()`.
 
 > ⚠️ **Do not combine the two modes without `installSkills: false`.**
-> Running `spawnSync(installCommandString, ...)` *and then* calling
-> `execute(task)` without passing `installSkills: false` will install the
+> Running `spawnSync(install.commandString, ...)` *and then* calling
+> `sendMessage(task)` without passing `installSkills: false` will install the
 > persona's skills **twice**. `ExecuteOptions.installSkills` defaults to
 > `true`, so you must explicitly opt out when you have already pre-staged.
 
@@ -99,7 +116,7 @@ persona's skills into the repo for a human or another tool to use, run
 
 ```ts
 const abort = new AbortController();
-const run = usePersona('npm-provenance').execute('Your task', {
+const run = usePersona('npm-provenance').sendMessage('Your task', {
   signal: abort.signal,
   onProgress: ({ stream, text }) => process[stream].write(text),
 });
@@ -123,7 +140,7 @@ try {
 ```
 
 `run.runId` is a `Promise<string>` — it is *not* available synchronously
-when `execute()` returns, because the workflow hasn't started yet. It
+when `sendMessage()` returns, because the workflow hasn't started yet. It
 resolves once the persona's agent step has actually spawned (on the first
 progress event from the subprocess, or ~250ms after spawn as a safety net).
 Don't block on it in a tight synchronous path expecting a cached value.

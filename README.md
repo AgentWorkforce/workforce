@@ -51,24 +51,25 @@ A **routing profile** is policy-only. It does not carry runtime fields; it only 
 ## TypeScript SDK usage
 
 The recommended entry point is **`usePersona(intent)`** — a synchronous,
-side-effect-free factory that resolves a persona and returns an `execute()`
-closure. Calling it does nothing but pre-compute the routing; nothing is
-installed or spawned until you call `execute()`.
+side-effect-free factory that resolves a persona and returns grouped install
+metadata plus a `sendMessage()` closure. Calling it does nothing but
+pre-compute the routing; nothing is installed or spawned until you call
+`sendMessage()` or run the install command yourself.
 
 ```ts
 import { usePersona } from '@agentworkforce/workload-router';
 
-const { execute } = usePersona('npm-provenance');
+const { sendMessage } = usePersona('npm-provenance');
 
 // Installs the persona's skills, then runs the persona's harness agent
 // with your task. Returns a PersonaExecution — awaitable, with
 // `cancel()` and a `runId` promise attached.
 //
-// `await execute(...)` only resolves on `status: 'completed'`. Non-zero
+// `await sendMessage(...)` only resolves on `status: 'completed'`. Non-zero
 // exits / timeouts throw PersonaExecutionError; cancellation throws
 // AbortError. Both carry the typed ExecuteResult on `err.result`.
 try {
-  const result = await execute('Set up npm trusted publishing for this repo', {
+  const result = await sendMessage('Set up npm trusted publishing for this repo', {
     workingDirectory: '.',
     timeoutSeconds: 600,
   });
@@ -87,6 +88,23 @@ try {
 
 > Despite the `use*` prefix, **`usePersona` is not a React hook.** It is a
 > plain synchronous factory with no implicit state — safe to call anywhere.
+
+The full return shape is:
+
+```ts
+const {
+  selection,
+  install,
+  sendMessage,
+} = usePersona('npm-provenance');
+```
+
+- `selection`: resolved persona choice and runtime metadata.
+- `install`: grouped install metadata.
+- `install.plan`: pure skill-install plan with no side effects.
+- `install.command`: full install command as an argv array.
+- `install.commandString`: full install command as a shell string.
+- `sendMessage(task, options?)`: runs the persona and returns an awaitable `PersonaExecution`.
 
 For the full API — the install-only mode, pre-staged install with
 `installSkills: false`, cancellation via `AbortSignal`, streaming progress,
@@ -111,13 +129,13 @@ const selection = resolvePersona('npm-provenance');
 const plan = materializeSkillsFor(selection);
 for (const install of plan.installs) {
   // install.installCommand is an argv array (safer for execFile/spawn).
-  // For a shell string, use `usePersona(...).installCommandString`.
+  // For a shell string, use `usePersona(...).install.commandString`.
   spawnSync(install.installCommand[0], install.installCommand.slice(1), { stdio: 'inherit' });
 }
 ```
 
 These primitives are exported for callers who need direct access to the
-plan object or want to skip the `execute()` workflow entirely. New code
+plan object or want to skip the `sendMessage()` workflow entirely. New code
 should prefer `usePersona` — it consolidates routing, install planning,
 and agent execution into one call and gives you cancellation / progress /
 run-id observability for free.
@@ -141,13 +159,14 @@ run-id observability for free.
    - `opencode-workflow-correctness`
    - `npm-provenance`
 2. Call `usePersona(intent, { profile? })` to resolve the persona and
-   receive an `execute()` closure bound to its runtime (harness, model,
-   settings, prompt) and skill install plan.
-3. Call `execute(task, opts)` to install the persona's skills and invoke
+   receive the selected persona, grouped install metadata, and a
+   `sendMessage()` closure bound to its runtime (harness, model, settings,
+   prompt).
+3. Call `sendMessage(task, opts)` to install the persona's skills and invoke
    its harness agent in one step. Use `AbortSignal` / `execution.cancel()`
    for cancellation and `onProgress` to stream stdout/stderr.
 
-If you need to bypass `execute()` and spawn the agent yourself — for
+If you need to bypass `sendMessage()` and spawn the agent yourself — for
 example, to integrate with an existing orchestrator — `resolvePersona` +
 `materializeSkillsFor` remain available as the underlying primitives
 (see the collapsed section above).

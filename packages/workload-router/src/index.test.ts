@@ -270,22 +270,23 @@ test('materializeSkills handles personas with no skills', () => {
   assert.equal(plan.installs.length, 0);
 });
 
-test('usePersona combines selection, install plan, and install commands into a frozen context', () => {
+test('usePersona combines selection, grouped install metadata, and sendMessage into a frozen context', () => {
   const context = usePersona('npm-provenance');
   const selection = resolvePersona('npm-provenance');
   const plan = materializeSkillsFor(selection);
 
   assert.deepEqual(context.selection, selection);
-  assert.deepEqual(context.installPlan, plan);
-  assert.equal(context.installCommand[0], 'sh');
-  assert.match(context.installCommandString, /prpm install/);
+  assert.deepEqual(context.install.plan, plan);
+  assert.equal(context.install.command[0], 'sh');
+  assert.match(context.install.commandString, /prpm install/);
   assert.ok(Object.isFrozen(context));
   assert.ok(Object.isFrozen(context.selection));
-  assert.ok(Object.isFrozen(context.installPlan));
-  assert.ok(Object.isFrozen(context.installCommand));
+  assert.ok(Object.isFrozen(context.install));
+  assert.ok(Object.isFrozen(context.install.plan));
+  assert.ok(Object.isFrozen(context.install.command));
 });
 
-test('usePersona.execute runs the selected harness and returns stdout, stderr, and run metadata', async () => {
+test('usePersona.sendMessage runs the selected harness and returns stdout, stderr, and run metadata', async () => {
   const dir = mkdtempSync(join(tmpdir(), 'use-persona-success-'));
   try {
     writeNodeExecutable(
@@ -303,9 +304,9 @@ process.stderr.write('stub-stderr');
 
     const context = usePersona('architecture-plan', { harness: 'codex' });
     const progress: Array<{ stream: 'stdout' | 'stderr'; text: string }> = [];
-    const execution = context.execute('Draft the migration plan', {
+    const execution = context.sendMessage('Draft the migration plan', {
       workingDirectory: dir,
-      env: buildEnv(dir, { TEST_ENV: 'persona-execute' }),
+      env: buildEnv(dir, { TEST_ENV: 'persona-send-message' }),
       onProgress: (chunk) => progress.push(chunk)
     });
 
@@ -324,7 +325,7 @@ process.stderr.write('stub-stderr');
     assert.deepEqual(args.slice(0, 2), ['exec', '--dangerously-bypass-approvals-and-sandbox']);
     assert.match(args[2], /System Instructions:/);
     assert.match(args[2], /Draft the migration plan/);
-    assert.deepEqual(env, { TEST_ENV: 'persona-execute' });
+    assert.deepEqual(env, { TEST_ENV: 'persona-send-message' });
     assert.deepEqual(progress, [
       { stream: 'stdout', text: 'stub-stdout' },
       { stream: 'stderr', text: 'stub-stderr' }
@@ -334,7 +335,7 @@ process.stderr.write('stub-stderr');
   }
 });
 
-test('usePersona.execute installs persona skills before running the agent step', async () => {
+test('usePersona.sendMessage installs persona skills before running the agent step', async () => {
   const dir = mkdtempSync(join(tmpdir(), 'use-persona-install-'));
   try {
     writeNodeExecutable(
@@ -360,7 +361,7 @@ process.stdout.write('agent-after-install');
     );
 
     const context = usePersona('npm-provenance', { harness: 'codex' });
-    const result = await context.execute('Configure publishing', {
+    const result = await context.sendMessage('Configure publishing', {
       workingDirectory: dir,
       env: buildEnv(dir)
     });
@@ -373,7 +374,7 @@ process.stdout.write('agent-after-install');
   }
 });
 
-test('usePersona.execute maps non-zero exits to PersonaExecutionError with captured stderr', async () => {
+test('usePersona.sendMessage maps non-zero exits to PersonaExecutionError with captured stderr', async () => {
   const dir = mkdtempSync(join(tmpdir(), 'use-persona-fail-'));
   try {
     writeNodeExecutable(
@@ -387,7 +388,7 @@ process.exit(17);
 
     const context = usePersona('architecture-plan', { harness: 'codex' });
     await assert.rejects(
-      context.execute('Fail this run', {
+      context.sendMessage('Fail this run', {
         workingDirectory: dir,
         env: buildEnv(dir)
       }),
@@ -404,7 +405,7 @@ process.exit(17);
   }
 });
 
-test('usePersona.execute supports cancellation via AbortSignal', async () => {
+test('usePersona.sendMessage supports cancellation via AbortSignal', async () => {
   const dir = mkdtempSync(join(tmpdir(), 'use-persona-cancel-'));
   try {
     writeNodeExecutable(
@@ -418,7 +419,7 @@ setInterval(() => {}, 1_000);
 
     const controller = new AbortController();
     const context = usePersona('architecture-plan', { harness: 'codex' });
-    const execution = context.execute('Wait for cancellation', {
+    const execution = context.sendMessage('Wait for cancellation', {
       workingDirectory: dir,
       env: buildEnv(dir),
       signal: controller.signal

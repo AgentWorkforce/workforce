@@ -133,14 +133,23 @@ export interface SkillMaterializationPlan {
   installs: SkillInstall[];
 }
 
+export interface PersonaInstallContext {
+  /** Pure install plan for the persona's skills. Describes what would be installed and where, with no side effects. */
+  readonly plan: SkillMaterializationPlan;
+  /** Full install command in argv form, suitable for `execFile`/`spawn` without shell escaping concerns. */
+  readonly command: readonly string[];
+  /** Shell-escaped form of the full install command, convenient for `spawn(..., { shell: true })`. */
+  readonly commandString: string;
+}
+
 /**
- * Options for {@link PersonaContext.execute}. All fields are optional —
- * calling `execute(task)` with no options is the common case.
+ * Options for {@link PersonaContext.sendMessage}. All fields are optional —
+ * calling `sendMessage(task)` with no options is the common case.
  *
  * Pass `installSkills: false` when you have already pre-staged the persona's
- * skills via {@link PersonaContext.installCommandString} (e.g. in a Dockerfile
- * or a CI bootstrap step) and do not want `execute()` to re-install them.
- * Leaving `installSkills` unset means `execute()` installs skills itself as
+ * skills via `usePersona(...).install.commandString` (e.g. in a Dockerfile or
+ * a CI bootstrap step) and do not want `sendMessage()` to re-install them.
+ * Leaving `installSkills` unset means `sendMessage()` installs skills itself as
  * the first step of the ad-hoc workflow — this is the default.
  */
 export interface ExecuteOptions {
@@ -163,7 +172,7 @@ export interface ExecuteOptions {
 }
 
 /**
- * Final result of a {@link PersonaContext.execute} call.
+ * Final result of a {@link PersonaContext.sendMessage} call.
  *
  * **Only `status: 'completed'` is returned as a resolved promise.** Any
  * other outcome is delivered as a thrown error with a typed `.result`
@@ -185,7 +194,7 @@ export interface ExecuteOptions {
  *
  * ```ts
  * try {
- *   const result = await execute(task, opts);
+ *   const result = await sendMessage(task, opts);
  *   // result.status is guaranteed to be 'completed' here.
  * } catch (err) {
  *   // err.result.status is 'failed' | 'cancelled' | 'timeout'.
@@ -205,7 +214,7 @@ export interface ExecuteResult {
 }
 
 /**
- * Handle returned by {@link PersonaContext.execute}. It *is* a `Promise<ExecuteResult>`
+ * Handle returned by {@link PersonaContext.sendMessage}. It *is* a `Promise<ExecuteResult>`
  * (awaitable directly), with two extra members bolted on:
  *
  * - `cancel(reason?)` — request cancellation of the running workflow. Equivalent
@@ -215,7 +224,7 @@ export interface ExecuteResult {
  * - `runId` — a `Promise<string>` that resolves to the workflow run id
  *   once the persona's agent step has actually spawned. This is deliberately
  *   a promise (not `string | undefined`) because the id is not known at the
- *   moment `execute()` returns — the workflow hasn't started yet. The
+ *   moment `sendMessage()` returns — the workflow hasn't started yet. The
  *   resolution timing contract is:
  *
  *     1. If the agent subprocess emits any stdout/stderr, `runId` resolves
@@ -229,7 +238,7 @@ export interface ExecuteResult {
  *   Practical consequence: `await run.runId` is *not* instantaneous — do not
  *   block on it in a tight synchronous path expecting a cached value.
  *
- *   Error mirroring: if `execute()` fails before the workflow has started
+ *   Error mirroring: if `sendMessage()` fails before the workflow has started
  *   (e.g. the dynamic `@agent-relay/sdk/workflows` import throws, or the
  *   `WorkflowRunner` constructor throws), `runId` rejects with the same
  *   error as the main promise. Awaiting `runId` is therefore safe to
@@ -245,26 +254,27 @@ export interface PersonaExecution extends Promise<ExecuteResult> {
 
 /**
  * Return value of {@link usePersona}. A side-effect-free bundle of
- * "what this persona is" plus an `execute()` closure for running it.
+ * "what this persona is" plus grouped install metadata and a
+ * `sendMessage()` closure for running it.
  *
  * There are two ways to use the fields, and they are **alternatives**,
  * not sequential steps:
  *
- * **Mode A — let `execute()` handle install (recommended default):**
+ * **Mode A — let `sendMessage()` handle install (recommended default):**
  * ```ts
- * const { execute } = usePersona('npm-provenance');
- * const result = await execute('Your task', { workingDirectory: '.' });
+ * const { sendMessage } = usePersona('npm-provenance');
+ * const result = await sendMessage('Your task', { workingDirectory: '.' });
  * ```
- * `execute()` installs the persona's skills as the first step of its
+ * `sendMessage()` installs the persona's skills as the first step of its
  * ad-hoc workflow, then runs the agent task. No manual install needed.
  *
- * **Mode B — pre-stage install yourself, then `execute()` without re-install:**
+ * **Mode B — pre-stage install yourself, then `sendMessage()` without re-install:**
  * ```ts
- * const { installCommandString, execute } = usePersona('npm-provenance');
+ * const { install, sendMessage } = usePersona('npm-provenance');
  * // e.g. inside a Dockerfile RUN, or a CI bootstrap step:
- * spawnSync(installCommandString, { shell: true, stdio: 'inherit' });
+ * spawnSync(install.commandString, { shell: true, stdio: 'inherit' });
  * // then, at runtime:
- * const result = await execute('Your task', {
+ * const result = await sendMessage('Your task', {
  *   workingDirectory: '.',
  *   installSkills: false, // skip re-install; skills are already staged
  * });
@@ -274,39 +284,35 @@ export interface PersonaExecution extends Promise<ExecuteResult> {
  * when you want to wrap the install with your own process management
  * (custom timeout, logging, retry, alternative runner, etc.).
  *
- * In both modes, the `await execute(...)` call above **only resolves
+ * In both modes, the `await sendMessage(...)` call above **only resolves
  * when `status === 'completed'`**. Non-zero exits / timeouts throw a
  * {@link PersonaExecutionError}, and cancellation throws an `AbortError`;
  * both carry a typed `.result` for inspection. See {@link ExecuteResult}
  * for the full outcome contract.
  *
  * ⚠️ **Do not combine the two modes without `installSkills: false`.**
- * Running `spawnSync(installCommandString, ...)` *and then* calling
- * `execute(task)` without passing `installSkills: false` will install
+ * Running `spawnSync(install.commandString, ...)` *and then* calling
+ * `sendMessage(task)` without passing `installSkills: false` will install
  * the persona's skills twice. The default value of `installSkills` is
  * `true` (see {@link ExecuteOptions}).
  *
  * A third usage is install-only: if all you want is to materialize
  * the persona's skills into the repo (for a human or another tool
- * to use), run `installCommandString` and never call `execute()`.
+ * to use), run `install.commandString` and never call `sendMessage()`.
  */
 export interface PersonaContext {
-  /** Resolved persona: id, tier, runtime (harness + model), and skills. */
+  /** Resolved persona choice for this intent/profile: identity, tier, runtime, skills, and routing rationale. */
   readonly selection: PersonaSelection;
-  /** Pure plan of what would be installed and where (no side effects). */
-  readonly installPlan: SkillMaterializationPlan;
-  /** argv form of the install command — safer for `execFile`/`spawn` callers. */
-  readonly installCommand: readonly string[];
-  /** Shell-escaped form of the install command — convenient for `spawn(..., { shell: true })`. */
-  readonly installCommandString: string;
+  /** Grouped install metadata for the resolved persona's skills. */
+  readonly install: PersonaInstallContext;
   /**
-   * Run the persona against `task`. Builds an ad-hoc agent-relay workflow,
-   * optionally runs `prpm install` as its first step (see
+   * Run the resolved persona against `task`. Builds an ad-hoc agent-relay
+   * workflow, optionally runs `prpm install` as its first step (see
    * {@link ExecuteOptions.installSkills}, default `true`), then invokes the
    * persona's harness agent with the task. Returns a {@link PersonaExecution}
    * (an awaitable promise with `cancel()` and `runId` attached).
    */
-  execute(task: string, options?: ExecuteOptions): PersonaExecution;
+  sendMessage(task: string, options?: ExecuteOptions): PersonaExecution;
 }
 
 export class PersonaExecutionError extends Error {
@@ -989,28 +995,28 @@ export function resolvePersonaByTier(intent: PersonaIntent, tier: PersonaTier = 
 
 /**
  * Resolve a persona for `intent` and return a {@link PersonaContext}
- * bundling the resolved persona, its skill install plan, and an
- * `execute()` closure for running the persona against a task.
+ * bundling the resolved persona, grouped install metadata, and a
+ * `sendMessage()` closure for running the persona against a task.
  *
  * **This is not a React hook.** The `use*` prefix is unfortunate — it is
  * a plain synchronous factory with no implicit state, no side effects,
  * and no rules-of-hooks constraints. Calling `usePersona(intent)` does
  * nothing but resolve routing config and pre-compute the install plan.
  * Nothing is installed, spawned, or written to disk until you call
- * `execute()` (or run the install command yourself).
+ * `sendMessage()` (or run the install command yourself).
  *
- * See {@link PersonaContext} for the two usage modes (let `execute()`
+ * See {@link PersonaContext} for the two usage modes (let `sendMessage()`
  * handle install vs. pre-stage install and pass `installSkills: false`)
  * and the double-install caveat.
  *
  * @example
- * // Mode A — let execute() install skills and run the agent in one call.
+ * // Mode A — let sendMessage() install skills and run the agent in one call.
  * // Only `status: 'completed'` resolves; non-zero exits / timeouts throw
  * // PersonaExecutionError and cancellation throws AbortError, both with
  * // the typed ExecuteResult attached as `err.result`.
- * const { execute } = usePersona('npm-provenance');
+ * const { sendMessage } = usePersona('npm-provenance');
  * try {
- *   const result = await execute('Set up npm trusted publishing for this repo', {
+ *   const result = await sendMessage('Set up npm trusted publishing for this repo', {
  *     workingDirectory: '.',
  *     timeoutSeconds: 600,
  *   });
@@ -1023,11 +1029,11 @@ export function resolvePersonaByTier(intent: PersonaIntent, tier: PersonaTier = 
  * @example
  * // Mode B — pre-stage install out-of-band (e.g. in a Dockerfile), then
  * // run at runtime without re-installing:
- * const { installCommandString, execute } = usePersona('npm-provenance');
+ * const { install, sendMessage } = usePersona('npm-provenance');
  * // build/CI step:
- * spawnSync(installCommandString, { shell: true, stdio: 'inherit' });
+ * spawnSync(install.commandString, { shell: true, stdio: 'inherit' });
  * // runtime step:
- * const result = await execute('Your task', {
+ * const result = await sendMessage('Your task', {
  *   workingDirectory: '.',
  *   installSkills: false,
  * });
@@ -1037,7 +1043,7 @@ export function resolvePersonaByTier(intent: PersonaIntent, tier: PersonaTier = 
  * // throw an AbortError with `err.result.status === 'cancelled'`, so
  * // wrap in try/catch if you plan to abort.
  * const abort = new AbortController();
- * const run = usePersona('npm-provenance').execute('Your task', {
+ * const run = usePersona('npm-provenance').sendMessage('Your task', {
  *   signal: abort.signal,
  *   onProgress: ({ stream, text }) => process[stream].write(text),
  * });
@@ -1091,10 +1097,15 @@ export function usePersona(
   const { installCommand, installCommandString } = buildInstallArtifacts(installPlan);
   const frozenSelection = deepFreeze(selection);
   const frozenInstallPlan = deepFreeze(installPlan);
+  const frozenInstall = Object.freeze({
+    plan: frozenInstallPlan,
+    command: installCommand,
+    commandString: installCommandString
+  });
 
-  const execute = (task: string, executeOptions: ExecuteOptions = {}): PersonaExecution => {
+  const sendMessage = (task: string, sendMessageOptions: ExecuteOptions = {}): PersonaExecution => {
     const runId = createDeferred<string>();
-    // The primary rejection path for any failure in execute() is `resultPromise`
+    // The primary rejection path for any failure in sendMessage() is `resultPromise`
     // (which the caller awaits via `await execution`). `runId.promise` is an
     // auxiliary promise that mirrors the same rejection when early setup fails
     // before the workflow has actually started. Callers are not required to
@@ -1104,21 +1115,22 @@ export function usePersona(
     // otherwise fire when both of those conditions hold simultaneously.
     runId.promise.catch(() => {});
     const abortController = new AbortController();
-    const unlinkAbort = linkAbortSignal(executeOptions.signal, abortController);
+    const unlinkAbort = linkAbortSignal(sendMessageOptions.signal, abortController);
     const stepName = sanitizeExecutionName(
-      executeOptions.name ?? `${frozenSelection.personaId}-${hash8(task)}`
+      sendMessageOptions.name ?? `${frozenSelection.personaId}-${hash8(task)}`
     );
     const workflowName = `use-persona-${stepName}`;
     const installStepName = `${stepName}-install-skills`;
-    const workingDirectory = resolvePath(executeOptions.workingDirectory ?? process.cwd());
+    const workingDirectory = resolvePath(sendMessageOptions.workingDirectory ?? process.cwd());
     const timeoutMs = Math.max(
       1,
       Math.round(
-        (executeOptions.timeoutSeconds ?? frozenSelection.runtime.harnessSettings.timeoutSeconds) * 1000
+        (sendMessageOptions.timeoutSeconds ??
+          frozenSelection.runtime.harnessSettings.timeoutSeconds) * 1000
       )
     );
     const shouldInstallSkills =
-      executeOptions.installSkills !== false && frozenInstallPlan.installs.length > 0;
+      sendMessageOptions.installSkills !== false && frozenInstallPlan.installs.length > 0;
     const stepCaptures = new Map<string, CommandCapture>();
     let cancelReason: string | undefined;
     let workflowRunId: string | undefined;
@@ -1143,7 +1155,7 @@ export function usePersona(
           stepCaptures,
           {
             cwd: workingDirectory,
-            env: { ...process.env, ...executeOptions.env },
+            env: { ...process.env, ...sendMessageOptions.env },
             signal: abortController.signal,
             onStepSpawn: (startedStepName) => {
               if (startedStepName !== stepName || runId.settled || runIdReadyTimer) {
@@ -1158,7 +1170,7 @@ export function usePersona(
                 resolveRunId();
               }
             },
-            onProgress: executeOptions.onProgress
+            onProgress: sendMessageOptions.onProgress
           },
           buildCommand
         );
@@ -1212,7 +1224,7 @@ export function usePersona(
           task: buildExecutionTask(
             frozenSelection.runtime.systemPrompt,
             task,
-            executeOptions.inputs
+            sendMessageOptions.inputs
           ),
           cwd: workingDirectory,
           timeoutMs,
@@ -1288,10 +1300,8 @@ export function usePersona(
 
   return Object.freeze({
     selection: frozenSelection,
-    installPlan: frozenInstallPlan,
-    installCommand,
-    installCommandString,
-    execute
+    install: frozenInstall,
+    sendMessage
   });
 }
 
