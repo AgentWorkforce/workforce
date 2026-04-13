@@ -1040,6 +1040,15 @@ export function usePersona(
 
   const execute = (task: string, executeOptions: ExecuteOptions = {}): PersonaExecution => {
     const runId = createDeferred<string>();
+    // The primary rejection path for any failure in execute() is `resultPromise`
+    // (which the caller awaits via `await execution`). `runId.promise` is an
+    // auxiliary promise that mirrors the same rejection when early setup fails
+    // before the workflow has actually started. Callers are not required to
+    // consume `execution.runId`, so attach a no-op catch here to suppress
+    // the unhandled-rejection warning (and, under Node's default
+    // --unhandled-rejections=throw, an uncaught-exception crash) that would
+    // otherwise fire when both of those conditions hold simultaneously.
+    runId.promise.catch(() => {});
     const abortController = new AbortController();
     const unlinkAbort = linkAbortSignal(executeOptions.signal, abortController);
     const stepName = sanitizeExecutionName(
