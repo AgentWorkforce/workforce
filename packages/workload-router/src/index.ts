@@ -1,3 +1,7 @@
+import { spawn } from 'node:child_process';
+import { createHash } from 'node:crypto';
+import { resolve as resolvePath } from 'node:path';
+import type { RunnerStepExecutor, WorkflowRunRow } from '@agent-relay/sdk/workflows';
 import { frontendImplementer, codeReviewer, architecturePlanner, requirementsAnalyst, debuggerPersona, securityReviewer, technicalWriter, verifierPersona, testStrategist, tddGuard, flakeHunter, opencodeWorkflowSpecialist, npmProvenancePublisher, cloudSandboxInfra } from './generated/personas.js';
 import defaultRoutingProfileJson from '../routing-profiles/default.json' with { type: 'json' };
 
@@ -129,6 +133,84 @@ export interface SkillMaterializationPlan {
   installs: SkillInstall[];
 }
 
+export interface ExecuteOptions {
+  /** Absolute or repo-relative path the spawned agent should treat as its CWD. */
+  workingDirectory?: string;
+  /** Optional step name override for the ad-hoc workflow run. */
+  name?: string;
+  /** Hard timeout for the install + agent run in seconds. */
+  timeoutSeconds?: number;
+  /** Optional structured context appended to the task body as JSON. */
+  inputs?: Record<string, string | number | boolean>;
+  /** Install persona skills before execution. Defaults to true. */
+  installSkills?: boolean;
+  /** Additional environment variables available to install + agent processes. */
+  env?: NodeJS.ProcessEnv;
+  /** Abort signal for cancellation. */
+  signal?: AbortSignal;
+  /** Streaming stdout/stderr callback from install + agent subprocesses. */
+  onProgress?: (chunk: { stream: 'stdout' | 'stderr'; text: string }) => void;
+}
+
+export interface ExecuteResult {
+  status: 'completed' | 'failed' | 'cancelled' | 'timeout';
+  output: string;
+  stderr: string;
+  exitCode: number | null;
+  durationMs: number;
+  workflowRunId?: string;
+  stepName: string;
+}
+
+export interface PersonaExecution extends Promise<ExecuteResult> {
+  cancel(reason?: string): void;
+  readonly runId: Promise<string>;
+}
+
+export interface PersonaContext {
+  readonly selection: PersonaSelection;
+  readonly installPlan: SkillMaterializationPlan;
+  readonly installCommand: readonly string[];
+  readonly installCommandString: string;
+  execute(task: string, options?: ExecuteOptions): PersonaExecution;
+}
+
+export class PersonaExecutionError extends Error {
+  readonly result: ExecuteResult;
+  override cause?: unknown;
+
+  constructor(message: string, result: ExecuteResult, cause?: unknown) {
+    super(message, cause === undefined ? undefined : { cause });
+    this.name = 'PersonaExecutionError';
+    this.result = result;
+    this.cause = cause;
+  }
+}
+
+interface Deferred<T> {
+  promise: Promise<T>;
+  resolve: (value: T | PromiseLike<T>) => void;
+  reject: (reason?: unknown) => void;
+  settled: boolean;
+}
+
+interface CommandCapture {
+  stdout: string;
+  stderr: string;
+  exitCode: number | null;
+  exitSignal: NodeJS.Signals | null;
+}
+
+class CapturedCommandError extends Error {
+  readonly capture: CommandCapture;
+
+  constructor(message: string, capture: CommandCapture) {
+    super(message);
+    this.name = 'CapturedCommandError';
+    this.capture = capture;
+  }
+}
+
 const PRPM_URL_RE =
   /^https?:\/\/prpm\.dev\/packages\/([^/\s?#]+)\/([^/\s?#]+)\/?(?:[?#].*)?$/i;
 const PRPM_BARE_REF_RE = /^([^/\s]+)\/([^/\s]+)$/;
@@ -208,6 +290,352 @@ export function materializeSkills(
  */
 export function materializeSkillsFor(selection: PersonaSelection): SkillMaterializationPlan {
   return materializeSkills(selection.skills, selection.runtime.harness);
+}
+
+function shellEscape(value: string): string {
+  if (/^[A-Za-z0-9_./:@%+=,-]+$/.test(value)) {
+    return value;
+  }
+  return `'${value.replace(/'/g, `'\\''`)}'`;
+}
+
+function commandToShellString(command: readonly string[]): string {
+  return command.map(shellEscape).join(' ');
+}
+
+function buildInstallArtifacts(plan: SkillMaterializationPlan): {
+  installCommand: readonly string[];
+  installCommandString: string;
+} {
+  const installCommandString =
+    plan.installs.length === 0
+      ? ':'
+      : plan.installs.map((install) => commandToShellString(install.installCommand)).join(' && ');
+
+  return {
+    installCommand: Object.freeze(['sh', '-c', installCommandString]) as readonly string[],
+    installCommandString
+  };
+}
+
+function buildExecutionTask(
+  systemPrompt: string,
+  task: string,
+  inputs?: Record<string, string | number | boolean>
+): string {
+  const sections = [`System Instructions:\n${systemPrompt.trim()}`, `Task:\n${task.trim()}`];
+  if (inputs && Object.keys(inputs).length > 0) {
+    sections.push(`Additional Inputs (JSON):\n${JSON.stringify(inputs, null, 2)}`);
+  }
+  return sections.join('\n\n');
+}
+
+function hash8(value: string): string {
+  return createHash('sha256').update(value).digest('hex').slice(0, 8);
+}
+
+function sanitizeExecutionName(value: string): string {
+  const sanitized = value
+    .trim()
+    .toLowerCase()
+    .replace(/[^a-z0-9_.-]+/g, '-')
+    .replace(/^-+|-+$/g, '');
+  return sanitized || `persona-${hash8(value)}`;
+}
+
+function createDeferred<T>(): Deferred<T> {
+  let settled = false;
+  let resolveFn!: Deferred<T>['resolve'];
+  let rejectFn!: Deferred<T>['reject'];
+  const promise = new Promise<T>((resolve, reject) => {
+    resolveFn = (value) => {
+      settled = true;
+      resolve(value);
+    };
+    rejectFn = (reason) => {
+      settled = true;
+      reject(reason);
+    };
+  });
+  return {
+    promise,
+    resolve: resolveFn,
+    reject: rejectFn,
+    get settled() {
+      return settled;
+    }
+  };
+}
+
+function createAbortError(message: string): Error {
+  const error = new Error(message);
+  error.name = 'AbortError';
+  return error;
+}
+
+function isTimeoutError(message: string | undefined): boolean {
+  return typeof message === 'string' && /timed out/i.test(message);
+}
+
+function deepFreeze<T>(value: T): T {
+  if (value === null || value === undefined || typeof value !== 'object') {
+    return value;
+  }
+
+  if (Array.isArray(value)) {
+    for (const entry of value) {
+      deepFreeze(entry);
+    }
+    return Object.freeze(value) as T;
+  }
+
+  for (const nested of Object.values(value)) {
+    deepFreeze(nested);
+  }
+  return Object.freeze(value) as T;
+}
+
+function linkAbortSignal(signal: AbortSignal | undefined, controller: AbortController): () => void {
+  if (!signal) {
+    return () => {};
+  }
+
+  if (signal.aborted) {
+    controller.abort(signal.reason);
+    return () => {};
+  }
+
+  const onAbort = () => controller.abort(signal.reason);
+  signal.addEventListener('abort', onAbort, { once: true });
+  return () => signal.removeEventListener('abort', onAbort);
+}
+
+async function runCapturedCommand(options: {
+  command: string;
+  args: string[];
+  cwd: string;
+  env: NodeJS.ProcessEnv;
+  timeoutMs?: number;
+  signal?: AbortSignal;
+  onSpawn?: () => void;
+  onProgress?: (chunk: { stream: 'stdout' | 'stderr'; text: string }) => void;
+}): Promise<CommandCapture> {
+  const { command, args, cwd, env, timeoutMs, signal, onSpawn, onProgress } = options;
+  return new Promise<CommandCapture>((resolve, reject) => {
+    if (signal?.aborted) {
+      reject(createAbortError('Execution aborted before the process started'));
+      return;
+    }
+
+    const child = spawn(command, args, {
+      cwd,
+      env,
+      stdio: ['ignore', 'pipe', 'pipe']
+    });
+
+    let stdout = '';
+    let stderr = '';
+    let timedOut = false;
+    let timeoutId: NodeJS.Timeout | undefined;
+    let killId: NodeJS.Timeout | undefined;
+    let abortDelayId: NodeJS.Timeout | undefined;
+
+    const cleanup = () => {
+      if (timeoutId) {
+        clearTimeout(timeoutId);
+      }
+      if (killId) {
+        clearTimeout(killId);
+      }
+      if (abortDelayId) {
+        clearTimeout(abortDelayId);
+      }
+      if (signal && abortHandler) {
+        signal.removeEventListener('abort', abortHandler);
+      }
+    };
+
+    const terminate = () => {
+      child.kill('SIGTERM');
+      killId = setTimeout(() => child.kill('SIGKILL'), 5_000);
+      killId.unref?.();
+    };
+
+    const abortHandler = () => {
+      if (stdout.length === 0 && stderr.length === 0) {
+        abortDelayId = setTimeout(() => {
+          abortDelayId = undefined;
+          terminate();
+        }, 15);
+        abortDelayId.unref?.();
+        return;
+      }
+
+      terminate();
+    };
+
+    if (signal) {
+      signal.addEventListener('abort', abortHandler, { once: true });
+    }
+
+    if (timeoutMs !== undefined) {
+      timeoutId = setTimeout(() => {
+        timedOut = true;
+        child.kill('SIGTERM');
+        killId = setTimeout(() => child.kill('SIGKILL'), 5_000);
+        killId.unref?.();
+      }, timeoutMs);
+      timeoutId.unref?.();
+    }
+
+    child.stdout?.on('data', (chunk) => {
+      const text = chunk.toString();
+      stdout += text;
+      onProgress?.({ stream: 'stdout', text });
+    });
+
+    child.stderr?.on('data', (chunk) => {
+      const text = chunk.toString();
+      stderr += text;
+      onProgress?.({ stream: 'stderr', text });
+    });
+
+    onSpawn?.();
+
+    child.once('error', (error) => {
+      cleanup();
+      reject(error);
+    });
+
+    child.once('close', (code, exitSignal) => {
+      cleanup();
+      const capture: CommandCapture = {
+        stdout,
+        stderr,
+        exitCode: code,
+        exitSignal: (exitSignal as NodeJS.Signals | null) ?? null
+      };
+
+      if (signal?.aborted) {
+        const error = createAbortError('Execution cancelled');
+        Object.assign(error, { capture });
+        reject(error);
+        return;
+      }
+
+      if (timedOut) {
+        reject(
+          new CapturedCommandError(
+            `Command timed out after ${timeoutMs ?? 'unknown'}ms`,
+            capture
+          )
+        );
+        return;
+      }
+
+      resolve(capture);
+    });
+  });
+}
+
+function createLocalExecutor(
+  stepCaptures: Map<string, CommandCapture>,
+  options: {
+    cwd: string;
+    env: NodeJS.ProcessEnv;
+    signal?: AbortSignal;
+    onStepSpawn?: (stepName: string) => void;
+    onStepProgress?: (
+      stepName: string,
+      chunk: { stream: 'stdout' | 'stderr'; text: string }
+    ) => void;
+    onProgress?: (chunk: { stream: 'stdout' | 'stderr'; text: string }) => void;
+  },
+  buildCommand: (cli: Harness, extraArgs: string[] | undefined, task: string) => string[]
+): RunnerStepExecutor {
+  const execute = async (
+    stepName: string,
+    command: string,
+    args: string[],
+    cwd: string,
+    timeoutMs?: number,
+    ignoreExitCode = false
+  ): Promise<CommandCapture> => {
+    const partialCapture: CommandCapture = {
+      stdout: '',
+      stderr: '',
+      exitCode: null,
+      exitSignal: null
+    };
+
+    try {
+      const capture = await runCapturedCommand({
+        command,
+        args,
+        cwd,
+        env: options.env,
+        timeoutMs,
+        signal: options.signal,
+        onSpawn: () => {
+          stepCaptures.set(stepName, { ...partialCapture });
+          options.onStepSpawn?.(stepName);
+        },
+        onProgress: (chunk) => {
+          if (chunk.stream === 'stdout') {
+            partialCapture.stdout += chunk.text;
+          } else {
+            partialCapture.stderr += chunk.text;
+          }
+          stepCaptures.set(stepName, { ...partialCapture });
+          options.onStepProgress?.(stepName, chunk);
+          options.onProgress?.(chunk);
+        }
+      });
+      stepCaptures.set(stepName, capture);
+      if (!ignoreExitCode && capture.exitCode !== null && capture.exitCode !== 0) {
+        throw new CapturedCommandError(
+          `Step "${stepName}" exited with code ${capture.exitCode}`,
+          capture
+        );
+      }
+      return capture;
+    } catch (error) {
+      const capture = error instanceof CapturedCommandError ? error.capture : (error as { capture?: CommandCapture }).capture;
+      if (capture) {
+        stepCaptures.set(stepName, capture);
+      }
+      throw error;
+    }
+  };
+
+  return {
+    async executeAgentStep(step, agentDef, resolvedTask, timeoutMs) {
+      const extraArgs = agentDef.constraints?.model ? ['--model', agentDef.constraints.model] : undefined;
+      const [command, ...args] = buildCommand(agentDef.cli as Harness, extraArgs, resolvedTask);
+      const capture = await execute(
+        step.name,
+        command,
+        args,
+        resolvePath(step.cwd ?? options.cwd),
+        timeoutMs,
+        agentDef.cli === 'opencode'
+      );
+      return capture.stdout;
+    },
+    async executeDeterministicStep(step, resolvedCommand, cwd) {
+      const capture = await execute(
+        step.name,
+        'sh',
+        ['-c', resolvedCommand],
+        resolvePath(cwd),
+        step.timeoutMs
+      );
+      return {
+        output: capture.stdout,
+        exitCode: capture.exitCode ?? 0
+      };
+    }
+  };
 }
 
 function isObject(value: unknown): value is Record<string, unknown> {
@@ -423,6 +851,229 @@ export function resolvePersonaByTier(intent: PersonaIntent, tier: PersonaTier = 
     skills: spec.skills,
     rationale: `legacy-tier-override: ${tier}`
   };
+}
+
+export function usePersona(
+  intent: PersonaIntent,
+  options: {
+    harness?: Harness;
+    tier?: PersonaTier;
+    profile?: RoutingProfile | RoutingProfileId;
+  } = {}
+): PersonaContext {
+  const baseSelection = options.tier
+    ? resolvePersonaByTier(intent, options.tier)
+    : resolvePersona(intent, options.profile ?? 'default');
+
+  const effectiveHarness = options.harness ?? baseSelection.runtime.harness;
+  const selection =
+    effectiveHarness === baseSelection.runtime.harness
+      ? baseSelection
+      : {
+          ...baseSelection,
+          runtime: {
+            ...baseSelection.runtime,
+            harness: effectiveHarness
+          }
+        };
+
+  const installPlan =
+    effectiveHarness === baseSelection.runtime.harness
+      ? materializeSkillsFor(selection)
+      : materializeSkills(selection.skills, effectiveHarness);
+
+  const { installCommand, installCommandString } = buildInstallArtifacts(installPlan);
+  const frozenSelection = deepFreeze(selection);
+  const frozenInstallPlan = deepFreeze(installPlan);
+
+  const execute = (task: string, executeOptions: ExecuteOptions = {}): PersonaExecution => {
+    const runId = createDeferred<string>();
+    const abortController = new AbortController();
+    const unlinkAbort = linkAbortSignal(executeOptions.signal, abortController);
+    const stepName = sanitizeExecutionName(
+      executeOptions.name ?? `${frozenSelection.personaId}-${hash8(task)}`
+    );
+    const workflowName = `use-persona-${stepName}`;
+    const installStepName = `${stepName}-install-skills`;
+    const workingDirectory = resolvePath(executeOptions.workingDirectory ?? process.cwd());
+    const timeoutMs = Math.max(
+      1,
+      Math.round(
+        (executeOptions.timeoutSeconds ?? frozenSelection.runtime.harnessSettings.timeoutSeconds) * 1000
+      )
+    );
+    const shouldInstallSkills =
+      executeOptions.installSkills !== false && frozenInstallPlan.installs.length > 0;
+    const stepCaptures = new Map<string, CommandCapture>();
+    let cancelReason: string | undefined;
+    let workflowRunId: string | undefined;
+    let runIdReadyTimer: NodeJS.Timeout | undefined;
+
+    const resolveRunId = (value = workflowRunId) => {
+      if (runIdReadyTimer) {
+        clearTimeout(runIdReadyTimer);
+        runIdReadyTimer = undefined;
+      }
+      if (value && !runId.settled) {
+        runId.resolve(value);
+      }
+    };
+
+    const resultPromise = (async (): Promise<ExecuteResult> => {
+      try {
+        const { InMemoryWorkflowDb, WorkflowRunner, buildCommand, workflow } = await import(
+          '@agent-relay/sdk/workflows'
+        );
+        const executor = createLocalExecutor(
+          stepCaptures,
+          {
+            cwd: workingDirectory,
+            env: { ...process.env, ...executeOptions.env },
+            signal: abortController.signal,
+            onStepSpawn: (startedStepName) => {
+              if (startedStepName !== stepName || runId.settled || runIdReadyTimer) {
+                return;
+              }
+
+              runIdReadyTimer = setTimeout(() => resolveRunId(), 250);
+              runIdReadyTimer.unref?.();
+            },
+            onStepProgress: (progressStepName) => {
+              if (progressStepName === stepName) {
+                resolveRunId();
+              }
+            },
+            onProgress: executeOptions.onProgress
+          },
+          buildCommand
+        );
+        const runner = new WorkflowRunner({
+          cwd: workingDirectory,
+          db: new InMemoryWorkflowDb(),
+          executor
+        });
+
+        runner.on((event) => {
+          if (event.type === 'run:started') {
+            workflowRunId = event.runId;
+          }
+
+          if (
+            (event.type === 'step:completed' || event.type === 'step:failed') &&
+            event.stepName === stepName
+          ) {
+            resolveRunId(event.runId);
+          }
+        });
+
+        const agentName = `${stepName}-agent`;
+        const builder = workflow(workflowName)
+          .description(`Ad-hoc persona execution for ${frozenSelection.personaId}`)
+          .pattern('dag')
+          .timeout(timeoutMs)
+          .trajectories(false)
+          .agent(agentName, {
+            cli: frozenSelection.runtime.harness,
+            model: frozenSelection.runtime.model,
+            role: frozenSelection.personaId,
+            preset: 'worker',
+            interactive: false,
+            timeoutMs
+          });
+
+        if (shouldInstallSkills) {
+          builder.step(installStepName, {
+            type: 'deterministic',
+            command: installCommandString,
+            cwd: workingDirectory,
+            timeoutMs,
+            captureOutput: true,
+            failOnError: true
+          });
+        }
+
+        builder.step(stepName, {
+          agent: agentName,
+          task: buildExecutionTask(
+            frozenSelection.runtime.systemPrompt,
+            task,
+            executeOptions.inputs
+          ),
+          cwd: workingDirectory,
+          timeoutMs,
+          verification: { type: 'exit_code', value: '0' },
+          ...(shouldInstallSkills ? { dependsOn: [installStepName] } : {})
+        });
+
+        abortController.signal.addEventListener('abort', () => runner.abort(), { once: true });
+        const run = (await runner.execute(builder.toConfig())) as WorkflowRunRow;
+        if (!runId.settled) {
+          runId.resolve(run.id);
+        }
+
+        const primaryCapture = stepCaptures.get(stepName);
+        const fallbackCapture = shouldInstallSkills ? stepCaptures.get(installStepName) : undefined;
+        const capture = primaryCapture ?? fallbackCapture;
+        const result: ExecuteResult = {
+          status:
+            run.status === 'cancelled'
+              ? 'cancelled'
+              : run.status === 'failed' && isTimeoutError(run.error)
+                ? 'timeout'
+                : run.status === 'completed'
+                  ? 'completed'
+                  : 'failed',
+          output: capture?.stdout ?? '',
+          stderr: capture?.stderr ?? '',
+          exitCode: capture?.exitCode ?? null,
+          durationMs: Date.now() - (Date.parse(run.startedAt) || Date.now()),
+          workflowRunId: run.id,
+          stepName
+        };
+
+        if (run.status === 'completed') {
+          return result;
+        }
+
+        if (run.status === 'cancelled') {
+          const error = createAbortError(cancelReason ?? 'Execution cancelled');
+          Object.assign(error, { result });
+          throw error;
+        }
+
+        throw new PersonaExecutionError(
+          run.error ?? `Persona execution failed for step "${stepName}"`,
+          result
+        );
+      } catch (error) {
+        if (!runId.settled) {
+          runId.reject(error);
+        }
+        throw error;
+      } finally {
+        if (runIdReadyTimer) {
+          clearTimeout(runIdReadyTimer);
+        }
+        unlinkAbort();
+      }
+    })();
+
+    return Object.assign(resultPromise, {
+      cancel(reason?: string) {
+        cancelReason = reason;
+        abortController.abort(reason);
+      },
+      runId: runId.promise
+    }) as PersonaExecution;
+  };
+
+  return Object.freeze({
+    selection: frozenSelection,
+    installPlan: frozenInstallPlan,
+    installCommand,
+    installCommandString,
+    execute
+  });
 }
 
 export * from './eval.js';
