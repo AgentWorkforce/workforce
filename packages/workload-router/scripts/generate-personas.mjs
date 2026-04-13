@@ -21,7 +21,8 @@ const exportNameMap = new Map([
   ['tdd-guard', 'tddGuard'],
   ['flake-hunter', 'flakeHunter'],
   ['opencode-workflow-specialist', 'opencodeWorkflowSpecialist'],
-  ['npm-provenance-publisher', 'npmProvenancePublisher']
+  ['npm-provenance-publisher', 'npmProvenancePublisher'],
+  ['cloud-sandbox-infra', 'cloudSandboxInfra']
 ]);
 
 const files = (await fs.readdir(personasDir)).filter((n) => n.endsWith('.json')).sort();
