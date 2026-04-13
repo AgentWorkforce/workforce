@@ -1005,7 +1005,11 @@ export function usePersona(
           ...(shouldInstallSkills ? { dependsOn: [installStepName] } : {})
         });
 
-        abortController.signal.addEventListener('abort', () => runner.abort(), { once: true });
+        if (abortController.signal.aborted) {
+          runner.abort();
+        } else {
+          abortController.signal.addEventListener('abort', () => runner.abort(), { once: true });
+        }
         const run = (await runner.execute(builder.toConfig())) as WorkflowRunRow;
         if (!runId.settled) {
           runId.resolve(run.id);
