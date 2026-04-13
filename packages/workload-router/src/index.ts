@@ -133,6 +133,16 @@ export interface SkillMaterializationPlan {
   installs: SkillInstall[];
 }
 
+/**
+ * Options for {@link PersonaContext.execute}. All fields are optional —
+ * calling `execute(task)` with no options is the common case.
+ *
+ * Pass `installSkills: false` when you have already pre-staged the persona's
+ * skills via {@link PersonaContext.installCommandString} (e.g. in a Dockerfile
+ * or a CI bootstrap step) and do not want `execute()` to re-install them.
+ * Leaving `installSkills` unset means `execute()` installs skills itself as
+ * the first step of the ad-hoc workflow — this is the default.
+ */
 export interface ExecuteOptions {
   /** Absolute or repo-relative path the spawned agent should treat as its CWD. */
   workingDirectory?: string;
@@ -152,6 +162,13 @@ export interface ExecuteOptions {
   onProgress?: (chunk: { stream: 'stdout' | 'stderr'; text: string }) => void;
 }
 
+/**
+ * Final result of a {@link PersonaContext.execute} call. A resolved result —
+ * including `status: 'failed' | 'cancelled' | 'timeout'` — is the normal
+ * return path; `PersonaExecutionError` is thrown only when the workflow
+ * itself could not be built or run (e.g. a bad config), not when the agent
+ * task merely exited non-zero.
+ */
 export interface ExecuteResult {
   status: 'completed' | 'failed' | 'cancelled' | 'timeout';
   output: string;
@@ -162,16 +179,93 @@ export interface ExecuteResult {
   stepName: string;
 }
 
+/**
+ * Handle returned by {@link PersonaContext.execute}. It *is* a `Promise<ExecuteResult>`
+ * (awaitable directly), with two extra members bolted on:
+ *
+ * - `cancel(reason?)` — request cancellation of the running workflow. Equivalent
+ *   to aborting the `AbortSignal` passed via {@link ExecuteOptions.signal}. Safe
+ *   to call after the run has already settled (no-op).
+ *
+ * - `runId` — a `Promise<string>` that resolves to the workflow run id
+ *   once the persona's agent step has actually spawned. This is deliberately
+ *   a promise (not `string | undefined`) because the id is not known at the
+ *   moment `execute()` returns — the workflow hasn't started yet. The
+ *   resolution timing contract is:
+ *
+ *     1. If the agent subprocess emits any stdout/stderr, `runId` resolves
+ *        immediately on the first progress event (see `onStepProgress`).
+ *     2. Otherwise, it resolves ~250ms after the agent step spawns (safety
+ *        net armed in `onStepSpawn`, see `src/index.ts` around the
+ *        `runIdReadyTimer` definition).
+ *     3. If the run settles (completes/fails/cancels) before either of the
+ *        above fire, it resolves at settle time with the final run id.
+ *
+ *   Practical consequence: `await run.runId` is *not* instantaneous — do not
+ *   block on it in a tight synchronous path expecting a cached value.
+ */
 export interface PersonaExecution extends Promise<ExecuteResult> {
   cancel(reason?: string): void;
   readonly runId: Promise<string>;
 }
 
+/**
+ * Return value of {@link usePersona}. A side-effect-free bundle of
+ * "what this persona is" plus an `execute()` closure for running it.
+ *
+ * There are two ways to use the fields, and they are **alternatives**,
+ * not sequential steps:
+ *
+ * **Mode A — let `execute()` handle install (recommended default):**
+ * ```ts
+ * const { execute } = usePersona('npm-provenance');
+ * const result = await execute('Your task', { workingDirectory: '.' });
+ * ```
+ * `execute()` installs the persona's skills as the first step of its
+ * ad-hoc workflow, then runs the agent task. No manual install needed.
+ *
+ * **Mode B — pre-stage install yourself, then `execute()` without re-install:**
+ * ```ts
+ * const { installCommandString, execute } = usePersona('npm-provenance');
+ * // e.g. inside a Dockerfile RUN, or a CI bootstrap step:
+ * spawnSync(installCommandString, { shell: true, stdio: 'inherit' });
+ * // then, at runtime:
+ * const result = await execute('Your task', {
+ *   workingDirectory: '.',
+ *   installSkills: false, // skip re-install; skills are already staged
+ * });
+ * ```
+ * Use this when you want to install skills once at build/CI time for
+ * caching, hermeticity, offline runtime, or split-trust reasons — or
+ * when you want to wrap the install with your own process management
+ * (custom timeout, logging, retry, alternative runner, etc.).
+ *
+ * ⚠️ **Do not combine the two modes without `installSkills: false`.**
+ * Running `spawnSync(installCommandString, ...)` *and then* calling
+ * `execute(task)` without passing `installSkills: false` will install
+ * the persona's skills twice. The default value of `installSkills` is
+ * `true` (see {@link ExecuteOptions}).
+ *
+ * A third usage is install-only: if all you want is to materialize
+ * the persona's skills into the repo (for a human or another tool
+ * to use), run `installCommandString` and never call `execute()`.
+ */
 export interface PersonaContext {
+  /** Resolved persona: id, tier, runtime (harness + model), and skills. */
   readonly selection: PersonaSelection;
+  /** Pure plan of what would be installed and where (no side effects). */
   readonly installPlan: SkillMaterializationPlan;
+  /** argv form of the install command — safer for `execFile`/`spawn` callers. */
   readonly installCommand: readonly string[];
+  /** Shell-escaped form of the install command — convenient for `spawn(..., { shell: true })`. */
   readonly installCommandString: string;
+  /**
+   * Run the persona against `task`. Builds an ad-hoc agent-relay workflow,
+   * optionally runs `prpm install` as its first step (see
+   * {@link ExecuteOptions.installSkills}, default `true`), then invokes the
+   * persona's harness agent with the task. Returns a {@link PersonaExecution}
+   * (an awaitable promise with `cancel()` and `runId` attached).
+   */
   execute(task: string, options?: ExecuteOptions): PersonaExecution;
 }
 
@@ -853,6 +947,64 @@ export function resolvePersonaByTier(intent: PersonaIntent, tier: PersonaTier = 
   };
 }
 
+/**
+ * Resolve a persona for `intent` and return a {@link PersonaContext}
+ * bundling the resolved persona, its skill install plan, and an
+ * `execute()` closure for running the persona against a task.
+ *
+ * **This is not a React hook.** The `use*` prefix is unfortunate — it is
+ * a plain synchronous factory with no implicit state, no side effects,
+ * and no rules-of-hooks constraints. Calling `usePersona(intent)` does
+ * nothing but resolve routing config and pre-compute the install plan.
+ * Nothing is installed, spawned, or written to disk until you call
+ * `execute()` (or run the install command yourself).
+ *
+ * See {@link PersonaContext} for the two usage modes (let `execute()`
+ * handle install vs. pre-stage install and pass `installSkills: false`)
+ * and the double-install caveat.
+ *
+ * @example
+ * // Mode A — let execute() install skills and run the agent in one call:
+ * const { execute } = usePersona('npm-provenance');
+ * const result = await execute('Set up npm trusted publishing for this repo', {
+ *   workingDirectory: '.',
+ *   timeoutSeconds: 600,
+ * });
+ * if (result.status !== 'completed') {
+ *   console.error('persona run failed', result.status, result.stderr);
+ * }
+ *
+ * @example
+ * // Mode B — pre-stage install out-of-band (e.g. in a Dockerfile), then
+ * // run at runtime without re-installing:
+ * const { installCommandString, execute } = usePersona('npm-provenance');
+ * // build/CI step:
+ * spawnSync(installCommandString, { shell: true, stdio: 'inherit' });
+ * // runtime step:
+ * const result = await execute('Your task', {
+ *   workingDirectory: '.',
+ *   installSkills: false,
+ * });
+ *
+ * @example
+ * // Cancellation + streaming progress:
+ * const abort = new AbortController();
+ * const run = usePersona('npm-provenance').execute('Your task', {
+ *   signal: abort.signal,
+ *   onProgress: ({ stream, text }) => process[stream].write(text),
+ * });
+ * run.runId.then((id) => console.log('workflow run id:', id));
+ * // ...later:
+ * abort.abort(); // or: run.cancel('user requested');
+ * const result = await run;
+ *
+ * @param intent   The persona intent to resolve (e.g. `'npm-provenance'`).
+ * @param options  Optional overrides. `harness` forces a specific harness
+ *                 (otherwise inferred from the selected tier's runtime).
+ *                 `tier` bypasses profile-driven routing and selects a tier
+ *                 directly (legacy path — prefer `profile`). `profile`
+ *                 selects the routing profile (defaults to `'default'`).
+ */
 export function usePersona(
   intent: PersonaIntent,
   options: {
