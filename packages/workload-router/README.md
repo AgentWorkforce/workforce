@@ -104,7 +104,17 @@ const run = usePersona('npm-provenance').execute('Your task', {
   onProgress: ({ stream, text }) => process[stream].write(text),
 });
 
-run.runId.then((id) => console.log('workflow run id:', id));
+// Two-arg `.then()` form: `runId` mirrors the main promise's rejection
+// when `execute()` fails before the workflow has started. The library
+// suppresses its own reference to that rejection, but user-level
+// `.then(onResolve)` chains track their derived promise independently,
+// so pass an onRejected handler here to avoid an unhandled rejection
+// on the callsite chain. The main promise remains the authoritative
+// outcome channel.
+run.runId.then(
+  (id) => console.log('workflow run id:', id),
+  () => {}, // error already observed via the main promise below
+);
 
 // ...later, from another code path:
 abort.abort();           // or: run.cancel('user requested');

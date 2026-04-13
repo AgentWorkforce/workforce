@@ -254,6 +254,8 @@ export interface PersonaExecution extends Promise<ExecuteResult> {
  * ```ts
  * const { execute } = usePersona('npm-provenance');
  * const result = await execute('Your task', { workingDirectory: '.' });
+ * // Happy-path shape — wrap in try/catch for non-completed outcomes.
+ * // See the "Outcome contract" note below.
  * ```
  * `execute()` installs the persona's skills as the first step of its
  * ad-hoc workflow, then runs the agent task. No manual install needed.
@@ -268,6 +270,8 @@ export interface PersonaExecution extends Promise<ExecuteResult> {
  *   workingDirectory: '.',
  *   installSkills: false, // skip re-install; skills are already staged
  * });
+ * // Same happy-path shape as Mode A — wrap in try/catch for
+ * // non-completed outcomes. See the "Outcome contract" note below.
  * ```
  * Use this when you want to install skills once at build/CI time for
  * caching, hermeticity, offline runtime, or split-trust reasons — or
@@ -1041,7 +1045,17 @@ export function resolvePersonaByTier(intent: PersonaIntent, tier: PersonaTier = 
  *   signal: abort.signal,
  *   onProgress: ({ stream, text }) => process[stream].write(text),
  * });
- * run.runId.then((id) => console.log('workflow run id:', id));
+ * // Two-arg `.then()` form: if `execute()` fails before the workflow
+ * // has started, `runId` rejects with the same error as the main
+ * // promise (see error-mirroring note on `PersonaExecution.runId`).
+ * // The library suppresses its own reference to that rejection, but
+ * // user-level `.then(onResolve)` chains track their derived promise
+ * // independently, so pass an onRejected handler (or trailing
+ * // `.catch`) to avoid an unhandled rejection on the callsite chain.
+ * run.runId.then(
+ *   (id) => console.log('workflow run id:', id),
+ *   () => {}, // main promise is the authoritative outcome channel
+ * );
  * // ...later:
  * abort.abort(); // or: run.cancel('user requested');
  * try {
