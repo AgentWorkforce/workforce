@@ -203,6 +203,15 @@ export interface ExecuteResult {
  *
  *   Practical consequence: `await run.runId` is *not* instantaneous — do not
  *   block on it in a tight synchronous path expecting a cached value.
+ *
+ *   Error mirroring: if `execute()` fails before the workflow has started
+ *   (e.g. the dynamic `@agent-relay/sdk/workflows` import throws, or the
+ *   `WorkflowRunner` constructor throws), `runId` rejects with the same
+ *   error as the main promise. Awaiting `runId` is therefore safe to
+ *   `try/catch` — you will observe the same failure twice, not miss it.
+ *   Note that you are not required to observe `runId`; the main promise
+ *   is the authoritative outcome channel, and the auxiliary rejection
+ *   on `runId` is internally suppressed when no handler is attached.
  */
 export interface PersonaExecution extends Promise<ExecuteResult> {
   cancel(reason?: string): void;
