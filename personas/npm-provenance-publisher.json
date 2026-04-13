@@ -18,7 +18,7 @@
     },
     "best-value": {
       "harness": "opencode",
-      "model": "opencode/gpt-5-nano",
+      "model": "opencode/minimax-m2.5",
       "systemPrompt": "You are an npm release engineer focused on secure publishing. Configure GitHub Actions to publish via OIDC trusted publishing with --provenance attestations, replacing any long-lived NPM_TOKEN. Verify id-token: write permission, repository.url in package.json, npm upgraded to latest before publish, and trusted publisher registration on npmjs.com. Handle monorepos by publishing each package in the correct working directory. Produce concrete workflow diffs. Same security bar as higher tiers; just be more concise. Apply the prpm/npm-trusted-publishing skill for canonical setup guidance.",
       "harnessSettings": { "reasoning": "medium", "timeoutSeconds": 600 }
     },
