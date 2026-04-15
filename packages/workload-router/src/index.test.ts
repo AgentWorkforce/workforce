@@ -115,11 +115,7 @@ test('resolves review from custom routing profile rule', () => {
         tier: 'best-value',
         rationale: 'e2e conduction benefits from strong reasoning without the highest-cost default'
       },
-      'skill-discovery': {
-        tier: 'best-value',
-        rationale: 'lightweight discovery work'
-      },
-      'prpm-self-improvement': {
+      'capability-discovery': {
         tier: 'best-value',
         rationale: 'lightweight discovery work'
       }
@@ -332,33 +328,43 @@ test('usePersona install command appends rm -rf cleanup after the install step',
   assert.match(cmd, /prpm install @prpm\/npm-trusted-publishing --as [a-z]+ && rm -rf \.\S*npm-trusted-publishing/);
 });
 
-test('resolves skill-discovery persona with the skill.sh find-skills skill attached', () => {
-  const selection = resolvePersona('skill-discovery');
-  assert.equal(selection.personaId, 'skill-finder');
+test('resolves capability-discovery persona carrying both skill.sh and prpm skills', () => {
+  const selection = resolvePersona('capability-discovery');
+  assert.equal(selection.personaId, 'capability-discoverer');
   assert.equal(selection.tier, 'best-value');
-  assert.equal(selection.skills.length, 1);
-  const [skill] = selection.skills;
-  assert.equal(skill.id, 'skill.sh/find-skills');
-  assert.equal(skill.source, 'https://github.com/vercel-labs/skills#find-skills');
-  const plan = materializeSkillsFor(selection);
-  assert.equal(plan.installs[0]?.sourceKind, 'skill.sh');
-  assert.deepEqual(
-    [...plan.installs[0]!.installCommand],
-    ['npx', '-y', 'skills', 'add', 'https://github.com/vercel-labs/skills', '--skill', 'find-skills', '-y']
-  );
+  assert.equal(selection.skills.length, 2);
+
+  const byId = new Map(selection.skills.map((s) => [s.id, s]));
+  const skillSh = byId.get('skill.sh/find-skills');
+  assert.ok(skillSh, 'missing skill.sh/find-skills skill');
+  assert.equal(skillSh!.source, 'https://github.com/vercel-labs/skills#find-skills');
+  const prpm = byId.get('prpm/self-improving');
+  assert.ok(prpm, 'missing prpm/self-improving skill');
+  assert.match(prpm!.source, /prpm\.dev\/packages\/@prpm\/self-improving/);
 });
 
-test('resolves prpm-self-improvement persona with the @prpm/self-improving skill attached', () => {
-  const selection = resolvePersona('prpm-self-improvement');
-  assert.equal(selection.personaId, 'prpm-self-improver');
-  assert.equal(selection.tier, 'best-value');
-  assert.equal(selection.skills.length, 1);
-  const [skill] = selection.skills;
-  assert.equal(skill.id, 'prpm/self-improving');
-  assert.match(skill.source, /prpm\.dev\/packages\/@prpm\/self-improving/);
+test('materializeSkillsFor capability-discovery plans both installs under one shell chain with cleanup', () => {
+  const selection = resolvePersona('capability-discovery');
   const plan = materializeSkillsFor(selection);
-  assert.equal(plan.installs[0]?.sourceKind, 'prpm');
-  assert.equal(plan.installs[0]?.packageRef, '@prpm/self-improving');
+  assert.equal(plan.installs.length, 2);
+
+  const byKind = new Map(plan.installs.map((i) => [i.sourceKind, i]));
+  const skillShInstall = byKind.get('skill.sh');
+  const prpmInstall = byKind.get('prpm');
+  assert.ok(skillShInstall, 'missing skill.sh install');
+  assert.ok(prpmInstall, 'missing prpm install');
+  assert.deepEqual(
+    [...skillShInstall!.installCommand],
+    ['npx', '-y', 'skills', 'add', 'https://github.com/vercel-labs/skills', '--skill', 'find-skills', '-y']
+  );
+  assert.equal(prpmInstall!.packageRef, '@prpm/self-improving');
+
+  const context = usePersona('capability-discovery');
+  const cmd = context.install.commandString;
+  // Both installs should be chained with &&, and each should be followed by
+  // its own rm -rf cleanup before the next install starts.
+  assert.match(cmd, /skills add.*&& rm -rf .*find-skills.*&& npx -y prpm install @prpm\/self-improving/);
+  assert.match(cmd, /prpm install @prpm\/self-improving --as [a-z]+ && rm -rf \.\S*self-improving/);
 });
 
 test('materializeSkills rejects unknown skill sources', () => {
