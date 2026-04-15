@@ -74,6 +74,14 @@
     "sage-cloud-e2e-conduction": {
       "tier": "best-value",
       "rationale": "End-to-end conduction is orchestration-heavy work where strong reasoning is useful without requiring the top tier by default."
+    },
+    "skill-discovery": {
+      "tier": "best-value",
+      "rationale": "Searching skills.sh and matching candidates is lightweight research; the balanced default is enough when guided by the skill.sh/find-skills skill."
+    },
+    "prpm-self-improvement": {
+      "tier": "best-value",
+      "rationale": "Classifying capability gaps and matching prpm packages is lightweight research; the balanced default is sufficient when guided by the @prpm/self-improving skill."
     }
   }
 }

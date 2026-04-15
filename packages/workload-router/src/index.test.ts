@@ -114,6 +114,14 @@ test('resolves review from custom routing profile rule', () => {
       'sage-cloud-e2e-conduction': {
         tier: 'best-value',
         rationale: 'e2e conduction benefits from strong reasoning without the highest-cost default'
+      },
+      'skill-discovery': {
+        tier: 'best-value',
+        rationale: 'lightweight discovery work'
+      },
+      'prpm-self-improvement': {
+        tier: 'best-value',
+        rationale: 'lightweight discovery work'
       }
     }
   });
@@ -262,6 +270,95 @@ test('materializeSkillsFor derives an install plan from a resolved persona', () 
   assert.equal(plan.installs.length, 1);
   const cmd = plan.installs[0].installCommand.join(' ');
   assert.match(cmd, /prpm install @prpm\/npm-trusted-publishing --as /);
+});
+
+test('materializeSkills emits a skill.sh install for a github#skill source', () => {
+  const plan = materializeSkills(
+    [
+      {
+        id: 'skill.sh/find-skills',
+        source: 'https://github.com/vercel-labs/skills#find-skills',
+        description: 'skill.sh discovery skill'
+      }
+    ],
+    'claude'
+  );
+
+  assert.equal(plan.installs.length, 1);
+  const [install] = plan.installs;
+  assert.equal(install.sourceKind, 'skill.sh');
+  assert.equal(install.packageRef, 'https://github.com/vercel-labs/skills#find-skills');
+  assert.deepEqual(
+    [...install.installCommand],
+    ['npx', '-y', 'skills', 'add', 'https://github.com/vercel-labs/skills', '--skill', 'find-skills', '-y']
+  );
+  // skill.sh uses a single universal content dir regardless of harness.
+  assert.equal(install.installedDir, '.agents/skills/find-skills');
+  assert.equal(install.installedManifest, '.agents/skills/find-skills/SKILL.md');
+  // Cleanup should target every harness symlink + the universal dir, but
+  // never the lockfile itself.
+  assert.deepEqual(
+    [...install.cleanupPaths],
+    [
+      '.agents/skills/find-skills',
+      '.claude/skills/find-skills',
+      '.factory/skills/find-skills',
+      '.kiro/skills/find-skills',
+      'skills/find-skills'
+    ]
+  );
+  assert.ok(!install.cleanupPaths.includes('skills-lock.json'));
+});
+
+test('prpm installs carry a harness-scoped cleanup path (not the lockfile)', () => {
+  const plan = materializeSkills(
+    [
+      {
+        id: 'prpm/npm-trusted-publishing',
+        source: '@prpm/npm-trusted-publishing',
+        description: 'bare ref form'
+      }
+    ],
+    'codex'
+  );
+  const [install] = plan.installs;
+  assert.deepEqual([...install.cleanupPaths], ['.agents/skills/npm-trusted-publishing']);
+  assert.ok(!install.cleanupPaths.includes('prpm.lock'));
+});
+
+test('usePersona install command appends rm -rf cleanup after the install step', () => {
+  const context = usePersona('npm-provenance');
+  const cmd = context.install.commandString;
+  assert.match(cmd, /prpm install @prpm\/npm-trusted-publishing --as [a-z]+ && rm -rf \.\S*npm-trusted-publishing/);
+});
+
+test('resolves skill-discovery persona with the skill.sh find-skills skill attached', () => {
+  const selection = resolvePersona('skill-discovery');
+  assert.equal(selection.personaId, 'skill-finder');
+  assert.equal(selection.tier, 'best-value');
+  assert.equal(selection.skills.length, 1);
+  const [skill] = selection.skills;
+  assert.equal(skill.id, 'skill.sh/find-skills');
+  assert.equal(skill.source, 'https://github.com/vercel-labs/skills#find-skills');
+  const plan = materializeSkillsFor(selection);
+  assert.equal(plan.installs[0]?.sourceKind, 'skill.sh');
+  assert.deepEqual(
+    [...plan.installs[0]!.installCommand],
+    ['npx', '-y', 'skills', 'add', 'https://github.com/vercel-labs/skills', '--skill', 'find-skills', '-y']
+  );
+});
+
+test('resolves prpm-self-improvement persona with the @prpm/self-improving skill attached', () => {
+  const selection = resolvePersona('prpm-self-improvement');
+  assert.equal(selection.personaId, 'prpm-self-improver');
+  assert.equal(selection.tier, 'best-value');
+  assert.equal(selection.skills.length, 1);
+  const [skill] = selection.skills;
+  assert.equal(skill.id, 'prpm/self-improving');
+  assert.match(skill.source, /prpm\.dev\/packages\/@prpm\/self-improving/);
+  const plan = materializeSkillsFor(selection);
+  assert.equal(plan.installs[0]?.sourceKind, 'prpm');
+  assert.equal(plan.installs[0]?.packageRef, '@prpm/self-improving');
 });
 
 test('materializeSkills rejects unknown skill sources', () => {

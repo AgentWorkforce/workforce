@@ -2,7 +2,7 @@ import { spawn } from 'node:child_process';
 import { createHash } from 'node:crypto';
 import { resolve as resolvePath } from 'node:path';
 import type { RunnerStepExecutor, WorkflowRunRow } from '@agent-relay/sdk/workflows';
-import { frontendImplementer, codeReviewer, architecturePlanner, requirementsAnalyst, debuggerPersona, securityReviewer, technicalWriter, verifierPersona, testStrategist, tddGuard, flakeHunter, opencodeWorkflowSpecialist, npmProvenancePublisher, cloudSandboxInfra, sageSlackEgressMigrator, sageProactiveRewirer, cloudSlackProxyGuard, agentRelayE2eConductor } from './generated/personas.js';
+import { frontendImplementer, codeReviewer, architecturePlanner, requirementsAnalyst, debuggerPersona, securityReviewer, technicalWriter, verifierPersona, testStrategist, tddGuard, flakeHunter, opencodeWorkflowSpecialist, npmProvenancePublisher, cloudSandboxInfra, sageSlackEgressMigrator, sageProactiveRewirer, cloudSlackProxyGuard, agentRelayE2eConductor, skillFinder, prpmSelfImprover } from './generated/personas.js';
 import defaultRoutingProfileJson from '../routing-profiles/default.json' with { type: 'json' };
 
 export const HARNESS_VALUES = ['opencode', 'codex', 'claude'] as const;
@@ -25,7 +25,9 @@ export const PERSONA_INTENTS = [
   'sage-slack-egress-migration',
   'sage-proactive-rewire',
   'cloud-slack-proxy-guard',
-  'sage-cloud-e2e-conduction'
+  'sage-cloud-e2e-conduction',
+  'skill-discovery',
+  'prpm-self-improvement'
 ] as const;
 
 export type Harness = (typeof HARNESS_VALUES)[number];
@@ -99,7 +101,7 @@ export interface PersonaSelection {
 // never touches the filesystem or spawns processes. Callers (relay workflows,
 // the OpenClaw spawner, ad-hoc scripts) decide how to execute it.
 
-export const SKILL_SOURCE_KINDS = ['prpm'] as const;
+export const SKILL_SOURCE_KINDS = ['prpm', 'skill.sh'] as const;
 export type SkillSourceKind = (typeof SKILL_SOURCE_KINDS)[number];
 
 /** Per-harness rules for where skills land on disk and how to ask prpm for them. */
@@ -121,7 +123,7 @@ export interface SkillInstall {
   /** Original `source` string from the persona JSON. */
   source: string;
   sourceKind: SkillSourceKind;
-  /** Normalized package reference used by prpm (e.g. `prpm/npm-trusted-publishing`). */
+  /** Normalized package reference (e.g. `@prpm/npm-trusted-publishing`, `vercel-labs/skills#find-skills`). */
   packageRef: string;
   harness: Harness;
   /** argv-style command — safer than a shell string for execFile/spawn callers. */
@@ -130,6 +132,13 @@ export interface SkillInstall {
   installedDir: string;
   /** Path to the installed SKILL.md manifest (for prompt injection fallback). */
   installedManifest: string;
+  /**
+   * Paths the installer scatters outside of a durable lockfile — safe to
+   * `rm -rf` once the persona run has read what it needs from them. The
+   * provider's lockfile (`prpm.lock`, `skills-lock.json`, etc.) is deliberately
+   * omitted so repeat runs can stay fast and reproducible.
+   */
+  cleanupPaths: readonly string[];
 }
 
 export interface SkillMaterializationPlan {
@@ -355,40 +364,171 @@ class CapturedCommandError extends Error {
   }
 }
 
-const PRPM_URL_RE =
-  /^https?:\/\/prpm\.dev\/packages\/([^/\s?#]+)\/([^/\s?#]+)\/?(?:[?#].*)?$/i;
-const PRPM_BARE_REF_RE = /^([^/\s]+)\/([^/\s]+)$/;
+// ---------------------------------------------------------------------------
+// Skill providers
+// ---------------------------------------------------------------------------
+//
+// Each provider (prpm, skill.sh, ...) owns three concerns:
+//   1. How to parse its source-string shape out of a persona JSON entry.
+//   2. How to build the concrete `npx ...` install command for a given harness.
+//   3. Which ephemeral paths the installer writes that should be cleaned up
+//      after the persona run finishes. The provider's *lockfile* is NOT in
+//      that list — it stays on disk so repeat runs reuse resolved versions.
+//
+// Adding a new skill source kind = add one provider entry here; everything
+// else (materializeSkills, buildInstallArtifacts, tests) picks it up via the
+// common interface.
 
 interface ResolvedSkillSource {
   kind: SkillSourceKind;
   packageRef: string;
+  /** Directory name used for the installed skill (e.g. `npm-trusted-publishing`). */
+  installedName: string;
 }
 
-function resolveSkillSource(source: string): ResolvedSkillSource {
-  const urlMatch = source.match(PRPM_URL_RE);
-  if (urlMatch) {
-    return { kind: 'prpm', packageRef: `${urlMatch[1]}/${urlMatch[2]}` };
+interface SkillProvider {
+  readonly kind: SkillSourceKind;
+  /** Parse a persona `source` string; return null if this provider does not claim it. */
+  parse(source: string): ResolvedSkillSource | null;
+  /** Build the argv-style install command for `materializeSkills`. */
+  buildInstallCommand(ref: ResolvedSkillSource, harness: Harness): readonly string[];
+  /**
+   * Ephemeral paths the installer scatters for this skill under `harness` that are
+   * safe to remove once the persona has finished reading them. Does not include
+   * the provider's lockfile.
+   */
+  cleanupPaths(ref: ResolvedSkillSource, harness: Harness): readonly string[];
+}
+
+const PRPM_URL_RE =
+  /^https?:\/\/prpm\.dev\/packages\/([^/\s?#]+)\/([^/\s?#]+)\/?(?:[?#].*)?$/i;
+const PRPM_BARE_REF_RE = /^([^/\s]+)\/([^/\s]+)$/;
+
+function lastSegment(ref: string): string {
+  const slash = ref.lastIndexOf('/');
+  return slash >= 0 ? ref.slice(slash + 1) : ref;
+}
+
+const prpmProvider: SkillProvider = {
+  kind: 'prpm',
+  parse(source) {
+    const urlMatch = source.match(PRPM_URL_RE);
+    if (urlMatch) {
+      const ref = `${urlMatch[1]}/${urlMatch[2]}`;
+      return { kind: 'prpm', packageRef: ref, installedName: lastSegment(ref) };
+    }
+    const bareMatch = source.match(PRPM_BARE_REF_RE);
+    if (bareMatch) {
+      return { kind: 'prpm', packageRef: source, installedName: lastSegment(source) };
+    }
+    return null;
+  },
+  buildInstallCommand(ref, harness) {
+    const target = HARNESS_SKILL_TARGETS[harness];
+    return Object.freeze([
+      'npx',
+      '-y',
+      'prpm',
+      'install',
+      ref.packageRef,
+      '--as',
+      target.asFlag
+    ]) as readonly string[];
+  },
+  cleanupPaths(ref, harness) {
+    const target = HARNESS_SKILL_TARGETS[harness];
+    return Object.freeze([`${target.dir}/${ref.installedName}`]) as readonly string[];
   }
-  const bareMatch = source.match(PRPM_BARE_REF_RE);
-  if (bareMatch) {
-    return { kind: 'prpm', packageRef: source };
+};
+
+// skill.sh source form: `<github-url>#<skill-name>`
+// Example: `https://github.com/vercel-labs/skills#find-skills`
+const SKILL_SH_URL_RE =
+  /^(https?:\/\/github\.com\/[^/\s?#]+\/[^/\s?#]+?)(?:\.git)?#([^\s?#]+)$/i;
+
+/**
+ * Paths `npx skills add` writes per install. Mirrors the on-disk layout from
+ * a live `npx -y skills add ... -y` run (universal dir + harness-side
+ * symlinks). `skills-lock.json` is deliberately excluded so repeat runs can
+ * re-resolve from the lock instead of refetching sources.
+ */
+function skillShArtifactPaths(installedName: string): readonly string[] {
+  return Object.freeze([
+    `.agents/skills/${installedName}`,
+    `.claude/skills/${installedName}`,
+    `.factory/skills/${installedName}`,
+    `.kiro/skills/${installedName}`,
+    `skills/${installedName}`
+  ]) as readonly string[];
+}
+
+const skillShProvider: SkillProvider = {
+  kind: 'skill.sh',
+  parse(source) {
+    const match = source.match(SKILL_SH_URL_RE);
+    if (!match) {
+      return null;
+    }
+    const [, repoUrl, skillName] = match;
+    return {
+      kind: 'skill.sh',
+      // packageRef preserves the full `<repo>#<skill>` shape so the command builder
+      // can reconstruct both halves without re-parsing the original source.
+      packageRef: `${repoUrl}#${skillName}`,
+      installedName: skillName
+    };
+  },
+  buildInstallCommand(ref) {
+    const [repoUrl, skillName] = ref.packageRef.split('#');
+    return Object.freeze([
+      'npx',
+      '-y',
+      'skills',
+      'add',
+      repoUrl,
+      '--skill',
+      skillName,
+      '-y'
+    ]) as readonly string[];
+  },
+  cleanupPaths(ref) {
+    // skill.sh installs the same universal dir + harness symlinks regardless
+    // of which agent is the "host" — clean all of them so nothing leaks into
+    // `.claude/`, `.agents/`, etc. after the persona run.
+    return skillShArtifactPaths(ref.installedName);
+  }
+};
+
+const SKILL_PROVIDERS: readonly SkillProvider[] = Object.freeze([prpmProvider, skillShProvider]);
+
+function resolveSkillSource(source: string): ResolvedSkillSource {
+  for (const provider of SKILL_PROVIDERS) {
+    const parsed = provider.parse(source);
+    if (parsed) {
+      return parsed;
+    }
   }
   throw new Error(
     `Unsupported skill source: ${source}. ` +
-      `Supported forms: prpm.dev package URL (https://prpm.dev/packages/<scope>/<name>) ` +
-      `or a bare "<scope>/<name>" reference.`
+      `Supported forms: prpm.dev package URL (https://prpm.dev/packages/<scope>/<name>), ` +
+      `bare "<scope>/<name>" prpm reference, ` +
+      `or skill.sh github URL with skill fragment (https://github.com/<org>/<repo>#<skill>).`
   );
 }
 
-function deriveInstalledName(packageRef: string): string {
-  const slash = packageRef.lastIndexOf('/');
-  return slash >= 0 ? packageRef.slice(slash + 1) : packageRef;
+function providerFor(kind: SkillSourceKind): SkillProvider {
+  const provider = SKILL_PROVIDERS.find((p) => p.kind === kind);
+  if (!provider) {
+    throw new Error(`No skill provider registered for kind: ${kind}`);
+  }
+  return provider;
 }
 
 /**
  * Given a set of persona skills and the harness the persona will run under,
- * produce the concrete install plan: which `prpm install` invocations to run
- * and where the skill will land on disk once installed.
+ * produce the concrete install plan: which install invocations to run, where
+ * the skill will land on disk, and which artifact paths should be cleaned up
+ * after the persona run to keep the workspace tidy.
  *
  * Pure function — does not execute commands or touch the filesystem.
  */
@@ -402,26 +542,28 @@ export function materializeSkills(
   }
 
   const installs = skills.map((skill): SkillInstall => {
-    const { kind, packageRef } = resolveSkillSource(skill.source);
-    const installedName = deriveInstalledName(packageRef);
-    const installedDir = `${target.dir}/${installedName}`;
+    const resolved = resolveSkillSource(skill.source);
+    const provider = providerFor(resolved.kind);
+    const installCommand = provider.buildInstallCommand(resolved, harness);
+    const cleanupPaths = provider.cleanupPaths(resolved, harness);
+    // For prompt-injection fallback we still want a single canonical manifest
+    // path. prpm installs into the harness target dir; skill.sh installs into
+    // its universal `.agents/skills` dir regardless of harness, so key off
+    // whichever cleanup path ends in the installed name.
+    const installedDir =
+      resolved.kind === 'skill.sh'
+        ? `.agents/skills/${resolved.installedName}`
+        : `${target.dir}/${resolved.installedName}`;
     return {
       skillId: skill.id,
       source: skill.source,
-      sourceKind: kind,
-      packageRef,
+      sourceKind: resolved.kind,
+      packageRef: resolved.packageRef,
       harness,
-      installCommand: Object.freeze([
-        'npx',
-        '-y',
-        'prpm',
-        'install',
-        packageRef,
-        '--as',
-        target.asFlag
-      ]) as readonly string[],
+      installCommand,
       installedDir,
-      installedManifest: `${installedDir}/SKILL.md`
+      installedManifest: `${installedDir}/SKILL.md`,
+      cleanupPaths
     };
   });
 
@@ -451,10 +593,30 @@ function buildInstallArtifacts(plan: SkillMaterializationPlan): {
   installCommand: readonly string[];
   installCommandString: string;
 } {
-  const installCommandString =
-    plan.installs.length === 0
-      ? ':'
-      : plan.installs.map((install) => commandToShellString(install.installCommand)).join(' && ');
+  if (plan.installs.length === 0) {
+    const noop = ':';
+    return {
+      installCommand: Object.freeze(['sh', '-c', noop]) as readonly string[],
+      installCommandString: noop
+    };
+  }
+
+  // Each skill runs its install, then — only on success — removes the
+  // ephemeral artifact paths the provider declared. Using `&& rm -rf` (rather
+  // than a separate post step) means a failing install short-circuits before
+  // cleanup runs, which preserves diagnostics in the failure path.
+  // The provider's lockfile is intentionally NOT in cleanupPaths, so repeat
+  // runs still benefit from cached resolution.
+  const installCommandString = plan.installs
+    .map((install) => {
+      const installPart = commandToShellString(install.installCommand);
+      if (install.cleanupPaths.length === 0) {
+        return installPart;
+      }
+      const cleanupPart = `rm -rf ${install.cleanupPaths.map(shellEscape).join(' ')}`;
+      return `${installPart} && ${cleanupPart}`;
+    })
+    .join(' && ');
 
   return {
     installCommand: Object.freeze(['sh', '-c', installCommandString]) as readonly string[],
@@ -969,7 +1131,9 @@ export const personaCatalog: Record<PersonaIntent, PersonaSpec> = {
   'sage-cloud-e2e-conduction': parsePersonaSpec(
     agentRelayE2eConductor,
     'sage-cloud-e2e-conduction'
-  )
+  ),
+  'skill-discovery': parsePersonaSpec(skillFinder, 'skill-discovery'),
+  'prpm-self-improvement': parsePersonaSpec(prpmSelfImprover, 'prpm-self-improvement')
 };
 
 export const routingProfiles = {
