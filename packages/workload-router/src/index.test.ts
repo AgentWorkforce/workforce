@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { chmodSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { chmodSync, existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import {
@@ -322,10 +322,47 @@ test('prpm installs carry a harness-scoped cleanup path (not the lockfile)', () 
   assert.ok(!install.cleanupPaths.includes('prpm.lock'));
 });
 
-test('usePersona install command appends rm -rf cleanup after the install step', () => {
+test('usePersona install command never embeds cleanup (agent must read skills first)', () => {
+  // Regression guard: previously buildInstallArtifacts inlined `&& rm -rf` into
+  // the install step, which ran BEFORE the agent step and deleted skill files
+  // the agent needed to read. Cleanup now lives on a separate post-agent step
+  // and on install.cleanupCommandString for Mode B callers.
   const context = usePersona('npm-provenance');
-  const cmd = context.install.commandString;
-  assert.match(cmd, /prpm install @prpm\/npm-trusted-publishing --as [a-z]+ && rm -rf \.\S*npm-trusted-publishing/);
+  assert.doesNotMatch(context.install.commandString, /rm -rf/);
+  assert.match(
+    context.install.commandString,
+    /prpm install @prpm\/npm-trusted-publishing --as [a-z]+/
+  );
+});
+
+test('usePersona exposes a post-run cleanupCommandString targeting skill artifact paths', () => {
+  const context = usePersona('npm-provenance');
+  assert.ok(Array.isArray(context.install.cleanupCommand));
+  assert.equal(context.install.cleanupCommand[0], 'sh');
+  assert.match(context.install.cleanupCommandString, /^rm -rf /);
+  assert.match(context.install.cleanupCommandString, /npm-trusted-publishing/);
+  // The provider lockfile must never be cleaned — repeat runs depend on it.
+  assert.doesNotMatch(context.install.cleanupCommandString, /prpm\.lock|skills-lock\.json/);
+});
+
+test('usePersona cleanupCommandString chains paths from every install in the plan', () => {
+  const context = usePersona('capability-discovery');
+  const cleanup = context.install.cleanupCommandString;
+  // Both the skill.sh symlink set and the prpm per-harness dir should appear
+  // in a single rm -rf chain.
+  assert.match(cleanup, /^rm -rf /);
+  assert.match(cleanup, /find-skills/);
+  assert.match(cleanup, /self-improving/);
+  // Cover every skill.sh harness symlink, not just the universal dir.
+  assert.match(cleanup, /\.agents\/skills\/find-skills/);
+  assert.match(cleanup, /\.claude\/skills\/find-skills/);
+  assert.match(cleanup, /\.factory\/skills\/find-skills/);
+  assert.match(cleanup, /\.kiro\/skills\/find-skills/);
+});
+
+test('usePersona cleanupCommandString is a shell no-op when the persona declares no skills', () => {
+  const context = usePersona('architecture-plan');
+  assert.equal(context.install.cleanupCommandString, ':');
 });
 
 test('resolves capability-discovery persona carrying both skill.sh and prpm skills', () => {
@@ -361,10 +398,13 @@ test('materializeSkillsFor capability-discovery plans both installs under one sh
 
   const context = usePersona('capability-discovery');
   const cmd = context.install.commandString;
-  // Both installs should be chained with &&, and each should be followed by
-  // its own rm -rf cleanup before the next install starts.
-  assert.match(cmd, /skills add.*&& rm -rf .*find-skills.*&& npx -y prpm install @prpm\/self-improving/);
-  assert.match(cmd, /prpm install @prpm\/self-improving --as [a-z]+ && rm -rf \.\S*self-improving/);
+  // Both installs should be chained back-to-back with `&&`, with NO inline
+  // cleanup — cleanup lives on a separate post-agent step.
+  assert.match(
+    cmd,
+    /skills add https:\/\/github\.com\/vercel-labs\/skills --skill find-skills -y && npx -y prpm install @prpm\/self-improving/
+  );
+  assert.doesNotMatch(cmd, /rm -rf/);
 });
 
 test('materializeSkills rejects unknown skill sources', () => {
@@ -488,6 +528,73 @@ process.stdout.write('agent-after-install');
     assert.equal(result.status, 'completed');
     assert.match(readFileSync(join(dir, 'install-ran.txt'), 'utf8'), /prpm install/);
     assert.equal(readFileSync(join(dir, 'agent-saw-install.txt'), 'utf8'), 'yes');
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test('usePersona.sendMessage keeps skill files on disk for the agent, then cleans them up after', async () => {
+  // Regression guard for the Devin-flagged P1: cleanup used to be chained
+  // into the install step with `&& rm -rf`, so by the time the agent step
+  // ran the skill manifest was already gone. This test:
+  //   1. Uses a fake `npx` that writes a stub SKILL.md into the exact path
+  //      listed in the install plan's cleanupPaths (simulating prpm install).
+  //   2. Uses a fake `codex` that asserts the SKILL.md IS present and
+  //      captures its location, then writes an agent-ran sentinel.
+  //   3. Asserts that after sendMessage settles, the cleanupPaths have been
+  //      removed — proving the post-agent cleanup step ran.
+  const dir = mkdtempSync(join(tmpdir(), 'use-persona-cleanup-'));
+  try {
+    // The install plan cleanupPaths for npm-provenance under codex is
+    // `.agents/skills/npm-trusted-publishing`. The fake npx must materialize
+    // a SKILL.md inside that dir so the agent can verify it.
+    writeNodeExecutable(
+      dir,
+      'npx',
+      `
+const { mkdirSync, writeFileSync } = require('node:fs');
+const path = require('node:path');
+const skillDir = path.join(process.cwd(), '.agents/skills/npm-trusted-publishing');
+mkdirSync(skillDir, { recursive: true });
+writeFileSync(path.join(skillDir, 'SKILL.md'), '# npm trusted publishing', 'utf8');
+`
+    );
+    writeNodeExecutable(
+      dir,
+      'codex',
+      `
+const { existsSync, writeFileSync } = require('node:fs');
+const skillPath = '.agents/skills/npm-trusted-publishing/SKILL.md';
+if (!existsSync(skillPath)) {
+  process.stderr.write('SKILL.md missing during agent step');
+  process.exit(9);
+}
+writeFileSync('agent-saw-skill.txt', 'yes', 'utf8');
+process.stdout.write('agent-read-skill');
+`
+    );
+
+    const context = usePersona('npm-provenance', { harness: 'codex' });
+    // Sanity check: plan must say this is the path we expect to verify.
+    assert.deepEqual(
+      context.install.plan.installs[0]?.cleanupPaths,
+      ['.agents/skills/npm-trusted-publishing']
+    );
+
+    const result = await context.sendMessage('Configure publishing', {
+      workingDirectory: dir,
+      env: buildEnv(dir)
+    });
+
+    assert.equal(result.status, 'completed');
+    // Agent must have seen the skill during its run.
+    assert.equal(readFileSync(join(dir, 'agent-saw-skill.txt'), 'utf8'), 'yes');
+    // Post-agent cleanup must have removed the skill artifact path.
+    assert.equal(
+      existsSync(join(dir, '.agents/skills/npm-trusted-publishing')),
+      false,
+      'cleanup step should have removed the skill artifact dir after the agent ran'
+    );
   } finally {
     rmSync(dir, { recursive: true, force: true });
   }

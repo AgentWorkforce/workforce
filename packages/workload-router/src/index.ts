@@ -152,6 +152,17 @@ export interface PersonaInstallContext {
   readonly command: readonly string[];
   /** Shell-escaped form of the full install command, convenient for `spawn(..., { shell: true })`. */
   readonly commandString: string;
+  /**
+   * Post-run cleanup command (argv form) that removes the ephemeral artifact
+   * paths the provider scatters during install, leaving the provider lockfile
+   * in place. Callers running the install themselves (Mode B) should run this
+   * **after** the agent step consumes the skills, never before. For empty
+   * plans this is a shell no-op (`:`). `sendMessage()` wires this into a
+   * post-agent workflow step automatically in Mode A.
+   */
+  readonly cleanupCommand: readonly string[];
+  /** Shell-escaped form of {@link cleanupCommand}. */
+  readonly cleanupCommandString: string;
 }
 
 /**
@@ -592,34 +603,36 @@ function buildInstallArtifacts(plan: SkillMaterializationPlan): {
   installCommand: readonly string[];
   installCommandString: string;
 } {
-  if (plan.installs.length === 0) {
-    const noop = ':';
-    return {
-      installCommand: Object.freeze(['sh', '-c', noop]) as readonly string[],
-      installCommandString: noop
-    };
-  }
-
-  // Each skill runs its install, then — only on success — removes the
-  // ephemeral artifact paths the provider declared. Using `&& rm -rf` (rather
-  // than a separate post step) means a failing install short-circuits before
-  // cleanup runs, which preserves diagnostics in the failure path.
-  // The provider's lockfile is intentionally NOT in cleanupPaths, so repeat
-  // runs still benefit from cached resolution.
-  const installCommandString = plan.installs
-    .map((install) => {
-      const installPart = commandToShellString(install.installCommand);
-      if (install.cleanupPaths.length === 0) {
-        return installPart;
-      }
-      const cleanupPart = `rm -rf ${install.cleanupPaths.map(shellEscape).join(' ')}`;
-      return `${installPart} && ${cleanupPart}`;
-    })
-    .join(' && ');
+  const installCommandString =
+    plan.installs.length === 0
+      ? ':'
+      : plan.installs.map((install) => commandToShellString(install.installCommand)).join(' && ');
 
   return {
     installCommand: Object.freeze(['sh', '-c', installCommandString]) as readonly string[],
     installCommandString
+  };
+}
+
+/**
+ * Post-run cleanup: one shell command that removes every ephemeral artifact
+ * path declared across all installs in the plan. Runs AFTER the agent step so
+ * the agent can still read skill manifests off disk during execution. The
+ * provider lockfile is deliberately not in the path set, so repeat runs keep
+ * cached resolution.
+ *
+ * Empty plans return `:` (shell no-op) to keep the post-step shape uniform.
+ */
+function buildCleanupArtifacts(plan: SkillMaterializationPlan): {
+  cleanupCommand: readonly string[];
+  cleanupCommandString: string;
+} {
+  const allPaths = plan.installs.flatMap((install) => [...install.cleanupPaths]);
+  const cleanupCommandString =
+    allPaths.length === 0 ? ':' : `rm -rf ${allPaths.map(shellEscape).join(' ')}`;
+  return {
+    cleanupCommand: Object.freeze(['sh', '-c', cleanupCommandString]) as readonly string[],
+    cleanupCommandString
   };
 }
 
@@ -1271,12 +1284,15 @@ export function usePersona(
       : materializeSkills(selection.skills, effectiveHarness);
 
   const { installCommand, installCommandString } = buildInstallArtifacts(installPlan);
+  const { cleanupCommand, cleanupCommandString } = buildCleanupArtifacts(installPlan);
   const frozenSelection = deepFreeze(selection);
   const frozenInstallPlan = deepFreeze(installPlan);
-  const frozenInstall = Object.freeze({
+  const frozenInstall: PersonaInstallContext = Object.freeze({
     plan: frozenInstallPlan,
     command: installCommand,
-    commandString: installCommandString
+    commandString: installCommandString,
+    cleanupCommand,
+    cleanupCommandString
   });
 
   const sendMessage = (task: string, sendMessageOptions: ExecuteOptions = {}): PersonaExecution => {
@@ -1297,6 +1313,7 @@ export function usePersona(
     );
     const workflowName = `use-persona-${stepName}`;
     const installStepName = `${stepName}-install-skills`;
+    const cleanupStepName = `${stepName}-cleanup-skills`;
     const workingDirectory = resolvePath(sendMessageOptions.workingDirectory ?? process.cwd());
     const timeoutMs = Math.max(
       1,
@@ -1407,6 +1424,26 @@ export function usePersona(
           verification: { type: 'exit_code', value: '0' },
           ...(shouldInstallSkills ? { dependsOn: [installStepName] } : {})
         });
+
+        // Post-agent cleanup: removes the ephemeral skill artifact paths the
+        // provider scattered during the install step. Only runs when this
+        // sendMessage owns the install (Mode A) AND the agent step completed
+        // — if the agent step fails or is skipped, the dag runner will skip
+        // this step too, which is fine because (a) failure diagnostics stay
+        // on disk for the user to inspect, and (b) `rm -rf` is idempotent so
+        // a follow-up run can re-clean. The lockfile is deliberately not in
+        // cleanupPaths, so repeat runs still benefit from cached resolution.
+        if (shouldInstallSkills && frozenInstall.cleanupCommandString !== ':') {
+          builder.step(cleanupStepName, {
+            type: 'deterministic',
+            command: frozenInstall.cleanupCommandString,
+            cwd: workingDirectory,
+            timeoutMs,
+            captureOutput: true,
+            failOnError: false,
+            dependsOn: [stepName]
+          });
+        }
 
         if (abortController.signal.aborted) {
           runner.abort();
