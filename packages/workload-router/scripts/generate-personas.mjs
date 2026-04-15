@@ -26,7 +26,8 @@ const exportNameMap = new Map([
   ['sage-slack-egress-migrator', 'sageSlackEgressMigrator'],
   ['sage-proactive-rewirer', 'sageProactiveRewirer'],
   ['cloud-slack-proxy-guard', 'cloudSlackProxyGuard'],
-  ['agent-relay-e2e-conductor', 'agentRelayE2eConductor']
+  ['agent-relay-e2e-conductor', 'agentRelayE2eConductor'],
+  ['capability-discoverer', 'capabilityDiscoverer']
 ]);
 
 const files = (await fs.readdir(personasDir)).filter((n) => n.endsWith('.json')).sort();
@@ -38,7 +39,10 @@ const lines = [
 for (const file of files) {
   const basename = file.replace(/\.json$/, '');
   const exportName = exportNameMap.get(basename);
-  if (!exportName) throw new Error(`No export name mapping for ${basename}`);
+  if (!exportName) {
+    console.warn(`[generate-personas] skipping unwired persona: ${basename} (no export name mapping)`);
+    continue;
+  }
   const json = await fs.readFile(path.join(personasDir, file), 'utf8');
   lines.push(`export const ${exportName} = ${json.trim()} as const;`);
   lines.push('');
