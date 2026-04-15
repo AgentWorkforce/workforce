@@ -58,6 +58,22 @@
     "cloud-sandbox-infra": {
       "tier": "best",
       "rationale": "Cloud infrastructure changes (sandbox provisioning, credential handling, session durability) have high blast radius; prioritize deeper reasoning and thorough verification."
+    },
+    "sage-slack-egress-migration": {
+      "tier": "best-value",
+      "rationale": "Slack egress migration work is mostly mechanical integration plumbing, so best-value is the default tradeoff."
+    },
+    "sage-proactive-rewire": {
+      "tier": "best-value",
+      "rationale": "Proactive rewiring is configuration-heavy coordination work that usually does not need the highest-cost tier by default."
+    },
+    "cloud-slack-proxy-guard": {
+      "tier": "best-value",
+      "rationale": "Proxy guard updates are typically policy and wiring checks, so best-value is a sensible default tier."
+    },
+    "sage-cloud-e2e-conduction": {
+      "tier": "best-value",
+      "rationale": "End-to-end conduction is orchestration-heavy work where strong reasoning is useful without requiring the top tier by default."
     }
   }
 }

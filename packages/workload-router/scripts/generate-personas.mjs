@@ -22,7 +22,11 @@ const exportNameMap = new Map([
   ['flake-hunter', 'flakeHunter'],
   ['opencode-workflow-specialist', 'opencodeWorkflowSpecialist'],
   ['npm-provenance-publisher', 'npmProvenancePublisher'],
-  ['cloud-sandbox-infra', 'cloudSandboxInfra']
+  ['cloud-sandbox-infra', 'cloudSandboxInfra'],
+  ['sage-slack-egress-migrator', 'sageSlackEgressMigrator'],
+  ['sage-proactive-rewirer', 'sageProactiveRewirer'],
+  ['cloud-slack-proxy-guard', 'cloudSlackProxyGuard'],
+  ['agent-relay-e2e-conductor', 'agentRelayE2eConductor']
 ]);
 
 const files = (await fs.readdir(personasDir)).filter((n) => n.endsWith('.json')).sort();

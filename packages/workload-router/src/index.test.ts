@@ -98,6 +98,22 @@ test('resolves review from custom routing profile rule', () => {
       'cloud-sandbox-infra': {
         tier: 'best',
         rationale: 'infra changes need deep reasoning'
+      },
+      'sage-slack-egress-migration': {
+        tier: 'best-value',
+        rationale: 'migration wiring can use the balanced default'
+      },
+      'sage-proactive-rewire': {
+        tier: 'best-value',
+        rationale: 'rewiring work is configuration-heavy rather than max-depth by default'
+      },
+      'cloud-slack-proxy-guard': {
+        tier: 'best-value',
+        rationale: 'proxy guard checks usually fit the balanced default tier'
+      },
+      'sage-cloud-e2e-conduction': {
+        tier: 'best-value',
+        rationale: 'e2e conduction benefits from strong reasoning without the highest-cost default'
       }
     }
   });
