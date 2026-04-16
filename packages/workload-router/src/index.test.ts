@@ -118,6 +118,10 @@ test('resolves review from custom routing profile rule', () => {
       'capability-discovery': {
         tier: 'best-value',
         rationale: 'lightweight discovery work'
+      },
+      'npm-package-compat': {
+        tier: 'best-value',
+        rationale: 'mechanical package.json audits'
       }
     }
   });

@@ -27,7 +27,8 @@ const exportNameMap = new Map([
   ['sage-proactive-rewirer', 'sageProactiveRewirer'],
   ['cloud-slack-proxy-guard', 'cloudSlackProxyGuard'],
   ['agent-relay-e2e-conductor', 'agentRelayE2eConductor'],
-  ['capability-discoverer', 'capabilityDiscoverer']
+  ['capability-discoverer', 'capabilityDiscoverer'],
+  ['npm-package-bundler-guard', 'npmPackageBundlerGuard']
 ]);
 
 const files = (await fs.readdir(personasDir)).filter((n) => n.endsWith('.json')).sort();
