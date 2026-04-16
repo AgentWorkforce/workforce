@@ -78,6 +78,10 @@
     "capability-discovery": {
       "tier": "best-value",
       "rationale": "Searching skill.sh and prpm.dev for existing skills, agents, and hooks is lightweight research; the balanced default is sufficient when guided by the skill.sh/find-skills and @prpm/self-improving skills."
+    },
+    "npm-package-compat": {
+      "tier": "best-value",
+      "rationale": "Package.json audits are mostly mechanical checks against known rules; best-value provides sufficient reasoning for catching misconfigurations."
     }
   }
 }

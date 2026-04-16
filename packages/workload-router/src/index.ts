@@ -2,7 +2,7 @@ import { spawn } from 'node:child_process';
 import { createHash } from 'node:crypto';
 import { resolve as resolvePath } from 'node:path';
 import type { RunnerStepExecutor, WorkflowRunRow } from '@agent-relay/sdk/workflows';
-import { frontendImplementer, codeReviewer, architecturePlanner, requirementsAnalyst, debuggerPersona, securityReviewer, technicalWriter, verifierPersona, testStrategist, tddGuard, flakeHunter, opencodeWorkflowSpecialist, npmProvenancePublisher, cloudSandboxInfra, sageSlackEgressMigrator, sageProactiveRewirer, cloudSlackProxyGuard, agentRelayE2eConductor, capabilityDiscoverer } from './generated/personas.js';
+import { frontendImplementer, codeReviewer, architecturePlanner, requirementsAnalyst, debuggerPersona, securityReviewer, technicalWriter, verifierPersona, testStrategist, tddGuard, flakeHunter, opencodeWorkflowSpecialist, npmProvenancePublisher, cloudSandboxInfra, sageSlackEgressMigrator, sageProactiveRewirer, cloudSlackProxyGuard, agentRelayE2eConductor, capabilityDiscoverer, npmPackageBundlerGuard } from './generated/personas.js';
 import defaultRoutingProfileJson from '../routing-profiles/default.json' with { type: 'json' };
 
 export const HARNESS_VALUES = ['opencode', 'codex', 'claude'] as const;
@@ -26,7 +26,8 @@ export const PERSONA_INTENTS = [
   'sage-proactive-rewire',
   'cloud-slack-proxy-guard',
   'sage-cloud-e2e-conduction',
-  'capability-discovery'
+  'capability-discovery',
+  'npm-package-compat'
 ] as const;
 
 export type Harness = (typeof HARNESS_VALUES)[number];
@@ -1144,7 +1145,8 @@ export const personaCatalog: Record<PersonaIntent, PersonaSpec> = {
     agentRelayE2eConductor,
     'sage-cloud-e2e-conduction'
   ),
-  'capability-discovery': parsePersonaSpec(capabilityDiscoverer, 'capability-discovery')
+  'capability-discovery': parsePersonaSpec(capabilityDiscoverer, 'capability-discovery'),
+  'npm-package-compat': parsePersonaSpec(npmPackageBundlerGuard, 'npm-package-compat')
 };
 
 export const routingProfiles = {
