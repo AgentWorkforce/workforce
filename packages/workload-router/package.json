@@ -11,6 +11,9 @@
       "default": "./dist/index.js"
     }
   },
+  "bin": {
+    "agent-workforce": "dist/cli.js"
+  },
   "files": [
     "dist",
     "routing-profiles",
@@ -29,7 +32,7 @@
   },
   "scripts": {
     "generate:personas": "node ./scripts/generate-personas.mjs",
-    "build": "npm run generate:personas && tsc -p tsconfig.json",
+    "build": "npm run generate:personas && tsc -p tsconfig.json && chmod +x dist/cli.js",
     "typecheck": "tsc -p tsconfig.json --noEmit",
     "test": "npm run generate:personas && tsc -p tsconfig.json && node --test dist/index.test.js",
     "lint": "npm run generate:personas && tsc -p tsconfig.json --noEmit"
