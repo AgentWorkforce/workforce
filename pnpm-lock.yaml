@@ -21,6 +21,12 @@ importers:
         specifier: ^5.9.2
         version: 5.9.3
 
+  packages/cli:
+    dependencies:
+      '@agentworkforce/workload-router':
+        specifier: workspace:*
+        version: link:../workload-router
+
   packages/workload-router:
     dependencies:
       '@agent-relay/sdk':

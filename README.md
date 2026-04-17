@@ -23,9 +23,84 @@ All tiers should enforce the same correctness/safety standards; lower tiers shou
 
 A **routing profile** is policy-only. It does not carry runtime fields; it only selects which persona tier to use per intent and explains why.
 
+## CLI
+
+The `agent-workforce` binary (published as `@agentworkforce/cli`) is the
+fastest way to actually *run* a persona. It resolves the persona from the
+built-in catalog or your local overrides, installs any declared skills,
+and execs the harness CLI (`claude`, `codex`, or `opencode`) with the right
+model, system prompt, env vars, MCP servers, and permissions wired up.
+
+### Install
+
+From the monorepo checkout:
+
+```bash
+corepack pnpm -r build
+corepack pnpm --filter @agentworkforce/cli link --global
+```
+
+`agent-workforce` is now on your PATH. (Or run the built bin directly:
+`./packages/cli/dist/cli.js …`.)
+
+### Usage
+
+```
+agent-workforce agent <persona>[@<tier>] [task...]
+```
+
+- **No task** → drops you into an interactive harness session.
+- **Task string** → runs one-shot via `usePersona().sendMessage()` and
+  streams output.
+- `<tier>` is `best` | `best-value` | `minimum` (default: `best-value`).
+- `<persona>` resolves across three layers, highest first:
+  1. `./.agent-workforce/*.json` — project-local
+  2. `~/.agent-workforce/*.json` — user-local
+  3. Built-in personas in `/personas/`
+
+Each local layer is a *partial overlay* — only the fields you set replace
+the value from the next lower layer; everything else cascades through.
+
+### Examples
+
+```bash
+# One-shot against the built-in code reviewer
+agent-workforce agent review@best-value "look at the diff on this branch"
+
+# Interactive PostHog session — the built-in persona ships with the PostHog
+# MCP server wired up and its tools auto-approved.
+export POSTHOG_API_KEY=phx_…
+agent-workforce agent posthog@best
+```
+
+### Local persona override
+
+Project-local `./.agent-workforce/my-posthog.json`:
+
+```json
+{
+  "id": "my-posthog",
+  "extends": "posthog",
+  "env": { "POSTHOG_API_KEY": "$POSTHOG_API_KEY" },
+  "permissions": {
+    "allow": ["mcp__posthog__insights-list", "mcp__posthog__events-query"]
+  }
+}
+```
+
+`agent-workforce agent my-posthog@best` inherits everything from the built-in
+`posthog` persona, layers your env var and narrower allow list on top, and
+launches claude against the PostHog MCP server with only the two named tools
+auto-approved.
+
+The full docs — cascade rules, `${VAR}` interpolation, MCP transport
+options, permission grammar, troubleshooting — live in
+**[packages/cli/README.md](./packages/cli/README.md)**.
+
 ## Packages
 
 - `packages/workload-router` — TypeScript SDK for typed persona + routing profile resolution.
+- `packages/cli` — `agent-workforce` command-line front end: spawn a persona's harness (claude/codex/opencode) from the shell, interactively or one-shot. See **[packages/cli/README.md](./packages/cli/README.md)** for the full docs, and the [CLI](#cli) section below for a quick tour.
 
 ## Personas
 
@@ -42,6 +117,7 @@ A **routing profile** is policy-only. It does not carry runtime fields; it only 
 - `personas/flake-hunter.json`
 - `personas/opencode-workflow-specialist.json`
 - `personas/npm-provenance-publisher.json`
+- `personas/posthog.json`
 
 ## Routing profiles
 
@@ -158,6 +234,7 @@ run-id observability for free.
    - `flake-investigation`
    - `opencode-workflow-correctness`
    - `npm-provenance`
+   - `posthog`
 2. Call `usePersona(intent, { profile? })` to resolve the persona and
    receive the selected persona, grouped install metadata, and a
    `sendMessage()` closure bound to its runtime (harness, model, settings,

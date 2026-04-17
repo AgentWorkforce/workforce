@@ -2,7 +2,7 @@ import { spawn } from 'node:child_process';
 import { createHash } from 'node:crypto';
 import { resolve as resolvePath } from 'node:path';
 import type { RunnerStepExecutor, WorkflowRunRow } from '@agent-relay/sdk/workflows';
-import { frontendImplementer, codeReviewer, architecturePlanner, requirementsAnalyst, debuggerPersona, securityReviewer, technicalWriter, verifierPersona, testStrategist, tddGuard, flakeHunter, opencodeWorkflowSpecialist, npmProvenancePublisher, cloudSandboxInfra, sageSlackEgressMigrator, sageProactiveRewirer, cloudSlackProxyGuard, agentRelayE2eConductor, capabilityDiscoverer } from './generated/personas.js';
+import { frontendImplementer, codeReviewer, architecturePlanner, requirementsAnalyst, debuggerPersona, securityReviewer, technicalWriter, verifierPersona, testStrategist, tddGuard, flakeHunter, opencodeWorkflowSpecialist, npmProvenancePublisher, cloudSandboxInfra, sageSlackEgressMigrator, sageProactiveRewirer, cloudSlackProxyGuard, agentRelayE2eConductor, capabilityDiscoverer, posthogAgent } from './generated/personas.js';
 import defaultRoutingProfileJson from '../routing-profiles/default.json' with { type: 'json' };
 
 export const HARNESS_VALUES = ['opencode', 'codex', 'claude'] as const;
@@ -26,7 +26,8 @@ export const PERSONA_INTENTS = [
   'sage-proactive-rewire',
   'cloud-slack-proxy-guard',
   'sage-cloud-e2e-conduction',
-  'capability-discovery'
+  'capability-discovery',
+  'posthog'
 ] as const;
 
 export type Harness = (typeof HARNESS_VALUES)[number];
@@ -56,12 +57,72 @@ export interface PersonaSkill {
   description: string;
 }
 
+export const PERMISSION_MODES = [
+  'default',
+  'acceptEdits',
+  'bypassPermissions',
+  'plan'
+] as const;
+export type PermissionMode = (typeof PERMISSION_MODES)[number];
+
+/**
+ * Persona-level permission policy for the harness session. Translates to the
+ * harness's native allow/deny/mode flags at spawn time. Tool-pattern syntax is
+ * passed through verbatim — `"mcp__posthog"` to allow every posthog MCP tool,
+ * `"mcp__posthog__projects-get"` for a specific one, `"Bash(git *)"` for a
+ * shell pattern. See the target harness's docs for the exact grammar.
+ */
+export interface PersonaPermissions {
+  /** Tool names/patterns to auto-approve. */
+  allow?: string[];
+  /** Tool names/patterns to always block. */
+  deny?: string[];
+  /** Permission mode for the session. */
+  mode?: PermissionMode;
+}
+
+/**
+ * MCP server config, structured to match Claude Code's `--mcp-config` JSON
+ * verbatim so the whole object can be passed through untouched. Values inside
+ * `headers` / `env` may be literal strings or `$VAR` references resolved from
+ * `process.env` at spawn time (see resolveEnvRef).
+ */
+export type McpServerSpec =
+  | {
+      type: 'http' | 'sse';
+      url: string;
+      headers?: Record<string, string>;
+    }
+  | {
+      type: 'stdio';
+      command: string;
+      args?: string[];
+      env?: Record<string, string>;
+    };
+
 export interface PersonaSpec {
   id: string;
   intent: PersonaIntent;
   description: string;
   skills: PersonaSkill[];
   tiers: Record<PersonaTier, PersonaRuntime>;
+  /**
+   * Environment variables injected into the harness child process.
+   * Values may be literal strings or `$VAR` references resolved from the
+   * caller's environment at spawn time.
+   */
+  env?: Record<string, string>;
+  /**
+   * MCP servers to attach to the harness session. Only wired for `claude`
+   * today (via `--mcp-config`); other harnesses warn and skip.
+   */
+  mcpServers?: Record<string, McpServerSpec>;
+  /**
+   * Permission policy (allow/deny lists, mode) for the harness session.
+   * Only wired for `claude` today (via `--allowedTools`, `--disallowedTools`,
+   * `--permission-mode`); other harnesses warn and skip.
+   */
+  permissions?: PersonaPermissions;
 }
 
 export interface RoutingProfileRule {
@@ -81,6 +142,9 @@ export interface PersonaSelection {
   runtime: PersonaRuntime;
   skills: PersonaSkill[];
   rationale: string;
+  env?: Record<string, string>;
+  mcpServers?: Record<string, McpServerSpec>;
+  permissions?: PersonaPermissions;
 }
 
 // ---------------------------------------------------------------------------
@@ -1043,7 +1107,7 @@ function parsePersonaSpec(value: unknown, expectedIntent: PersonaIntent): Person
     throw new Error(`persona[${expectedIntent}] must be an object`);
   }
 
-  const { id, intent, description, tiers, skills } = value;
+  const { id, intent, description, tiers, skills, env, mcpServers, permissions } = value;
 
   if (typeof id !== 'string' || !id.trim()) {
     throw new Error(`persona[${expectedIntent}].id must be a non-empty string`);
@@ -1067,14 +1131,116 @@ function parsePersonaSpec(value: unknown, expectedIntent: PersonaIntent): Person
   }
 
   const parsedSkills = parseSkills(skills, `persona[${expectedIntent}].skills`);
+  const parsedEnv = parseStringMap(env, `persona[${expectedIntent}].env`);
+  const parsedMcpServers = parseMcpServers(mcpServers, `persona[${expectedIntent}].mcpServers`);
+  const parsedPermissions = parsePermissions(
+    permissions,
+    `persona[${expectedIntent}].permissions`
+  );
 
   return {
     id,
     intent,
     description,
     skills: parsedSkills,
-    tiers: parsedTiers
+    tiers: parsedTiers,
+    ...(parsedEnv ? { env: parsedEnv } : {}),
+    ...(parsedMcpServers ? { mcpServers: parsedMcpServers } : {}),
+    ...(parsedPermissions ? { permissions: parsedPermissions } : {})
   };
+}
+
+function parsePermissions(
+  value: unknown,
+  context: string
+): PersonaPermissions | undefined {
+  if (value === undefined) return undefined;
+  if (!isObject(value)) {
+    throw new Error(`${context} must be an object if provided`);
+  }
+  const out: PersonaPermissions = {};
+  const { allow, deny, mode } = value;
+  if (allow !== undefined) {
+    if (!Array.isArray(allow) || allow.some((s) => typeof s !== 'string' || !s.trim())) {
+      throw new Error(`${context}.allow must be an array of non-empty strings`);
+    }
+    out.allow = allow as string[];
+  }
+  if (deny !== undefined) {
+    if (!Array.isArray(deny) || deny.some((s) => typeof s !== 'string' || !s.trim())) {
+      throw new Error(`${context}.deny must be an array of non-empty strings`);
+    }
+    out.deny = deny as string[];
+  }
+  if (mode !== undefined) {
+    if (!PERMISSION_MODES.includes(mode as PermissionMode)) {
+      throw new Error(
+        `${context}.mode must be one of: ${PERMISSION_MODES.join(', ')}`
+      );
+    }
+    out.mode = mode as PermissionMode;
+  }
+  return Object.keys(out).length > 0 ? out : undefined;
+}
+
+function parseStringMap(
+  value: unknown,
+  context: string
+): Record<string, string> | undefined {
+  if (value === undefined) return undefined;
+  if (!isObject(value)) {
+    throw new Error(`${context} must be an object if provided`);
+  }
+  const out: Record<string, string> = {};
+  for (const [key, v] of Object.entries(value)) {
+    if (typeof v !== 'string') {
+      throw new Error(`${context}.${key} must be a string`);
+    }
+    out[key] = v;
+  }
+  return out;
+}
+
+function parseMcpServers(
+  value: unknown,
+  context: string
+): Record<string, McpServerSpec> | undefined {
+  if (value === undefined) return undefined;
+  if (!isObject(value)) {
+    throw new Error(`${context} must be an object if provided`);
+  }
+  const out: Record<string, McpServerSpec> = {};
+  for (const [name, raw] of Object.entries(value)) {
+    if (!isObject(raw)) {
+      throw new Error(`${context}.${name} must be an object`);
+    }
+    const type = raw.type;
+    if (type === 'http' || type === 'sse') {
+      if (typeof raw.url !== 'string' || !raw.url.trim()) {
+        throw new Error(`${context}.${name}.url must be a non-empty string for type=${type}`);
+      }
+      const headers = parseStringMap(raw.headers, `${context}.${name}.headers`);
+      out[name] = { type, url: raw.url, ...(headers ? { headers } : {}) };
+    } else if (type === 'stdio') {
+      if (typeof raw.command !== 'string' || !raw.command.trim()) {
+        throw new Error(`${context}.${name}.command must be a non-empty string for type=stdio`);
+      }
+      const args = raw.args;
+      if (args !== undefined && (!Array.isArray(args) || args.some((a) => typeof a !== 'string'))) {
+        throw new Error(`${context}.${name}.args must be an array of strings`);
+      }
+      const env = parseStringMap(raw.env, `${context}.${name}.env`);
+      out[name] = {
+        type: 'stdio',
+        command: raw.command,
+        ...(args ? { args: args as string[] } : {}),
+        ...(env ? { env } : {})
+      };
+    } else {
+      throw new Error(`${context}.${name}.type must be one of: http, sse, stdio`);
+    }
+  }
+  return out;
 }
 
 function parseRoutingProfile(value: unknown, context: string): RoutingProfile {
@@ -1144,7 +1310,8 @@ export const personaCatalog: Record<PersonaIntent, PersonaSpec> = {
     agentRelayE2eConductor,
     'sage-cloud-e2e-conduction'
   ),
-  'capability-discovery': parsePersonaSpec(capabilityDiscoverer, 'capability-discovery')
+  'capability-discovery': parsePersonaSpec(capabilityDiscoverer, 'capability-discovery'),
+  posthog: parsePersonaSpec(posthogAgent, 'posthog')
 };
 
 export const routingProfiles = {
@@ -1163,7 +1330,10 @@ export function resolvePersona(intent: PersonaIntent, profile: RoutingProfile | 
     tier: rule.tier,
     runtime: spec.tiers[rule.tier],
     skills: spec.skills,
-    rationale: `${profileSpec.id}: ${rule.rationale}`
+    rationale: `${profileSpec.id}: ${rule.rationale}`,
+    ...(spec.env ? { env: spec.env } : {}),
+    ...(spec.mcpServers ? { mcpServers: spec.mcpServers } : {}),
+    ...(spec.permissions ? { permissions: spec.permissions } : {})
   };
 }
 
@@ -1178,7 +1348,10 @@ export function resolvePersonaByTier(intent: PersonaIntent, tier: PersonaTier = 
     tier,
     runtime: spec.tiers[tier],
     skills: spec.skills,
-    rationale: `legacy-tier-override: ${tier}`
+    rationale: `legacy-tier-override: ${tier}`,
+    ...(spec.env ? { env: spec.env } : {}),
+    ...(spec.mcpServers ? { mcpServers: spec.mcpServers } : {}),
+    ...(spec.permissions ? { permissions: spec.permissions } : {})
   };
 }
 
@@ -1266,6 +1439,19 @@ export function usePersona(
     ? resolvePersonaByTier(intent, options.tier)
     : resolvePersona(intent, options.profile ?? 'default');
 
+  return useSelection(baseSelection, { harness: options.harness });
+}
+
+/**
+ * Same as {@link usePersona}, but takes a pre-resolved {@link PersonaSelection}
+ * instead of an intent. Use this when you have a selection produced outside
+ * the standard repo catalog — for example, a user-local persona override
+ * loaded from disk — and want the same install/sendMessage surface.
+ */
+export function useSelection(
+  baseSelection: PersonaSelection,
+  options: { harness?: Harness } = {}
+): PersonaContext {
   const effectiveHarness = options.harness ?? baseSelection.runtime.harness;
   const selection =
     effectiveHarness === baseSelection.runtime.harness

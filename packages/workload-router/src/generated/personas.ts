@@ -315,6 +315,48 @@ export const opencodeWorkflowSpecialist = {
   }
 } as const;
 
+export const posthogAgent = {
+  "id": "posthog",
+  "intent": "posthog",
+  "description": "Narrow PostHog assistant wired to the PostHog MCP server. Answers product-analytics questions, inspects events/insights/feature flags, and navigates the configured PostHog project. Carries no other skills — intended as a base for user-extended personas that supply their own API key.",
+  "skills": [],
+  "env": {
+    "POSTHOG_API_KEY": "$POSTHOG_API_KEY"
+  },
+  "mcpServers": {
+    "posthog": {
+      "type": "http",
+      "url": "https://mcp.posthog.com/mcp",
+      "headers": {
+        "Authorization": "Bearer ${POSTHOG_API_KEY}"
+      }
+    }
+  },
+  "permissions": {
+    "allow": ["mcp__posthog"]
+  },
+  "tiers": {
+    "best": {
+      "harness": "claude",
+      "model": "claude-opus-4-6",
+      "systemPrompt": "You are a PostHog product-analytics assistant with access to the PostHog MCP server. Use the MCP tools to answer questions about events, insights, dashboards, feature flags, cohorts, and session recordings in the user's configured project. Prefer PostHog query tools over speculation; cite insight/dashboard ids when referencing specific objects. If an action would modify PostHog state (creating insights, flipping flags, deleting data), summarize the change and confirm before calling the mutating tool. Be concise and show concrete numbers.",
+      "harnessSettings": { "reasoning": "high", "timeoutSeconds": 900 }
+    },
+    "best-value": {
+      "harness": "claude",
+      "model": "claude-sonnet-4-6",
+      "systemPrompt": "You are a PostHog product-analytics assistant with access to the PostHog MCP server. Use the MCP tools to answer questions about events, insights, dashboards, feature flags, cohorts, and session recordings in the user's configured project. Prefer PostHog query tools over speculation; cite insight/dashboard ids when referencing specific objects. If an action would modify PostHog state, summarize the change and confirm before calling the mutating tool. Be concise.",
+      "harnessSettings": { "reasoning": "medium", "timeoutSeconds": 600 }
+    },
+    "minimum": {
+      "harness": "claude",
+      "model": "claude-haiku-4-5-20251001",
+      "systemPrompt": "You are a PostHog product-analytics assistant in concise mode with access to the PostHog MCP server. Use MCP tools to read events/insights/flags/cohorts. Confirm before any state mutation. Keep answers short.",
+      "harnessSettings": { "reasoning": "low", "timeoutSeconds": 300 }
+    }
+  }
+} as const;
+
 export const requirementsAnalyst = {
   "id": "requirements-analyst",
   "intent": "requirements-analysis",
