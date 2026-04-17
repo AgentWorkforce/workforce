@@ -57,8 +57,8 @@ export interface LoadOptions {
 }
 
 function defaultHomeDir(): string {
-  const override = process.env.AGENT_WORKFORCE_CONFIG_DIR;
-  if (override && override.trim()) return override;
+  const override = process.env.AGENT_WORKFORCE_CONFIG_DIR?.trim();
+  if (override) return override;
   return join(homedir(), '.agent-workforce');
 }
 

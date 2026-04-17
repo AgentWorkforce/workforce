@@ -172,6 +172,29 @@ test('warns on duplicate ids within a single layer', () => {
   });
 });
 
+test('AGENT_WORKFORCE_CONFIG_DIR is trimmed before use (whitespace tolerated)', () => {
+  withLayers(({ cwd, homeDir }) => {
+    writeJson(join(homeDir, 'my-posthog.json'), {
+      id: 'my-posthog',
+      extends: 'posthog'
+    });
+    const prev = process.env.AGENT_WORKFORCE_CONFIG_DIR;
+    process.env.AGENT_WORKFORCE_CONFIG_DIR = `   ${homeDir}   `;
+    try {
+      // Don't pass homeDir — force the loader to fall back to the env var,
+      // which is the code path that used to return the untrimmed value.
+      const loaded = loadLocalPersonas({ cwd });
+      assert.ok(
+        loaded.byId.has('my-posthog'),
+        'persona should load despite whitespace in AGENT_WORKFORCE_CONFIG_DIR'
+      );
+    } finally {
+      if (prev === undefined) delete process.env.AGENT_WORKFORCE_CONFIG_DIR;
+      else process.env.AGENT_WORKFORCE_CONFIG_DIR = prev;
+    }
+  });
+});
+
 test('returns empty result when neither layer exists', () => {
   const loaded = loadLocalPersonas({
     cwd: '/tmp/agentworkforce-nonexistent-pwd-zzz',
