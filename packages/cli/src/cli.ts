@@ -12,19 +12,25 @@ import {
 } from '@agentworkforce/workload-router';
 import {
   buildInteractiveSpec,
+  detectHarnesses,
   formatDropWarnings,
   resolveMcpServersLenient,
   resolveStringMapLenient,
+  type HarnessAvailability,
   type InteractiveSpec
 } from '@agentworkforce/harness-kit';
 import { loadLocalPersonas } from './local-personas.js';
 
-const USAGE = `Usage: agent-workforce agent <persona>[@<tier>] [task...]
+const USAGE = `Usage: agent-workforce <command> [args...]
 
-  <persona>  repo persona id, repo intent, or local persona id
-  <tier>     ${PERSONA_TIERS.join(' | ')}   (default: best-value)
-  [task]     if provided, runs one-shot non-interactively;
-             otherwise drops into an interactive harness session
+Commands:
+  agent <persona>[@<tier>] [task...]
+                      Run a persona. Tier one of: ${PERSONA_TIERS.join(' | ')}
+                      (default: best-value). If [task] is provided, runs one-shot
+                      non-interactively; otherwise drops into an interactive
+                      harness session.
+  harness check       Probe which harnesses (claude, codex, opencode) are
+                      installed and runnable on this machine.
 
 Local personas cascade: <cwd>/.agent-workforce/*.json → ~/.agent-workforce/*.json → repo library.
 Each layer only needs to specify fields it overrides; everything else inherits
@@ -36,6 +42,7 @@ Examples:
   agent-workforce agent npm-provenance-publisher@best
   agent-workforce agent my-posthog@best
   agent-workforce agent review@best-value "look at the diff on this branch"
+  agent-workforce harness check
 `;
 
 function die(msg: string, withUsage = true): never {
@@ -259,6 +266,31 @@ function runInteractive(selection: PersonaSelection): Promise<number> {
   });
 }
 
+function formatAvailabilityTable(results: readonly HarnessAvailability[]): string {
+  const rows = results.map((r) => ({
+    harness: r.harness,
+    status: r.available ? 'ok' : 'missing',
+    version: r.available ? (r.version ?? '') : '',
+    detail: r.available ? (r.path ?? '') : (r.error ?? '')
+  }));
+  const headers = { harness: 'HARNESS', status: 'STATUS', version: 'VERSION', detail: 'DETAIL' };
+  const cols = ['harness', 'status', 'version', 'detail'] as const;
+  const widths = Object.fromEntries(
+    cols.map((c) => [c, Math.max(headers[c].length, ...rows.map((r) => r[c].length))])
+  ) as Record<(typeof cols)[number], number>;
+  const line = (row: Record<(typeof cols)[number], string>) =>
+    cols.map((c) => row[c].padEnd(widths[c])).join('  ').trimEnd();
+  return [line(headers), ...rows.map(line)].join('\n') + '\n';
+}
+
+function runHarnessCheck(): never {
+  const results = detectHarnesses();
+  process.stdout.write(formatAvailabilityTable(results));
+  const available = results.filter((r) => r.available).length;
+  process.stdout.write(`\n${available}/${results.length} harness(es) available.\n`);
+  process.exit(0);
+}
+
 async function main(): Promise<void> {
   const argv = process.argv.slice(2);
   const [subcommand, ...rest] = argv;
@@ -266,6 +298,20 @@ async function main(): Promise<void> {
   if (!subcommand || subcommand === '-h' || subcommand === '--help') {
     process.stdout.write(USAGE);
     process.exit(subcommand ? 0 : 1);
+  }
+
+  if (subcommand === 'harness') {
+    const [action, ...extra] = rest;
+    if (!action || action === '-h' || action === '--help') {
+      die('harness: missing action. Expected: check');
+    }
+    if (action !== 'check') {
+      die(`harness: unknown action "${action}". Expected: check`);
+    }
+    if (extra.length > 0) {
+      die(`harness check: unexpected argument "${extra[0]}".`);
+    }
+    runHarnessCheck();
   }
 
   if (subcommand !== 'agent') {

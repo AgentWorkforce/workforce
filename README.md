@@ -47,16 +47,21 @@ corepack pnpm --filter @agentworkforce/cli link --global
 
 ```
 agent-workforce agent <persona>[@<tier>] [task...]
+agent-workforce harness check
 ```
 
-- **No task** → drops you into an interactive harness session.
-- **Task string** → runs one-shot via `usePersona().sendMessage()` and
-  streams output.
-- `<tier>` is `best` | `best-value` | `minimum` (default: `best-value`).
-- `<persona>` resolves across three layers, highest first:
-  1. `./.agent-workforce/*.json` — project-local
-  2. `~/.agent-workforce/*.json` — user-local
-  3. Built-in personas in `/personas/`
+- `agent` — run a persona.
+  - **No task** → drops you into an interactive harness session.
+  - **Task string** → runs one-shot via `usePersona().sendMessage()` and
+    streams output.
+  - `<tier>` is `best` | `best-value` | `minimum` (default: `best-value`).
+  - `<persona>` resolves across three layers, highest first:
+    1. `./.agent-workforce/*.json` — project-local
+    2. `~/.agent-workforce/*.json` — user-local
+    3. Built-in personas in `/personas/`
+- `harness check` — probe which harnesses (`claude`, `codex`, `opencode`)
+  are installed and runnable on this machine. Prints a table with status,
+  version, and the resolved path for each.
 
 Each local layer is a *partial overlay* — only the fields you set replace
 the value from the next lower layer; everything else cascades through.
@@ -301,3 +306,38 @@ This runs minimal guardrails across the workspace:
 - `lint` (currently TypeScript-only)
 - `typecheck` (package + examples)
 - `test` (Node test runner)
+
+## Developing
+
+For iterating on the CLI, harness-kit, workload-router, or persona JSON files,
+use the watch-mode dev loop instead of rebuilding by hand.
+
+**Terminal 1 — start the watchers (leave running):**
+
+```bash
+npm run dev
+```
+
+First runs a cold `corepack pnpm -r build` so every package's `dist/` exists,
+then starts `tsc --watch` on all three packages in parallel. For
+`workload-router` it also runs a persona-JSON watcher: editing any file under
+`/personas/*.json` regenerates
+`packages/workload-router/src/generated/personas.ts`, and tsc picks up the
+change and rebuilds dist automatically — full JSON → built artifact flow with
+no manual step.
+
+**Terminal 2 — invoke the CLI against the latest build:**
+
+```bash
+npm run dev:cli -- harness check
+npm run dev:cli -- agent review@best-value "look at the diff on this branch"
+```
+
+The `--` is required so npm forwards everything after it as argv to the CLI
+(otherwise npm consumes flags like `--model` for itself).
+
+Edit → save → re-run in terminal 2. TypeScript errors show up in terminal 1.
+
+**Per-package dev:** if you only want to watch one package, run
+`corepack pnpm --filter @agentworkforce/<name> run dev` (where `<name>` is
+`cli`, `harness-kit`, or `workload-router`).

@@ -21,3 +21,9 @@ export {
   type BuildInteractiveSpecInput,
   type InteractiveSpec
 } from './harness.js';
+
+export {
+  detectHarness,
+  detectHarnesses,
+  type HarnessAvailability
+} from './detect.js';
