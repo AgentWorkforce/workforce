@@ -150,25 +150,45 @@ jobs:
             git commit -m "$MSG"
           fi
 
+      # npm >= 11.5.1 is required for the OIDC trusted-publisher flow.
       - name: Install latest npm
         run: npm install -g npm@latest
 
-      # pnpm publish rewrites workspace:* to the concrete currently-published
-      # version, so harness-kit ships depending on @agentworkforce/workload-router@^x.y.z
-      # rather than a literal "workspace:*" string that would fail on install.
-      - name: Publish
-        env:
-          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
+      # Authentication note: this workflow does NOT use an NPM_TOKEN. It relies
+      # on npm's OIDC trusted-publisher flow — the `id-token: write` permission
+      # above lets `npm publish --provenance` exchange the GitHub workflow's
+      # OIDC identity for a short-lived publish token. Each package must be
+      # registered as a trusted publisher on npmjs.com under this
+      # repo/workflow path for the first publish.
+      #
+      # Pipeline: `pnpm pack` rewrites workspace:* deps to concrete versions
+      # inside the tarball's package.json, then `npm publish <tarball>`
+      # uploads it using npm's native auth. This decouples workspace-aware
+      # packing from publish-time auth and matches the agent-relay pattern.
+      - name: Pack + publish
         run: |
-          FLAGS="--access public --tag ${{ github.event.inputs.tag }} --no-git-checks"
+          set -euo pipefail
+          PACK_DIR="$RUNNER_TEMP/packs"
+          mkdir -p "$PACK_DIR"
+
+          COMMON_FLAGS="--access public --tag ${{ github.event.inputs.tag }}"
           if [ "${{ github.event.inputs.dry_run }}" = "true" ]; then
-            FLAGS+=" --dry-run"
+            COMMON_FLAGS+=" --dry-run"
           else
-            FLAGS+=" --provenance"
+            COMMON_FLAGS+=" --provenance"
           fi
+
           for pkg in ${{ steps.targets.outputs.packages }}; do
-            echo "==> Publishing @agentworkforce/$pkg $FLAGS"
-            pnpm --filter "@agentworkforce/$pkg" publish $FLAGS
+            echo "==> Packing @agentworkforce/$pkg"
+            pnpm --filter "@agentworkforce/$pkg" pack --pack-destination "$PACK_DIR"
+            TARBALL=$(ls -1t "$PACK_DIR"/agentworkforce-$pkg-*.tgz | head -n1)
+            if [ -z "$TARBALL" ] || [ ! -f "$TARBALL" ]; then
+              echo "::error::could not find packed tarball for $pkg in $PACK_DIR" >&2
+              ls -la "$PACK_DIR" >&2 || true
+              exit 1
+            fi
+            echo "==> Publishing $TARBALL $COMMON_FLAGS"
+            npm publish "$TARBALL" $COMMON_FLAGS
           done
 
       - name: Tag + push
