@@ -138,6 +138,49 @@ test('legacy tier override remains available via resolvePersonaByTier', () => {
   assert.match(result.rationale, /legacy-tier-override/);
 });
 
+test('resolvePersona propagates env, mcpServers, and permissions to the selection', () => {
+  // posthog is the library's canonical carrier for all three optional fields:
+  // env.POSTHOG_API_KEY, mcpServers.posthog (http transport with bearer
+  // header), and permissions.allow auto-approving posthog MCP tools.
+  const selection = resolvePersona('posthog');
+  assert.equal(selection.personaId, 'posthog');
+
+  // env is exposed on the selection and still holds the literal $VAR form —
+  // interpolation is the runner's job, not resolvePersona's.
+  assert.equal(selection.env?.POSTHOG_API_KEY, '$POSTHOG_API_KEY');
+
+  // mcpServers carry through including headers (runner interpolates later).
+  const posthogServer = selection.mcpServers?.posthog;
+  assert.ok(posthogServer, 'expected mcpServers.posthog on the selection');
+  assert.equal(posthogServer.type, 'http');
+  if (posthogServer.type === 'http') {
+    assert.equal(posthogServer.url, 'https://mcp.posthog.com/mcp');
+    assert.equal(
+      posthogServer.headers?.Authorization,
+      'Bearer ${POSTHOG_API_KEY}'
+    );
+  }
+
+  // permissions.allow is carried without modification.
+  assert.deepEqual(selection.permissions?.allow, ['mcp__posthog']);
+});
+
+test('resolvePersonaByTier also propagates env / mcpServers / permissions', () => {
+  const selection = resolvePersonaByTier('posthog', 'minimum');
+  assert.equal(selection.tier, 'minimum');
+  assert.ok(selection.env, 'env should flow through tier override resolver');
+  assert.ok(selection.mcpServers, 'mcpServers should flow through tier override resolver');
+  assert.ok(selection.permissions, 'permissions should flow through tier override resolver');
+});
+
+test('personas with no optional fields keep them undefined on the selection', () => {
+  // code-reviewer has no env/mcpServers/permissions in its JSON.
+  const selection = resolvePersona('review');
+  assert.equal(selection.env, undefined);
+  assert.equal(selection.mcpServers, undefined);
+  assert.equal(selection.permissions, undefined);
+});
+
 test('resolves testing personas from the default routing profile', () => {
   const testStrategy = resolvePersona('test-strategy');
   assert.equal(testStrategy.personaId, 'test-strategist');

@@ -99,11 +99,15 @@ function readLayerDir(
   return out;
 }
 
+function isPlainObject(value: unknown): value is Record<string, unknown> {
+  return typeof value === 'object' && value !== null && !Array.isArray(value);
+}
+
 function parseOverride(value: unknown, context: string): LocalPersonaOverride {
-  if (!value || typeof value !== 'object' || Array.isArray(value)) {
+  if (!isPlainObject(value)) {
     throw new Error(`${context} must be a JSON object`);
   }
-  const raw = value as Record<string, unknown>;
+  const raw = value;
   if (typeof raw.id !== 'string' || !raw.id.trim()) {
     throw new Error(`${context}.id must be a non-empty string`);
   }
@@ -116,6 +120,15 @@ function parseOverride(value: unknown, context: string): LocalPersonaOverride {
   if (raw.description !== undefined && typeof raw.description !== 'string') {
     throw new Error(`${context}.description must be a string if provided`);
   }
+
+  if (raw.skills !== undefined && !Array.isArray(raw.skills)) {
+    throw new Error(`${context}.skills must be an array if provided`);
+  }
+  assertStringMap(raw.env, `${context}.env`);
+  assertMcpServersShape(raw.mcpServers, `${context}.mcpServers`);
+  assertPermissionsShape(raw.permissions, `${context}.permissions`);
+  assertTiersShape(raw.tiers, `${context}.tiers`);
+
   return {
     id: raw.id,
     extends: raw.extends as string | undefined,
@@ -127,6 +140,94 @@ function parseOverride(value: unknown, context: string): LocalPersonaOverride {
     systemPrompt: raw.systemPrompt as string | undefined,
     tiers: raw.tiers as LocalPersonaOverride['tiers']
   };
+}
+
+function assertStringMap(value: unknown, context: string): void {
+  if (value === undefined) return;
+  if (!isPlainObject(value)) {
+    throw new Error(`${context} must be an object if provided`);
+  }
+  for (const [k, v] of Object.entries(value)) {
+    if (typeof v !== 'string') {
+      throw new Error(`${context}.${k} must be a string`);
+    }
+  }
+}
+
+function assertMcpServersShape(value: unknown, context: string): void {
+  if (value === undefined) return;
+  if (!isPlainObject(value)) {
+    throw new Error(`${context} must be an object if provided`);
+  }
+  for (const [name, spec] of Object.entries(value)) {
+    const path = `${context}.${name}`;
+    if (!isPlainObject(spec)) {
+      throw new Error(`${path} must be an object`);
+    }
+    const type = spec.type;
+    if (type !== 'http' && type !== 'sse' && type !== 'stdio') {
+      throw new Error(`${path}.type must be one of: http, sse, stdio`);
+    }
+    if (type === 'stdio') {
+      if (typeof spec.command !== 'string' || !spec.command.trim()) {
+        throw new Error(`${path}.command must be a non-empty string`);
+      }
+      if (spec.args !== undefined) {
+        if (!Array.isArray(spec.args) || spec.args.some((a) => typeof a !== 'string')) {
+          throw new Error(`${path}.args must be an array of strings`);
+        }
+      }
+      assertStringMap(spec.env, `${path}.env`);
+    } else {
+      if (typeof spec.url !== 'string' || !spec.url.trim()) {
+        throw new Error(`${path}.url must be a non-empty string`);
+      }
+      assertStringMap(spec.headers, `${path}.headers`);
+    }
+  }
+}
+
+function assertPermissionsShape(value: unknown, context: string): void {
+  if (value === undefined) return;
+  if (!isPlainObject(value)) {
+    throw new Error(`${context} must be an object if provided`);
+  }
+  for (const key of ['allow', 'deny'] as const) {
+    const list = value[key];
+    if (list === undefined) continue;
+    if (!Array.isArray(list) || list.some((s) => typeof s !== 'string' || !s.trim())) {
+      throw new Error(`${context}.${key} must be an array of non-empty strings`);
+    }
+  }
+  const mode = value.mode;
+  if (mode !== undefined && typeof mode !== 'string') {
+    throw new Error(`${context}.mode must be a string if provided`);
+  }
+}
+
+function assertTiersShape(value: unknown, context: string): void {
+  if (value === undefined) return;
+  if (!isPlainObject(value)) {
+    throw new Error(`${context} must be an object if provided`);
+  }
+  for (const [tierName, runtime] of Object.entries(value)) {
+    const path = `${context}.${tierName}`;
+    if (!isPlainObject(runtime)) {
+      throw new Error(`${path} must be an object`);
+    }
+    if (runtime.model !== undefined && typeof runtime.model !== 'string') {
+      throw new Error(`${path}.model must be a string`);
+    }
+    if (runtime.harness !== undefined && typeof runtime.harness !== 'string') {
+      throw new Error(`${path}.harness must be a string`);
+    }
+    if (runtime.systemPrompt !== undefined && typeof runtime.systemPrompt !== 'string') {
+      throw new Error(`${path}.systemPrompt must be a string`);
+    }
+    if (runtime.harnessSettings !== undefined && !isPlainObject(runtime.harnessSettings)) {
+      throw new Error(`${path}.harnessSettings must be an object`);
+    }
+  }
 }
 
 function findInLibrary(key: string): PersonaSpec | undefined {

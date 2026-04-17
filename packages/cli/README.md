@@ -14,12 +14,13 @@ agent-workforce agent <persona>[@<tier>] [task...]
 
 ## Install
 
-The CLI ships as a `bin` in `@agentworkforce/workload-router`. From the repo
+The CLI ships as a `bin` in `@agentworkforce/cli` (which depends on
+`@agentworkforce/workload-router` via the pnpm workspace). From the repo
 checkout:
 
 ```sh
 corepack pnpm -r build
-corepack pnpm --filter @agentworkforce/workload-router link --global
+corepack pnpm --filter @agentworkforce/cli link --global
 ```
 
 That puts `agent-workforce` on your PATH.
@@ -69,7 +70,7 @@ MCP servers to attach*. Full library shape:
     "posthog": {
       "type": "http",
       "url": "https://mcp.posthog.com/mcp",
-      "headers": { "Authorization": "Bearer $POSTHOG_API_KEY" }
+      "headers": { "Authorization": "Bearer ${POSTHOG_API_KEY}" }
     }
   },
   "tiers": {

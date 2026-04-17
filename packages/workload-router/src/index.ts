@@ -84,8 +84,9 @@ export interface PersonaPermissions {
 /**
  * MCP server config, structured to match Claude Code's `--mcp-config` JSON
  * verbatim so the whole object can be passed through untouched. Values inside
- * `headers` / `env` may be literal strings or `$VAR` references resolved from
- * `process.env` at spawn time (see resolveEnvRef).
+ * `headers` / `env` / `args` / `url` / `command` may be literal strings or
+ * `$VAR` / `${VAR}` references. Resolution happens in the runner/CLI at spawn
+ * time — this package only defines the shape, not the interpolation policy.
  */
 export type McpServerSpec =
   | {

@@ -374,12 +374,29 @@ function runInteractive(selection: PersonaSelection): Promise<number> {
     selection.permissions
   );
   const finalArgs = spec.initialPrompt ? [...spec.args, spec.initialPrompt] : [...spec.args];
-  const promptNote = spec.initialPrompt ? ' <systemPrompt>' : '';
-  const mcpNote =
-    runtime.harness === 'claude'
-      ? ` [mcp-strict: ${Object.keys(resolvedMcp ?? {}).join(', ') || '(none)'}]`
-      : '';
-  process.stderr.write(`• spawning: ${spec.bin} ${spec.args.join(' ')}${promptNote}${mcpNote}\n`);
+
+  // Print a sanitized summary rather than raw argv: spec.args for the claude
+  // harness contains the resolved --mcp-config JSON and the full system
+  // prompt, either of which can carry secrets (Bearer tokens, API keys) once
+  // env refs are interpolated. We show the bin, model, and the *names* of
+  // the servers / permission fields so the user can verify the shape without
+  // leaking credentials to stderr or CI logs.
+  const summary: string[] = [`model=${runtime.model}`];
+  if (runtime.harness === 'claude') {
+    const servers = Object.keys(resolvedMcp ?? {});
+    summary.push(`mcp-strict=${servers.length ? servers.join(',') : '(none)'}`);
+    if (selection.permissions?.allow?.length) {
+      summary.push(`allow=${selection.permissions.allow.length} rule(s)`);
+    }
+    if (selection.permissions?.deny?.length) {
+      summary.push(`deny=${selection.permissions.deny.length} rule(s)`);
+    }
+    if (selection.permissions?.mode) {
+      summary.push(`mode=${selection.permissions.mode}`);
+    }
+  }
+  if (spec.initialPrompt) summary.push('initial-prompt=<systemPrompt>');
+  process.stderr.write(`• spawning ${spec.bin} (${summary.join(', ')})\n`);
 
   return new Promise((resolve) => {
     let settled = false;
