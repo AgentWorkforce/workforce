@@ -61,10 +61,11 @@ agent-workforce harness check
     2. `~/.agent-workforce/*.json` — user-local
     3. Built-in personas in `/personas/`
 - `list` — print the catalog of personas from the cascade (pwd → home →
-  library). By default shows one row per persona at the recommended tier
-  for its intent. Flags: `--all`, `--json`, `--filter-rating <tier>`,
-  `--filter-harness <harness>`, `--no-display-intent`,
-  `--no-display-description`. See **[packages/cli/README.md](./packages/cli/README.md#list)** for details.
+  library). Columns: persona, source, harness, model, rating, description.
+  By default shows one row per persona at the recommended tier for its
+  intent. Flags: `--all`, `--json`, `--filter-rating <tier>`,
+  `--filter-harness <harness>`, `--no-display-description`. See
+  **[packages/cli/README.md](./packages/cli/README.md#list)** for details.
 - `harness check` — probe which harnesses (`claude`, `codex`, `opencode`)
   are installed and runnable on this machine. Prints a table with status,
   version, and the resolved path for each.

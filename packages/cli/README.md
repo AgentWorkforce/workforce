@@ -67,7 +67,7 @@ agent-workforce list [flags]
 
 Prints the merged persona catalog — everything the `agent` subcommand would
 accept as a selector — including cascade source (`library`, `home`, `pwd`),
-harness, intent, description, and tier ("rating"). One row per persona-tier
+harness, model, description, and tier ("rating"). One row per persona-tier
 combination; by default only the **recommended tier per intent** is shown
 (as declared in
 `packages/workload-router/routing-profiles/default.json`).
@@ -80,7 +80,6 @@ combination; by default only the **recommended tier per intent** is shown
 | `--recommended` | on | Only show the recommended tier per intent. Implicit default; mostly useful for undoing `--all` earlier in a wrapper script. |
 | `--filter-rating <tier>` | — | Restrict to a single tier (`best` \| `best-value` \| `minimum`). **Implicitly turns off the recommended-only default**, so filtering by `best` shows every persona's `best` row even when that's not the recommended tier. |
 | `--filter-harness <harness>` | — | Restrict to a single harness (`claude` \| `codex` \| `opencode`). Composable with `--filter-rating` and `--all`. |
-| `--no-display-intent` | off | Hide the `INTENT` column. `--display-intent` re-enables it. |
 | `--no-display-description` | off | Hide the `DESCRIPTION` column. `--display-description` re-enables it. |
 | `--json` | off | Emit `{ "personas": [...] }` with one object per row. Same field set as the table, useful for scripting. |
 | `-h`, `--help` | — | Print a one-line usage string and exit. |
@@ -104,7 +103,7 @@ agent-workforce list --filter-rating best
 agent-workforce list --all --filter-harness claude
 
 # Compact table for a narrow terminal
-agent-workforce list --no-display-intent --no-display-description
+agent-workforce list --no-display-description
 
 # Machine-readable
 agent-workforce list --json --filter-harness claude

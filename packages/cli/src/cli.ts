@@ -44,7 +44,6 @@ Commands:
                                                       (${PERSONA_TIERS.join(' | ')})
                         --filter-harness <harness>    only show this harness
                                                       (${HARNESS_VALUES.join(' | ')})
-                        --no-display-intent           hide the INTENT column
                         --no-display-description      hide the DESCRIPTION column
   harness check       Probe which harnesses (claude, codex, opencode) are
                       installed and runnable on this machine.
@@ -305,6 +304,7 @@ interface PersonaListRow {
   persona: string;
   source: PersonaSource;
   harness: string;
+  model: string;
   intent: string;
   description: string;
   rating: PersonaTier;
@@ -318,6 +318,7 @@ function collectPersonaRows(): PersonaListRow[] {
         persona: spec.id,
         source,
         harness: spec.tiers[tier].harness,
+        model: spec.tiers[tier].model,
         intent: spec.intent,
         description: spec.description,
         rating: tier
@@ -342,7 +343,6 @@ function collectPersonaRows(): PersonaListRow[] {
 }
 
 interface ListDisplayOptions {
-  intent: boolean;
   description: boolean;
 }
 
@@ -354,7 +354,7 @@ function formatPersonaTable(
     persona: 'PERSONA',
     source: 'SOURCE',
     harness: 'HARNESS',
-    intent: 'INTENT',
+    model: 'MODEL',
     rating: 'RATING',
     description: 'DESCRIPTION'
   };
@@ -362,20 +362,19 @@ function formatPersonaTable(
     persona: Math.max(headers.persona.length, ...rows.map((r) => r.persona.length)),
     source: Math.max(headers.source.length, ...rows.map((r) => r.source.length)),
     harness: Math.max(headers.harness.length, ...rows.map((r) => r.harness.length)),
-    intent: Math.max(headers.intent.length, ...rows.map((r) => r.intent.length)),
+    model: Math.max(headers.model.length, ...rows.map((r) => r.model.length)),
     rating: Math.max(headers.rating.length, ...rows.map((r) => r.rating.length)),
     description: headers.description.length
   };
   const termWidth =
     process.stdout.isTTY && typeof process.stdout.columns === 'number' ? process.stdout.columns : 140;
-  const nonDescCols = 4 + (display.intent ? 1 : 0);
   const fixed =
     widths.persona +
     widths.source +
     widths.harness +
+    widths.model +
     widths.rating +
-    (display.intent ? widths.intent : 0) +
-    (nonDescCols + (display.description ? 1 : 0) - 1) * 2;
+    (5 + (display.description ? 1 : 0) - 1) * 2;
   const descBudget = Math.max(20, termWidth - fixed - 1);
   const truncate = (s: string, n: number) => (s.length <= n ? s : s.slice(0, Math.max(1, n - 1)) + '…');
   const line = (row: typeof headers | PersonaListRow) => {
@@ -383,9 +382,9 @@ function formatPersonaTable(
       row.persona.padEnd(widths.persona),
       row.source.padEnd(widths.source),
       row.harness.padEnd(widths.harness),
+      row.model.padEnd(widths.model),
       row.rating.padEnd(widths.rating)
     ];
-    if (display.intent) parts.push(row.intent.padEnd(widths.intent));
     if (display.description) {
       parts.push(truncate(row.description.replace(/\s+/g, ' ').trim(), descBudget));
     }
@@ -407,7 +406,7 @@ function parseListArgs(args: readonly string[]): {
   let filterRatingExplicit = false;
   let filterHarness: Harness | undefined;
   let showAll = false;
-  const display: ListDisplayOptions = { intent: true, description: true };
+  const display: ListDisplayOptions = { description: true };
 
   const valueOf = (i: number, flag: string): string => {
     const v = args[i + 1];
@@ -423,7 +422,7 @@ function parseListArgs(args: readonly string[]): {
       json = true;
     } else if (arg === '-h' || arg === '--help') {
       process.stdout.write(
-        'Usage: agent-workforce list [--all] [--json] [--filter-rating <tier>] [--filter-harness <harness>] [--no-display-intent] [--no-display-description]\n'
+        'Usage: agent-workforce list [--all] [--json] [--filter-rating <tier>] [--filter-harness <harness>] [--no-display-description]\n'
       );
       process.exit(0);
     } else if (arg === '--all' || arg === '--no-recommended') {
@@ -443,10 +442,6 @@ function parseListArgs(args: readonly string[]): {
         die(`list: invalid --filter-harness "${v}". Must be one of: ${HARNESS_VALUES.join(', ')}`);
       }
       filterHarness = v as Harness;
-    } else if (arg === '--display-intent') {
-      display.intent = true;
-    } else if (arg === '--no-display-intent') {
-      display.intent = false;
     } else if (arg === '--display-description') {
       display.description = true;
     } else if (arg === '--no-display-description') {
