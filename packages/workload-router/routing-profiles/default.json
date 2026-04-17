@@ -78,6 +78,10 @@
     "capability-discovery": {
       "tier": "best-value",
       "rationale": "Searching skill.sh and prpm.dev for existing skills, agents, and hooks is lightweight research; the balanced default is sufficient when guided by the skill.sh/find-skills and @prpm/self-improving skills."
+    },
+    "posthog": {
+      "tier": "best-value",
+      "rationale": "PostHog queries are interactive analytics lookups; best-value is sufficient and keeps latency low when chatting with the MCP server."
     }
   }
 }

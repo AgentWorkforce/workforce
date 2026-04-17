@@ -3,8 +3,18 @@ name: Publish Package
 on:
   workflow_dispatch:
     inputs:
+      package:
+        description: 'Which package(s) to publish'
+        required: true
+        default: cli
+        type: choice
+        options:
+          - all
+          - workload-router
+          - harness-kit
+          - cli
       version:
-        description: 'Version bump type'
+        description: 'Version bump type (ignored if custom_version is set)'
         required: true
         default: patch
         type: choice
@@ -12,7 +22,18 @@ on:
           - patch
           - minor
           - major
+          - prepatch
+          - preminor
+          - premajor
           - prerelease
+          - none
+      custom_version:
+        description: 'Exact version (e.g. 0.1.0). Overrides version type when set.'
+        required: false
+      prerelease_id:
+        description: 'Prerelease identifier for pre* bumps (e.g. "next", "beta")'
+        required: false
+        default: next
       tag:
         description: 'npm dist-tag'
         required: true
@@ -22,8 +43,9 @@ on:
           - latest
           - next
           - beta
+          - alpha
       dry_run:
-        description: 'Dry run only (no publish)'
+        description: 'Dry run (no actual publish, no version commit, no git tag)'
         required: true
         default: false
         type: boolean
@@ -32,70 +54,168 @@ permissions:
   contents: write
   id-token: write
 
-jobs:
-  publish-workload-router:
-    runs-on: ubuntu-latest
+concurrency:
+  group: publish-${{ github.ref }}
+  cancel-in-progress: false
 
+jobs:
+  publish:
+    runs-on: ubuntu-latest
     steps:
       - name: Checkout
         uses: actions/checkout@v4
         with:
           fetch-depth: 0
 
+      - name: Setup pnpm
+        uses: pnpm/action-setup@v4
+
       - name: Setup Node
         uses: actions/setup-node@v4
         with:
           node-version: '22.14.0'
           registry-url: 'https://registry.npmjs.org'
-
-      - name: Setup pnpm
-        uses: pnpm/action-setup@v4
+          cache: 'pnpm'
 
       - name: Install deps
         run: pnpm install --frozen-lockfile
 
-      - name: Build package
-        run: pnpm --filter @agentworkforce/workload-router build
+      # Build + test everything regardless of which package is being released —
+      # the CLI depends on harness-kit which depends on workload-router via
+      # workspace:*. `pnpm publish` rewrites those specs to concrete versions
+      # at pack time, and we want every package's dist/ to be fresh when that
+      # happens.
+      - name: Build workspace
+        run: pnpm -r run build
 
-      - name: Test package
-        run: pnpm --filter @agentworkforce/workload-router test
+      - name: Run tests
+        run: pnpm -r run test
 
-      - name: Bump version
-        id: bump
-        working-directory: packages/workload-router
+      - name: Resolve target packages (dep order)
+        id: targets
         run: |
-          npm version ${{ github.event.inputs.version }} --no-git-tag-version
-          NEW_VERSION=$(node -p "require('./package.json').version")
-          echo "version=$NEW_VERSION" >> "$GITHUB_OUTPUT"
+          case "${{ github.event.inputs.package }}" in
+            all)
+              # Must be in dependency order: router → harness-kit → cli.
+              echo "packages=workload-router harness-kit cli" >> "$GITHUB_OUTPUT"
+              ;;
+            workload-router|harness-kit|cli)
+              echo "packages=${{ github.event.inputs.package }}" >> "$GITHUB_OUTPUT"
+              ;;
+            *)
+              echo "Unknown package: ${{ github.event.inputs.package }}" >&2
+              exit 1
+              ;;
+          esac
 
-      - name: Commit version bump
+      - name: Bump versions
+        id: bump
+        run: |
+          VERSIONS=""
+          CUSTOM='${{ github.event.inputs.custom_version }}'
+          BUMP='${{ github.event.inputs.version }}'
+          PREID='${{ github.event.inputs.prerelease_id }}'
+          for pkg in ${{ steps.targets.outputs.packages }}; do
+            pushd "packages/$pkg" > /dev/null
+            if [ -n "$CUSTOM" ]; then
+              npm version "$CUSTOM" --no-git-tag-version --allow-same-version
+            elif [ "$BUMP" = "none" ]; then
+              : # keep existing version (useful for first publish or re-publish)
+            elif [[ "$BUMP" == pre* ]]; then
+              npm version "$BUMP" --no-git-tag-version --preid="$PREID"
+            else
+              npm version "$BUMP" --no-git-tag-version
+            fi
+            NEW=$(node -p "require('./package.json').version")
+            VERSIONS+=" $pkg:$NEW"
+            popd > /dev/null
+          done
+          echo "versions=${VERSIONS# }" >> "$GITHUB_OUTPUT"
+
+      - name: Commit version bumps
+        if: ${{ github.event.inputs.dry_run != 'true' && (github.event.inputs.version != 'none' || github.event.inputs.custom_version != '') }}
         run: |
           git config user.name "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
-          git add packages/workload-router/package.json
-          git commit -m "chore(release): @agentworkforce/workload-router v${{ steps.bump.outputs.version }}"
+          git add packages/*/package.json
+          if git diff --cached --quiet; then
+            echo "No version changes to commit."
+          else
+            MSG="chore(release):"
+            for entry in ${{ steps.bump.outputs.versions }}; do
+              pkg="${entry%%:*}"
+              version="${entry##*:}"
+              MSG+=" @agentworkforce/$pkg@$version"
+            done
+            git commit -m "$MSG"
+          fi
 
+      # npm >= 11.5.1 is required for the OIDC trusted-publisher flow.
       - name: Install latest npm
         run: npm install -g npm@latest
 
-      - name: Publish (dry run)
-        if: ${{ github.event.inputs.dry_run == 'true' }}
-        working-directory: packages/workload-router
-        run: npm publish --dry-run --access public --tag ${{ github.event.inputs.tag }}
+      # Authentication note: this workflow does NOT use an NPM_TOKEN. It relies
+      # on npm's OIDC trusted-publisher flow — the `id-token: write` permission
+      # above lets `npm publish --provenance` exchange the GitHub workflow's
+      # OIDC identity for a short-lived publish token. Each package must be
+      # registered as a trusted publisher on npmjs.com under this
+      # repo/workflow path for the first publish.
+      #
+      # Pipeline: `pnpm pack` rewrites workspace:* deps to concrete versions
+      # inside the tarball's package.json, then `npm publish <tarball>`
+      # uploads it using npm's native auth. This decouples workspace-aware
+      # packing from publish-time auth and matches the agent-relay pattern.
+      - name: Pack + publish
+        run: |
+          set -euo pipefail
+          PACK_DIR="$RUNNER_TEMP/packs"
+          mkdir -p "$PACK_DIR"
 
-      - name: Publish to npm
-        if: ${{ github.event.inputs.dry_run != 'true' }}
-        working-directory: packages/workload-router
-        run: npm publish --provenance --access public --tag ${{ github.event.inputs.tag }}
+          COMMON_FLAGS="--access public --tag ${{ github.event.inputs.tag }}"
+          if [ "${{ github.event.inputs.dry_run }}" = "true" ]; then
+            COMMON_FLAGS+=" --dry-run"
+          else
+            COMMON_FLAGS+=" --provenance"
+          fi
+
+          for pkg in ${{ steps.targets.outputs.packages }}; do
+            echo "==> Packing @agentworkforce/$pkg"
+            pnpm --filter "@agentworkforce/$pkg" pack --pack-destination "$PACK_DIR"
+            TARBALL=$(ls -1t "$PACK_DIR"/agentworkforce-$pkg-*.tgz | head -n1)
+            if [ -z "$TARBALL" ] || [ ! -f "$TARBALL" ]; then
+              echo "::error::could not find packed tarball for $pkg in $PACK_DIR" >&2
+              ls -la "$PACK_DIR" >&2 || true
+              exit 1
+            fi
+            echo "==> Publishing $TARBALL $COMMON_FLAGS"
+            npm publish "$TARBALL" $COMMON_FLAGS
+          done
 
       - name: Tag + push
-        if: ${{ github.event.inputs.dry_run != 'true' }}
+        if: ${{ github.event.inputs.dry_run != 'true' && (github.event.inputs.version != 'none' || github.event.inputs.custom_version != '') }}
         run: |
-          git tag workload-router-v${{ steps.bump.outputs.version }}
-          git push origin main --follow-tags
+          for entry in ${{ steps.bump.outputs.versions }}; do
+            pkg="${entry%%:*}"
+            version="${entry##*:}"
+            git tag "$pkg-v$version"
+          done
+          git push origin HEAD --follow-tags
 
       - name: Summary
         run: |
-          echo "Published: @agentworkforce/workload-router@${{ steps.bump.outputs.version }}" >> $GITHUB_STEP_SUMMARY
-          echo "Tag: ${{ github.event.inputs.tag }}" >> $GITHUB_STEP_SUMMARY
-          echo "Dry run: ${{ github.event.inputs.dry_run }}" >> $GITHUB_STEP_SUMMARY
+          {
+            echo "### Published"
+            echo ""
+            for entry in ${{ steps.bump.outputs.versions }}; do
+              pkg="${entry%%:*}"
+              version="${entry##*:}"
+              echo "- \`@agentworkforce/$pkg@$version\`"
+            done
+            echo ""
+            echo "- **dist-tag**: \`${{ github.event.inputs.tag }}\`"
+            echo "- **dry run**: \`${{ github.event.inputs.dry_run }}\`"
+            echo ""
+            if [ "${{ github.event.inputs.dry_run }}" != "true" ]; then
+              echo "Next step: verify the published artifact by running the \`Verify Publish\` workflow."
+            fi
+          } >> "$GITHUB_STEP_SUMMARY"
