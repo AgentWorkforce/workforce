@@ -99,7 +99,8 @@ options, permission grammar, troubleshooting — live in
 
 ## Packages
 
-- `packages/workload-router` — TypeScript SDK for typed persona + routing profile resolution.
+- `packages/workload-router` — TypeScript SDK for typed persona + routing profile resolution (harness-agnostic).
+- `packages/harness-kit` — Composable primitives for launching a persona's harness: env-ref resolution, MCP server translation, per-harness argv building. The layer the CLI sits on top of. Depend on this directly if you're building your own orchestrator on top of `@agentworkforce/workload-router` and want the same behaviors.
 - `packages/cli` — `agent-workforce` command-line front end: spawn a persona's harness (claude/codex/opencode) from the shell, interactively or one-shot. See **[packages/cli/README.md](./packages/cli/README.md)** for the full docs, and the [CLI](#cli) section below for a quick tour.
 
 ## Personas

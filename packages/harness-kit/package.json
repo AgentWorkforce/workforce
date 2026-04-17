@@ -1,10 +1,15 @@
 {
-  "name": "@agentworkforce/cli",
+  "name": "@agentworkforce/harness-kit",
   "version": "0.1.0",
   "private": false,
   "type": "module",
-  "bin": {
-    "agent-workforce": "dist/cli.js"
+  "main": "dist/index.js",
+  "types": "dist/index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "default": "./dist/index.js"
+    }
   },
   "files": [
     "dist",
@@ -12,19 +17,18 @@
     "package.json"
   ],
   "dependencies": {
-    "@agentworkforce/harness-kit": "workspace:*",
     "@agentworkforce/workload-router": "workspace:*"
   },
   "repository": {
     "type": "git",
     "url": "https://github.com/AgentWorkforce/workforce",
-    "directory": "packages/cli"
+    "directory": "packages/harness-kit"
   },
   "publishConfig": {
     "access": "public"
   },
   "scripts": {
-    "build": "tsc -p tsconfig.json && chmod +x dist/cli.js",
+    "build": "tsc -p tsconfig.json",
     "typecheck": "tsc -p tsconfig.json --noEmit",
     "test": "tsc -p tsconfig.json && node --test dist/*.test.js",
     "lint": "tsc -p tsconfig.json --noEmit"

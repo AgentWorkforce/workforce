@@ -23,6 +23,15 @@ importers:
 
   packages/cli:
     dependencies:
+      '@agentworkforce/harness-kit':
+        specifier: workspace:*
+        version: link:../harness-kit
+      '@agentworkforce/workload-router':
+        specifier: workspace:*
+        version: link:../workload-router
+
+  packages/harness-kit:
+    dependencies:
       '@agentworkforce/workload-router':
         specifier: workspace:*
         version: link:../workload-router

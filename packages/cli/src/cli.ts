@@ -6,19 +6,18 @@ import {
   PERSONA_TIERS,
   personaCatalog,
   useSelection,
-  type Harness,
-  type McpServerSpec,
-  type PersonaPermissions,
   type PersonaSelection,
   type PersonaSpec,
   type PersonaTier
 } from '@agentworkforce/workload-router';
-import { loadLocalPersonas } from './local-personas.js';
 import {
-  makeLenientResolver,
+  buildInteractiveSpec,
+  formatDropWarnings,
+  resolveMcpServersLenient,
   resolveStringMapLenient,
-  type DroppedRef
-} from './env-refs.js';
+  type InteractiveSpec
+} from '@agentworkforce/harness-kit';
+import { loadLocalPersonas } from './local-personas.js';
 
 const USAGE = `Usage: agent-workforce agent <persona>[@<tier>] [task...]
 
@@ -99,181 +98,6 @@ function buildSelection(spec: PersonaSpec, tier: PersonaTier, kind: 'repo' | 'lo
     ...(spec.mcpServers ? { mcpServers: spec.mcpServers } : {}),
     ...(spec.permissions ? { permissions: spec.permissions } : {})
   };
-}
-
-function stripProviderPrefix(model: string): string {
-  const idx = model.indexOf('/');
-  return idx >= 0 ? model.slice(idx + 1) : model;
-}
-
-interface McpResolution {
-  servers: Record<string, McpServerSpec> | undefined;
-  /** Entries dropped because a referenced env var was not set. */
-  dropped: DroppedRef[];
-  /**
-   * Servers dropped entirely because a structural field (`url`, `command`,
-   * any `arg`) couldn't be resolved — the config for those servers would be
-   * unusable without the missing value.
-   */
-  droppedServers: { name: string; refs: string[] }[];
-}
-
-function resolveMcpServersLenient(
-  servers: Record<string, McpServerSpec> | undefined,
-  processEnv: NodeJS.ProcessEnv
-): McpResolution {
-  if (!servers) return { servers: undefined, dropped: [], droppedServers: [] };
-  const resolve = makeLenientResolver(processEnv);
-  const out: Record<string, McpServerSpec> = {};
-  const dropped: DroppedRef[] = [];
-  const droppedServers: { name: string; refs: string[] }[] = [];
-
-  for (const [name, spec] of Object.entries(servers)) {
-    const field = `mcpServers.${name}`;
-    const fatalRefs: string[] = [];
-
-    const resolveFatal = (value: string, subfield: string): string | undefined => {
-      const r = resolve(value, subfield);
-      if (r.ok) return r.value;
-      fatalRefs.push(r.ref);
-      return undefined;
-    };
-
-    if (spec.type === 'stdio') {
-      const command = resolveFatal(spec.command, `${field}.command`);
-      const args = spec.args?.map((a, i) => resolveFatal(a, `${field}.args[${i}]`));
-      if (!command || (args && args.some((a) => a === undefined))) {
-        droppedServers.push({ name, refs: fatalRefs });
-        continue;
-      }
-      const envResolution = resolveStringMapLenient(spec.env, processEnv, `${field}.env`);
-      dropped.push(...envResolution.dropped);
-      out[name] = {
-        type: 'stdio',
-        command,
-        ...(args ? { args: args as string[] } : {}),
-        ...(envResolution.value ? { env: envResolution.value } : {})
-      };
-    } else {
-      const url = resolveFatal(spec.url, `${field}.url`);
-      if (!url) {
-        droppedServers.push({ name, refs: fatalRefs });
-        continue;
-      }
-      const headersResolution = resolveStringMapLenient(
-        spec.headers,
-        processEnv,
-        `${field}.headers`
-      );
-      dropped.push(...headersResolution.dropped);
-      out[name] = {
-        type: spec.type,
-        url,
-        ...(headersResolution.value ? { headers: headersResolution.value } : {})
-      };
-    }
-  }
-
-  return {
-    servers: Object.keys(out).length > 0 ? out : undefined,
-    dropped,
-    droppedServers
-  };
-}
-
-function formatDropWarnings(
-  envDrops: DroppedRef[],
-  mcpDrops: DroppedRef[],
-  mcpServerDrops: { name: string; refs: string[] }[]
-): string[] {
-  const lines: string[] = [];
-  for (const d of envDrops) {
-    lines.push(`${d.field} dropped (env var ${d.ref} is not set).`);
-  }
-  for (const d of mcpDrops) {
-    lines.push(`${d.field} dropped (env var ${d.ref} is not set).`);
-  }
-  for (const d of mcpServerDrops) {
-    lines.push(
-      `mcpServers.${d.name} dropped entirely (required fields referenced unset env vars: ${d.refs.join(', ')}).`
-    );
-  }
-  return lines;
-}
-
-type InteractiveSpec = {
-  bin: string;
-  args: readonly string[];
-  initialPrompt: string | null;
-};
-
-function buildInteractiveSpec(
-  harness: Harness,
-  model: string,
-  systemPrompt: string,
-  resolvedMcp: Record<string, McpServerSpec> | undefined,
-  permissions: PersonaPermissions | undefined
-): InteractiveSpec {
-  switch (harness) {
-    case 'claude': {
-      // Always isolate MCP: pair --mcp-config with --strict-mcp-config so
-      // only the persona's declared servers load. Without --strict, Claude
-      // merges our config with ~/.claude.json and project-level MCP sources,
-      // pulling in whatever the user has configured elsewhere.
-      const mcpPayload = JSON.stringify({ mcpServers: resolvedMcp ?? {} });
-      const base: string[] = [
-        '--model',
-        model,
-        '--append-system-prompt',
-        systemPrompt,
-        '--mcp-config',
-        mcpPayload,
-        '--strict-mcp-config'
-      ];
-      if (permissions?.allow && permissions.allow.length > 0) {
-        base.push('--allowedTools', ...permissions.allow);
-      }
-      if (permissions?.deny && permissions.deny.length > 0) {
-        base.push('--disallowedTools', ...permissions.deny);
-      }
-      if (permissions?.mode) {
-        base.push('--permission-mode', permissions.mode);
-      }
-      return { bin: 'claude', args: base, initialPrompt: null };
-    }
-    case 'codex':
-      if (resolvedMcp && Object.keys(resolvedMcp).length > 0) {
-        process.stderr.write(
-          `warning: persona declares mcpServers but the codex harness is not yet wired for runtime MCP injection; proceeding without MCP.\n`
-        );
-      }
-      if (permissions && (permissions.allow?.length || permissions.deny?.length || permissions.mode)) {
-        process.stderr.write(
-          `warning: persona declares permissions but the codex harness is not yet wired for runtime permission injection; proceeding with codex defaults.\n`
-        );
-      }
-      return {
-        bin: 'codex',
-        args: ['-m', stripProviderPrefix(model)],
-        initialPrompt: systemPrompt
-      };
-    case 'opencode':
-      if (resolvedMcp && Object.keys(resolvedMcp).length > 0) {
-        process.stderr.write(
-          `warning: persona declares mcpServers but the opencode harness is not yet wired for runtime MCP injection; proceeding without MCP.\n`
-        );
-      }
-      if (permissions && (permissions.allow?.length || permissions.deny?.length || permissions.mode)) {
-        process.stderr.write(
-          `warning: persona declares permissions but the opencode harness is not yet wired for runtime permission injection; proceeding with opencode defaults.\n`
-        );
-      }
-      return {
-        bin: 'opencode',
-        args: ['--model', stripProviderPrefix(model)],
-        initialPrompt: systemPrompt
-      };
-  }
 }
 
 function emitDropWarnings(lines: string[]): void {
@@ -366,13 +190,14 @@ function runInteractive(selection: PersonaSelection): Promise<number> {
     runInstall(install.command, `Installing skills: ${skillIds}`);
   }
 
-  const spec = buildInteractiveSpec(
-    runtime.harness,
-    runtime.model,
-    runtime.systemPrompt,
-    resolvedMcp,
-    selection.permissions
-  );
+  const spec = buildInteractiveSpec({
+    harness: runtime.harness,
+    model: runtime.model,
+    systemPrompt: runtime.systemPrompt,
+    mcpServers: resolvedMcp,
+    permissions: selection.permissions
+  });
+  for (const w of spec.warnings) process.stderr.write(`warning: ${w}\n`);
   const finalArgs = spec.initialPrompt ? [...spec.args, spec.initialPrompt] : [...spec.args];
 
   // Print a sanitized summary rather than raw argv: spec.args for the claude
