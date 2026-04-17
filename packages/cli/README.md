@@ -6,11 +6,17 @@ built-in one from `/personas/`, or a user-local one that extends a built-in.
 
 ```
 agent-workforce agent <persona>[@<tier>] [task...]
+agent-workforce list [flags]
+agent-workforce harness check
 ```
 
-- No `task` → drops you into an interactive session with the harness.
-- `task...` given → runs one-shot (via `usePersona().sendMessage()`) and streams
-  output to stdout/stderr.
+- `agent` — no `task` drops you into an interactive session with the harness;
+  a `task...` argument runs one-shot (via `usePersona().sendMessage()`) and
+  streams output to stdout/stderr.
+- `list` — print the persona catalog as a table (or JSON). See
+  [`## List`](#list) below for every flag.
+- `harness check` — probe which harnesses (`claude`, `codex`, `opencode`)
+  are installed. See [`## Harness check`](#harness-check) below.
 
 ## Install
 
@@ -52,6 +58,68 @@ agent-workforce agent posthog@best
 # Interactive against a local override
 agent-workforce agent my-posthog@best
 ```
+
+## List
+
+```
+agent-workforce list [flags]
+```
+
+Prints the merged persona catalog — everything the `agent` subcommand would
+accept as a selector — including cascade source (`library`, `home`, `pwd`),
+harness, intent, description, and tier ("rating"). One row per persona-tier
+combination; by default only the **recommended tier per intent** is shown
+(as declared in
+`packages/workload-router/routing-profiles/default.json`).
+
+### Flags
+
+| Flag | Default | Effect |
+| --- | --- | --- |
+| `--all` | off | Show every tier of every persona. Alias: `--no-recommended`. |
+| `--recommended` | on | Only show the recommended tier per intent. Implicit default; mostly useful for undoing `--all` earlier in a wrapper script. |
+| `--filter-rating <tier>` | — | Restrict to a single tier (`best` \| `best-value` \| `minimum`). **Implicitly turns off the recommended-only default**, so filtering by `best` shows every persona's `best` row even when that's not the recommended tier. |
+| `--filter-harness <harness>` | — | Restrict to a single harness (`claude` \| `codex` \| `opencode`). Composable with `--filter-rating` and `--all`. |
+| `--no-display-intent` | off | Hide the `INTENT` column. `--display-intent` re-enables it. |
+| `--no-display-description` | off | Hide the `DESCRIPTION` column. `--display-description` re-enables it. |
+| `--json` | off | Emit `{ "personas": [...] }` with one object per row. Same field set as the table, useful for scripting. |
+| `-h`, `--help` | — | Print a one-line usage string and exit. |
+
+Invalid values for `--filter-rating` / `--filter-harness` fail fast and list
+the allowed values.
+
+### Examples
+
+```sh
+# Default: one row per persona, recommended tier only
+agent-workforce list
+
+# See every tier
+agent-workforce list --all
+
+# Only the top tier across the catalog — independent of recommendations
+agent-workforce list --filter-rating best
+
+# All claude-harness personas (any tier)
+agent-workforce list --all --filter-harness claude
+
+# Compact table for a narrow terminal
+agent-workforce list --no-display-intent --no-display-description
+
+# Machine-readable
+agent-workforce list --json --filter-harness claude
+```
+
+## Harness check
+
+```
+agent-workforce harness check
+```
+
+Probes your PATH for each supported harness binary (`claude`, `codex`,
+`opencode`) and prints a table with status (`ok` / `missing`), resolved
+version, and the resolved path (or the error, for missing ones). Exit
+code is always `0` — this command is diagnostic, not a gate.
 
 ## Personas
 

@@ -3,9 +3,13 @@ import { spawn, spawnSync } from 'node:child_process';
 import { constants } from 'node:os';
 
 import {
+  HARNESS_VALUES,
   PERSONA_TIERS,
   personaCatalog,
+  routingProfiles,
   useSelection,
+  type Harness,
+  type PersonaIntent,
   type PersonaSelection,
   type PersonaSpec,
   type PersonaTier
@@ -19,7 +23,7 @@ import {
   type HarnessAvailability,
   type InteractiveSpec
 } from '@agentworkforce/harness-kit';
-import { loadLocalPersonas } from './local-personas.js';
+import { loadLocalPersonas, type PersonaSource } from './local-personas.js';
 
 const USAGE = `Usage: agent-workforce <command> [args...]
 
@@ -29,6 +33,19 @@ Commands:
                       (default: best-value). If [task] is provided, runs one-shot
                       non-interactively; otherwise drops into an interactive
                       harness session.
+  list [flags]        List available personas from the cascade (pwd → home →
+                      library). By default shows one row per persona at the
+                      recommended tier for its intent; pass --all to see every
+                      tier. Flags:
+                        --all                         show every tier (overrides default)
+                        --json                        emit JSON instead of a table
+                        --filter-rating <tier>        only show this tier; disables
+                                                      the recommended-only default
+                                                      (${PERSONA_TIERS.join(' | ')})
+                        --filter-harness <harness>    only show this harness
+                                                      (${HARNESS_VALUES.join(' | ')})
+                        --no-display-intent           hide the INTENT column
+                        --no-display-description      hide the DESCRIPTION column
   harness check       Probe which harnesses (claude, codex, opencode) are
                       installed and runnable on this machine.
 
@@ -42,6 +59,7 @@ Examples:
   agent-workforce agent npm-provenance-publisher@best
   agent-workforce agent my-posthog@best
   agent-workforce agent review@best-value "look at the diff on this branch"
+  agent-workforce list
   agent-workforce harness check
 `;
 
@@ -283,6 +301,191 @@ function formatAvailabilityTable(results: readonly HarnessAvailability[]): strin
   return [line(headers), ...rows.map(line)].join('\n') + '\n';
 }
 
+interface PersonaListRow {
+  persona: string;
+  source: PersonaSource;
+  harness: string;
+  intent: string;
+  description: string;
+  rating: PersonaTier;
+}
+
+function collectPersonaRows(): PersonaListRow[] {
+  const rows: PersonaListRow[] = [];
+  const pushSpec = (spec: PersonaSpec, source: PersonaSource): void => {
+    for (const tier of PERSONA_TIERS) {
+      rows.push({
+        persona: spec.id,
+        source,
+        harness: spec.tiers[tier].harness,
+        intent: spec.intent,
+        description: spec.description,
+        rating: tier
+      });
+    }
+  };
+  const seen = new Set<string>();
+  for (const [id, spec] of local.byId) {
+    pushSpec(spec, local.sources.get(id) ?? 'library');
+    seen.add(id);
+  }
+  for (const spec of Object.values(personaCatalog)) {
+    if (seen.has(spec.id)) continue;
+    pushSpec(spec, 'library');
+  }
+  const tierOrder = new Map(PERSONA_TIERS.map((t, i) => [t, i] as const));
+  return rows.sort(
+    (a, b) =>
+      a.persona.localeCompare(b.persona) ||
+      (tierOrder.get(a.rating)! - tierOrder.get(b.rating)!)
+  );
+}
+
+interface ListDisplayOptions {
+  intent: boolean;
+  description: boolean;
+}
+
+function formatPersonaTable(
+  rows: readonly PersonaListRow[],
+  display: ListDisplayOptions
+): string {
+  const headers = {
+    persona: 'PERSONA',
+    source: 'SOURCE',
+    harness: 'HARNESS',
+    intent: 'INTENT',
+    rating: 'RATING',
+    description: 'DESCRIPTION'
+  };
+  const widths = {
+    persona: Math.max(headers.persona.length, ...rows.map((r) => r.persona.length)),
+    source: Math.max(headers.source.length, ...rows.map((r) => r.source.length)),
+    harness: Math.max(headers.harness.length, ...rows.map((r) => r.harness.length)),
+    intent: Math.max(headers.intent.length, ...rows.map((r) => r.intent.length)),
+    rating: Math.max(headers.rating.length, ...rows.map((r) => r.rating.length)),
+    description: headers.description.length
+  };
+  const termWidth =
+    process.stdout.isTTY && typeof process.stdout.columns === 'number' ? process.stdout.columns : 140;
+  const nonDescCols = 4 + (display.intent ? 1 : 0);
+  const fixed =
+    widths.persona +
+    widths.source +
+    widths.harness +
+    widths.rating +
+    (display.intent ? widths.intent : 0) +
+    (nonDescCols + (display.description ? 1 : 0) - 1) * 2;
+  const descBudget = Math.max(20, termWidth - fixed - 1);
+  const truncate = (s: string, n: number) => (s.length <= n ? s : s.slice(0, Math.max(1, n - 1)) + '…');
+  const line = (row: typeof headers | PersonaListRow) => {
+    const parts = [
+      row.persona.padEnd(widths.persona),
+      row.source.padEnd(widths.source),
+      row.harness.padEnd(widths.harness),
+      row.rating.padEnd(widths.rating)
+    ];
+    if (display.intent) parts.push(row.intent.padEnd(widths.intent));
+    if (display.description) {
+      parts.push(truncate(row.description.replace(/\s+/g, ' ').trim(), descBudget));
+    }
+    return parts.join('  ').trimEnd();
+  };
+  return [line(headers), ...rows.map(line)].join('\n') + '\n';
+}
+
+function parseListArgs(args: readonly string[]): {
+  json: boolean;
+  filterRating?: PersonaTier;
+  filterHarness?: Harness;
+  display: ListDisplayOptions;
+  showAll: boolean;
+  filterRatingExplicit: boolean;
+} {
+  let json = false;
+  let filterRating: PersonaTier | undefined;
+  let filterRatingExplicit = false;
+  let filterHarness: Harness | undefined;
+  let showAll = false;
+  const display: ListDisplayOptions = { intent: true, description: true };
+
+  const valueOf = (i: number, flag: string): string => {
+    const v = args[i + 1];
+    if (v === undefined || v.startsWith('--')) {
+      die(`list: ${flag} requires a value.`);
+    }
+    return v;
+  };
+
+  for (let i = 0; i < args.length; i++) {
+    const arg = args[i];
+    if (arg === '--json') {
+      json = true;
+    } else if (arg === '-h' || arg === '--help') {
+      process.stdout.write(
+        'Usage: agent-workforce list [--all] [--json] [--filter-rating <tier>] [--filter-harness <harness>] [--no-display-intent] [--no-display-description]\n'
+      );
+      process.exit(0);
+    } else if (arg === '--all' || arg === '--no-recommended') {
+      showAll = true;
+    } else if (arg === '--recommended') {
+      showAll = false;
+    } else if (arg === '--filter-rating') {
+      const v = valueOf(i++, arg);
+      if (!(PERSONA_TIERS as readonly string[]).includes(v)) {
+        die(`list: invalid --filter-rating "${v}". Must be one of: ${PERSONA_TIERS.join(', ')}`);
+      }
+      filterRating = v as PersonaTier;
+      filterRatingExplicit = true;
+    } else if (arg === '--filter-harness') {
+      const v = valueOf(i++, arg);
+      if (!(HARNESS_VALUES as readonly string[]).includes(v)) {
+        die(`list: invalid --filter-harness "${v}". Must be one of: ${HARNESS_VALUES.join(', ')}`);
+      }
+      filterHarness = v as Harness;
+    } else if (arg === '--display-intent') {
+      display.intent = true;
+    } else if (arg === '--no-display-intent') {
+      display.intent = false;
+    } else if (arg === '--display-description') {
+      display.description = true;
+    } else if (arg === '--no-display-description') {
+      display.description = false;
+    } else {
+      die(`list: unexpected argument "${arg}".`);
+    }
+  }
+  return { json, filterRating, filterHarness, display, showAll, filterRatingExplicit };
+}
+
+function runList(args: readonly string[]): never {
+  const { json, filterRating, filterHarness, display, showAll, filterRatingExplicit } =
+    parseListArgs(args);
+
+  const recommendedByIntent = routingProfiles.default.intents;
+  const applyRecommended = !showAll && !filterRatingExplicit;
+
+  const rows = collectPersonaRows().filter((r) => {
+    if (filterRating && r.rating !== filterRating) return false;
+    if (filterHarness && r.harness !== filterHarness) return false;
+    if (applyRecommended) {
+      const rule = recommendedByIntent[r.intent as PersonaIntent];
+      if (!rule || r.rating !== rule.tier) return false;
+    }
+    return true;
+  });
+
+  if (json) {
+    process.stdout.write(JSON.stringify({ personas: rows }, null, 2) + '\n');
+  } else {
+    process.stdout.write(formatPersonaTable(rows, display));
+    const uniq = new Set(rows.map((r) => r.persona)).size;
+    const suffix = applyRecommended ? ' (recommended tier per intent; pass --all to see every tier)' : '';
+    process.stdout.write(`\n${uniq} persona(s), ${rows.length} row(s)${suffix}.\n`);
+  }
+  process.exit(0);
+}
+
 function runHarnessCheck(): never {
   const results = detectHarnesses();
   process.stdout.write(formatAvailabilityTable(results));
@@ -298,6 +501,10 @@ async function main(): Promise<void> {
   if (!subcommand || subcommand === '-h' || subcommand === '--help') {
     process.stdout.write(USAGE);
     process.exit(subcommand ? 0 : 1);
+  }
+
+  if (subcommand === 'list') {
+    runList(rest);
   }
 
   if (subcommand === 'harness') {
