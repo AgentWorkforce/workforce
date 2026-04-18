@@ -4,6 +4,7 @@ import { constants } from 'node:os';
 
 import {
   HARNESS_VALUES,
+  PERSONA_TAGS,
   PERSONA_TIERS,
   personaCatalog,
   routingProfiles,
@@ -12,6 +13,7 @@ import {
   type PersonaIntent,
   type PersonaSelection,
   type PersonaSpec,
+  type PersonaTag,
   type PersonaTier
 } from '@agentworkforce/workload-router';
 import {
@@ -44,6 +46,8 @@ Commands:
                                                       (${PERSONA_TIERS.join(' | ')})
                         --filter-harness <harness>    only show this harness
                                                       (${HARNESS_VALUES.join(' | ')})
+                        --filter-tag <tag>            only show personas carrying this tag
+                                                      (${PERSONA_TAGS.join(' | ')})
                         --no-display-description      hide the DESCRIPTION column
   harness check       Probe which harnesses (claude, codex, opencode) are
                       installed and runnable on this machine.
@@ -306,6 +310,7 @@ interface PersonaListRow {
   harness: string;
   model: string;
   intent: string;
+  tags: PersonaTag[];
   description: string;
   rating: PersonaTier;
 }
@@ -320,6 +325,7 @@ function collectPersonaRows(): PersonaListRow[] {
         harness: spec.tiers[tier].harness,
         model: spec.tiers[tier].model,
         intent: spec.intent,
+        tags: spec.tags,
         description: spec.description,
         rating: tier
       });
@@ -350,20 +356,40 @@ function formatPersonaTable(
   rows: readonly PersonaListRow[],
   display: ListDisplayOptions
 ): string {
-  const headers = {
+  interface RenderRow {
+    persona: string;
+    source: string;
+    harness: string;
+    model: string;
+    rating: string;
+    tags: string;
+    description: string;
+  }
+  const headers: RenderRow = {
     persona: 'PERSONA',
     source: 'SOURCE',
     harness: 'HARNESS',
     model: 'MODEL',
     rating: 'RATING',
+    tags: 'TAGS',
     description: 'DESCRIPTION'
   };
+  const rendered: RenderRow[] = rows.map((r) => ({
+    persona: r.persona,
+    source: r.source,
+    harness: r.harness,
+    model: r.model,
+    rating: r.rating,
+    tags: r.tags.join(','),
+    description: r.description
+  }));
   const widths = {
-    persona: Math.max(headers.persona.length, ...rows.map((r) => r.persona.length)),
-    source: Math.max(headers.source.length, ...rows.map((r) => r.source.length)),
-    harness: Math.max(headers.harness.length, ...rows.map((r) => r.harness.length)),
-    model: Math.max(headers.model.length, ...rows.map((r) => r.model.length)),
-    rating: Math.max(headers.rating.length, ...rows.map((r) => r.rating.length)),
+    persona: Math.max(headers.persona.length, ...rendered.map((r) => r.persona.length)),
+    source: Math.max(headers.source.length, ...rendered.map((r) => r.source.length)),
+    harness: Math.max(headers.harness.length, ...rendered.map((r) => r.harness.length)),
+    model: Math.max(headers.model.length, ...rendered.map((r) => r.model.length)),
+    rating: Math.max(headers.rating.length, ...rendered.map((r) => r.rating.length)),
+    tags: Math.max(headers.tags.length, ...rendered.map((r) => r.tags.length)),
     description: headers.description.length
   };
   const termWidth =
@@ -374,29 +400,32 @@ function formatPersonaTable(
     widths.harness +
     widths.model +
     widths.rating +
-    (5 + (display.description ? 1 : 0) - 1) * 2;
+    widths.tags +
+    (6 + (display.description ? 1 : 0) - 1) * 2;
   const descBudget = Math.max(20, termWidth - fixed - 1);
   const truncate = (s: string, n: number) => (s.length <= n ? s : s.slice(0, Math.max(1, n - 1)) + '…');
-  const line = (row: typeof headers | PersonaListRow) => {
+  const line = (row: RenderRow) => {
     const parts = [
       row.persona.padEnd(widths.persona),
       row.source.padEnd(widths.source),
       row.harness.padEnd(widths.harness),
       row.model.padEnd(widths.model),
-      row.rating.padEnd(widths.rating)
+      row.rating.padEnd(widths.rating),
+      row.tags.padEnd(widths.tags)
     ];
     if (display.description) {
       parts.push(truncate(row.description.replace(/\s+/g, ' ').trim(), descBudget));
     }
     return parts.join('  ').trimEnd();
   };
-  return [line(headers), ...rows.map(line)].join('\n') + '\n';
+  return [line(headers), ...rendered.map(line)].join('\n') + '\n';
 }
 
 function parseListArgs(args: readonly string[]): {
   json: boolean;
   filterRating?: PersonaTier;
   filterHarness?: Harness;
+  filterTag?: PersonaTag;
   display: ListDisplayOptions;
   showAll: boolean;
   filterRatingExplicit: boolean;
@@ -405,6 +434,7 @@ function parseListArgs(args: readonly string[]): {
   let filterRating: PersonaTier | undefined;
   let filterRatingExplicit = false;
   let filterHarness: Harness | undefined;
+  let filterTag: PersonaTag | undefined;
   let showAll = false;
   const display: ListDisplayOptions = { description: true };
 
@@ -422,7 +452,7 @@ function parseListArgs(args: readonly string[]): {
       json = true;
     } else if (arg === '-h' || arg === '--help') {
       process.stdout.write(
-        'Usage: agent-workforce list [--all] [--json] [--filter-rating <tier>] [--filter-harness <harness>] [--no-display-description]\n'
+        'Usage: agent-workforce list [--all] [--json] [--filter-rating <tier>] [--filter-harness <harness>] [--filter-tag <tag>] [--no-display-description]\n'
       );
       process.exit(0);
     } else if (arg === '--all' || arg === '--no-recommended') {
@@ -442,6 +472,12 @@ function parseListArgs(args: readonly string[]): {
         die(`list: invalid --filter-harness "${v}". Must be one of: ${HARNESS_VALUES.join(', ')}`);
       }
       filterHarness = v as Harness;
+    } else if (arg === '--filter-tag') {
+      const v = valueOf(i++, arg);
+      if (!(PERSONA_TAGS as readonly string[]).includes(v)) {
+        die(`list: invalid --filter-tag "${v}". Must be one of: ${PERSONA_TAGS.join(', ')}`);
+      }
+      filterTag = v as PersonaTag;
     } else if (arg === '--display-description') {
       display.description = true;
     } else if (arg === '--no-display-description') {
@@ -450,11 +486,11 @@ function parseListArgs(args: readonly string[]): {
       die(`list: unexpected argument "${arg}".`);
     }
   }
-  return { json, filterRating, filterHarness, display, showAll, filterRatingExplicit };
+  return { json, filterRating, filterHarness, filterTag, display, showAll, filterRatingExplicit };
 }
 
 function runList(args: readonly string[]): never {
-  const { json, filterRating, filterHarness, display, showAll, filterRatingExplicit } =
+  const { json, filterRating, filterHarness, filterTag, display, showAll, filterRatingExplicit } =
     parseListArgs(args);
 
   const recommendedByIntent = routingProfiles.default.intents;
@@ -463,6 +499,7 @@ function runList(args: readonly string[]): never {
   const rows = collectPersonaRows().filter((r) => {
     if (filterRating && r.rating !== filterRating) return false;
     if (filterHarness && r.harness !== filterHarness) return false;
+    if (filterTag && !r.tags.includes(filterTag)) return false;
     if (applyRecommended) {
       const rule = recommendedByIntent[r.intent as PersonaIntent];
       if (!rule || r.rating !== rule.tier) return false;

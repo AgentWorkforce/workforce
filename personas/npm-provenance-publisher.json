@@ -1,6 +1,7 @@
 {
   "id": "npm-provenance-publisher",
   "intent": "npm-provenance",
+  "tags": ["release"],
   "description": "Sets up and verifies secure npm publishing via GitHub Actions OIDC trusted publishing with provenance attestations.",
   "skills": [
     {

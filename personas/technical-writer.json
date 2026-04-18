@@ -1,6 +1,7 @@
 {
   "id": "technical-writer",
   "intent": "documentation",
+  "tags": ["documentation"],
   "description": "Produces accurate developer-facing documentation, READMEs, API notes, and change guidance grounded in the actual code.",
   "tiers": {
     "best": {

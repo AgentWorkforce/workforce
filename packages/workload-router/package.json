@@ -15,6 +15,7 @@
     "dist",
     "routing-profiles",
     "README.md",
+    "CHANGELOG.md",
     "package.json"
   ],
   "dependencies": {

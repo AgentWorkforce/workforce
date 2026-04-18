@@ -4,6 +4,7 @@
 export const agentRelayE2eConductor = {
   "id": "agent-relay-e2e-conductor",
   "intent": "sage-cloud-e2e-conduction",
+  "tags": ["testing"],
   "description": "Conducts full sage ↔ cloud ↔ Slack end-to-end validation by standing up a docker-compose stack (postgres, mock-slack, mock-nango, cloud-web, miniflare-sage) and driving production-shaped Slack fixtures through it.",
   "tiers": {
     "best": {
@@ -30,6 +31,7 @@ export const agentRelayE2eConductor = {
 export const architecturePlanner = {
   "id": "architecture-planner",
   "intent": "architecture-plan",
+  "tags": ["planning"],
   "description": "Produces architecture plans, tradeoffs, and migration paths.",
   "tiers": {
     "best": {
@@ -56,6 +58,7 @@ export const architecturePlanner = {
 export const capabilityDiscoverer = {
   "id": "capability-discoverer",
   "intent": "capability-discovery",
+  "tags": ["discovery"],
   "description": "Finds existing skills, agents, and hooks for a project by searching both the skills.sh ecosystem and prpm.dev instead of hand-rolling new logic. Picks the best fit across providers and emits the exact install command.",
   "skills": [
     {
@@ -94,6 +97,7 @@ export const capabilityDiscoverer = {
 export const cloudSandboxInfra = {
   "id": "cloud-sandbox-infra",
   "intent": "cloud-sandbox-infra",
+  "tags": ["implementation"],
   "description": "Implements cloud infrastructure features: sandbox provisioning, session management, credential handling, executor wiring, and Daytona SDK integration.",
   "tiers": {
     "best": {
@@ -120,6 +124,7 @@ export const cloudSandboxInfra = {
 export const cloudSlackProxyGuard = {
   "id": "cloud-slack-proxy-guard",
   "intent": "cloud-slack-proxy-guard",
+  "tags": ["implementation"],
   "description": "Owns the canonical POST /api/v1/proxy/slack route in cloud — enforces allow-listed methods, shared-secret auth, rate limits, audit log, and stable {ok,data,code,retryAfterMs} envelope so sage and other clients never talk to Slack directly.",
   "tiers": {
     "best": {
@@ -146,6 +151,7 @@ export const cloudSlackProxyGuard = {
 export const codeReviewer = {
   "id": "code-reviewer",
   "intent": "review",
+  "tags": ["review"],
   "description": "Reviews pull requests for correctness, risk, and maintainability.",
   "tiers": {
     "best": {
@@ -172,6 +178,7 @@ export const codeReviewer = {
 export const debuggerPersona = {
   "id": "debugger",
   "intent": "debugging",
+  "tags": ["debugging"],
   "description": "Drives root-cause debugging for failing builds, regressions, and runtime defects with minimal corrective changes.",
   "tiers": {
     "best": {
@@ -207,6 +214,7 @@ export const debuggerPersona = {
 export const flakeHunter = {
   "id": "flake-hunter",
   "intent": "flake-investigation",
+  "tags": ["testing", "debugging"],
   "description": "Diagnoses intermittent test failures and removes root-cause nondeterminism instead of masking it.",
   "tiers": {
     "best": {
@@ -233,6 +241,7 @@ export const flakeHunter = {
 export const frontendImplementer = {
   "id": "frontend-implementer",
   "intent": "implement-frontend",
+  "tags": ["implementation"],
   "description": "Implements frontend UI features with strong UX and maintainable code.",
   "tiers": {
     "best": {
@@ -259,6 +268,7 @@ export const frontendImplementer = {
 export const npmProvenancePublisher = {
   "id": "npm-provenance-publisher",
   "intent": "npm-provenance",
+  "tags": ["release"],
   "description": "Sets up and verifies secure npm publishing via GitHub Actions OIDC trusted publishing with provenance attestations.",
   "skills": [
     {
@@ -292,6 +302,7 @@ export const npmProvenancePublisher = {
 export const opencodeWorkflowSpecialist = {
   "id": "opencode-workflow-specialist",
   "intent": "opencode-workflow-correctness",
+  "tags": ["debugging"],
   "description": "Diagnoses and repairs opencode-based agent-relay workflow failures across SDK, broker, cloud bootstrap, and CLI layers",
   "tiers": {
     "best": {
@@ -318,6 +329,7 @@ export const opencodeWorkflowSpecialist = {
 export const posthogAgent = {
   "id": "posthog",
   "intent": "posthog",
+  "tags": ["analytics"],
   "description": "Narrow PostHog assistant wired to the PostHog MCP server. Answers product-analytics questions, inspects events/insights/feature flags, and navigates the configured PostHog project. Carries no other skills — intended as a base for user-extended personas that supply their own API key.",
   "skills": [],
   "env": {
@@ -360,6 +372,7 @@ export const posthogAgent = {
 export const requirementsAnalyst = {
   "id": "requirements-analyst",
   "intent": "requirements-analysis",
+  "tags": ["planning"],
   "description": "Turns rough feature ideas into explicit acceptance criteria, edge cases, and open questions before planning or coding begins.",
   "tiers": {
     "best": {
@@ -395,6 +408,7 @@ export const requirementsAnalyst = {
 export const sageProactiveRewirer = {
   "id": "sage-proactive-rewirer",
   "intent": "sage-proactive-rewire",
+  "tags": ["implementation"],
   "description": "Rewires sage's proactive Slack paths (follow-up-checker, stale-thread-detector, context-watcher, pr-matcher) to resolve connectionId and providerConfigKey from stored state rather than guessing from team_id or environment defaults.",
   "tiers": {
     "best": {
@@ -421,6 +435,7 @@ export const sageProactiveRewirer = {
 export const sageSlackEgressMigrator = {
   "id": "sage-slack-egress-migrator",
   "intent": "sage-slack-egress-migration",
+  "tags": ["implementation"],
   "description": "Migrates sage Slack egress off direct NangoClient onto the @relayfile/sdk ConnectionProvider abstraction without introducing hardcoded providerConfigKey defaults.",
   "tiers": {
     "best": {
@@ -447,6 +462,7 @@ export const sageSlackEgressMigrator = {
 export const securityReviewer = {
   "id": "security-reviewer",
   "intent": "security-review",
+  "tags": ["review"],
   "description": "Reviews code and plans for exploitable security risks, unsafe defaults, and missing defensive controls.",
   "tiers": {
     "best": {
@@ -482,6 +498,7 @@ export const securityReviewer = {
 export const tddGuard = {
   "id": "tdd-guard",
   "intent": "tdd-enforcement",
+  "tags": ["testing"],
   "description": "Enforces red-green-refactor discipline so teams prove behavior before implementation.",
   "tiers": {
     "best": {
@@ -508,6 +525,7 @@ export const tddGuard = {
 export const technicalWriter = {
   "id": "technical-writer",
   "intent": "documentation",
+  "tags": ["documentation"],
   "description": "Produces accurate developer-facing documentation, READMEs, API notes, and change guidance grounded in the actual code.",
   "tiers": {
     "best": {
@@ -543,6 +561,7 @@ export const technicalWriter = {
 export const testStrategist = {
   "id": "test-strategist",
   "intent": "test-strategy",
+  "tags": ["testing"],
   "description": "Designs pragmatic test plans, risk-ranked coverage, and the smallest test set that buys confidence.",
   "tiers": {
     "best": {
@@ -569,6 +588,7 @@ export const testStrategist = {
 export const verifierPersona = {
   "id": "verifier",
   "intent": "verification",
+  "tags": ["testing", "review"],
   "description": "Checks whether completion claims are actually supported by fresh evidence, acceptance criteria coverage, and relevant tests.",
   "tiers": {
     "best": {

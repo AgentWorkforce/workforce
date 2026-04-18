@@ -4,11 +4,13 @@ import { join } from 'node:path';
 
 import {
   personaCatalog,
+  PERSONA_TAGS,
   PERSONA_TIERS,
   type McpServerSpec,
   type PersonaPermissions,
   type PersonaRuntime,
   type PersonaSpec,
+  type PersonaTag,
   type PersonaTier
 } from '@agentworkforce/workload-router';
 
@@ -23,6 +25,11 @@ import {
 export interface LocalPersonaOverride {
   id: string;
   extends?: string;
+  /**
+   * Classification tags. When provided, replaces the inherited base's tags
+   * entirely (matching the replace-wholesale semantics used for `skills`).
+   */
+  tags?: PersonaTag[];
   description?: string;
   skills?: PersonaSpec['skills'];
   env?: Record<string, string>;
@@ -120,6 +127,18 @@ function parseOverride(value: unknown, context: string): LocalPersonaOverride {
   if (raw.description !== undefined && typeof raw.description !== 'string') {
     throw new Error(`${context}.description must be a string if provided`);
   }
+  if (raw.tags !== undefined) {
+    if (!Array.isArray(raw.tags) || raw.tags.length === 0) {
+      throw new Error(`${context}.tags must be a non-empty array of tags if provided`);
+    }
+    for (const [idx, tag] of raw.tags.entries()) {
+      if (!PERSONA_TAGS.includes(tag as PersonaTag)) {
+        throw new Error(
+          `${context}.tags[${idx}] must be one of: ${PERSONA_TAGS.join(', ')}`
+        );
+      }
+    }
+  }
 
   if (raw.skills !== undefined && !Array.isArray(raw.skills)) {
     throw new Error(`${context}.skills must be an array if provided`);
@@ -132,6 +151,7 @@ function parseOverride(value: unknown, context: string): LocalPersonaOverride {
   return {
     id: raw.id,
     extends: raw.extends as string | undefined,
+    tags: raw.tags as PersonaTag[] | undefined,
     description: raw.description as string | undefined,
     skills: raw.skills as PersonaSpec['skills'] | undefined,
     env: raw.env as LocalPersonaOverride['env'],
@@ -324,6 +344,7 @@ function mergeOverride(base: PersonaSpec, override: LocalPersonaOverride): Perso
   return {
     id: override.id,
     intent: base.intent,
+    tags: override.tags ?? base.tags,
     description: override.description ?? base.description,
     skills: override.skills ?? base.skills,
     tiers,

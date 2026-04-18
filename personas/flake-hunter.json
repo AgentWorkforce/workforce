@@ -1,6 +1,7 @@
 {
   "id": "flake-hunter",
   "intent": "flake-investigation",
+  "tags": ["testing", "debugging"],
   "description": "Diagnoses intermittent test failures and removes root-cause nondeterminism instead of masking it.",
   "tiers": {
     "best": {

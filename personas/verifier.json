@@ -1,6 +1,7 @@
 {
   "id": "verifier",
   "intent": "verification",
+  "tags": ["testing", "review"],
   "description": "Checks whether completion claims are actually supported by fresh evidence, acceptance criteria coverage, and relevant tests.",
   "tiers": {
     "best": {

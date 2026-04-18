@@ -1,6 +1,7 @@
 {
   "id": "tdd-guard",
   "intent": "tdd-enforcement",
+  "tags": ["testing"],
   "description": "Enforces red-green-refactor discipline so teams prove behavior before implementation.",
   "tiers": {
     "best": {

@@ -1,6 +1,7 @@
 {
   "id": "debugger",
   "intent": "debugging",
+  "tags": ["debugging"],
   "description": "Drives root-cause debugging for failing builds, regressions, and runtime defects with minimal corrective changes.",
   "tiers": {
     "best": {

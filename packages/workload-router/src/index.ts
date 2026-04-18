@@ -7,6 +7,17 @@ import defaultRoutingProfileJson from '../routing-profiles/default.json' with { 
 
 export const HARNESS_VALUES = ['opencode', 'codex', 'claude'] as const;
 export const PERSONA_TIERS = ['best', 'best-value', 'minimum'] as const;
+export const PERSONA_TAGS = [
+  'planning',
+  'implementation',
+  'review',
+  'testing',
+  'debugging',
+  'documentation',
+  'release',
+  'discovery',
+  'analytics'
+] as const;
 export const PERSONA_INTENTS = [
   'implement-frontend',
   'review',
@@ -33,6 +44,7 @@ export const PERSONA_INTENTS = [
 export type Harness = (typeof HARNESS_VALUES)[number];
 export type PersonaTier = (typeof PERSONA_TIERS)[number];
 export type PersonaIntent = (typeof PERSONA_INTENTS)[number];
+export type PersonaTag = (typeof PERSONA_TAGS)[number];
 
 export interface HarnessSettings {
   reasoning: 'low' | 'medium' | 'high';
@@ -104,6 +116,12 @@ export type McpServerSpec =
 export interface PersonaSpec {
   id: string;
   intent: PersonaIntent;
+  /**
+   * Free-form classification labels (from {@link PERSONA_TAGS}). Every persona
+   * has at least one; a persona may carry multiple tags when it spans concerns
+   * (e.g. `['testing', 'implementation']`).
+   */
+  tags: PersonaTag[];
   description: string;
   skills: PersonaSkill[];
   tiers: Record<PersonaTier, PersonaRuntime>;
@@ -1037,6 +1055,26 @@ function isIntent(value: unknown): value is PersonaIntent {
   return typeof value === 'string' && PERSONA_INTENTS.includes(value as PersonaIntent);
 }
 
+function isTag(value: unknown): value is PersonaTag {
+  return typeof value === 'string' && PERSONA_TAGS.includes(value as PersonaTag);
+}
+
+function parseTags(value: unknown, context: string): PersonaTag[] {
+  if (!Array.isArray(value) || value.length === 0) {
+    throw new Error(`${context} must be a non-empty array of tags`);
+  }
+  const out: PersonaTag[] = [];
+  for (const [idx, entry] of value.entries()) {
+    if (!isTag(entry)) {
+      throw new Error(
+        `${context}[${idx}] must be one of: ${PERSONA_TAGS.join(', ')}`
+      );
+    }
+    if (!out.includes(entry)) out.push(entry);
+  }
+  return out;
+}
+
 function parseRuntime(value: unknown, context: string): PersonaRuntime {
   if (!isObject(value)) {
     throw new Error(`${context} must be an object`);
@@ -1108,7 +1146,7 @@ function parsePersonaSpec(value: unknown, expectedIntent: PersonaIntent): Person
     throw new Error(`persona[${expectedIntent}] must be an object`);
   }
 
-  const { id, intent, description, tiers, skills, env, mcpServers, permissions } = value;
+  const { id, intent, tags, description, tiers, skills, env, mcpServers, permissions } = value;
 
   if (typeof id !== 'string' || !id.trim()) {
     throw new Error(`persona[${expectedIntent}].id must be a non-empty string`);
@@ -1119,6 +1157,7 @@ function parsePersonaSpec(value: unknown, expectedIntent: PersonaIntent): Person
   if (intent !== expectedIntent) {
     throw new Error(`persona[${expectedIntent}] intent mismatch: got ${intent}`);
   }
+  const parsedTags = parseTags(tags, `persona[${expectedIntent}].tags`);
   if (typeof description !== 'string' || !description.trim()) {
     throw new Error(`persona[${expectedIntent}].description must be a non-empty string`);
   }
@@ -1142,6 +1181,7 @@ function parsePersonaSpec(value: unknown, expectedIntent: PersonaIntent): Person
   return {
     id,
     intent,
+    tags: parsedTags,
     description,
     skills: parsedSkills,
     tiers: parsedTiers,

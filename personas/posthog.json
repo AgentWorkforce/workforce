@@ -1,6 +1,7 @@
 {
   "id": "posthog",
   "intent": "posthog",
+  "tags": ["analytics"],
   "description": "Narrow PostHog assistant wired to the PostHog MCP server. Answers product-analytics questions, inspects events/insights/feature flags, and navigates the configured PostHog project. Carries no other skills — intended as a base for user-extended personas that supply their own API key.",
   "skills": [],
   "env": {

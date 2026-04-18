@@ -132,12 +132,151 @@ jobs:
           done
           echo "versions=${VERSIONS# }" >> "$GITHUB_OUTPUT"
 
+      # Per-package CHANGELOG.md generation. For each package being published,
+      # finds the last `<pkg>-v*` tag, collects Conventional Commits since then
+      # that touched `packages/<pkg>/**`, buckets them, and prepends a new
+      # versioned block. Skips silently for prereleases (version contains `-`)
+      # and for first publishes (no prior tag).
+      - name: Generate changelogs
+        if: ${{ github.event.inputs.version != 'none' || github.event.inputs.custom_version != '' }}
+        run: |
+          TODAY=$(date -u +%Y-%m-%d)
+          cat > /tmp/gen-changelog.mjs << 'GENEOF'
+          import { execSync } from 'node:child_process';
+          import { readFileSync, writeFileSync, existsSync } from 'node:fs';
+
+          const [,, pkg, newVersion, today] = process.argv;
+          const path = `packages/${pkg}/CHANGELOG.md`;
+
+          if (newVersion.includes('-')) {
+            console.log(`prerelease ${pkg}@${newVersion}: skipping`);
+            process.exit(0);
+          }
+
+          const tagPrefix = `${pkg}-v`;
+          const tags = execSync(`git tag -l '${tagPrefix}*' --sort=-v:refname`, { encoding: 'utf-8' })
+            .trim().split('\n').filter(Boolean);
+          const semverRe = new RegExp(`^${tagPrefix.replace(/\./g, '\\.')}\\d+\\.\\d+\\.\\d+$`);
+          const lastTag = tags.find(t => semverRe.test(t));
+
+          if (!lastTag) {
+            console.log(`${pkg}: no prior stable tag, skipping`);
+            process.exit(0);
+          }
+
+          const existing = existsSync(path) ? readFileSync(path, 'utf-8') : '';
+          if (existing.includes(`## [${newVersion}]`)) {
+            console.log(`${path} already has ${newVersion}, skipping`);
+            process.exit(0);
+          }
+
+          const log = execSync(
+            `git log ${lastTag}..HEAD --pretty=format:"%H|%s|%b%x00" --no-merges -- packages/${pkg}`,
+            { encoding: 'utf-8' }
+          ).trim();
+
+          if (!log) {
+            console.log(`${pkg}: no commits since ${lastTag}, skipping`);
+            process.exit(0);
+          }
+
+          const commits = log.split('\0').filter(Boolean).map(record => {
+            const idx = record.indexOf('|');
+            const idx2 = record.indexOf('|', idx + 1);
+            return {
+              subject: record.slice(idx + 1, idx2).trim(),
+              body: record.slice(idx2 + 1).trim(),
+            };
+          });
+
+          const extractPR = (subject, body) => {
+            const m = (subject + ' ' + body).match(/#(\d+)/);
+            return m ? `(#${m[1]})` : '';
+          };
+
+          const formatTitle = (subject) => {
+            const cleaned = subject
+              .replace(/^(feat|fix|refactor|perf|chore|test|ci|docs|build|style)(\([^)]+\))?!?:\s*/i, '')
+              .replace(/\s*\(#\d+\)\s*$/, '');
+            return cleaned.charAt(0).toUpperCase() + cleaned.slice(1);
+          };
+
+          const getType = (subject) => {
+            const m = subject.match(/^(feat|fix|refactor|perf|chore|test|ci|docs|build|style)(\([^)]+\))?(!)?:/i);
+            if (!m) return 'other';
+            const type = m[1].toLowerCase();
+            const scope = (m[2] || '').replace(/[()]/g, '');
+            if (m[3] === '!') return 'breaking';
+            if (type === 'feat') return 'feat';
+            if (type === 'fix') return 'fix';
+            if (type === 'refactor' || type === 'perf' || type === 'build') return 'changed';
+            if (type === 'test' || type === 'ci') return 'reliability';
+            if (type === 'chore' && scope === 'release') return 'release';
+            if (type === 'chore') return 'deps';
+            return 'other';
+          };
+
+          const cats = { breaking: [], feat: [], fix: [], changed: [], reliability: [], deps: [], release: [], other: [] };
+          for (const c of commits) {
+            const type = getType(c.subject);
+            cats[type].push({ title: formatTitle(c.subject), pr: extractPR(c.subject, c.body) });
+          }
+
+          const sections = [
+            ['Breaking Changes', cats.breaking, true],
+            ['Added', cats.feat, true],
+            ['Fixed', cats.fix, false],
+            ['Changed', cats.changed, false],
+            ['Reliability', cats.reliability, false],
+            ['Dependencies', cats.deps, false],
+          ];
+
+          const lines = [`## [${newVersion}] - ${today}`, ''];
+          let anyContent = false;
+          for (const [header, bucket, bold] of sections) {
+            if (bucket.length === 0) continue;
+            anyContent = true;
+            lines.push(`### ${header}`, '');
+            for (const c of bucket) {
+              const title = bold ? `**${c.title}**` : c.title;
+              lines.push(`- ${title}${c.pr ? ' ' + c.pr : ''}`);
+            }
+            lines.push('');
+          }
+          if (!anyContent) {
+            lines.push('### Released', '', `- v${newVersion}`, '');
+          }
+
+          const newEntry = lines.join('\n');
+
+          if (!existing) {
+            const header = `# Changelog\n\nAll notable changes to \`@agentworkforce/${pkg}\` will be documented in this file.\n\nThe format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),\nand this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).\n\n## [Unreleased]\n\n`;
+            writeFileSync(path, header + newEntry + '\n');
+          } else {
+            // Insert after the [Unreleased] block, before the first versioned entry.
+            const match = existing.match(/\n## \[\d/);
+            const insertAt = match ? match.index : -1;
+            if (insertAt === -1) {
+              writeFileSync(path, existing.trimEnd() + '\n\n' + newEntry + '\n');
+            } else {
+              writeFileSync(path, existing.slice(0, insertAt + 1) + newEntry + '\n' + existing.slice(insertAt + 1));
+            }
+          }
+          console.log(`${path} updated with ${newVersion}`);
+          GENEOF
+
+          for entry in ${{ steps.bump.outputs.versions }}; do
+            pkg="${entry%%:*}"
+            version="${entry##*:}"
+            node /tmp/gen-changelog.mjs "$pkg" "$version" "$TODAY"
+          done
+
       - name: Commit version bumps
         if: ${{ github.event.inputs.dry_run != 'true' && (github.event.inputs.version != 'none' || github.event.inputs.custom_version != '') }}
         run: |
           git config user.name "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
-          git add packages/*/package.json
+          git add packages/*/package.json packages/*/CHANGELOG.md
           if git diff --cached --quiet; then
             echo "No version changes to commit."
           else
