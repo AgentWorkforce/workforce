@@ -777,20 +777,24 @@ function buildInstallArtifacts(plan: SkillMaterializationPlan): {
   installCommand: readonly string[];
   installCommandString: string;
 } {
-  if (plan.installs.length === 0) {
-    return {
-      installCommand: Object.freeze(['sh', '-c', ':']) as readonly string[],
-      installCommandString: ':'
-    };
-  }
-
   if (plan.sessionInstallRoot !== undefined) {
-    // In session mode, chain the raw provider commands after a single
-    // `cd <root>` so we emit one shell invocation instead of repeating the
-    // cd per skill. Each install.installCommand is already self-contained
-    // (`sh -c 'cd <root> && …'`) for callers who want to run one at a time,
-    // but here we flatten to the underlying prpm argv for a cleaner chain.
+    // Session mode always stages a plugin dir so the caller can pass
+    // `--plugin-dir <root>` to claude unconditionally. Even for personas
+    // with zero skills, we emit the scaffold (mkdir + manifest + symlink)
+    // so the `--plugin-dir` target exists.
     const root = plan.sessionInstallRoot;
+    const scaffold = buildSessionScaffoldCommand(root);
+    if (plan.installs.length === 0) {
+      return {
+        installCommand: Object.freeze(['sh', '-c', scaffold]) as readonly string[],
+        installCommandString: scaffold
+      };
+    }
+    // Chain the raw provider commands after a single `cd <root>` so we emit
+    // one shell invocation instead of repeating the cd per skill. Each
+    // install.installCommand is already self-contained (`sh -c 'cd <root> &&
+    // …'`) for callers who want to run one at a time, but here we flatten
+    // to the underlying prpm argv for a cleaner chain.
     const perSkill = plan.installs
       .map((install) => {
         const resolved = resolveSkillSource(install.source);
@@ -798,10 +802,17 @@ function buildInstallArtifacts(plan: SkillMaterializationPlan): {
         return commandToShellString(provider.buildInstallCommand(resolved, plan.harness));
       })
       .join(' && ');
-    const installCommandString = `${buildSessionScaffoldCommand(root)} && cd ${shellEscape(root)} && ${perSkill}`;
+    const installCommandString = `${scaffold} && cd ${shellEscape(root)} && ${perSkill}`;
     return {
       installCommand: Object.freeze(['sh', '-c', installCommandString]) as readonly string[],
       installCommandString
+    };
+  }
+
+  if (plan.installs.length === 0) {
+    return {
+      installCommand: Object.freeze(['sh', '-c', ':']) as readonly string[],
+      installCommandString: ':'
     };
   }
 
@@ -827,12 +838,12 @@ function buildCleanupArtifacts(plan: SkillMaterializationPlan): {
   cleanupCommand: readonly string[];
   cleanupCommandString: string;
 } {
-  // Session mode: cleanup is the whole stage dir. Even if no skills were
-  // actually installed, we still drop the directory the scaffold created so
-  // nothing remains on disk after the run.
+  // Session mode: cleanup is the whole stage dir. The scaffold always runs
+  // (even for zero-skill personas), so cleanup unconditionally drops the
+  // stage dir. The CLI is responsible for removing the enclosing session
+  // root; this command covers the install subtree.
   if (plan.sessionInstallRoot !== undefined) {
-    const cleanupCommandString =
-      plan.installs.length === 0 ? ':' : `rm -rf ${shellEscape(plan.sessionInstallRoot)}`;
+    const cleanupCommandString = `rm -rf ${shellEscape(plan.sessionInstallRoot)}`;
     return {
       cleanupCommand: Object.freeze(['sh', '-c', cleanupCommandString]) as readonly string[],
       cleanupCommandString

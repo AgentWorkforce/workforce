@@ -2,7 +2,7 @@
 import { spawn, spawnSync } from 'node:child_process';
 import { randomBytes } from 'node:crypto';
 import { constants, homedir } from 'node:os';
-import { join } from 'node:path';
+import { join, resolve as resolvePath } from 'node:path';
 import { pathToFileURL } from 'node:url';
 
 import {
@@ -220,6 +220,18 @@ function runCleanup(command: readonly string[], commandString: string): void {
 }
 
 /**
+ * Remove the whole per-session directory after the run, including the
+ * enclosing `<homedir>/.agent-workforce/sessions/<id>/` that the CLI
+ * created. The workload-router cleanup only covers the install subtree
+ * (`<root>/claude/plugin`), so without this step empty parent dirs
+ * would accumulate under `~/.agent-workforce/sessions/`.
+ */
+function removeSessionRoot(sessionRoot: string | undefined): void {
+  if (!sessionRoot) return;
+  spawnSync('rm', ['-rf', sessionRoot], { stdio: 'ignore', shell: false });
+}
+
+/**
  * Compute the absolute root directory for an interactive claude session.
  * Layout (under `root`):
  *
@@ -364,7 +376,10 @@ async function runInteractive(
         mountDir,
         args: finalArgs,
         ignoredPatterns: [...CLEAN_IGNORED_PATTERNS],
-        env: resolvedEnv,
+        // launchOnMount passes `env` straight to the child spawn, so without
+        // merging process.env we'd strip PATH/HOME/etc. Match the non-clean
+        // branch: persona env overlays the inherited environment.
+        env: resolvedEnv ? { ...process.env, ...resolvedEnv } : process.env,
         agentName: personaId
       });
       return result.exitCode;
@@ -380,6 +395,7 @@ async function runInteractive(
       return 127;
     } finally {
       runCleanup(install.cleanupCommand, install.cleanupCommandString);
+      removeSessionRoot(sessionRoot);
     }
   }
 
@@ -389,6 +405,7 @@ async function runInteractive(
       if (settled) return;
       settled = true;
       runCleanup(install.cleanupCommand, install.cleanupCommandString);
+      removeSessionRoot(sessionRoot);
       resolve(code);
     };
 
@@ -772,12 +789,13 @@ export function parseAgentArgs(args: readonly string[]): {
 
 // Only run main when invoked as the CLI entry, not when imported by tests.
 // Node ESM: import.meta.url is the module URL; argv[1] is the entry script
-// path. Compare after normalizing both to file URLs.
+// path, which may be relative (e.g. `node ./dist/cli.js`) and pathToFileURL
+// throws on relative paths. Resolve to absolute first.
 const isCliEntry = (() => {
   const entry = process.argv[1];
   if (!entry) return false;
   try {
-    return import.meta.url === pathToFileURL(entry).href;
+    return import.meta.url === pathToFileURL(resolvePath(entry)).href;
   } catch {
     return false;
   }

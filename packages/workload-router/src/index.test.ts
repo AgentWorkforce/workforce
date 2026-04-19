@@ -502,6 +502,28 @@ test('materializeSkills with installRoot + no skills still reports the sessionIn
   assert.equal(plan.installs.length, 0);
 });
 
+test('useSelection with installRoot + no skills emits scaffold so --plugin-dir target exists', () => {
+  // Skill-less claude personas (e.g. posthog) still need the stage dir to
+  // exist so `claude --plugin-dir <installRoot>` finds a valid plugin.
+  const installRoot = '/tmp/agent-workforce/sessions/empty-scaffold/claude/plugin';
+  const selection = resolvePersonaByTier('posthog', 'best');
+  const context = useSelection(selection, { harness: 'claude', installRoot });
+  assert.equal(context.install.plan.sessionInstallRoot, installRoot);
+  assert.equal(context.install.plan.installs.length, 0);
+  const cmd = context.install.commandString;
+  // Must NOT be the `:` no-op; must run the scaffold.
+  assert.notEqual(cmd, ':');
+  assert.match(cmd, /^mkdir -p /);
+  assert.match(cmd, /\.claude-plugin/);
+  assert.match(cmd, /ln -sfn \.claude\/skills /);
+  assert.match(cmd, /printf '%s' /);
+  // Cleanup always drops the stage dir in session mode, even with zero skills.
+  assert.equal(
+    context.install.cleanupCommandString,
+    `rm -rf ${installRoot}`
+  );
+});
+
 test('resolves capability-discovery persona carrying both skill.sh and prpm skills', () => {
   const selection = resolvePersona('capability-discovery');
   assert.equal(selection.personaId, 'capability-discoverer');
