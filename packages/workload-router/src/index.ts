@@ -200,6 +200,24 @@ export const HARNESS_SKILL_TARGETS: Record<Harness, HarnessSkillTarget> = {
   opencode: { asFlag: 'opencode', dir: '.skills' }
 };
 
+/**
+ * Options for {@link materializeSkills} / {@link materializeSkillsFor}.
+ *
+ * `installRoot` stages skills under an out-of-repo directory (typically
+ * `~/.agent-workforce/sessions/<id>/claude/plugin`) that doubles as a Claude
+ * Code plugin root. The SDK generates the scaffold (`.claude-plugin/plugin.json`
+ * and a `skills` symlink pointing at `.claude/skills/`), prpm installs into
+ * `<installRoot>/.claude/skills/<name>/`, and post-run cleanup removes the
+ * entire `installRoot` in one `rm -rf` — no files ever touch the repo.
+ *
+ * Only honored for `harness === 'claude'`. Passing `installRoot` with another
+ * harness throws. The absolute path is the caller's responsibility; the SDK
+ * does not create parent directories on its own.
+ */
+export interface SkillMaterializationOptions {
+  installRoot?: string;
+}
+
 export interface SkillInstall {
   skillId: string;
   /** Original `source` string from the persona JSON. */
@@ -226,6 +244,13 @@ export interface SkillInstall {
 export interface SkillMaterializationPlan {
   harness: Harness;
   installs: SkillInstall[];
+  /**
+   * Absolute path to the out-of-repo stage directory, when the plan was
+   * produced with {@link SkillMaterializationOptions.installRoot}. When set,
+   * the install artifacts emit plugin scaffolding at this root and cleanup
+   * removes the whole directory instead of individual skill paths.
+   */
+  sessionInstallRoot?: string;
 }
 
 export interface PersonaInstallContext {
@@ -627,26 +652,56 @@ function providerFor(kind: SkillSourceKind): SkillProvider {
  */
 export function materializeSkills(
   skills: readonly PersonaSkill[],
-  harness: Harness
+  harness: Harness,
+  options: SkillMaterializationOptions = {}
 ): SkillMaterializationPlan {
   const target = HARNESS_SKILL_TARGETS[harness];
   if (!target) {
     throw new Error(`No skill install target configured for harness: ${harness}`);
   }
+  const { installRoot } = options;
+  if (installRoot !== undefined && harness !== 'claude') {
+    throw new Error(
+      `installRoot is only supported for the claude harness (got: ${harness}). ` +
+        `codex and opencode still install into the harness's conventional repo-relative directory.`
+    );
+  }
 
   const installs = skills.map((skill): SkillInstall => {
     const resolved = resolveSkillSource(skill.source);
     const provider = providerFor(resolved.kind);
-    const installCommand = provider.buildInstallCommand(resolved, harness);
-    const cleanupPaths = provider.cleanupPaths(resolved, harness);
+    const baseCommand = provider.buildInstallCommand(resolved, harness);
+    // In session-install-root mode, the install runs `cd <installRoot> && <prpm>`
+    // so that prpm's harness-relative dirs (`.claude/skills/<name>`) land
+    // inside the stage dir instead of the user's repo. The per-install command
+    // stays self-contained so callers who run a single install.installCommand
+    // directly still get the correct placement.
+    const installCommand =
+      installRoot !== undefined
+        ? (Object.freeze([
+            'sh',
+            '-c',
+            `cd ${shellEscape(installRoot)} && ${commandToShellString(baseCommand)}`
+          ]) as readonly string[])
+        : baseCommand;
     // For prompt-injection fallback we still want a single canonical manifest
     // path. prpm installs into the harness target dir; skill.sh installs into
     // its universal `.agents/skills` dir regardless of harness, so key off
     // whichever cleanup path ends in the installed name.
-    const installedDir =
+    const repoRelativeDir =
       resolved.kind === 'skill.sh'
         ? `.agents/skills/${resolved.installedName}`
         : `${target.dir}/${resolved.installedName}`;
+    const installedDir =
+      installRoot !== undefined ? `${installRoot}/${repoRelativeDir}` : repoRelativeDir;
+    // When the plan stages into `installRoot`, cleanup targets the whole
+    // session dir (handled at plan level in buildCleanupArtifacts). Leave
+    // per-skill cleanupPaths empty so Mode B callers running individual
+    // install.cleanupPaths don't accidentally remove unrelated things.
+    const cleanupPaths =
+      installRoot !== undefined
+        ? (Object.freeze([]) as readonly string[])
+        : provider.cleanupPaths(resolved, harness);
     return {
       skillId: skill.id,
       source: skill.source,
@@ -660,15 +715,22 @@ export function materializeSkills(
     };
   });
 
-  return { harness, installs };
+  return {
+    harness,
+    installs,
+    ...(installRoot !== undefined ? { sessionInstallRoot: installRoot } : {})
+  };
 }
 
 /**
  * Convenience wrapper: derive the install plan directly from a resolved
  * persona selection, using its tier's harness automatically.
  */
-export function materializeSkillsFor(selection: PersonaSelection): SkillMaterializationPlan {
-  return materializeSkills(selection.skills, selection.runtime.harness);
+export function materializeSkillsFor(
+  selection: PersonaSelection,
+  options: SkillMaterializationOptions = {}
+): SkillMaterializationPlan {
+  return materializeSkills(selection.skills, selection.runtime.harness, options);
 }
 
 function shellEscape(value: string): string {
@@ -682,15 +744,70 @@ function commandToShellString(command: readonly string[]): string {
   return command.map(shellEscape).join(' ');
 }
 
+/**
+ * Minimal Claude Code plugin manifest written to `<root>/.claude-plugin/plugin.json`
+ * in session-install-root mode. Claude's plugin loader treats any directory
+ * that contains this file (alongside a `skills/` tree) as a plugin; we pass
+ * the root to `claude --plugin-dir <root>` so the session sees exactly the
+ * skills we staged — and nothing the repo happens to carry.
+ */
+const SESSION_PLUGIN_MANIFEST = JSON.stringify({
+  name: 'agent-workforce-session',
+  version: '0.0.0',
+  description: 'Ephemeral skills staged by agent-workforce for this session.'
+});
+
+function buildSessionScaffoldCommand(root: string): string {
+  const q = shellEscape(root);
+  // mkdir -p creates both the plugin metadata dir and the prpm target.
+  // `ln -sfn .claude/skills skills` makes Claude's expected plugin layout
+  // (`<root>/skills/<name>/SKILL.md`) resolve to prpm's actual output
+  // (`<root>/.claude/skills/<name>/SKILL.md`) without moving any files.
+  // The -n guards against following into an existing `skills/` dir (e.g.
+  // when the session dir is reused), and -f replaces a prior symlink so
+  // the scaffold is idempotent.
+  return [
+    `mkdir -p ${q}/.claude-plugin ${q}/.claude/skills`,
+    `ln -sfn .claude/skills ${q}/skills`,
+    `printf '%s' ${shellEscape(SESSION_PLUGIN_MANIFEST)} > ${q}/.claude-plugin/plugin.json`
+  ].join(' && ');
+}
+
 function buildInstallArtifacts(plan: SkillMaterializationPlan): {
   installCommand: readonly string[];
   installCommandString: string;
 } {
-  const installCommandString =
-    plan.installs.length === 0
-      ? ':'
-      : plan.installs.map((install) => commandToShellString(install.installCommand)).join(' && ');
+  if (plan.installs.length === 0) {
+    return {
+      installCommand: Object.freeze(['sh', '-c', ':']) as readonly string[],
+      installCommandString: ':'
+    };
+  }
 
+  if (plan.sessionInstallRoot !== undefined) {
+    // In session mode, chain the raw provider commands after a single
+    // `cd <root>` so we emit one shell invocation instead of repeating the
+    // cd per skill. Each install.installCommand is already self-contained
+    // (`sh -c 'cd <root> && …'`) for callers who want to run one at a time,
+    // but here we flatten to the underlying prpm argv for a cleaner chain.
+    const root = plan.sessionInstallRoot;
+    const perSkill = plan.installs
+      .map((install) => {
+        const resolved = resolveSkillSource(install.source);
+        const provider = providerFor(resolved.kind);
+        return commandToShellString(provider.buildInstallCommand(resolved, plan.harness));
+      })
+      .join(' && ');
+    const installCommandString = `${buildSessionScaffoldCommand(root)} && cd ${shellEscape(root)} && ${perSkill}`;
+    return {
+      installCommand: Object.freeze(['sh', '-c', installCommandString]) as readonly string[],
+      installCommandString
+    };
+  }
+
+  const installCommandString = plan.installs
+    .map((install) => commandToShellString(install.installCommand))
+    .join(' && ');
   return {
     installCommand: Object.freeze(['sh', '-c', installCommandString]) as readonly string[],
     installCommandString
@@ -710,6 +827,17 @@ function buildCleanupArtifacts(plan: SkillMaterializationPlan): {
   cleanupCommand: readonly string[];
   cleanupCommandString: string;
 } {
+  // Session mode: cleanup is the whole stage dir. Even if no skills were
+  // actually installed, we still drop the directory the scaffold created so
+  // nothing remains on disk after the run.
+  if (plan.sessionInstallRoot !== undefined) {
+    const cleanupCommandString =
+      plan.installs.length === 0 ? ':' : `rm -rf ${shellEscape(plan.sessionInstallRoot)}`;
+    return {
+      cleanupCommand: Object.freeze(['sh', '-c', cleanupCommandString]) as readonly string[],
+      cleanupCommandString
+    };
+  }
   const allPaths = plan.installs.flatMap((install) => [...install.cleanupPaths]);
   const cleanupCommandString =
     allPaths.length === 0 ? ':' : `rm -rf ${allPaths.map(shellEscape).join(' ')}`;
@@ -1474,13 +1602,21 @@ export function usePersona(
     harness?: Harness;
     tier?: PersonaTier;
     profile?: RoutingProfile | RoutingProfileId;
+    /**
+     * Stage claude skills under this absolute directory instead of the
+     * repo's `.claude/skills/`. See {@link SkillMaterializationOptions.installRoot}.
+     */
+    installRoot?: string;
   } = {}
 ): PersonaContext {
   const baseSelection = options.tier
     ? resolvePersonaByTier(intent, options.tier)
     : resolvePersona(intent, options.profile ?? 'default');
 
-  return useSelection(baseSelection, { harness: options.harness });
+  return useSelection(baseSelection, {
+    harness: options.harness,
+    installRoot: options.installRoot
+  });
 }
 
 /**
@@ -1491,7 +1627,7 @@ export function usePersona(
  */
 export function useSelection(
   baseSelection: PersonaSelection,
-  options: { harness?: Harness } = {}
+  options: { harness?: Harness; installRoot?: string } = {}
 ): PersonaContext {
   const effectiveHarness = options.harness ?? baseSelection.runtime.harness;
   const selection =
@@ -1505,10 +1641,12 @@ export function useSelection(
           }
         };
 
+  const materializationOptions: SkillMaterializationOptions =
+    options.installRoot !== undefined ? { installRoot: options.installRoot } : {};
   const installPlan =
     effectiveHarness === baseSelection.runtime.harness
-      ? materializeSkillsFor(selection)
-      : materializeSkills(selection.skills, effectiveHarness);
+      ? materializeSkillsFor(selection, materializationOptions)
+      : materializeSkills(selection.skills, effectiveHarness, materializationOptions);
 
   const { installCommand, installCommandString } = buildInstallArtifacts(installPlan);
   const { cleanupCommand, cleanupCommandString } = buildCleanupArtifacts(installPlan);

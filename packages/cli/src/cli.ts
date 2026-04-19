@@ -1,6 +1,9 @@
 #!/usr/bin/env node
 import { spawn, spawnSync } from 'node:child_process';
-import { constants } from 'node:os';
+import { randomBytes } from 'node:crypto';
+import { constants, homedir } from 'node:os';
+import { join } from 'node:path';
+import { pathToFileURL } from 'node:url';
 
 import {
   HARNESS_VALUES,
@@ -25,16 +28,33 @@ import {
   type HarnessAvailability,
   type InteractiveSpec
 } from '@agentworkforce/harness-kit';
+import { launchOnMount } from '@relayfile/local-mount';
 import { loadLocalPersonas, type PersonaSource } from './local-personas.js';
 
 const USAGE = `Usage: agent-workforce <command> [args...]
 
 Commands:
-  agent <persona>[@<tier>] [task...]
+  agent [flags] <persona>[@<tier>] [task...]
                       Run a persona. Tier one of: ${PERSONA_TIERS.join(' | ')}
                       (default: best-value). If [task] is provided, runs one-shot
                       non-interactively; otherwise drops into an interactive
                       harness session.
+
+                      Flags:
+                        --install-in-repo   Install skills into the repo's
+                                            .claude/skills/ (legacy). By default,
+                                            interactive claude sessions stage
+                                            skills under ~/.agent-workforce/
+                                            sessions/<id>/ and pass --plugin-dir
+                                            so the repo is never touched.
+                        --clean             Launch interactive claude inside a
+                                            @relayfile/local-mount sandbox that
+                                            hides the repo's CLAUDE.md,
+                                            CLAUDE.local.md, .claude, and
+                                            .mcp.json from the session. Persona
+                                            skills and keychain auth are
+                                            preserved. Claude interactive only;
+                                            incompatible with --install-in-repo.
   list [flags]        List available personas from the cascade (pwd → home →
                       library). By default shows one row per persona at the
                       recommended tier for its intent; pass --all to see every
@@ -199,9 +219,85 @@ function runCleanup(command: readonly string[], commandString: string): void {
   spawnSync(bin, args, { stdio: 'inherit', shell: false });
 }
 
-function runInteractive(selection: PersonaSelection): Promise<number> {
-  const ctx = useSelection(selection);
+/**
+ * Compute the absolute root directory for an interactive claude session.
+ * Layout (under `root`):
+ *
+ *   ~/.agent-workforce/sessions/<personaId>-<timestamp>-<rand>/
+ *     ├── claude/plugin/     ← skill install target + --plugin-dir
+ *     └── mount/             ← @relayfile/local-mount mount (--clean only)
+ *
+ * The timestamp + random suffix keep concurrent sessions from colliding on
+ * the same dir. Both the skill-install path and the mount path are derived
+ * from the same `root` so a single session ID describes the whole run.
+ */
+function generateSessionRoot(personaId: string): string {
+  const sessionId = `${Date.now().toString(36)}-${randomBytes(4).toString('hex')}`;
+  return join(homedir(), '.agent-workforce', 'sessions', `${personaId}-${sessionId}`);
+}
+
+function sessionInstallRoot(sessionRoot: string): string {
+  return join(sessionRoot, 'claude', 'plugin');
+}
+
+function sessionMountDir(sessionRoot: string): string {
+  return join(sessionRoot, 'mount');
+}
+
+/** Patterns hidden from an interactive claude session when `--clean` is set.
+ * Applied by `@relayfile/local-mount` with gitignore semantics, so bare names
+ * match at any depth in the project tree (e.g. `.claude` hides both
+ * `./.claude/` and `./packages/foo/.claude/`). */
+export const CLEAN_IGNORED_PATTERNS = [
+  'CLAUDE.md',
+  'CLAUDE.local.md',
+  '.claude',
+  '.mcp.json'
+] as const;
+
+/**
+ * Decide whether `--clean` should engage for this run. Returns a warning
+ * string when the flag was requested but cannot apply (e.g. non-claude
+ * harness); callers emit the warning to stderr and proceed with
+ * `useClean: false`. Pure — no side effects, trivially testable.
+ */
+export function decideCleanMode(
+  harness: Harness,
+  clean: boolean
+): { useClean: boolean; warning?: string } {
+  if (!clean) return { useClean: false };
+  if (harness !== 'claude') {
+    return {
+      useClean: false,
+      warning: `--clean is only supported for the claude harness (this session uses ${harness}). Ignoring flag.`
+    };
+  }
+  return { useClean: true };
+}
+
+async function runInteractive(
+  selection: PersonaSelection,
+  options: { installInRepo?: boolean; clean?: boolean } = {}
+): Promise<number> {
   const { runtime, personaId, tier } = selection;
+  // Out-of-repo staging only applies to the claude harness today (it's the
+  // only one with a `--plugin-dir` hook). For codex/opencode, keep the legacy
+  // behavior of installing into the repo's harness-conventional directory.
+  // The --install-in-repo flag forces legacy behavior across the board.
+  const useSessionDir = !options.installInRepo && runtime.harness === 'claude';
+  const sessionRoot = useSessionDir ? generateSessionRoot(personaId) : undefined;
+  const installRoot = sessionRoot ? sessionInstallRoot(sessionRoot) : undefined;
+  // --clean applies to interactive claude only. For non-claude harnesses, warn
+  // and drop the flag (same pattern as pluginDirs warnings in buildInteractiveSpec).
+  const cleanDecision = decideCleanMode(runtime.harness, options.clean === true);
+  if (cleanDecision.warning) {
+    process.stderr.write(`warning: ${cleanDecision.warning}\n`);
+  }
+  const useClean = cleanDecision.useClean;
+  const ctx = useSelection(
+    selection,
+    installRoot !== undefined ? { installRoot } : {}
+  );
   const { install } = ctx;
   process.stderr.write(`→ ${personaId} [${tier}] via ${runtime.harness} (${runtime.model})\n`);
 
@@ -215,7 +311,8 @@ function runInteractive(selection: PersonaSelection): Promise<number> {
 
   if (install.plan.installs.length > 0) {
     const skillIds = install.plan.installs.map((i) => i.skillId).join(', ');
-    runInstall(install.command, `Installing skills: ${skillIds}`);
+    const targetLabel = installRoot ? ` → ${installRoot}` : '';
+    runInstall(install.command, `Installing skills: ${skillIds}${targetLabel}`);
   }
 
   const spec = buildInteractiveSpec({
@@ -223,7 +320,8 @@ function runInteractive(selection: PersonaSelection): Promise<number> {
     model: runtime.model,
     systemPrompt: runtime.systemPrompt,
     mcpServers: resolvedMcp,
-    permissions: selection.permissions
+    permissions: selection.permissions,
+    ...(installRoot !== undefined ? { pluginDirs: [installRoot] } : {})
   });
   for (const w of spec.warnings) process.stderr.write(`warning: ${w}\n`);
   const finalArgs = spec.initialPrompt ? [...spec.args, spec.initialPrompt] : [...spec.args];
@@ -249,7 +347,41 @@ function runInteractive(selection: PersonaSelection): Promise<number> {
     }
   }
   if (spec.initialPrompt) summary.push('initial-prompt=<systemPrompt>');
+  if (useClean) summary.push('clean=on');
   process.stderr.write(`• spawning ${spec.bin} (${summary.join(', ')})\n`);
+
+  // --clean branch: delegate process lifecycle (spawn, signal forwarding,
+  // syncback, cleanup) to @relayfile/local-mount. Skill plugin dir lives
+  // outside the mount, so claude resolves --plugin-dir normally regardless
+  // of cwd.
+  if (useClean && sessionRoot) {
+    const mountDir = sessionMountDir(sessionRoot);
+    process.stderr.write(`• clean mount → ${mountDir}\n`);
+    try {
+      const result = await launchOnMount({
+        cli: spec.bin,
+        projectDir: process.cwd(),
+        mountDir,
+        args: finalArgs,
+        ignoredPatterns: [...CLEAN_IGNORED_PATTERNS],
+        env: resolvedEnv,
+        agentName: personaId
+      });
+      return result.exitCode;
+    } catch (err) {
+      const e = err as NodeJS.ErrnoException;
+      if (e.code === 'ENOENT') {
+        process.stderr.write(
+          `Failed to spawn "${spec.bin}" inside clean mount: binary not found on PATH. Install the ${runtime.harness} CLI and retry.\n`
+        );
+      } else {
+        process.stderr.write(`Failed to launch clean mount: ${e.message}\n`);
+      }
+      return 127;
+    } finally {
+      runCleanup(install.cleanupCommand, install.cleanupCommandString);
+    }
+  }
 
   return new Promise((resolve) => {
     let settled = false;
@@ -557,21 +689,103 @@ async function main(): Promise<void> {
     die(`Unknown subcommand "${subcommand}".`);
   }
 
-  const [selector, ...taskParts] = rest;
+  const { flags, positional } = parseAgentArgs(rest);
+  const [selector, ...taskParts] = positional;
   if (!selector) die('agent: missing persona selector.');
 
   const target = parseSelector(selector);
   const selection = buildSelection(target.spec, target.tier, target.kind);
 
   if (taskParts.length > 0) {
+    // One-shot (sendMessage) currently goes through the agent-relay workflow
+    // SDK, which doesn't yet thread `--plugin-dir` into claude. For now it
+    // keeps the legacy in-repo install regardless of --install-in-repo so
+    // skills remain visible to the model. Flipping this requires upstream
+    // SDK work on the claude agent adapter.
+    if (flags.installInRepo) {
+      process.stderr.write(
+        'note: --install-in-repo is redundant for one-shot runs (already the current behavior).\n'
+      );
+    }
+    if (flags.clean) {
+      // Parallel to --install-in-repo: the agent-relay workflow SDK doesn't
+      // thread @relayfile/local-mount integration today, so --clean on a
+      // one-shot run is a no-op. Interactive mode gets the sandbox.
+      process.stderr.write(
+        'note: --clean is ignored for one-shot runs; it currently only applies to interactive claude sessions.\n'
+      );
+    }
     await runOneShot(selection, taskParts.join(' '));
   } else {
-    const code = await runInteractive(selection);
+    const code = await runInteractive(selection, {
+      installInRepo: flags.installInRepo,
+      clean: flags.clean
+    });
     process.exit(code);
   }
 }
 
-main().catch((err) => {
-  process.stderr.write(`${(err as Error)?.stack ?? String(err)}\n`);
-  process.exit(1);
-});
+export interface AgentFlags {
+  installInRepo: boolean;
+  clean: boolean;
+}
+
+export function parseAgentArgs(args: readonly string[]): {
+  flags: AgentFlags;
+  positional: string[];
+} {
+  const flags: AgentFlags = { installInRepo: false, clean: false };
+  const positional: string[] = [];
+  let seenDoubleDash = false;
+  for (const arg of args) {
+    if (seenDoubleDash) {
+      positional.push(arg);
+      continue;
+    }
+    if (arg === '--') {
+      seenDoubleDash = true;
+      continue;
+    }
+    if (arg === '--install-in-repo') {
+      flags.installInRepo = true;
+      continue;
+    }
+    if (arg === '--clean') {
+      flags.clean = true;
+      continue;
+    }
+    if (arg === '-h' || arg === '--help') {
+      process.stdout.write(USAGE);
+      process.exit(0);
+    }
+    positional.push(arg);
+  }
+  if (flags.installInRepo && flags.clean) {
+    die(
+      'agent: --install-in-repo and --clean are mutually exclusive. ' +
+        '--install-in-repo stages skills into the real repo; --clean hides ' +
+        'the repo behind a mount. Pick one.'
+    );
+  }
+  return { flags, positional };
+}
+
+// Only run main when invoked as the CLI entry, not when imported by tests.
+// Node ESM: import.meta.url is the module URL; argv[1] is the entry script
+// path. Compare after normalizing both to file URLs.
+const isCliEntry = (() => {
+  const entry = process.argv[1];
+  if (!entry) return false;
+  try {
+    return import.meta.url === pathToFileURL(entry).href;
+  } catch {
+    return false;
+  }
+})();
+
+if (isCliEntry) {
+  main().catch((err) => {
+    process.stderr.write(`${(err as Error)?.stack ?? String(err)}\n`);
+    process.exit(1);
+  });
+}

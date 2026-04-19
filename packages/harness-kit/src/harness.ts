@@ -31,6 +31,14 @@ export interface BuildInteractiveSpecInput {
   /** Env-resolved MCP servers (pass the output of `resolveMcpServersLenient().servers`). */
   mcpServers?: Record<string, McpServerSpec>;
   permissions?: PersonaPermissions;
+  /**
+   * Absolute paths of directories to load as Claude Code plugins for this
+   * session (`--plugin-dir <path>` per entry). Used to wire in out-of-repo
+   * skill stages produced by
+   * {@link import('@agentworkforce/workload-router').SkillMaterializationOptions.installRoot}.
+   * Claude-only: other harnesses emit a warning and ignore the field.
+   */
+  pluginDirs?: readonly string[];
 }
 
 function stripProviderPrefix(model: string): string {
@@ -59,8 +67,9 @@ function hasAnyPermission(p: PersonaPermissions | undefined): boolean {
  * harnesses yet.
  */
 export function buildInteractiveSpec(input: BuildInteractiveSpecInput): InteractiveSpec {
-  const { harness, model, systemPrompt, mcpServers, permissions } = input;
+  const { harness, model, systemPrompt, mcpServers, permissions, pluginDirs } = input;
   const warnings: string[] = [];
+  const hasPluginDirs = pluginDirs !== undefined && pluginDirs.length > 0;
 
   switch (harness) {
     case 'claude': {
@@ -74,6 +83,11 @@ export function buildInteractiveSpec(input: BuildInteractiveSpecInput): Interact
         mcpPayload,
         '--strict-mcp-config'
       ];
+      if (hasPluginDirs) {
+        for (const dir of pluginDirs!) {
+          args.push('--plugin-dir', dir);
+        }
+      }
       if (permissions?.allow && permissions.allow.length > 0) {
         args.push('--allowedTools', ...permissions.allow);
       }
@@ -96,6 +110,11 @@ export function buildInteractiveSpec(input: BuildInteractiveSpecInput): Interact
           'persona declares permissions but the codex harness is not yet wired for runtime permission injection; proceeding with codex defaults.'
         );
       }
+      if (hasPluginDirs) {
+        warnings.push(
+          'pluginDirs is currently claude-only; ignoring under the codex harness. Skills must be staged via codex conventions.'
+        );
+      }
       return {
         bin: 'codex',
         args: ['-m', stripProviderPrefix(model)],
@@ -112,6 +131,11 @@ export function buildInteractiveSpec(input: BuildInteractiveSpecInput): Interact
       if (hasAnyPermission(permissions)) {
         warnings.push(
           'persona declares permissions but the opencode harness is not yet wired for runtime permission injection; proceeding with opencode defaults.'
+        );
+      }
+      if (hasPluginDirs) {
+        warnings.push(
+          'pluginDirs is currently claude-only; ignoring under the opencode harness. Skills must be staged via opencode conventions.'
         );
       }
       return {
