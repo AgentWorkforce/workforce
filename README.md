@@ -109,6 +109,72 @@ The full docs — cascade rules, `${VAR}` interpolation, MCP transport
 options, permission grammar, troubleshooting — live in
 **[packages/cli/README.md](./packages/cli/README.md)**.
 
+### Skill staging (interactive claude only)
+
+Interactive `claude` sessions stage skills **outside the repo** by default.
+The CLI materializes a Claude Code plugin under the user's home directory
+and passes it via `--plugin-dir`, so the session sees exactly the persona's
+declared skills — and nothing the repo happens to have in `.claude/skills/`.
+
+```
+~/.agent-workforce/
+└── sessions/<personaId>-<timestamp>-<rand>/
+    └── claude/
+        └── plugin/                                ← passed as --plugin-dir
+            ├── .claude-plugin/plugin.json         ← generated scaffold
+            ├── skills → .claude/skills            ← relative symlink
+            └── .claude/skills/<name>/SKILL.md     ← prpm install output
+```
+
+On exit the whole stage dir is removed with a single `rm -rf`. To fall back
+to the legacy behavior and install into the repo's `.claude/skills/`, pass
+`--install-in-repo`:
+
+```bash
+agent-workforce agent --install-in-repo code-reviewer@best
+```
+
+V1 scope: claude interactive only. codex, opencode, and one-shot runs still
+use the repo-relative install path. A content-addressed
+`~/.agent-workforce/cache/` layer for reusing installs across sessions is
+planned but not yet wired up. See
+**[packages/cli/README.md#skill-staging](./packages/cli/README.md#skill-staging)**
+for the full mechanics.
+
+### Clean mode (`--clean`)
+
+For interactive `claude` sessions, `--clean` launches the harness inside a
+[`@relayfile/local-mount`](https://www.npmjs.com/package/@relayfile/local-mount)
+sandbox that hides repo-level Claude Code configuration from the model:
+
+| Hidden in `--clean` mode | Still visible |
+| --- | --- |
+| `CLAUDE.md` (at any depth) | `~/.claude/CLAUDE.md` (user-level) |
+| `CLAUDE.local.md` | `~/.claude/skills/` (user-level skills) |
+| `.claude/` | persona's staged skills (via `--plugin-dir`) |
+| `.mcp.json` | persona's own `mcpServers` block |
+|  | your keychain auth (unchanged) |
+
+```bash
+agent-workforce agent --clean posthog@best
+```
+
+The repo tree is mirrored into
+`~/.agent-workforce/sessions/<id>/mount/` via symlinks; claude sees the
+mount as its cwd. Writes inside the mount sync back to the real repo on
+exit. Ignore semantics follow gitignore — `.claude` hides nested variants
+like `packages/foo/.claude/` too.
+
+**Scope:** interactive claude only. Pass it to codex/opencode or to a
+one-shot run and the flag is ignored with a note. `--clean` and
+`--install-in-repo` are mutually exclusive — they ask for opposite things.
+
+**Caveat:** user-level Claude Code config in `~/.claude/` still loads
+inside the session. `--clean` hides the *repo's* context, not the user's.
+If you need to hide user-level config too, launch under a scratch
+`$HOME`. See **[packages/cli/README.md#clean-mode](./packages/cli/README.md#clean-mode)**
+for the full mount layout and semantics.
+
 ## Packages
 
 - `packages/workload-router` — TypeScript SDK for typed persona + routing profile resolution (harness-agnostic).

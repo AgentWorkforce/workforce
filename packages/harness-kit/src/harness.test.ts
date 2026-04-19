@@ -118,6 +118,60 @@ test('opencode carries system prompt and strips provider prefix', () => {
   assert.equal(result.initialPrompt, 'x');
 });
 
+test('claude branch appends --plugin-dir per entry in pluginDirs', () => {
+  const result = buildInteractiveSpec({
+    harness: 'claude',
+    model: 'claude-opus-4-6',
+    systemPrompt: 'x',
+    pluginDirs: ['/tmp/session-a/claude/plugin', '/tmp/session-b/claude/plugin']
+  });
+  const args = result.args;
+  const indices: number[] = [];
+  args.forEach((a, i) => {
+    if (a === '--plugin-dir') indices.push(i);
+  });
+  assert.equal(indices.length, 2);
+  assert.equal(args[indices[0] + 1], '/tmp/session-a/claude/plugin');
+  assert.equal(args[indices[1] + 1], '/tmp/session-b/claude/plugin');
+  assert.deepEqual(result.warnings, []);
+});
+
+test('claude branch omits --plugin-dir when pluginDirs is empty or absent', () => {
+  const withEmpty = buildInteractiveSpec({
+    harness: 'claude',
+    model: 'claude-opus-4-6',
+    systemPrompt: 'x',
+    pluginDirs: []
+  });
+  const without = buildInteractiveSpec({
+    harness: 'claude',
+    model: 'claude-opus-4-6',
+    systemPrompt: 'x'
+  });
+  assert.ok(!withEmpty.args.includes('--plugin-dir'));
+  assert.ok(!without.args.includes('--plugin-dir'));
+});
+
+test('non-claude harnesses warn and ignore pluginDirs', () => {
+  const codex = buildInteractiveSpec({
+    harness: 'codex',
+    model: 'x',
+    systemPrompt: 'x',
+    pluginDirs: ['/tmp/session/plugin']
+  });
+  assert.ok(!codex.args.includes('--plugin-dir'));
+  assert.ok(codex.warnings.some((w) => /pluginDirs is currently claude-only/.test(w)));
+
+  const opencode = buildInteractiveSpec({
+    harness: 'opencode',
+    model: 'x',
+    systemPrompt: 'x',
+    pluginDirs: ['/tmp/session/plugin']
+  });
+  assert.ok(!opencode.args.includes('--plugin-dir'));
+  assert.ok(opencode.warnings.some((w) => /pluginDirs is currently claude-only/.test(w)));
+});
+
 test('warnings are returned, not printed — library consumers route I/O themselves', () => {
   // Ensure no side effects on stderr: if the function wrote to stderr, this
   // test would leak output into the test runner. We just assert the shape.
