@@ -321,10 +321,18 @@ async function runInteractive(
   const resolvedEnv = envResolution.value;
   const resolvedMcp = mcpResolution.servers;
 
-  if (install.plan.installs.length > 0) {
+  // In session mode the install command is never `:` — it at minimum runs
+  // the plugin scaffold (mkdir + manifest + symlink) so `--plugin-dir` has a
+  // valid target even for skill-less personas like posthog. Gate on the
+  // command string rather than `installs.length` so we don't skip that.
+  if (install.commandString !== ':') {
     const skillIds = install.plan.installs.map((i) => i.skillId).join(', ');
     const targetLabel = installRoot ? ` → ${installRoot}` : '';
-    runInstall(install.command, `Installing skills: ${skillIds}${targetLabel}`);
+    const label =
+      install.plan.installs.length === 0
+        ? `Staging session plugin dir${targetLabel}`
+        : `Installing skills: ${skillIds}${targetLabel}`;
+    runInstall(install.command, label);
   }
 
   const spec = buildInteractiveSpec({

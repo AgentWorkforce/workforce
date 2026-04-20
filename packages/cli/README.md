@@ -462,10 +462,13 @@ the working tree, and the session only sees the skills the persona declares
 - **prpm install** — still runs `npx -y prpm install <ref> --as claude`,
   but inside `cd <stage-dir>` so the harness-conventional `.claude/skills/`
   lands in the stage dir, not the repo.
-- **Cleanup** — on exit, a single `rm -rf <stage-dir>` removes the whole
-  session directory. The provider lockfile (`prpm.lock`) is inside the stage
-  dir and goes with it — no repeat-run resolution cache today. Restart cost
-  is one prpm install per session.
+- **Cleanup** — on exit, two cleanup scopes run. The workload-router removes
+  `<stage-dir>` (e.g. `.../sessions/<id>/claude/plugin/`) via its generated
+  `rm -rf` command. The CLI additionally removes the enclosing session root
+  (`.../sessions/<id>/`) so the mount dir and any empty parents don't
+  accumulate under `~/.agent-workforce/sessions/`. The provider lockfile
+  (`prpm.lock`) is inside the stage dir and goes with it — no repeat-run
+  resolution cache today. Restart cost is one prpm install per session.
 
 **Opt-out — `--install-in-repo`:**
 

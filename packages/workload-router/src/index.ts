@@ -211,8 +211,9 @@ export const HARNESS_SKILL_TARGETS: Record<Harness, HarnessSkillTarget> = {
  * entire `installRoot` in one `rm -rf` — no files ever touch the repo.
  *
  * Only honored for `harness === 'claude'`. Passing `installRoot` with another
- * harness throws. The absolute path is the caller's responsibility; the SDK
- * does not create parent directories on its own.
+ * harness throws. The caller must supply an absolute path; when the generated
+ * install command runs, it `mkdir -p`s `installRoot` and any missing parents
+ * needed for the scaffold (`.claude-plugin/`, `.claude/skills/`).
  */
 export interface SkillMaterializationOptions {
   installRoot?: string;
