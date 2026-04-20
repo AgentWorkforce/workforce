@@ -2,18 +2,13 @@
   "id": "posthog",
   "intent": "posthog",
   "tags": ["analytics"],
-  "description": "Narrow PostHog assistant wired to the PostHog MCP server. Answers product-analytics questions, inspects events/insights/feature flags, and navigates the configured PostHog project. Carries no other skills — intended as a base for user-extended personas that supply their own API key.",
+  "description": "Narrow PostHog assistant wired to the PostHog MCP server via mcp-remote (OAuth). Answers product-analytics questions, inspects events/insights/feature flags, and navigates the configured PostHog project. First run opens a browser for OAuth; tokens cache in ~/.mcp-auth. To use a personal API key instead, override mcpServers locally (see PostHog's 'MCP Server' preset).",
   "skills": [],
-  "env": {
-    "POSTHOG_API_KEY": "$POSTHOG_API_KEY"
-  },
   "mcpServers": {
     "posthog": {
-      "type": "http",
-      "url": "https://mcp.posthog.com/mcp",
-      "headers": {
-        "Authorization": "Bearer ${POSTHOG_API_KEY}"
-      }
+      "type": "stdio",
+      "command": "npx",
+      "args": ["-y", "mcp-remote@latest", "https://mcp.posthog.com/mcp"]
     }
   },
   "permissions": {

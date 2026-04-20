@@ -69,6 +69,14 @@ Commands:
                         --filter-tag <tag>            only show personas carrying this tag
                                                       (${PERSONA_TAGS.join(' | ')})
                         --no-display-description      hide the DESCRIPTION column
+  show <persona>[@<tier>]
+                      Print the fully-resolved spec for a single persona,
+                      including which cascade layer defined it (pwd, home,
+                      library). By default shows only the recommended tier for
+                      the persona's intent; pass @<tier> to pick one, or --all
+                      to see every tier. Flags:
+                        --all         include every tier (overrides default)
+                        --json        emit the resolved PersonaSpec as JSON
   harness check       Probe which harnesses (claude, codex, opencode) are
                       installed and runnable on this machine.
 
@@ -83,6 +91,7 @@ Examples:
   agent-workforce agent my-posthog@best
   agent-workforce agent review@best-value "look at the diff on this branch"
   agent-workforce list
+  agent-workforce show posthog
   agent-workforce harness check
 `;
 
@@ -675,6 +684,201 @@ function runList(args: readonly string[]): never {
   process.exit(0);
 }
 
+function parseShowArgs(args: readonly string[]): {
+  selector: string;
+  json: boolean;
+  all: boolean;
+} {
+  let json = false;
+  let all = false;
+  let selector: string | undefined;
+  for (const arg of args) {
+    if (arg === '--json') {
+      json = true;
+    } else if (arg === '--all') {
+      all = true;
+    } else if (arg === '-h' || arg === '--help') {
+      process.stdout.write('Usage: agent-workforce show <persona>[@<tier>] [--all] [--json]\n');
+      process.exit(0);
+    } else if (arg.startsWith('--')) {
+      die(`show: unexpected flag "${arg}".`);
+    } else if (selector === undefined) {
+      selector = arg;
+    } else {
+      die(`show: unexpected argument "${arg}".`);
+    }
+  }
+  if (!selector) die('show: missing persona name.');
+  return { selector, json, all };
+}
+
+function resolveShowTarget(
+  selector: string,
+  all: boolean
+): {
+  spec: PersonaSpec;
+  source: PersonaSource;
+  tiers: PersonaTier[];
+  explicitTier: PersonaTier | undefined;
+} {
+  const at = selector.indexOf('@');
+  const key = at === -1 ? selector : selector.slice(0, at);
+  const tierRaw = at === -1 ? undefined : selector.slice(at + 1);
+  if (!key) die('show: missing persona name before "@".');
+  let explicitTier: PersonaTier | undefined;
+  if (tierRaw !== undefined) {
+    if (!PERSONA_TIERS.includes(tierRaw as PersonaTier)) {
+      die(`show: invalid tier "${tierRaw}". Must be one of: ${PERSONA_TIERS.join(', ')}`);
+    }
+    explicitTier = tierRaw as PersonaTier;
+    if (all) {
+      die('show: --all cannot be combined with an explicit @<tier> suffix.');
+    }
+  }
+
+  const localSpec = local.byId.get(key);
+  let spec: PersonaSpec | undefined;
+  let source: PersonaSource = 'library';
+  if (localSpec) {
+    spec = localSpec;
+    source = local.sources.get(key) ?? 'pwd';
+  } else {
+    const byIntent = (personaCatalog as Record<string, PersonaSpec>)[key];
+    if (byIntent) {
+      spec = byIntent;
+    } else {
+      const byId = Object.values(personaCatalog).find((p) => p.id === key);
+      if (byId) spec = byId;
+    }
+  }
+  if (!spec) {
+    const result = resolveSpec(key);
+    if ('error' in result) die(result.error, false);
+    spec = result;
+  }
+
+  let tiers: PersonaTier[];
+  if (all) {
+    tiers = [...PERSONA_TIERS];
+  } else if (explicitTier) {
+    tiers = [explicitTier];
+  } else {
+    const rule = routingProfiles.default.intents[spec.intent];
+    tiers = [rule?.tier ?? 'best-value'];
+  }
+  return { spec, source, tiers, explicitTier };
+}
+
+function indent(text: string, prefix: string): string {
+  return text
+    .split('\n')
+    .map((line) => (line.length > 0 ? prefix + line : line))
+    .join('\n');
+}
+
+function formatPersonaShow(
+  spec: PersonaSpec,
+  source: PersonaSource,
+  tiers: readonly PersonaTier[],
+  tierNote: string
+): string {
+  const lines: string[] = [];
+  lines.push(`PERSONA      ${spec.id}`);
+  lines.push(`SOURCE       ${source}`);
+  lines.push(`INTENT       ${spec.intent}`);
+  lines.push(`TAGS         ${spec.tags.length ? spec.tags.join(', ') : '(none)'}`);
+  lines.push(`DESCRIPTION  ${spec.description}`);
+  lines.push(`TIERS SHOWN  ${tiers.join(', ')}${tierNote ? `  (${tierNote})` : ''}`);
+
+  lines.push('');
+  lines.push('SKILLS');
+  if (spec.skills.length === 0) {
+    lines.push('  (none)');
+  } else {
+    for (const s of spec.skills) {
+      lines.push(`  - ${s.id}`);
+      lines.push(`      source:      ${s.source}`);
+      lines.push(`      description: ${s.description}`);
+    }
+  }
+
+  lines.push('');
+  lines.push('MCP SERVERS');
+  const servers = Object.entries(spec.mcpServers ?? {});
+  if (servers.length === 0) {
+    lines.push('  (none)');
+  } else {
+    for (const [name, server] of servers) {
+      lines.push(`  - ${name} (${server.type})`);
+      if (server.type === 'stdio') {
+        lines.push(`      command: ${server.command}${server.args?.length ? ' ' + server.args.join(' ') : ''}`);
+        if (server.env && Object.keys(server.env).length > 0) {
+          lines.push(`      env:     ${Object.keys(server.env).join(', ')}`);
+        }
+      } else {
+        lines.push(`      url:     ${server.url}`);
+        if (server.headers && Object.keys(server.headers).length > 0) {
+          lines.push(`      headers: ${Object.keys(server.headers).join(', ')}`);
+        }
+      }
+    }
+  }
+
+  lines.push('');
+  lines.push('PERMISSIONS');
+  const perms = spec.permissions;
+  if (!perms || (!perms.allow?.length && !perms.deny?.length && !perms.mode)) {
+    lines.push('  (none)');
+  } else {
+    if (perms.mode) lines.push(`  mode:  ${perms.mode}`);
+    if (perms.allow?.length) lines.push(`  allow: ${perms.allow.join(', ')}`);
+    if (perms.deny?.length) lines.push(`  deny:  ${perms.deny.join(', ')}`);
+  }
+
+  lines.push('');
+  lines.push('ENV');
+  const envKeys = Object.keys(spec.env ?? {});
+  if (envKeys.length === 0) {
+    lines.push('  (none)');
+  } else {
+    for (const k of envKeys) lines.push(`  ${k}=${spec.env![k]}`);
+  }
+
+  for (const tier of tiers) {
+    const rt = spec.tiers[tier];
+    lines.push('');
+    lines.push(`TIER: ${tier}`);
+    lines.push(`  harness:  ${rt.harness}`);
+    lines.push(`  model:    ${rt.model}`);
+    lines.push(`  reasoning: ${rt.harnessSettings.reasoning}`);
+    lines.push(`  timeout:  ${rt.harnessSettings.timeoutSeconds}s`);
+    lines.push('  systemPrompt:');
+    lines.push(indent(rt.systemPrompt, '    '));
+  }
+
+  return lines.join('\n') + '\n';
+}
+
+function runShow(args: readonly string[]): never {
+  const { selector, json, all } = parseShowArgs(args);
+  const { spec, source, tiers, explicitTier } = resolveShowTarget(selector, all);
+  const tierNote = all
+    ? 'all tiers'
+    : explicitTier
+      ? 'explicit @<tier>'
+      : 'recommended for intent; pass --all or @<tier> to override';
+  if (json) {
+    const projectedTiers = Object.fromEntries(
+      tiers.map((t) => [t, spec.tiers[t]])
+    ) as PersonaSpec['tiers'];
+    const projected: PersonaSpec = { ...spec, tiers: projectedTiers };
+    process.stdout.write(JSON.stringify({ source, spec: projected }, null, 2) + '\n');
+  } else {
+    process.stdout.write(formatPersonaShow(spec, source, tiers, tierNote));
+  }
+  process.exit(0);
+}
+
 function runHarnessCheck(): never {
   const results = detectHarnesses();
   process.stdout.write(formatAvailabilityTable(results));
@@ -694,6 +898,10 @@ async function main(): Promise<void> {
 
   if (subcommand === 'list') {
     runList(rest);
+  }
+
+  if (subcommand === 'show') {
+    runShow(rest);
   }
 
   if (subcommand === 'harness') {
