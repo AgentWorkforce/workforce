@@ -61,6 +61,8 @@ concurrency:
 jobs:
   publish:
     runs-on: ubuntu-latest
+    outputs:
+      versions: ${{ steps.bump.outputs.versions }}
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -358,3 +360,95 @@ jobs:
               echo "Next step: verify the published artifact by running the \`Verify Publish\` workflow."
             fi
           } >> "$GITHUB_STEP_SUMMARY"
+
+  # One GitHub Release per package tag. Matches the relay pattern
+  # (softprops/action-gh-release@v2 + generate_release_notes). Runs in parallel
+  # across packages; each cell is gated on whether its package was published.
+  create-release:
+    name: Release @agentworkforce/${{ matrix.package }}
+    needs: publish
+    if: ${{ github.event.inputs.dry_run != 'true' && (github.event.inputs.version != 'none' || github.event.inputs.custom_version != '') }}
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    strategy:
+      fail-fast: false
+      matrix:
+        package: [workload-router, harness-kit, cli]
+    steps:
+      - name: Check if this package was published
+        id: check
+        run: |
+          VERSIONS='${{ needs.publish.outputs.versions }}'
+          for entry in $VERSIONS; do
+            pkg="${entry%%:*}"
+            ver="${entry##*:}"
+            if [ "$pkg" = "${{ matrix.package }}" ]; then
+              echo "published=true" >> "$GITHUB_OUTPUT"
+              echo "version=$ver" >> "$GITHUB_OUTPUT"
+              if [[ "$ver" == *-* ]]; then
+                echo "prerelease=true" >> "$GITHUB_OUTPUT"
+              else
+                echo "prerelease=false" >> "$GITHUB_OUTPUT"
+              fi
+              exit 0
+            fi
+          done
+          echo "published=false" >> "$GITHUB_OUTPUT"
+
+      - name: Checkout
+        if: steps.check.outputs.published == 'true'
+        uses: actions/checkout@v4
+        with:
+          # Need the tag that the publish job just pushed.
+          ref: ${{ matrix.package }}-v${{ steps.check.outputs.version }}
+
+      # Prefer the per-package CHANGELOG section that was generated and
+      # committed during publish. Falls back to auto-generated notes for
+      # prereleases and first publishes (where no CHANGELOG entry exists).
+      - name: Extract changelog notes
+        if: steps.check.outputs.published == 'true'
+        id: notes
+        run: |
+          pkg="${{ matrix.package }}"
+          ver="${{ steps.check.outputs.version }}"
+          file="packages/$pkg/CHANGELOG.md"
+          out=/tmp/release-notes.md
+          : > "$out"
+          if [ -f "$file" ]; then
+            awk -v v="## [$ver]" '
+              $0 ~ "^" v { flag=1; print; next }
+              /^## \[/ && flag { exit }
+              flag { print }
+            ' "$file" > "$out"
+          fi
+          if [ -s "$out" ]; then
+            echo "has_notes=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "has_notes=false" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Create GitHub Release (stable, with changelog)
+        if: steps.check.outputs.published == 'true' && steps.check.outputs.prerelease != 'true' && steps.notes.outputs.has_notes == 'true'
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ matrix.package }}-v${{ steps.check.outputs.version }}
+          name: "@agentworkforce/${{ matrix.package }}@${{ steps.check.outputs.version }}"
+          body_path: /tmp/release-notes.md
+
+      - name: Create GitHub Release (stable, auto notes)
+        if: steps.check.outputs.published == 'true' && steps.check.outputs.prerelease != 'true' && steps.notes.outputs.has_notes != 'true'
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ matrix.package }}-v${{ steps.check.outputs.version }}
+          name: "@agentworkforce/${{ matrix.package }}@${{ steps.check.outputs.version }}"
+          generate_release_notes: true
+
+      - name: Create GitHub Release (prerelease)
+        if: steps.check.outputs.published == 'true' && steps.check.outputs.prerelease == 'true'
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ matrix.package }}-v${{ steps.check.outputs.version }}
+          name: "@agentworkforce/${{ matrix.package }}@${{ steps.check.outputs.version }} (prerelease)"
+          prerelease: true
+          generate_release_notes: true
