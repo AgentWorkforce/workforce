@@ -12,7 +12,8 @@ import {
   personaCatalog,
   resolvePersona,
   resolvePersonaByTier,
-  usePersona
+  usePersona,
+  useSelection
 } from './index.js';
 
 function writeNodeExecutable(dir: string, name: string, source: string): string {
@@ -410,6 +411,117 @@ test('usePersona cleanupCommandString chains paths from every install in the pla
 test('usePersona cleanupCommandString is a shell no-op when the persona declares no skills', () => {
   const context = usePersona('architecture-plan');
   assert.equal(context.install.cleanupCommandString, ':');
+});
+
+test('materializeSkills with installRoot stages claude skills under the stage dir', () => {
+  const installRoot = '/tmp/agent-workforce/sessions/test-run/claude/plugin';
+  const plan = materializeSkills(
+    [
+      {
+        id: 'prpm/npm-trusted-publishing',
+        source: '@prpm/npm-trusted-publishing',
+        description: 'bare ref form'
+      }
+    ],
+    'claude',
+    { installRoot }
+  );
+
+  assert.equal(plan.sessionInstallRoot, installRoot);
+  const [install] = plan.installs;
+  assert.equal(
+    install.installedDir,
+    `${installRoot}/.claude/skills/npm-trusted-publishing`
+  );
+  assert.equal(
+    install.installedManifest,
+    `${installRoot}/.claude/skills/npm-trusted-publishing/SKILL.md`
+  );
+  // Per-install command is self-contained: runs prpm inside the stage dir.
+  assert.equal(install.installCommand[0], 'sh');
+  assert.equal(install.installCommand[1], '-c');
+  const script = install.installCommand[2];
+  assert.match(script, /^cd /);
+  assert.match(script, /agent-workforce\/sessions\/test-run\/claude\/plugin/);
+  assert.match(script, /npx -y prpm install @prpm\/npm-trusted-publishing --as claude/);
+  // Per-skill cleanupPaths is empty; cleanup lives at the plan level.
+  assert.deepEqual([...install.cleanupPaths], []);
+});
+
+test('materializeSkills rejects installRoot for non-claude harnesses', () => {
+  assert.throws(
+    () =>
+      materializeSkills(
+        [
+          {
+            id: 'prpm/x',
+            source: '@prpm/x',
+            description: 'x'
+          }
+        ],
+        'codex',
+        { installRoot: '/tmp/agent-workforce/sessions/abc/claude/plugin' }
+      ),
+    /installRoot is only supported for the claude harness/
+  );
+});
+
+test('useSelection with installRoot emits scaffold + chained prpm in install.commandString', () => {
+  const installRoot = '/tmp/agent-workforce/sessions/scaffold-test/claude/plugin';
+  const selection = resolvePersonaByTier('npm-provenance', 'best-value');
+  // Force harness=claude so the installRoot path is exercised regardless of
+  // the persona's default tier harness.
+  const context = useSelection(selection, { harness: 'claude', installRoot });
+  assert.equal(context.install.plan.sessionInstallRoot, installRoot);
+  const cmd = context.install.commandString;
+  // Scaffold: the three mkdir/ln/printf steps go first.
+  assert.match(cmd, /^mkdir -p /);
+  assert.match(cmd, /\.claude-plugin/);
+  assert.match(cmd, /ln -sfn \.claude\/skills /);
+  assert.match(cmd, /printf '%s' /);
+  // Then a single cd into the stage dir, then the prpm call.
+  assert.match(cmd, / && cd '?\/tmp\/agent-workforce\/sessions\/scaffold-test\/claude\/plugin'? && /);
+  assert.match(cmd, /npx -y prpm install @prpm\/npm-trusted-publishing --as claude/);
+});
+
+test('useSelection with installRoot collapses cleanup to a single rm -rf of the stage dir', () => {
+  const installRoot = '/tmp/agent-workforce/sessions/cleanup-test/claude/plugin';
+  const selection = resolvePersonaByTier('npm-provenance', 'best-value');
+  const context = useSelection(selection, { harness: 'claude', installRoot });
+  // shellEscape leaves paths made of [A-Za-z0-9_./:@%+=,-] unquoted.
+  assert.equal(
+    context.install.cleanupCommandString,
+    `rm -rf /tmp/agent-workforce/sessions/cleanup-test/claude/plugin`
+  );
+});
+
+test('materializeSkills with installRoot + no skills still reports the sessionInstallRoot', () => {
+  const installRoot = '/tmp/agent-workforce/sessions/empty/claude/plugin';
+  const plan = materializeSkills([], 'claude', { installRoot });
+  assert.equal(plan.sessionInstallRoot, installRoot);
+  assert.equal(plan.installs.length, 0);
+});
+
+test('useSelection with installRoot + no skills emits scaffold so --plugin-dir target exists', () => {
+  // Skill-less claude personas (e.g. posthog) still need the stage dir to
+  // exist so `claude --plugin-dir <installRoot>` finds a valid plugin.
+  const installRoot = '/tmp/agent-workforce/sessions/empty-scaffold/claude/plugin';
+  const selection = resolvePersonaByTier('posthog', 'best');
+  const context = useSelection(selection, { harness: 'claude', installRoot });
+  assert.equal(context.install.plan.sessionInstallRoot, installRoot);
+  assert.equal(context.install.plan.installs.length, 0);
+  const cmd = context.install.commandString;
+  // Must NOT be the `:` no-op; must run the scaffold.
+  assert.notEqual(cmd, ':');
+  assert.match(cmd, /^mkdir -p /);
+  assert.match(cmd, /\.claude-plugin/);
+  assert.match(cmd, /ln -sfn \.claude\/skills /);
+  assert.match(cmd, /printf '%s' /);
+  // Cleanup always drops the stage dir in session mode, even with zero skills.
+  assert.equal(
+    context.install.cleanupCommandString,
+    `rm -rf ${installRoot}`
+  );
 });
 
 test('resolves capability-discovery persona carrying both skill.sh and prpm skills', () => {
