@@ -332,13 +332,15 @@ jobs:
             npm publish "$TARBALL" $COMMON_FLAGS
           done
 
+      # Annotated tags (-a) so `git push --follow-tags` actually pushes them;
+      # lightweight tags are skipped by --follow-tags.
       - name: Tag + push
         if: ${{ github.event.inputs.dry_run != 'true' && (github.event.inputs.version != 'none' || github.event.inputs.custom_version != '') }}
         run: |
           for entry in ${{ steps.bump.outputs.versions }}; do
             pkg="${entry%%:*}"
             version="${entry##*:}"
-            git tag "$pkg-v$version"
+            git tag -a "$pkg-v$version" -m "@agentworkforce/$pkg@$version"
           done
           git push origin HEAD --follow-tags
 
