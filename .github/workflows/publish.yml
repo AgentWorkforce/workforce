@@ -416,8 +416,8 @@ jobs:
           out=/tmp/release-notes.md
           : > "$out"
           if [ -f "$file" ]; then
-            awk -v v="## [$ver]" '
-              $0 ~ "^" v { flag=1; print; next }
+            awk -v prefix="## [$ver]" '
+              index($0, prefix) == 1 { flag=1; print; next }
               /^## \[/ && flag { exit }
               flag { print }
             ' "$file" > "$out"
