@@ -42,19 +42,28 @@ Commands:
 
                       Flags:
                         --install-in-repo   Install skills into the repo's
-                                            .claude/skills/ (legacy). By default,
+                                            harness-conventional directory
+                                            (.claude/skills, .opencode/skills,
+                                            .agents/skills, etc.). By default,
                                             interactive claude sessions stage
                                             skills under ~/.agent-workforce/
-                                            sessions/<id>/ and pass --plugin-dir
-                                            so the repo is never touched.
+                                            sessions/<id>/ and pass --plugin-dir;
+                                            interactive opencode sessions run
+                                            inside a @relayfile/local-mount
+                                            sandbox so npx prpm install / npx
+                                            skills add writes never touch the
+                                            real repo.
                         --clean             Launch interactive claude inside a
                                             @relayfile/local-mount sandbox that
-                                            hides the repo's CLAUDE.md,
+                                            also hides the repo's CLAUDE.md,
                                             CLAUDE.local.md, .claude, and
                                             .mcp.json from the session. Persona
                                             skills and keychain auth are
-                                            preserved. Claude interactive only;
-                                            incompatible with --install-in-repo.
+                                            preserved. No-op for opencode
+                                            (mount is already on by default);
+                                            codex still warns and proceeds
+                                            without a mount. Incompatible
+                                            with --install-in-repo.
   list [flags]        List available personas from the cascade (pwd → home →
                       library). By default shows one row per persona at the
                       recommended tier for its intent; pass --all to see every
@@ -209,15 +218,31 @@ function signalExitCode(signal: NodeJS.Signals | null): number {
   return 128 + (num ?? 1);
 }
 
-function runInstall(command: readonly string[], label: string): void {
+function runInstall(command: readonly string[], label: string, cwd?: string): void {
   const [bin, ...args] = command;
   if (!bin) return;
   process.stderr.write(`• ${label}\n`);
-  const res = spawnSync(bin, args, { stdio: 'inherit', shell: false });
+  const res = spawnSync(bin, args, { stdio: 'inherit', shell: false, ...(cwd ? { cwd } : {}) });
   if (res.status !== 0) {
     const code = res.status ?? 1;
     process.stderr.write(`${label} failed (exit ${code}). Aborting.\n`);
     process.exit(code);
+  }
+}
+
+/**
+ * Install variant that throws instead of calling `process.exit` on failure.
+ * Used inside `launchOnMount`'s `onBeforeLaunch`, so mount teardown runs
+ * before the error surfaces.
+ */
+function runInstallOrThrow(command: readonly string[], label: string, cwd: string): void {
+  const [bin, ...args] = command;
+  if (!bin) return;
+  process.stderr.write(`• ${label}\n`);
+  const res = spawnSync(bin, args, { stdio: 'inherit', shell: false, cwd });
+  if (res.status !== 0) {
+    const code = res.status ?? 1;
+    throw new Error(`${label} failed (exit ${code})`);
   }
 }
 
@@ -277,23 +302,56 @@ export const CLEAN_IGNORED_PATTERNS = [
 ] as const;
 
 /**
- * Decide whether `--clean` should engage for this run. Returns a warning
- * string when the flag was requested but cannot apply (e.g. non-claude
- * harness); callers emit the warning to stderr and proceed with
- * `useClean: false`. Pure — no side effects, trivially testable.
+ * Skill-install artifacts that should never be copied into the mount nor
+ * synced back to the real repo. Applied to non-claude interactive sessions
+ * that rely on the mount to keep `npx skills add` / `npx prpm install`
+ * writes out of the user's project tree. Claude sessions use `installRoot`
+ * for out-of-repo staging instead, so these patterns don't apply there.
+ */
+export const SKILL_INSTALL_IGNORED_PATTERNS = [
+  '.agents',
+  '.opencode',
+  '.skills',
+  'prpm.lock',
+  'skills-lock.json'
+] as const;
+
+/**
+ * Decide whether to run the interactive session inside a
+ * `@relayfile/local-mount` sandbox.
+ *
+ * - Claude: mount only engages when the user passes `--clean` explicitly
+ *   (its purpose there is to hide CLAUDE.md / .claude / .mcp.json from the
+ *   session). Out-of-repo skill staging is handled separately via
+ *   `installRoot` + `--plugin-dir`.
+ * - Opencode: the SDK cannot stage skills out-of-repo for this harness
+ *   (there is no `installRoot` support), so the mount is the only way to
+ *   keep `npx prpm install` / `npx skills add` writes out of the project.
+ *   Default to mount unless the user opts in with `--install-in-repo`.
+ * - Codex: no auto-mount yet. `--clean` still emits the existing
+ *   "claude-only" warning so current behavior is preserved.
+ *
+ * Pure — no side effects, trivially testable.
  */
 export function decideCleanMode(
   harness: Harness,
-  clean: boolean
+  clean: boolean,
+  installInRepo = false
 ): { useClean: boolean; warning?: string } {
-  if (!clean) return { useClean: false };
-  if (harness !== 'claude') {
+  if (harness === 'claude') {
+    return { useClean: clean };
+  }
+  if (harness === 'opencode') {
+    if (installInRepo) return { useClean: false };
+    return { useClean: true };
+  }
+  if (clean) {
     return {
       useClean: false,
       warning: `--clean is only supported for the claude harness (this session uses ${harness}). Ignoring flag.`
     };
   }
-  return { useClean: true };
+  return { useClean: false };
 }
 
 async function runInteractive(
@@ -301,20 +359,31 @@ async function runInteractive(
   options: { installInRepo?: boolean; clean?: boolean } = {}
 ): Promise<number> {
   const { runtime, personaId, tier } = selection;
-  // Out-of-repo staging only applies to the claude harness today (it's the
-  // only one with a `--plugin-dir` hook). For codex/opencode, keep the legacy
-  // behavior of installing into the repo's harness-conventional directory.
-  // The --install-in-repo flag forces legacy behavior across the board.
-  const useSessionDir = !options.installInRepo && runtime.harness === 'claude';
-  const sessionRoot = useSessionDir ? generateSessionRoot(personaId) : undefined;
-  const installRoot = sessionRoot ? sessionInstallRoot(sessionRoot) : undefined;
-  // --clean applies to interactive claude only. For non-claude harnesses, warn
-  // and drop the flag (same pattern as pluginDirs warnings in buildInteractiveSpec).
-  const cleanDecision = decideCleanMode(runtime.harness, options.clean === true);
+  // `installRoot` (out-of-repo skill staging via `--plugin-dir`) is currently
+  // claude-only; the workload-router SDK throws if it's set for other
+  // harnesses. For opencode, we instead keep installs out of the repo by
+  // running them inside a @relayfile/local-mount sandbox (see `useClean`
+  // below). The --install-in-repo flag forces legacy in-repo installs
+  // across the board.
+  const cleanDecision = decideCleanMode(
+    runtime.harness,
+    options.clean === true,
+    options.installInRepo === true
+  );
   if (cleanDecision.warning) {
     process.stderr.write(`warning: ${cleanDecision.warning}\n`);
   }
   const useClean = cleanDecision.useClean;
+  // A session dir is needed whenever we either (a) stage skills out-of-repo
+  // via claude's installRoot, or (b) open a mount. Opencode reaches (b) by
+  // default; claude reaches both when --clean is set, and just (a) otherwise.
+  const useSessionDir =
+    !options.installInRepo && (runtime.harness === 'claude' || useClean);
+  const sessionRoot = useSessionDir ? generateSessionRoot(personaId) : undefined;
+  const installRoot =
+    sessionRoot && runtime.harness === 'claude'
+      ? sessionInstallRoot(sessionRoot)
+      : undefined;
   const ctx = useSelection(
     selection,
     installRoot !== undefined ? { installRoot } : {}
@@ -334,14 +403,19 @@ async function runInteractive(
   // the plugin scaffold (mkdir + manifest + symlink) so `--plugin-dir` has a
   // valid target even for skill-less personas like posthog. Gate on the
   // command string rather than `installs.length` so we don't skip that.
-  if (install.commandString !== ':') {
-    const skillIds = install.plan.installs.map((i) => i.skillId).join(', ');
-    const targetLabel = installRoot ? ` → ${installRoot}` : '';
-    const label =
-      install.plan.installs.length === 0
-        ? `Staging session plugin dir${targetLabel}`
-        : `Installing skills: ${skillIds}${targetLabel}`;
-    runInstall(install.command, label);
+  const skillIds = install.plan.installs.map((i) => i.skillId).join(', ');
+  const installLabel =
+    install.plan.installs.length === 0
+      ? `Staging session plugin dir${installRoot ? ` → ${installRoot}` : ''}`
+      : `Installing skills: ${skillIds}${installRoot ? ` → ${installRoot}` : ''}`;
+  // When useClean engages on a non-claude harness, the install must run
+  // INSIDE the mount so `.opencode/skills/`, `.agents/skills/`, prpm.lock,
+  // etc. land in the sandbox rather than the real repo. We defer it to
+  // `onBeforeLaunch` below instead of pre-running here.
+  const deferInstallToMount =
+    useClean && runtime.harness !== 'claude' && install.commandString !== ':';
+  if (install.commandString !== ':' && !deferInstallToMount) {
+    runInstall(install.command, installLabel);
   }
 
   const spec = buildInteractiveSpec({
@@ -379,12 +453,24 @@ async function runInteractive(
   if (useClean) summary.push('clean=on');
   process.stderr.write(`• spawning ${spec.bin} (${summary.join(', ')})\n`);
 
-  // --clean branch: delegate process lifecycle (spawn, signal forwarding,
-  // syncback, cleanup) to @relayfile/local-mount. Skill plugin dir lives
-  // outside the mount, so claude resolves --plugin-dir normally regardless
-  // of cwd.
+  // Mount branch: delegate process lifecycle (spawn, signal forwarding,
+  // syncback, cleanup) to @relayfile/local-mount.
+  //
+  // For claude: mount engages only when `--clean` is set, to hide the repo's
+  // claude config from the session. Skill plugin dir lives outside the mount
+  // at an absolute path, so claude resolves `--plugin-dir` normally.
+  //
+  // For opencode: mount engages by default (unless `--install-in-repo`), and
+  // the install itself runs inside the mount via `onBeforeLaunch` so that
+  // `npx prpm install` / `npx skills add` writes land in the sandbox. The
+  // skill-install paths are added to `ignoredPatterns` so they are neither
+  // copied in from the real repo nor synced back on exit.
   if (useClean && sessionRoot) {
     const mountDir = sessionMountDir(sessionRoot);
+    const ignoredPatterns: string[] =
+      runtime.harness === 'claude'
+        ? [...CLEAN_IGNORED_PATTERNS]
+        : [...SKILL_INSTALL_IGNORED_PATTERNS];
     process.stderr.write(`• clean mount → ${mountDir}\n`);
     try {
       const result = await launchOnMount({
@@ -392,12 +478,19 @@ async function runInteractive(
         projectDir: process.cwd(),
         mountDir,
         args: finalArgs,
-        ignoredPatterns: [...CLEAN_IGNORED_PATTERNS],
+        ignoredPatterns,
         // launchOnMount passes `env` straight to the child spawn, so without
         // merging process.env we'd strip PATH/HOME/etc. Match the non-clean
         // branch: persona env overlays the inherited environment.
         env: resolvedEnv ? { ...process.env, ...resolvedEnv } : process.env,
-        agentName: personaId
+        agentName: personaId,
+        ...(deferInstallToMount
+          ? {
+              onBeforeLaunch: (dir: string) => {
+                runInstallOrThrow(install.command, installLabel, dir);
+              }
+            }
+          : {})
       });
       return result.exitCode;
     } catch (err) {

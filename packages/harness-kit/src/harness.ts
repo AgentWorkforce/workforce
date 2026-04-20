@@ -138,10 +138,14 @@ export function buildInteractiveSpec(input: BuildInteractiveSpecInput): Interact
           'pluginDirs is currently claude-only; ignoring under the opencode harness. Skills must be staged via opencode conventions.'
         );
       }
+      // opencode's bare form is `opencode [project]` where the trailing
+      // positional is a project directory, NOT a prompt. Carry the persona's
+      // system prompt via `--prompt` (top-level TUI flag) so it isn't parsed
+      // as a cwd.
       return {
         bin: 'opencode',
-        args: ['--model', stripProviderPrefix(model)],
-        initialPrompt: systemPrompt,
+        args: ['--model', stripProviderPrefix(model), '--prompt', systemPrompt],
+        initialPrompt: null,
         warnings
       };
     }

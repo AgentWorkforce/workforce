@@ -107,15 +107,17 @@ test('codex warns when mcpServers / permissions are declared', () => {
   assert.match(result.warnings[1], /codex harness is not yet wired for runtime permission/);
 });
 
-test('opencode carries system prompt and strips provider prefix', () => {
+test('opencode carries system prompt via --prompt flag (not as trailing positional cwd)', () => {
   const result = buildInteractiveSpec({
     harness: 'opencode',
     model: 'opencode/minimax-m2.5',
     systemPrompt: 'x'
   });
   assert.equal(result.bin, 'opencode');
-  assert.deepEqual(result.args, ['--model', 'minimax-m2.5']);
-  assert.equal(result.initialPrompt, 'x');
+  assert.deepEqual(result.args, ['--model', 'minimax-m2.5', '--prompt', 'x']);
+  // initialPrompt must be null so the caller does not append systemPrompt as
+  // a trailing positional — opencode would interpret it as a project dir.
+  assert.equal(result.initialPrompt, null);
 });
 
 test('claude branch appends --plugin-dir per entry in pluginDirs', () => {
