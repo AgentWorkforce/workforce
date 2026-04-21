@@ -492,27 +492,39 @@ async function runInteractive(
         ? [...CLEAN_IGNORED_PATTERNS]
         : [...SKILL_INSTALL_IGNORED_PATTERNS];
     process.stderr.write(`• clean mount → ${mountDir}\n`);
-    // Two-stage SIGINT handler layered on top of launchOnMount's own signal
+    // Three-stage SIGINT handler layered on top of launchOnMount's own signal
     // forwarding. launchOnMount catches the first SIGINT to kill the child
     // and run its finalize() (autoSync.stop + final syncBack), which walks
     // both trees and can take several seconds on a large repo — during
-    // which the terminal otherwise looks frozen. We announce "syncing…" on
-    // that first press, and on a second press we tear down the mount
-    // synchronously and exit 130 so the user always has an escape hatch.
+    // which the terminal otherwise looks frozen.
+    //
+    //   1st press  → announce "syncing…" so the user knows the pause is real.
+    //   2nd press  → abort `shutdownSignal`, which local-mount 0.5+ respects
+    //                by skipping autosync's draining reconcile and returning
+    //                the partial count from the final syncBack. Cleanup
+    //                still runs, so no leaked mount dir.
+    //   3rd press  → hard escape: synchronously rm the mount root and
+    //                process.exit(130) in case the abort never resolves.
+    const shutdownController = new AbortController();
     let sigintCount = 0;
     const forceExitHandler = () => {
       sigintCount += 1;
       if (sigintCount === 1) {
         process.stderr.write(
-          '\n⏳ Syncing session changes back to the repo… (press Ctrl-C again to force quit)\n'
+          '\n⏳ Syncing session changes back to the repo… (press Ctrl-C again to skip sync)\n'
         );
         return;
       }
+      if (sigintCount === 2) {
+        process.stderr.write(
+          '\n⚠ Aborting sync — partial changes will be propagated. (press Ctrl-C again to force quit)\n'
+        );
+        shutdownController.abort();
+        return;
+      }
       process.stderr.write(
-        '\n✗ Force-quit: session sync aborted. Any in-flight writes may be incomplete.\n'
+        '\n✗ Force-quit: mount teardown skipped. Session dir may be left behind.\n'
       );
-      // Best-effort teardown — the mount dir lives under
-      // ~/.agent-workforce/sessions/ and would otherwise accumulate.
       try {
         spawnSync('rm', ['-rf', sessionRoot], { stdio: 'ignore', shell: false });
       } catch {
@@ -533,11 +545,16 @@ async function runInteractive(
         // branch: persona env overlays the inherited environment.
         env: resolvedEnv ? { ...process.env, ...resolvedEnv } : process.env,
         agentName: personaId,
+        // Second Ctrl-C aborts this signal → local-mount skips autosync's
+        // draining reconcile and returns the partial syncBack count. Cleanup
+        // still runs, so there's no leaked mount dir.
+        shutdownSignal: shutdownController.signal,
         // Report sync stats so the user sees confirmation rather than a
         // silent pause between the child exiting and the CLI returning.
         onAfterSync: (count) => {
           if (count > 0) {
-            process.stderr.write(`✓ Synced ${count} change(s) back to the repo.\n`);
+            const qualifier = shutdownController.signal.aborted ? ' (partial)' : '';
+            process.stderr.write(`✓ Synced ${count} change(s) back to the repo${qualifier}.\n`);
           }
         },
         ...(deferInstallToMount
