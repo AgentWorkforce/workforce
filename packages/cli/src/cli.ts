@@ -153,11 +153,31 @@ function parseSelector(sel: string): ResolvedTarget {
   return { kind, spec: result, tier };
 }
 
+/**
+ * Resolve the `<harness>` placeholder used in persona systemPrompts.
+ * Personas embed `<harness>` inside example install commands (e.g.
+ * `npx prpm install <ref> --as <harness>`) so the docstring stays
+ * harness-agnostic in source. The active harness is known at selection
+ * time, so swap it in here to give the model a concrete command.
+ *
+ * Exported for test coverage. Only `<harness>` is resolved today; other
+ * angle-bracketed tokens in the prompt (e.g. `<ref>`, `<repo-url>`,
+ * `<query>`) are deliberately left as LLM-facing placeholders.
+ */
+export function resolveSystemPromptPlaceholders(prompt: string, harness: Harness): string {
+  return prompt.replaceAll('<harness>', harness);
+}
+
 function buildSelection(spec: PersonaSpec, tier: PersonaTier, kind: 'repo' | 'local'): PersonaSelection {
+  const rawRuntime = spec.tiers[tier];
+  const runtime = {
+    ...rawRuntime,
+    systemPrompt: resolveSystemPromptPlaceholders(rawRuntime.systemPrompt, rawRuntime.harness)
+  };
   return {
     personaId: spec.id,
     tier,
-    runtime: spec.tiers[tier],
+    runtime,
     skills: spec.skills,
     rationale: kind === 'local' ? `local-override: ${spec.id}` : `cli-tier-override: ${tier}`,
     ...(spec.env ? { env: spec.env } : {}),
@@ -472,6 +492,35 @@ async function runInteractive(
         ? [...CLEAN_IGNORED_PATTERNS]
         : [...SKILL_INSTALL_IGNORED_PATTERNS];
     process.stderr.write(`• clean mount → ${mountDir}\n`);
+    // Two-stage SIGINT handler layered on top of launchOnMount's own signal
+    // forwarding. launchOnMount catches the first SIGINT to kill the child
+    // and run its finalize() (autoSync.stop + final syncBack), which walks
+    // both trees and can take several seconds on a large repo — during
+    // which the terminal otherwise looks frozen. We announce "syncing…" on
+    // that first press, and on a second press we tear down the mount
+    // synchronously and exit 130 so the user always has an escape hatch.
+    let sigintCount = 0;
+    const forceExitHandler = () => {
+      sigintCount += 1;
+      if (sigintCount === 1) {
+        process.stderr.write(
+          '\n⏳ Syncing session changes back to the repo… (press Ctrl-C again to force quit)\n'
+        );
+        return;
+      }
+      process.stderr.write(
+        '\n✗ Force-quit: session sync aborted. Any in-flight writes may be incomplete.\n'
+      );
+      // Best-effort teardown — the mount dir lives under
+      // ~/.agent-workforce/sessions/ and would otherwise accumulate.
+      try {
+        spawnSync('rm', ['-rf', sessionRoot], { stdio: 'ignore', shell: false });
+      } catch {
+        /* swallow — we're exiting anyway */
+      }
+      process.exit(130);
+    };
+    process.on('SIGINT', forceExitHandler);
     try {
       const result = await launchOnMount({
         cli: spec.bin,
@@ -484,6 +533,13 @@ async function runInteractive(
         // branch: persona env overlays the inherited environment.
         env: resolvedEnv ? { ...process.env, ...resolvedEnv } : process.env,
         agentName: personaId,
+        // Report sync stats so the user sees confirmation rather than a
+        // silent pause between the child exiting and the CLI returning.
+        onAfterSync: (count) => {
+          if (count > 0) {
+            process.stderr.write(`✓ Synced ${count} change(s) back to the repo.\n`);
+          }
+        },
         ...(deferInstallToMount
           ? {
               onBeforeLaunch: (dir: string) => {
@@ -504,6 +560,7 @@ async function runInteractive(
       }
       return 127;
     } finally {
+      process.removeListener('SIGINT', forceExitHandler);
       runCleanup(install.cleanupCommand, install.cleanupCommandString);
       removeSessionRoot(sessionRoot);
     }

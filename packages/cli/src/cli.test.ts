@@ -5,7 +5,8 @@ import {
   CLEAN_IGNORED_PATTERNS,
   SKILL_INSTALL_IGNORED_PATTERNS,
   decideCleanMode,
-  parseAgentArgs
+  parseAgentArgs,
+  resolveSystemPromptPlaceholders
 } from './cli.js';
 
 // The conflict-detection path inside parseAgentArgs uses the module-local
@@ -163,6 +164,27 @@ test('CLEAN_IGNORED_PATTERNS: covers the declared repo-level claude config files
     '.claude',
     '.mcp.json'
   ]);
+});
+
+test('resolveSystemPromptPlaceholders: substitutes <harness> with the active harness', () => {
+  const input =
+    'produce the exact install command: `npx -y prpm install <ref> --as <harness>` for prpm using the active harness';
+  const out = resolveSystemPromptPlaceholders(input, 'opencode');
+  assert.match(out, /--as opencode/);
+  assert.ok(!out.includes('<harness>'), 'expected <harness> placeholder to be resolved');
+  // Other angle-bracket placeholders (<ref>, <repo-url>, etc.) are deliberately
+  // preserved — they are LLM-facing template variables.
+  assert.ok(out.includes('<ref>'));
+});
+
+test('resolveSystemPromptPlaceholders: resolves every occurrence (not just the first)', () => {
+  const out = resolveSystemPromptPlaceholders('<harness> then <harness> again', 'codex');
+  assert.equal(out, 'codex then codex again');
+});
+
+test('resolveSystemPromptPlaceholders: leaves prompts without the placeholder untouched', () => {
+  const original = 'You are a code reviewer. No placeholders here.';
+  assert.equal(resolveSystemPromptPlaceholders(original, 'claude'), original);
 });
 
 test('SKILL_INSTALL_IGNORED_PATTERNS: keeps skill-install artifacts out of the real repo', () => {
