@@ -139,37 +139,35 @@ test('legacy tier override remains available via resolvePersonaByTier', () => {
   assert.match(result.rationale, /legacy-tier-override/);
 });
 
-test('resolvePersona propagates env, mcpServers, and permissions to the selection', () => {
-  // posthog is the library's canonical carrier for all three optional fields:
-  // env.POSTHOG_API_KEY, mcpServers.posthog (http transport with bearer
-  // header), and permissions.allow auto-approving posthog MCP tools.
+test('resolvePersona propagates mcpServers and permissions to the selection', () => {
+  // posthog is the library's canonical carrier for mcpServers + permissions.
+  // It used to also carry env.POSTHOG_API_KEY, but the persona switched to
+  // mcp-remote/OAuth (stdio, no env, no bearer header) in e3342c7. Env
+  // propagation through the loader is covered by the cli package's
+  // local-personas cascade tests.
   const selection = resolvePersona('posthog');
   assert.equal(selection.personaId, 'posthog');
 
-  // env is exposed on the selection and still holds the literal $VAR form —
-  // interpolation is the runner's job, not resolvePersona's.
-  assert.equal(selection.env?.POSTHOG_API_KEY, '$POSTHOG_API_KEY');
-
-  // mcpServers carry through including headers (runner interpolates later).
+  // mcpServers carry through with the full stdio shape (command + args).
   const posthogServer = selection.mcpServers?.posthog;
   assert.ok(posthogServer, 'expected mcpServers.posthog on the selection');
-  assert.equal(posthogServer.type, 'http');
-  if (posthogServer.type === 'http') {
-    assert.equal(posthogServer.url, 'https://mcp.posthog.com/mcp');
-    assert.equal(
-      posthogServer.headers?.Authorization,
-      'Bearer ${POSTHOG_API_KEY}'
-    );
+  assert.equal(posthogServer.type, 'stdio');
+  if (posthogServer.type === 'stdio') {
+    assert.equal(posthogServer.command, 'npx');
+    assert.deepEqual(posthogServer.args, [
+      '-y',
+      'mcp-remote@latest',
+      'https://mcp.posthog.com/mcp'
+    ]);
   }
 
   // permissions.allow is carried without modification.
   assert.deepEqual(selection.permissions?.allow, ['mcp__posthog']);
 });
 
-test('resolvePersonaByTier also propagates env / mcpServers / permissions', () => {
+test('resolvePersonaByTier also propagates mcpServers / permissions', () => {
   const selection = resolvePersonaByTier('posthog', 'minimum');
   assert.equal(selection.tier, 'minimum');
-  assert.ok(selection.env, 'env should flow through tier override resolver');
   assert.ok(selection.mcpServers, 'mcpServers should flow through tier override resolver');
   assert.ok(selection.permissions, 'permissions should flow through tier override resolver');
 });
