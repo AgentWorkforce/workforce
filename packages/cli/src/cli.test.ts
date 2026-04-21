@@ -188,12 +188,17 @@ test('resolveSystemPromptPlaceholders: leaves prompts without the placeholder un
 });
 
 test('SKILL_INSTALL_IGNORED_PATTERNS: keeps skill-install artifacts out of the real repo', () => {
-  // Pinned — non-claude sessions rely on these to prevent `.opencode/skills/`
-  // etc. from being copied into the mount or synced back on exit. Shrinking
-  // this set re-introduces repo pollution from `npx prpm install` / `npx
-  // skills add`; expand via review, not silently.
+  // Pinned — non-claude sessions rely on these to prevent `.opencode/skills/`,
+  // `.agents/skills/`, and skill.sh per-provider symlink farms from being
+  // copied into the mount or synced back on exit. Shrinking this set
+  // re-introduces repo pollution from `npx prpm install` / `npx skills add`;
+  // expand via review, not silently.
   assert.deepEqual([...SKILL_INSTALL_IGNORED_PATTERNS], [
     '.agents',
+    '.claude/skills',
+    '.factory/skills',
+    '.kiro/skills',
+    'skills',
     '.opencode',
     '.skills',
     'prpm.lock',

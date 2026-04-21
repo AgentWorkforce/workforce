@@ -325,13 +325,23 @@ export const CLEAN_IGNORED_PATTERNS = [
  * Skill-install artifacts that should never be copied into the mount nor
  * synced back to the real repo. Applied to non-claude interactive sessions
  * that rely on the mount to keep `npx skills add` / `npx prpm install`
- * writes out of the user's project tree. Claude sessions use `installRoot`
- * for out-of-repo staging instead, so these patterns don't apply there.
+ * writes out of the user's project tree. Covers every per-provider output
+ * root that skill.sh / prpm scatter into on install — missing one here
+ * re-introduces repo pollution, so this list is deliberately superset-y.
+ * Claude sessions use `installRoot` for out-of-repo staging instead, so
+ * these patterns don't apply there.
  */
 export const SKILL_INSTALL_IGNORED_PATTERNS = [
+  // skill.sh universal install root + per-harness symlink farms
   '.agents',
+  '.claude/skills',
+  '.factory/skills',
+  '.kiro/skills',
+  'skills',
+  // prpm `--as <harness>` output roots
   '.opencode',
   '.skills',
+  // provider lockfiles written at the repo root
   'prpm.lock',
   'skills-lock.json'
 ] as const;
@@ -578,7 +588,15 @@ async function runInteractive(
       return 127;
     } finally {
       process.removeListener('SIGINT', forceExitHandler);
-      runCleanup(install.cleanupCommand, install.cleanupCommandString);
+      // When the install ran inside the mount, its cleanup paths are
+      // mount-relative (e.g. `.skills/<name>`, `skills/<name>`) and
+      // running cleanup here would resolve them against the real repo
+      // cwd — potentially `rm -rf`ing pre-existing user content. The
+      // mount dir is removed wholesale by `removeSessionRoot` below, so
+      // the install's cleanup is redundant anyway in that case.
+      if (!deferInstallToMount) {
+        runCleanup(install.cleanupCommand, install.cleanupCommandString);
+      }
       removeSessionRoot(sessionRoot);
     }
   }
