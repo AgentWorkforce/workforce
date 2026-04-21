@@ -1,6 +1,7 @@
 #!/usr/bin/env node
 import { spawn, spawnSync } from 'node:child_process';
 import { randomBytes } from 'node:crypto';
+import { rmSync } from 'node:fs';
 import { constants, homedir } from 'node:os';
 import { join, resolve as resolvePath } from 'node:path';
 import { pathToFileURL } from 'node:url';
@@ -42,19 +43,28 @@ Commands:
 
                       Flags:
                         --install-in-repo   Install skills into the repo's
-                                            .claude/skills/ (legacy). By default,
+                                            harness-conventional directory
+                                            (.claude/skills, .opencode/skills,
+                                            .agents/skills, etc.). By default,
                                             interactive claude sessions stage
                                             skills under ~/.agent-workforce/
-                                            sessions/<id>/ and pass --plugin-dir
-                                            so the repo is never touched.
+                                            sessions/<id>/ and pass --plugin-dir;
+                                            interactive opencode sessions run
+                                            inside a @relayfile/local-mount
+                                            sandbox so npx prpm install / npx
+                                            skills add writes never touch the
+                                            real repo.
                         --clean             Launch interactive claude inside a
                                             @relayfile/local-mount sandbox that
-                                            hides the repo's CLAUDE.md,
+                                            also hides the repo's CLAUDE.md,
                                             CLAUDE.local.md, .claude, and
                                             .mcp.json from the session. Persona
                                             skills and keychain auth are
-                                            preserved. Claude interactive only;
-                                            incompatible with --install-in-repo.
+                                            preserved. No-op for opencode
+                                            (mount is already on by default);
+                                            codex still warns and proceeds
+                                            without a mount. Incompatible
+                                            with --install-in-repo.
   list [flags]        List available personas from the cascade (pwd → home →
                       library). By default shows one row per persona at the
                       recommended tier for its intent; pass --all to see every
@@ -144,11 +154,31 @@ function parseSelector(sel: string): ResolvedTarget {
   return { kind, spec: result, tier };
 }
 
+/**
+ * Resolve the `<harness>` placeholder used in persona systemPrompts.
+ * Personas embed `<harness>` inside example install commands (e.g.
+ * `npx prpm install <ref> --as <harness>`) so the docstring stays
+ * harness-agnostic in source. The active harness is known at selection
+ * time, so swap it in here to give the model a concrete command.
+ *
+ * Exported for test coverage. Only `<harness>` is resolved today; other
+ * angle-bracketed tokens in the prompt (e.g. `<ref>`, `<repo-url>`,
+ * `<query>`) are deliberately left as LLM-facing placeholders.
+ */
+export function resolveSystemPromptPlaceholders(prompt: string, harness: Harness): string {
+  return prompt.replaceAll('<harness>', harness);
+}
+
 function buildSelection(spec: PersonaSpec, tier: PersonaTier, kind: 'repo' | 'local'): PersonaSelection {
+  const rawRuntime = spec.tiers[tier];
+  const runtime = {
+    ...rawRuntime,
+    systemPrompt: resolveSystemPromptPlaceholders(rawRuntime.systemPrompt, rawRuntime.harness)
+  };
   return {
     personaId: spec.id,
     tier,
-    runtime: spec.tiers[tier],
+    runtime,
     skills: spec.skills,
     rationale: kind === 'local' ? `local-override: ${spec.id}` : `cli-tier-override: ${tier}`,
     ...(spec.env ? { env: spec.env } : {}),
@@ -209,15 +239,58 @@ function signalExitCode(signal: NodeJS.Signals | null): number {
   return 128 + (num ?? 1);
 }
 
-function runInstall(command: readonly string[], label: string): void {
+/**
+ * Derive a meaningful exit code from a `spawnSync` result. `spawnSync`
+ * sets `status` to null and `signal` to the signal name (e.g. `SIGINT`)
+ * when the child was killed before it could set its own exit code, so
+ * a naive `res.status ?? 1` collapses Ctrl-C / SIGTERM onto generic
+ * failure instead of the conventional 128+N.
+ */
+function subprocessExitCode(res: ReturnType<typeof spawnSync>): number {
+  if (res.status !== null) return res.status;
+  if (res.signal) return signalExitCode(res.signal);
+  return 1;
+}
+
+function runInstall(command: readonly string[], label: string, cwd?: string): void {
   const [bin, ...args] = command;
   if (!bin) return;
   process.stderr.write(`• ${label}\n`);
-  const res = spawnSync(bin, args, { stdio: 'inherit', shell: false });
-  if (res.status !== 0) {
-    const code = res.status ?? 1;
+  const res = spawnSync(bin, args, { stdio: 'inherit', shell: false, ...(cwd ? { cwd } : {}) });
+  const code = subprocessExitCode(res);
+  if (code !== 0) {
     process.stderr.write(`${label} failed (exit ${code}). Aborting.\n`);
     process.exit(code);
+  }
+}
+
+/**
+ * Thrown by `runInstallOrThrow` when the install subprocess exits non-zero.
+ * Carries the underlying exit code so the mount-branch catch can surface it
+ * to the user instead of collapsing every failure onto 127.
+ */
+class InstallCommandError extends Error {
+  readonly exitCode: number;
+  constructor(label: string, exitCode: number) {
+    super(`${label} failed (exit ${exitCode})`);
+    this.name = 'InstallCommandError';
+    this.exitCode = exitCode;
+  }
+}
+
+/**
+ * Install variant that throws instead of calling `process.exit` on failure.
+ * Used inside `launchOnMount`'s `onBeforeLaunch`, so mount teardown runs
+ * before the error surfaces.
+ */
+function runInstallOrThrow(command: readonly string[], label: string, cwd: string): void {
+  const [bin, ...args] = command;
+  if (!bin) return;
+  process.stderr.write(`• ${label}\n`);
+  const res = spawnSync(bin, args, { stdio: 'inherit', shell: false, cwd });
+  const code = subprocessExitCode(res);
+  if (code !== 0) {
+    throw new InstallCommandError(label, code);
   }
 }
 
@@ -234,10 +307,17 @@ function runCleanup(command: readonly string[], commandString: string): void {
  * created. The workload-router cleanup only covers the install subtree
  * (`<root>/claude/plugin`), so without this step empty parent dirs
  * would accumulate under `~/.agent-workforce/sessions/`.
+ *
+ * Uses `fs.rmSync` rather than `spawnSync('rm', …)` so the teardown works
+ * on Windows where `rm` isn't on PATH.
  */
 function removeSessionRoot(sessionRoot: string | undefined): void {
   if (!sessionRoot) return;
-  spawnSync('rm', ['-rf', sessionRoot], { stdio: 'ignore', shell: false });
+  try {
+    rmSync(sessionRoot, { recursive: true, force: true });
+  } catch {
+    /* best-effort — if teardown fails the dir is harmless under ~/.agent-workforce/sessions */
+  }
 }
 
 /**
@@ -277,23 +357,66 @@ export const CLEAN_IGNORED_PATTERNS = [
 ] as const;
 
 /**
- * Decide whether `--clean` should engage for this run. Returns a warning
- * string when the flag was requested but cannot apply (e.g. non-claude
- * harness); callers emit the warning to stderr and proceed with
- * `useClean: false`. Pure — no side effects, trivially testable.
+ * Skill-install artifacts that should never be copied into the mount nor
+ * synced back to the real repo. Applied to non-claude interactive sessions
+ * that rely on the mount to keep `npx skills add` / `npx prpm install`
+ * writes out of the user's project tree. Covers every per-provider output
+ * root that skill.sh / prpm scatter into on install — missing one here
+ * re-introduces repo pollution, so this list is deliberately superset-y.
+ * Claude sessions use `installRoot` for out-of-repo staging instead, so
+ * these patterns don't apply there.
+ */
+export const SKILL_INSTALL_IGNORED_PATTERNS = [
+  // skill.sh universal install root + per-harness symlink farms
+  '.agents',
+  '.claude/skills',
+  '.factory/skills',
+  '.kiro/skills',
+  'skills',
+  // prpm `--as <harness>` output roots
+  '.opencode',
+  '.skills',
+  // provider lockfiles written at the repo root
+  'prpm.lock',
+  'skills-lock.json'
+] as const;
+
+/**
+ * Decide whether to run the interactive session inside a
+ * `@relayfile/local-mount` sandbox.
+ *
+ * - Claude: mount only engages when the user passes `--clean` explicitly
+ *   (its purpose there is to hide CLAUDE.md / .claude / .mcp.json from the
+ *   session). Out-of-repo skill staging is handled separately via
+ *   `installRoot` + `--plugin-dir`.
+ * - Opencode: the SDK cannot stage skills out-of-repo for this harness
+ *   (there is no `installRoot` support), so the mount is the only way to
+ *   keep `npx prpm install` / `npx skills add` writes out of the project.
+ *   Default to mount unless the user opts in with `--install-in-repo`.
+ * - Codex: no auto-mount yet. `--clean` still emits the existing
+ *   "claude-only" warning so current behavior is preserved.
+ *
+ * Pure — no side effects, trivially testable.
  */
 export function decideCleanMode(
   harness: Harness,
-  clean: boolean
+  clean: boolean,
+  installInRepo = false
 ): { useClean: boolean; warning?: string } {
-  if (!clean) return { useClean: false };
-  if (harness !== 'claude') {
+  if (harness === 'claude') {
+    return { useClean: clean };
+  }
+  if (harness === 'opencode') {
+    if (installInRepo) return { useClean: false };
+    return { useClean: true };
+  }
+  if (clean) {
     return {
       useClean: false,
       warning: `--clean is only supported for the claude harness (this session uses ${harness}). Ignoring flag.`
     };
   }
-  return { useClean: true };
+  return { useClean: false };
 }
 
 async function runInteractive(
@@ -301,20 +424,31 @@ async function runInteractive(
   options: { installInRepo?: boolean; clean?: boolean } = {}
 ): Promise<number> {
   const { runtime, personaId, tier } = selection;
-  // Out-of-repo staging only applies to the claude harness today (it's the
-  // only one with a `--plugin-dir` hook). For codex/opencode, keep the legacy
-  // behavior of installing into the repo's harness-conventional directory.
-  // The --install-in-repo flag forces legacy behavior across the board.
-  const useSessionDir = !options.installInRepo && runtime.harness === 'claude';
-  const sessionRoot = useSessionDir ? generateSessionRoot(personaId) : undefined;
-  const installRoot = sessionRoot ? sessionInstallRoot(sessionRoot) : undefined;
-  // --clean applies to interactive claude only. For non-claude harnesses, warn
-  // and drop the flag (same pattern as pluginDirs warnings in buildInteractiveSpec).
-  const cleanDecision = decideCleanMode(runtime.harness, options.clean === true);
+  // `installRoot` (out-of-repo skill staging via `--plugin-dir`) is currently
+  // claude-only; the workload-router SDK throws if it's set for other
+  // harnesses. For opencode, we instead keep installs out of the repo by
+  // running them inside a @relayfile/local-mount sandbox (see `useClean`
+  // below). The --install-in-repo flag forces legacy in-repo installs
+  // across the board.
+  const cleanDecision = decideCleanMode(
+    runtime.harness,
+    options.clean === true,
+    options.installInRepo === true
+  );
   if (cleanDecision.warning) {
     process.stderr.write(`warning: ${cleanDecision.warning}\n`);
   }
   const useClean = cleanDecision.useClean;
+  // A session dir is needed whenever we either (a) stage skills out-of-repo
+  // via claude's installRoot, or (b) open a mount. Opencode reaches (b) by
+  // default; claude reaches both when --clean is set, and just (a) otherwise.
+  const useSessionDir =
+    !options.installInRepo && (runtime.harness === 'claude' || useClean);
+  const sessionRoot = useSessionDir ? generateSessionRoot(personaId) : undefined;
+  const installRoot =
+    sessionRoot && runtime.harness === 'claude'
+      ? sessionInstallRoot(sessionRoot)
+      : undefined;
   const ctx = useSelection(
     selection,
     installRoot !== undefined ? { installRoot } : {}
@@ -334,14 +468,19 @@ async function runInteractive(
   // the plugin scaffold (mkdir + manifest + symlink) so `--plugin-dir` has a
   // valid target even for skill-less personas like posthog. Gate on the
   // command string rather than `installs.length` so we don't skip that.
-  if (install.commandString !== ':') {
-    const skillIds = install.plan.installs.map((i) => i.skillId).join(', ');
-    const targetLabel = installRoot ? ` → ${installRoot}` : '';
-    const label =
-      install.plan.installs.length === 0
-        ? `Staging session plugin dir${targetLabel}`
-        : `Installing skills: ${skillIds}${targetLabel}`;
-    runInstall(install.command, label);
+  const skillIds = install.plan.installs.map((i) => i.skillId).join(', ');
+  const installLabel =
+    install.plan.installs.length === 0
+      ? `Staging session plugin dir${installRoot ? ` → ${installRoot}` : ''}`
+      : `Installing skills: ${skillIds}${installRoot ? ` → ${installRoot}` : ''}`;
+  // When useClean engages on a non-claude harness, the install must run
+  // INSIDE the mount so `.opencode/skills/`, `.agents/skills/`, prpm.lock,
+  // etc. land in the sandbox rather than the real repo. We defer it to
+  // `onBeforeLaunch` below instead of pre-running here.
+  const deferInstallToMount =
+    useClean && runtime.harness !== 'claude' && install.commandString !== ':';
+  if (install.commandString !== ':' && !deferInstallToMount) {
+    runInstall(install.command, installLabel);
   }
 
   const spec = buildInteractiveSpec({
@@ -376,42 +515,132 @@ async function runInteractive(
     }
   }
   if (spec.initialPrompt) summary.push('initial-prompt=<systemPrompt>');
-  if (useClean) summary.push('clean=on');
+  if (useClean) summary.push('mount=on');
   process.stderr.write(`• spawning ${spec.bin} (${summary.join(', ')})\n`);
 
-  // --clean branch: delegate process lifecycle (spawn, signal forwarding,
-  // syncback, cleanup) to @relayfile/local-mount. Skill plugin dir lives
-  // outside the mount, so claude resolves --plugin-dir normally regardless
-  // of cwd.
+  // Mount branch: delegate process lifecycle (spawn, signal forwarding,
+  // syncback, cleanup) to @relayfile/local-mount.
+  //
+  // For claude: mount engages only when `--clean` is set, to hide the repo's
+  // claude config from the session. Skill plugin dir lives outside the mount
+  // at an absolute path, so claude resolves `--plugin-dir` normally.
+  //
+  // For opencode: mount engages by default (unless `--install-in-repo`), and
+  // the install itself runs inside the mount via `onBeforeLaunch` so that
+  // `npx prpm install` / `npx skills add` writes land in the sandbox. The
+  // skill-install paths are added to `ignoredPatterns` so they are neither
+  // copied in from the real repo nor synced back on exit.
   if (useClean && sessionRoot) {
     const mountDir = sessionMountDir(sessionRoot);
-    process.stderr.write(`• clean mount → ${mountDir}\n`);
+    const ignoredPatterns: string[] =
+      runtime.harness === 'claude'
+        ? [...CLEAN_IGNORED_PATTERNS]
+        : [...SKILL_INSTALL_IGNORED_PATTERNS];
+    process.stderr.write(`• sandbox mount → ${mountDir}\n`);
+    // Three-stage SIGINT handler layered on top of launchOnMount's own signal
+    // forwarding. launchOnMount catches the first SIGINT to kill the child
+    // and run its finalize() (autoSync.stop + final syncBack), which walks
+    // both trees and can take several seconds on a large repo — during
+    // which the terminal otherwise looks frozen.
+    //
+    //   1st press  → announce "syncing…" so the user knows the pause is real.
+    //   2nd press  → abort `shutdownSignal`, which local-mount 0.5+ respects
+    //                by skipping autosync's draining reconcile and returning
+    //                the partial count from the final syncBack. Cleanup
+    //                still runs, so no leaked mount dir.
+    //   3rd press  → hard escape: synchronously rm the mount root and
+    //                process.exit(130) in case the abort never resolves.
+    const shutdownController = new AbortController();
+    let sigintCount = 0;
+    const forceExitHandler = () => {
+      sigintCount += 1;
+      if (sigintCount === 1) {
+        process.stderr.write(
+          '\n⏳ Syncing session changes back to the repo… (press Ctrl-C again to skip sync)\n'
+        );
+        return;
+      }
+      if (sigintCount === 2) {
+        process.stderr.write(
+          '\n⚠ Aborting sync — partial changes will be propagated. (press Ctrl-C again to force quit)\n'
+        );
+        shutdownController.abort();
+        return;
+      }
+      process.stderr.write(
+        '\n✗ Force-quit: mount teardown skipped. Session dir may be left behind.\n'
+      );
+      // Node-native removal rather than `rm -rf` so the emergency path
+      // works on Windows too.
+      try {
+        rmSync(sessionRoot, { recursive: true, force: true });
+      } catch {
+        /* swallow — we're exiting anyway */
+      }
+      process.exit(130);
+    };
+    process.on('SIGINT', forceExitHandler);
     try {
       const result = await launchOnMount({
         cli: spec.bin,
         projectDir: process.cwd(),
         mountDir,
         args: finalArgs,
-        ignoredPatterns: [...CLEAN_IGNORED_PATTERNS],
+        ignoredPatterns,
         // launchOnMount passes `env` straight to the child spawn, so without
         // merging process.env we'd strip PATH/HOME/etc. Match the non-clean
         // branch: persona env overlays the inherited environment.
         env: resolvedEnv ? { ...process.env, ...resolvedEnv } : process.env,
-        agentName: personaId
+        agentName: personaId,
+        // Second Ctrl-C aborts this signal → local-mount skips autosync's
+        // draining reconcile and returns the partial syncBack count. Cleanup
+        // still runs, so there's no leaked mount dir.
+        shutdownSignal: shutdownController.signal,
+        // Report sync stats so the user sees confirmation rather than a
+        // silent pause between the child exiting and the CLI returning.
+        onAfterSync: (count) => {
+          if (count > 0) {
+            const qualifier = shutdownController.signal.aborted ? ' (partial)' : '';
+            process.stderr.write(`✓ Synced ${count} change(s) back to the repo${qualifier}.\n`);
+          }
+        },
+        ...(deferInstallToMount
+          ? {
+              onBeforeLaunch: (dir: string) => {
+                runInstallOrThrow(install.command, installLabel, dir);
+              }
+            }
+          : {})
       });
       return result.exitCode;
     } catch (err) {
+      // InstallCommandError carries the real install exit code — surfacing
+      // it (rather than collapsing onto 127) lets callers distinguish a
+      // failed `npx prpm install` from a missing harness binary.
+      if (err instanceof InstallCommandError) {
+        process.stderr.write(`${err.message}. Aborting.\n`);
+        return err.exitCode;
+      }
       const e = err as NodeJS.ErrnoException;
       if (e.code === 'ENOENT') {
         process.stderr.write(
-          `Failed to spawn "${spec.bin}" inside clean mount: binary not found on PATH. Install the ${runtime.harness} CLI and retry.\n`
+          `Failed to spawn "${spec.bin}" inside sandbox mount: binary not found on PATH. Install the ${runtime.harness} CLI and retry.\n`
         );
-      } else {
-        process.stderr.write(`Failed to launch clean mount: ${e.message}\n`);
+        return 127;
       }
-      return 127;
+      process.stderr.write(`Failed to launch sandbox mount: ${e.message}\n`);
+      return 1;
     } finally {
-      runCleanup(install.cleanupCommand, install.cleanupCommandString);
+      process.removeListener('SIGINT', forceExitHandler);
+      // When the install ran inside the mount, its cleanup paths are
+      // mount-relative (e.g. `.skills/<name>`, `skills/<name>`) and
+      // running cleanup here would resolve them against the real repo
+      // cwd — potentially `rm -rf`ing pre-existing user content. The
+      // mount dir is removed wholesale by `removeSessionRoot` below, so
+      // the install's cleanup is redundant anyway in that case.
+      if (!deferInstallToMount) {
+        runCleanup(install.cleanupCommand, install.cleanupCommandString);
+      }
       removeSessionRoot(sessionRoot);
     }
   }

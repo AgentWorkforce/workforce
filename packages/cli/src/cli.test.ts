@@ -1,7 +1,13 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 
-import { CLEAN_IGNORED_PATTERNS, decideCleanMode, parseAgentArgs } from './cli.js';
+import {
+  CLEAN_IGNORED_PATTERNS,
+  SKILL_INSTALL_IGNORED_PATTERNS,
+  decideCleanMode,
+  parseAgentArgs,
+  resolveSystemPromptPlaceholders
+} from './cli.js';
 
 // The conflict-detection path inside parseAgentArgs uses the module-local
 // `die()` helper, which calls process.exit(1) after writing to stderr. Tests
@@ -117,25 +123,36 @@ test('parseAgentArgs: -- stops flag parsing, positional args after are preserved
   assert.deepEqual(positional, ['--install-in-repo', 'posthog']);
 });
 
-test('decideCleanMode: clean=false → no-op regardless of harness', () => {
+test('decideCleanMode: claude + clean=false → no mount', () => {
   assert.deepEqual(decideCleanMode('claude', false), { useClean: false });
+});
+
+test('decideCleanMode: codex + clean=false → no mount', () => {
   assert.deepEqual(decideCleanMode('codex', false), { useClean: false });
-  assert.deepEqual(decideCleanMode('opencode', false), { useClean: false });
+});
+
+test('decideCleanMode: opencode defaults to mount (skills would otherwise land in repo)', () => {
+  // Opencode has no installRoot support in the SDK, so the mount is the only
+  // way to keep `.opencode/skills/`, `.agents/skills/`, prpm.lock, etc. out
+  // of the real repo. Default-on for non-in-repo runs.
+  assert.deepEqual(decideCleanMode('opencode', false), { useClean: true });
+  assert.deepEqual(decideCleanMode('opencode', true), { useClean: true });
+});
+
+test('decideCleanMode: opencode + --install-in-repo → no mount', () => {
+  assert.deepEqual(decideCleanMode('opencode', false, true), { useClean: false });
+  assert.deepEqual(decideCleanMode('opencode', true, true), { useClean: false });
 });
 
 test('decideCleanMode: claude + clean → engaged', () => {
   assert.deepEqual(decideCleanMode('claude', true), { useClean: true });
 });
 
-test('decideCleanMode: non-claude + clean → disengaged with warning naming harness', () => {
+test('decideCleanMode: codex + clean → disengaged with warning naming harness', () => {
   const codex = decideCleanMode('codex', true);
   assert.equal(codex.useClean, false);
   assert.match(codex.warning ?? '', /claude harness/);
   assert.match(codex.warning ?? '', /codex/);
-
-  const opencode = decideCleanMode('opencode', true);
-  assert.equal(opencode.useClean, false);
-  assert.match(opencode.warning ?? '', /opencode/);
 });
 
 test('CLEAN_IGNORED_PATTERNS: covers the declared repo-level claude config files', () => {
@@ -146,6 +163,46 @@ test('CLEAN_IGNORED_PATTERNS: covers the declared repo-level claude config files
     'CLAUDE.local.md',
     '.claude',
     '.mcp.json'
+  ]);
+});
+
+test('resolveSystemPromptPlaceholders: substitutes <harness> with the active harness', () => {
+  const input =
+    'produce the exact install command: `npx -y prpm install <ref> --as <harness>` for prpm using the active harness';
+  const out = resolveSystemPromptPlaceholders(input, 'opencode');
+  assert.match(out, /--as opencode/);
+  assert.ok(!out.includes('<harness>'), 'expected <harness> placeholder to be resolved');
+  // Other angle-bracket placeholders (<ref>, <repo-url>, etc.) are deliberately
+  // preserved — they are LLM-facing template variables.
+  assert.ok(out.includes('<ref>'));
+});
+
+test('resolveSystemPromptPlaceholders: resolves every occurrence (not just the first)', () => {
+  const out = resolveSystemPromptPlaceholders('<harness> then <harness> again', 'codex');
+  assert.equal(out, 'codex then codex again');
+});
+
+test('resolveSystemPromptPlaceholders: leaves prompts without the placeholder untouched', () => {
+  const original = 'You are a code reviewer. No placeholders here.';
+  assert.equal(resolveSystemPromptPlaceholders(original, 'claude'), original);
+});
+
+test('SKILL_INSTALL_IGNORED_PATTERNS: keeps skill-install artifacts out of the real repo', () => {
+  // Pinned — non-claude sessions rely on these to prevent `.opencode/skills/`,
+  // `.agents/skills/`, and skill.sh per-provider symlink farms from being
+  // copied into the mount or synced back on exit. Shrinking this set
+  // re-introduces repo pollution from `npx prpm install` / `npx skills add`;
+  // expand via review, not silently.
+  assert.deepEqual([...SKILL_INSTALL_IGNORED_PATTERNS], [
+    '.agents',
+    '.claude/skills',
+    '.factory/skills',
+    '.kiro/skills',
+    'skills',
+    '.opencode',
+    '.skills',
+    'prpm.lock',
+    'skills-lock.json'
   ]);
 });
 
@@ -216,7 +273,7 @@ test('main: --clean on an interactive non-claude session warns and proceeds with
   // npm-provenance-publisher@best runs on codex. --clean should warn and the
   // run should continue down the non-mount spawn path (which then fails to
   // spawn codex because PATH is scrubbed). We should NEVER see a
-  // "clean mount → …" line, which the clean branch emits before calling
+  // "sandbox mount → …" line, which the mount branch emits before calling
   // launchOnMount.
   const { stderr } = await runCliCapturingStderr([
     'agent',
@@ -229,7 +286,7 @@ test('main: --clean on an interactive non-claude session warns and proceeds with
     'expected non-claude clean warning to surface'
   );
   assert.ok(
-    !/clean mount →/.test(stderr),
-    `expected the clean mount branch to be skipped; saw stderr:\n${stderr}`
+    !/sandbox mount →/.test(stderr),
+    `expected the mount branch to be skipped; saw stderr:\n${stderr}`
   );
 });

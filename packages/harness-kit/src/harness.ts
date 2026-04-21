@@ -13,8 +13,10 @@ export interface InteractiveSpec {
   /**
    * If set, the caller should append this as the final positional argument
    * — used by harnesses that don't support a separate system-prompt flag
-   * (codex, opencode) to carry the persona's system prompt as the initial
-   * user prompt.
+   * to carry the persona's system prompt as the initial user prompt.
+   * Currently only codex takes this path; opencode uses its own `--prompt`
+   * flag (wired directly into `args`) and claude uses `--append-system-prompt`,
+   * so both return `null` here.
    */
   initialPrompt: string | null;
   /**
@@ -60,10 +62,18 @@ function hasAnyPermission(p: PersonaPermissions | undefined): boolean {
  * so the spawned session only sees the persona's declared MCP servers,
  * never the user's or project's Claude Code config.
  *
- * codex / opencode branches carry the system prompt as the initial
- * positional `[PROMPT]` because neither CLI supports a separate
- * system-prompt flag today. They emit a warning if the persona declares
- * mcpServers or permissions — those features aren't wired for those
+ * The codex branch carries the system prompt via `initialPrompt` because
+ * codex has no dedicated system-prompt flag today — callers append it as
+ * the final positional `[PROMPT]`.
+ *
+ * The opencode branch uses opencode's own `--prompt` flag (wired directly
+ * into `args`) and returns `initialPrompt: null`. The earlier behavior of
+ * appending the prompt as a trailing positional was unsafe: `opencode`'s
+ * bare form treats a trailing positional as a project directory, which
+ * caused the TUI to fail with "Failed to change directory to …".
+ *
+ * Both codex and opencode emit a warning if the persona declares
+ * `mcpServers` or `permissions` — those features aren't wired for those
  * harnesses yet.
  */
 export function buildInteractiveSpec(input: BuildInteractiveSpecInput): InteractiveSpec {
@@ -138,10 +148,14 @@ export function buildInteractiveSpec(input: BuildInteractiveSpecInput): Interact
           'pluginDirs is currently claude-only; ignoring under the opencode harness. Skills must be staged via opencode conventions.'
         );
       }
+      // opencode's bare form is `opencode [project]` where the trailing
+      // positional is a project directory, NOT a prompt. Carry the persona's
+      // system prompt via `--prompt` (top-level TUI flag) so it isn't parsed
+      // as a cwd.
       return {
         bin: 'opencode',
-        args: ['--model', stripProviderPrefix(model)],
-        initialPrompt: systemPrompt,
+        args: ['--model', stripProviderPrefix(model), '--prompt', systemPrompt],
+        initialPrompt: null,
         warnings
       };
     }
