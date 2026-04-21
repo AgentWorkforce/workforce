@@ -239,13 +239,26 @@ function signalExitCode(signal: NodeJS.Signals | null): number {
   return 128 + (num ?? 1);
 }
 
+/**
+ * Derive a meaningful exit code from a `spawnSync` result. `spawnSync`
+ * sets `status` to null and `signal` to the signal name (e.g. `SIGINT`)
+ * when the child was killed before it could set its own exit code, so
+ * a naive `res.status ?? 1` collapses Ctrl-C / SIGTERM onto generic
+ * failure instead of the conventional 128+N.
+ */
+function subprocessExitCode(res: ReturnType<typeof spawnSync>): number {
+  if (res.status !== null) return res.status;
+  if (res.signal) return signalExitCode(res.signal);
+  return 1;
+}
+
 function runInstall(command: readonly string[], label: string, cwd?: string): void {
   const [bin, ...args] = command;
   if (!bin) return;
   process.stderr.write(`• ${label}\n`);
   const res = spawnSync(bin, args, { stdio: 'inherit', shell: false, ...(cwd ? { cwd } : {}) });
-  if (res.status !== 0) {
-    const code = res.status ?? 1;
+  const code = subprocessExitCode(res);
+  if (code !== 0) {
     process.stderr.write(`${label} failed (exit ${code}). Aborting.\n`);
     process.exit(code);
   }
@@ -275,8 +288,9 @@ function runInstallOrThrow(command: readonly string[], label: string, cwd: strin
   if (!bin) return;
   process.stderr.write(`• ${label}\n`);
   const res = spawnSync(bin, args, { stdio: 'inherit', shell: false, cwd });
-  if (res.status !== 0) {
-    throw new InstallCommandError(label, res.status ?? 1);
+  const code = subprocessExitCode(res);
+  if (code !== 0) {
+    throw new InstallCommandError(label, code);
   }
 }
 
