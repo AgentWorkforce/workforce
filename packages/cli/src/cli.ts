@@ -1,6 +1,7 @@
 #!/usr/bin/env node
 import { spawn, spawnSync } from 'node:child_process';
 import { randomBytes } from 'node:crypto';
+import { rmSync } from 'node:fs';
 import { constants, homedir } from 'node:os';
 import { join, resolve as resolvePath } from 'node:path';
 import { pathToFileURL } from 'node:url';
@@ -251,6 +252,20 @@ function runInstall(command: readonly string[], label: string, cwd?: string): vo
 }
 
 /**
+ * Thrown by `runInstallOrThrow` when the install subprocess exits non-zero.
+ * Carries the underlying exit code so the mount-branch catch can surface it
+ * to the user instead of collapsing every failure onto 127.
+ */
+class InstallCommandError extends Error {
+  readonly exitCode: number;
+  constructor(label: string, exitCode: number) {
+    super(`${label} failed (exit ${exitCode})`);
+    this.name = 'InstallCommandError';
+    this.exitCode = exitCode;
+  }
+}
+
+/**
  * Install variant that throws instead of calling `process.exit` on failure.
  * Used inside `launchOnMount`'s `onBeforeLaunch`, so mount teardown runs
  * before the error surfaces.
@@ -261,8 +276,7 @@ function runInstallOrThrow(command: readonly string[], label: string, cwd: strin
   process.stderr.write(`• ${label}\n`);
   const res = spawnSync(bin, args, { stdio: 'inherit', shell: false, cwd });
   if (res.status !== 0) {
-    const code = res.status ?? 1;
-    throw new Error(`${label} failed (exit ${code})`);
+    throw new InstallCommandError(label, res.status ?? 1);
   }
 }
 
@@ -279,10 +293,17 @@ function runCleanup(command: readonly string[], commandString: string): void {
  * created. The workload-router cleanup only covers the install subtree
  * (`<root>/claude/plugin`), so without this step empty parent dirs
  * would accumulate under `~/.agent-workforce/sessions/`.
+ *
+ * Uses `fs.rmSync` rather than `spawnSync('rm', …)` so the teardown works
+ * on Windows where `rm` isn't on PATH.
  */
 function removeSessionRoot(sessionRoot: string | undefined): void {
   if (!sessionRoot) return;
-  spawnSync('rm', ['-rf', sessionRoot], { stdio: 'ignore', shell: false });
+  try {
+    rmSync(sessionRoot, { recursive: true, force: true });
+  } catch {
+    /* best-effort — if teardown fails the dir is harmless under ~/.agent-workforce/sessions */
+  }
 }
 
 /**
@@ -480,7 +501,7 @@ async function runInteractive(
     }
   }
   if (spec.initialPrompt) summary.push('initial-prompt=<systemPrompt>');
-  if (useClean) summary.push('clean=on');
+  if (useClean) summary.push('mount=on');
   process.stderr.write(`• spawning ${spec.bin} (${summary.join(', ')})\n`);
 
   // Mount branch: delegate process lifecycle (spawn, signal forwarding,
@@ -501,7 +522,7 @@ async function runInteractive(
       runtime.harness === 'claude'
         ? [...CLEAN_IGNORED_PATTERNS]
         : [...SKILL_INSTALL_IGNORED_PATTERNS];
-    process.stderr.write(`• clean mount → ${mountDir}\n`);
+    process.stderr.write(`• sandbox mount → ${mountDir}\n`);
     // Three-stage SIGINT handler layered on top of launchOnMount's own signal
     // forwarding. launchOnMount catches the first SIGINT to kill the child
     // and run its finalize() (autoSync.stop + final syncBack), which walks
@@ -535,8 +556,10 @@ async function runInteractive(
       process.stderr.write(
         '\n✗ Force-quit: mount teardown skipped. Session dir may be left behind.\n'
       );
+      // Node-native removal rather than `rm -rf` so the emergency path
+      // works on Windows too.
       try {
-        spawnSync('rm', ['-rf', sessionRoot], { stdio: 'ignore', shell: false });
+        rmSync(sessionRoot, { recursive: true, force: true });
       } catch {
         /* swallow — we're exiting anyway */
       }
@@ -577,15 +600,22 @@ async function runInteractive(
       });
       return result.exitCode;
     } catch (err) {
+      // InstallCommandError carries the real install exit code — surfacing
+      // it (rather than collapsing onto 127) lets callers distinguish a
+      // failed `npx prpm install` from a missing harness binary.
+      if (err instanceof InstallCommandError) {
+        process.stderr.write(`${err.message}. Aborting.\n`);
+        return err.exitCode;
+      }
       const e = err as NodeJS.ErrnoException;
       if (e.code === 'ENOENT') {
         process.stderr.write(
-          `Failed to spawn "${spec.bin}" inside clean mount: binary not found on PATH. Install the ${runtime.harness} CLI and retry.\n`
+          `Failed to spawn "${spec.bin}" inside sandbox mount: binary not found on PATH. Install the ${runtime.harness} CLI and retry.\n`
         );
-      } else {
-        process.stderr.write(`Failed to launch clean mount: ${e.message}\n`);
+        return 127;
       }
-      return 127;
+      process.stderr.write(`Failed to launch sandbox mount: ${e.message}\n`);
+      return 1;
     } finally {
       process.removeListener('SIGINT', forceExitHandler);
       // When the install ran inside the mount, its cleanup paths are

@@ -273,7 +273,7 @@ test('main: --clean on an interactive non-claude session warns and proceeds with
   // npm-provenance-publisher@best runs on codex. --clean should warn and the
   // run should continue down the non-mount spawn path (which then fails to
   // spawn codex because PATH is scrubbed). We should NEVER see a
-  // "clean mount → …" line, which the clean branch emits before calling
+  // "sandbox mount → …" line, which the mount branch emits before calling
   // launchOnMount.
   const { stderr } = await runCliCapturingStderr([
     'agent',
@@ -286,7 +286,7 @@ test('main: --clean on an interactive non-claude session warns and proceeds with
     'expected non-claude clean warning to surface'
   );
   assert.ok(
-    !/clean mount →/.test(stderr),
-    `expected the clean mount branch to be skipped; saw stderr:\n${stderr}`
+    !/sandbox mount →/.test(stderr),
+    `expected the mount branch to be skipped; saw stderr:\n${stderr}`
   );
 });

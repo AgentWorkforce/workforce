@@ -529,7 +529,7 @@ agent-workforce agent --clean <persona>[@<tier>]
 
 ### Session layout
 
-Both the skill install root and the clean mount live under a single
+Both the skill install root and the sandbox mount live under a single
 session directory. The session id (`<personaId>-<base36-timestamp>-<hex>`)
 is generated once and both paths are derived from it:
 
