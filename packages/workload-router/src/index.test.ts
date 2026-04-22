@@ -123,6 +123,10 @@ test('resolves review from custom routing profile rule', () => {
       posthog: {
         tier: 'best-value',
         rationale: 'analytics lookups via MCP'
+      },
+      'slop-audit': {
+        tier: 'minimum',
+        rationale: 'quick slop sweep is enough here'
       }
     }
   });
