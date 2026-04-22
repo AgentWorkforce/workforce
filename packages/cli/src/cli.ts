@@ -577,6 +577,16 @@ async function runInteractive(
       runtime.harness === 'claude'
         ? [...CLEAN_IGNORED_PATTERNS]
         : [...SKILL_INSTALL_IGNORED_PATTERNS];
+    // Anything we materialize into the mount via onBeforeLaunch must be
+    // hidden from the mount-mirror in both directions: without this, any
+    // opencode.json already present in the real repo would be copied into
+    // the mount (masking the per-session agent config we write), and the
+    // fresh write from onBeforeLaunch would sync back out on exit and
+    // pollute the user's working tree. Added dynamically so this stays
+    // generic for any future configFile producer.
+    for (const file of spec.configFiles) {
+      ignoredPatterns.push(file.path);
+    }
     process.stderr.write(`• sandbox mount → ${mountDir}\n`);
     // Three-stage SIGINT handler layered on top of launchOnMount's own signal
     // forwarding. launchOnMount catches the first SIGINT to kill the child
