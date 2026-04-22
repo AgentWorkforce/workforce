@@ -29,7 +29,8 @@ const exportNameMap = new Map([
   ['cloud-slack-proxy-guard', 'cloudSlackProxyGuard'],
   ['agent-relay-e2e-conductor', 'agentRelayE2eConductor'],
   ['capability-discoverer', 'capabilityDiscoverer'],
-  ['posthog', 'posthogAgent']
+  ['posthog', 'posthogAgent'],
+  ['persona-maker', 'personaMaker']
 ]);
 
 async function generate() {

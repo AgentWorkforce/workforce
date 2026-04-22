@@ -123,6 +123,10 @@ test('resolves review from custom routing profile rule', () => {
       posthog: {
         tier: 'best-value',
         rationale: 'analytics lookups via MCP'
+      },
+      'persona-authoring': {
+        tier: 'best-value',
+        rationale: 'scaffolding a persona is mechanical wiring work'
       }
     }
   });
