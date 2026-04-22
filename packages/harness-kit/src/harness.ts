@@ -4,6 +4,18 @@ import type {
   PersonaPermissions
 } from '@agentworkforce/workload-router';
 
+/**
+ * A config file the caller should materialize before launching the harness.
+ * Paths are relative to the harness's cwd — typically the mount dir when a
+ * sandbox is in use, otherwise process.cwd(). Pure data, no I/O here.
+ */
+export interface InteractiveConfigFile {
+  /** Relative path (from cwd) where the file should be written. */
+  path: string;
+  /** Exact file contents, already serialized. */
+  contents: string;
+}
+
 /** Result of translating a persona's runtime into a spawnable command. */
 export interface InteractiveSpec {
   /** Binary to exec (e.g. `claude`, `codex`, `opencode`). */
@@ -14,8 +26,8 @@ export interface InteractiveSpec {
    * If set, the caller should append this as the final positional argument
    * — used by harnesses that don't support a separate system-prompt flag
    * to carry the persona's system prompt as the initial user prompt.
-   * Currently only codex takes this path; opencode uses its own `--prompt`
-   * flag (wired directly into `args`) and claude uses `--append-system-prompt`,
+   * Currently only codex takes this path; claude uses `--append-system-prompt`
+   * and opencode writes the prompt into `opencode.json` (see `configFiles`),
    * so both return `null` here.
    */
   initialPrompt: string | null;
@@ -24,10 +36,23 @@ export interface InteractiveSpec {
    * support MCP yet, ignoring". Callers decide whether to print them.
    */
   warnings: string[];
+  /**
+   * Config files the caller must write (relative to the harness cwd) before
+   * launch. Opencode uses this to materialize an `opencode.json` carrying
+   * the persona's agent definition (model + system prompt) so `--agent` can
+   * resolve it; claude and codex return an empty array.
+   */
+  configFiles: InteractiveConfigFile[];
 }
 
 export interface BuildInteractiveSpecInput {
   harness: Harness;
+  /**
+   * Persona id — used as the opencode agent name. Claude and codex ignore
+   * this field today; keeping it required here keeps call sites honest and
+   * lets future harnesses consume it without another type change.
+   */
+  personaId: string;
   model: string;
   systemPrompt: string;
   /** Env-resolved MCP servers (pass the output of `resolveMcpServersLenient().servers`). */
@@ -77,7 +102,7 @@ function hasAnyPermission(p: PersonaPermissions | undefined): boolean {
  * harnesses yet.
  */
 export function buildInteractiveSpec(input: BuildInteractiveSpecInput): InteractiveSpec {
-  const { harness, model, systemPrompt, mcpServers, permissions, pluginDirs } = input;
+  const { harness, personaId, model, systemPrompt, mcpServers, permissions, pluginDirs } = input;
   const warnings: string[] = [];
   const hasPluginDirs = pluginDirs !== undefined && pluginDirs.length > 0;
 
@@ -107,7 +132,7 @@ export function buildInteractiveSpec(input: BuildInteractiveSpecInput): Interact
       if (permissions?.mode) {
         args.push('--permission-mode', permissions.mode);
       }
-      return { bin: 'claude', args, initialPrompt: null, warnings };
+      return { bin: 'claude', args, initialPrompt: null, warnings, configFiles: [] };
     }
     case 'codex': {
       if (mcpServers && Object.keys(mcpServers).length > 0) {
@@ -129,7 +154,8 @@ export function buildInteractiveSpec(input: BuildInteractiveSpecInput): Interact
         bin: 'codex',
         args: ['-m', stripProviderPrefix(model)],
         initialPrompt: systemPrompt,
-        warnings
+        warnings,
+        configFiles: []
       };
     }
     case 'opencode': {
@@ -148,15 +174,41 @@ export function buildInteractiveSpec(input: BuildInteractiveSpecInput): Interact
           'pluginDirs is currently claude-only; ignoring under the opencode harness. Skills must be staged via opencode conventions.'
         );
       }
-      // opencode's bare form is `opencode [project]` where the trailing
-      // positional is a project directory, NOT a prompt. Carry the persona's
-      // system prompt via `--prompt` (top-level TUI flag) so it isn't parsed
-      // as a cwd.
+      // opencode resolves a persona's system prompt + model through its own
+      // "agent" abstraction (see https://opencode.ai/config.json: `agent.<id>.{
+      // model, prompt, mode }`). Earlier revisions tried to use `--prompt` for
+      // the system prompt and `-m` for the model directly, but that was wrong
+      // on two counts:
+      //   (a) `--prompt` pre-fills the TUI input buffer with a *user* message,
+      //       not the agent's instructions — the persona's systemPrompt ended
+      //       up sitting unsent in the chat field.
+      //   (b) `-m` expects `provider/model` (opencode's own docs); stripping
+      //       the `opencode/` prefix left just `gpt-5-nano`, which opencode
+      //       could not resolve and silently fell back to its default model.
+      // The correct shape is an `opencode.json` under cwd defining an agent
+      // with the persona's prompt + full-provider-form model, selected via
+      // `--agent <personaId>` at launch. We emit that file via configFiles
+      // so the CLI can drop it into the mount dir before exec.
+      const agentConfig = {
+        agent: {
+          [personaId]: {
+            model,
+            prompt: systemPrompt,
+            mode: 'primary'
+          }
+        }
+      };
       return {
         bin: 'opencode',
-        args: ['--model', stripProviderPrefix(model), '--prompt', systemPrompt],
+        args: ['--agent', personaId],
         initialPrompt: null,
-        warnings
+        warnings,
+        configFiles: [
+          {
+            path: 'opencode.json',
+            contents: JSON.stringify(agentConfig, null, 2) + '\n'
+          }
+        ]
       };
     }
   }

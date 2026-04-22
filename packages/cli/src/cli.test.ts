@@ -6,7 +6,8 @@ import {
   SKILL_INSTALL_IGNORED_PATTERNS,
   decideCleanMode,
   parseAgentArgs,
-  resolveSystemPromptPlaceholders
+  resolveSystemPromptPlaceholders,
+  stripAgentFlag
 } from './cli.js';
 
 // The conflict-detection path inside parseAgentArgs uses the module-local
@@ -142,6 +143,30 @@ test('decideCleanMode: opencode defaults to mount (skills would otherwise land i
 test('decideCleanMode: opencode + --install-in-repo → no mount', () => {
   assert.deepEqual(decideCleanMode('opencode', false, true), { useClean: false });
   assert.deepEqual(decideCleanMode('opencode', true, true), { useClean: false });
+});
+
+test('stripAgentFlag: removes --agent <name> pair preserving surrounding args', () => {
+  // Degrade path: when the CLI cannot materialize opencode.json (non-mount
+  // --install-in-repo), it strips the --agent selector so opencode launches
+  // with its default agent rather than failing to resolve the unknown one.
+  assert.deepEqual(
+    stripAgentFlag(['--agent', 'persona-maker']),
+    []
+  );
+  assert.deepEqual(
+    stripAgentFlag(['--foo', '--agent', 'persona-maker', '--bar']),
+    ['--foo', '--bar']
+  );
+  assert.deepEqual(
+    stripAgentFlag(['--keep-me']),
+    ['--keep-me']
+  );
+});
+
+test('stripAgentFlag: trailing --agent without a value is preserved (caller decides)', () => {
+  // Defensive: don't swallow an argv that looks malformed — let the harness
+  // reject it so the bug surfaces instead of getting silently stripped.
+  assert.deepEqual(stripAgentFlag(['--agent']), ['--agent']);
 });
 
 test('decideCleanMode: claude + clean → engaged', () => {
