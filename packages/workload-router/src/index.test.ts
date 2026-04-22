@@ -228,6 +228,15 @@ test('resolves newly added personas from the default routing profile', () => {
   assert.equal(opencodeWorkflow.runtime.harness, 'codex');
 });
 
+test('resolves persona-maker from the default routing profile', () => {
+  const maker = resolvePersona('persona-authoring');
+  assert.equal(maker.personaId, 'persona-maker');
+  assert.equal(maker.tier, 'best');
+  assert.equal(maker.runtime.harness, 'codex');
+  assert.equal(maker.skills.length, 1);
+  assert.equal(maker.skills[0].id, 'skill.sh/find-skills');
+});
+
 test('claude is a recognized harness value', () => {
   assert.ok(HARNESS_VALUES.includes('claude'));
 });
