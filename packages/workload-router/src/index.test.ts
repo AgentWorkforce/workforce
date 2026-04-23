@@ -241,6 +241,30 @@ test('resolves persona-maker from the default routing profile', () => {
   assert.equal(maker.skills[0].id, 'skill.sh/find-skills');
 });
 
+test('resolves anti-slop-auditor with the jscpd skill.sh skill attached', () => {
+  const auditor = resolvePersona('slop-audit');
+  assert.equal(auditor.personaId, 'anti-slop-auditor');
+  assert.equal(auditor.tier, 'best');
+  assert.equal(auditor.runtime.harness, 'codex');
+  assert.equal(auditor.skills.length, 1);
+  assert.equal(auditor.skills[0].id, 'kucherenko/jscpd');
+  assert.match(auditor.skills[0].source, /github\.com\/kucherenko\/jscpd#jscpd/);
+
+  // materializeSkillsFor must not throw — the skill.sh URL must be supported.
+  const plan = materializeSkillsFor(auditor);
+  assert.equal(plan.installs.length, 1);
+  assert.deepEqual(plan.installs[0].installCommand, [
+    'npx',
+    '-y',
+    'skills',
+    'add',
+    'https://github.com/kucherenko/jscpd',
+    '--skill',
+    'jscpd',
+    '-y'
+  ]);
+});
+
 test('claude is a recognized harness value', () => {
   assert.ok(HARNESS_VALUES.includes('claude'));
 });

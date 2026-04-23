@@ -6,8 +6,8 @@
   "skills": [
     {
       "id": "kucherenko/jscpd",
-      "source": "https://github.com/kucherenko/jscpd",
-      "description": "Copy-paste duplication detector with an AI-optimized reporter. Run `npx jscpd --reporters ai <path>` to surface clone pairs by file:line range."
+      "source": "https://github.com/kucherenko/jscpd#jscpd",
+      "description": "Copy-paste duplication detector with an AI-optimized reporter. Teaches the `npx jscpd --reporters ai <path>` invocation plus a clone-refactoring workflow (extract function / module / constant, confirm with re-run)."
     }
   ],
   "tiers": {
