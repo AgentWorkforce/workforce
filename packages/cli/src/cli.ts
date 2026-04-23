@@ -30,6 +30,7 @@ import {
   type InteractiveSpec
 } from '@agentworkforce/harness-kit';
 import { launchOnMount } from '@relayfile/local-mount';
+import ora, { type Ora } from 'ora';
 import { loadLocalPersonas, type PersonaSource } from './local-personas.js';
 
 const USAGE = `Usage: agent-workforce <command> [args...]
@@ -625,8 +626,12 @@ async function runInteractive(
     // both trees and can take several seconds on a large repo — during
     // which the terminal otherwise looks frozen.
     //
-    //   1st press  → announce "syncing…" so the user knows the pause is real.
-    //   2nd press  → abort `shutdownSignal`, which local-mount 0.5+ respects
+    //   1st press  → start an ora spinner so the pause is visibly live
+    //                (replaces the prior static print). onAfterSync below
+    //                transitions the spinner into a succeed/fail state once
+    //                relayfile reports the sync result.
+    //   2nd press  → update the spinner text to the "aborting" warning and
+    //                abort `shutdownSignal`, which local-mount 0.5+ respects
     //                by skipping autosync's draining reconcile and returning
     //                the partial count from the final syncBack. Cleanup
     //                still runs, so no leaked mount dir.
@@ -634,24 +639,32 @@ async function runInteractive(
     //                process.exit(130) in case the abort never resolves.
     const shutdownController = new AbortController();
     let sigintCount = 0;
+    let syncSpinner: Ora | undefined;
     const forceExitHandler = () => {
       sigintCount += 1;
       if (sigintCount === 1) {
-        process.stderr.write(
-          '\n⏳ Syncing session changes back to the repo… (press Ctrl-C again to skip sync)\n'
-        );
+        syncSpinner = ora({
+          text: 'Syncing session changes back to the repo… (Ctrl-C again to skip)',
+          stream: process.stderr
+        }).start();
         return;
       }
       if (sigintCount === 2) {
-        process.stderr.write(
-          '\n⚠ Aborting sync — partial changes will be propagated. (press Ctrl-C again to force quit)\n'
-        );
+        if (syncSpinner) {
+          syncSpinner.text =
+            'Aborting sync — partial changes will be propagated. (Ctrl-C again to force quit)';
+        }
         shutdownController.abort();
         return;
       }
-      process.stderr.write(
-        '\n✗ Force-quit: mount teardown skipped. Session dir may be left behind.\n'
-      );
+      if (syncSpinner) {
+        syncSpinner.fail('Force-quit: mount teardown skipped. Session dir may be left behind.');
+        syncSpinner = undefined;
+      } else {
+        process.stderr.write(
+          '\n✗ Force-quit: mount teardown skipped. Session dir may be left behind.\n'
+        );
+      }
       // Node-native removal rather than `rm -rf` so the emergency path
       // works on Windows too.
       try {
@@ -680,10 +693,28 @@ async function runInteractive(
         shutdownSignal: shutdownController.signal,
         // Report sync stats so the user sees confirmation rather than a
         // silent pause between the child exiting and the CLI returning.
+        //
+        // NOTE: `count` is bidirectional per relayfile's onAfterSync
+        // contract (see @relayfile/local-mount launch.d.ts) — it sums
+        // autosync activity in *both* directions (inbound project→mount
+        // and outbound mount→project, including deletes) plus the final
+        // mount→project syncBack. Phrasing this as "synced back to the
+        // repo" earlier misled sessions where inbound events dominated:
+        // a user who did no edits still saw "Synced 15 changes back"
+        // because ambient initial-mirror traffic counted. Phrase as "file
+        // events during session" so we don't overclaim direction.
         onAfterSync: (count) => {
-          if (count > 0) {
-            const qualifier = shutdownController.signal.aborted ? ' (partial)' : '';
-            process.stderr.write(`✓ Synced ${count} change(s) back to the repo${qualifier}.\n`);
+          const aborted = shutdownController.signal.aborted;
+          const qualifier = aborted ? ' (partial)' : '';
+          const message =
+            count > 0
+              ? `Session complete — ${count} file event${count === 1 ? '' : 's'} during session${qualifier}.`
+              : 'Session complete — no file events.';
+          if (syncSpinner) {
+            syncSpinner.succeed(message);
+            syncSpinner = undefined;
+          } else {
+            process.stderr.write(`✓ ${message}\n`);
           }
         },
         ...(deferInstallToMount || hasConfigFiles
@@ -707,6 +738,12 @@ async function runInteractive(
       });
       return result.exitCode;
     } catch (err) {
+      // If the spinner is still live when we error out, mark it failed so
+      // the pending animation doesn't hang around under the error message.
+      if (syncSpinner) {
+        syncSpinner.fail('Sync did not complete');
+        syncSpinner = undefined;
+      }
       // InstallCommandError carries the real install exit code — surfacing
       // it (rather than collapsing onto 127) lets callers distinguish a
       // failed `npx prpm install` from a missing harness binary.
@@ -724,6 +761,13 @@ async function runInteractive(
       process.stderr.write(`Failed to launch sandbox mount: ${e.message}\n`);
       return 1;
     } finally {
+      // Defensive: if neither onAfterSync nor the catch branch stopped the
+      // spinner (e.g. unexpected exit path), stop it cleanly here so the
+      // terminal is not left in spinner state.
+      if (syncSpinner) {
+        syncSpinner.stop();
+        syncSpinner = undefined;
+      }
       process.removeListener('SIGINT', forceExitHandler);
       // When the install ran inside the mount, its cleanup paths are
       // mount-relative (e.g. `.skills/<name>`, `skills/<name>`) and
