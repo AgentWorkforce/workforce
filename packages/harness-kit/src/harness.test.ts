@@ -149,7 +149,12 @@ test('opencode configFiles carries a well-formed opencode.json with the agent de
       'test-persona': {
         model: 'opencode/minimax-m2.5',
         prompt: 'you are a test',
-        mode: 'primary'
+        mode: 'primary',
+        // Wildcard-allow across opencode's tool set — matches the built-in
+        // `build` agent. Without this, opencode's restrictive default kept
+        // agents from making any edits and autosync had nothing to
+        // propagate on exit.
+        permission: 'allow'
       }
     }
   });

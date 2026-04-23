@@ -15,7 +15,8 @@
   "dependencies": {
     "@agentworkforce/harness-kit": "workspace:*",
     "@agentworkforce/workload-router": "workspace:*",
-    "@relayfile/local-mount": "^0.5.0"
+    "@relayfile/local-mount": "^0.5.0",
+    "ora": "^9.4.0"
   },
   "repository": {
     "type": "git",
