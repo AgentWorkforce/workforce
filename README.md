@@ -197,6 +197,7 @@ for the full mount layout and semantics.
 - `personas/opencode-workflow-specialist.json`
 - `personas/npm-provenance-publisher.json`
 - `personas/posthog.json`
+- `personas/persona-maker.json`
 - `personas/anti-slop-auditor.json`
 
 ## Routing profiles

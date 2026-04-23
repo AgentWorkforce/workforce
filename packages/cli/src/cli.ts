@@ -1,9 +1,9 @@
 #!/usr/bin/env node
 import { spawn, spawnSync } from 'node:child_process';
 import { randomBytes } from 'node:crypto';
-import { rmSync } from 'node:fs';
+import { mkdirSync, rmSync, writeFileSync } from 'node:fs';
 import { constants, homedir } from 'node:os';
-import { join, resolve as resolvePath } from 'node:path';
+import { dirname, isAbsolute, join, resolve as resolvePath } from 'node:path';
 import { pathToFileURL } from 'node:url';
 
 import {
@@ -30,6 +30,7 @@ import {
   type InteractiveSpec
 } from '@agentworkforce/harness-kit';
 import { launchOnMount } from '@relayfile/local-mount';
+import ora, { type Ora } from 'ora';
 import { loadLocalPersonas, type PersonaSource } from './local-personas.js';
 
 const USAGE = `Usage: agent-workforce <command> [args...]
@@ -345,6 +346,55 @@ function sessionMountDir(sessionRoot: string): string {
   return join(sessionRoot, 'mount');
 }
 
+/**
+ * Remove every `--agent <id>` pair from a harness argv. Used on the non-mount
+ * opencode path where we cannot safely materialize the persona's
+ * opencode.json (it would land in the user's real repo), so we fall back to
+ * launching opencode without a persona-specific agent selection.
+ *
+ * Strips all occurrences rather than just the first — the current producer
+ * (harness-kit's opencode branch) emits exactly one pair, so both behaviors
+ * are equivalent today, but "remove all" is idempotent and safer if a future
+ * caller ever appends a second `--agent` for any reason. A trailing `--agent`
+ * with no following value is preserved so the malformed argv surfaces at the
+ * harness rather than getting silently swallowed here.
+ */
+export function stripAgentFlag(args: readonly string[]): string[] {
+  const out: string[] = [];
+  for (let i = 0; i < args.length; i += 1) {
+    if (args[i] === '--agent' && i + 1 < args.length) {
+      i += 1;
+      continue;
+    }
+    out.push(args[i]);
+  }
+  return out;
+}
+
+/**
+ * Validate that a configFile's relative path is safe to resolve under a
+ * sandbox/session directory. Rejects absolute paths and any segment equal to
+ * `..` so a malformed or adversarial persona cannot escape the mount via
+ * `join()` and overwrite files elsewhere. Called at materialization time so
+ * the failure surfaces with a clear path before any disk write happens.
+ */
+export function assertSafeRelativePath(relPath: string): void {
+  if (!relPath) {
+    throw new Error('configFile path must be a non-empty relative path');
+  }
+  if (isAbsolute(relPath)) {
+    throw new Error(
+      `configFile path must be relative; got absolute path ${JSON.stringify(relPath)}`
+    );
+  }
+  const segments = relPath.split(/[\\/]+/);
+  if (segments.some((s) => s === '..')) {
+    throw new Error(
+      `configFile path must not contain ".." segments; got ${JSON.stringify(relPath)}`
+    );
+  }
+}
+
 /** Patterns hidden from an interactive claude session when `--clean` is set.
  * Applied by `@relayfile/local-mount` with gitignore semantics, so bare names
  * match at any depth in the project tree (e.g. `.claude` hides both
@@ -485,6 +535,7 @@ async function runInteractive(
 
   const spec = buildInteractiveSpec({
     harness: runtime.harness,
+    personaId,
     model: runtime.model,
     systemPrompt: runtime.systemPrompt,
     mcpServers: resolvedMcp,
@@ -492,7 +543,29 @@ async function runInteractive(
     ...(installRoot !== undefined ? { pluginDirs: [installRoot] } : {})
   });
   for (const w of spec.warnings) process.stderr.write(`warning: ${w}\n`);
-  const finalArgs = spec.initialPrompt ? [...spec.args, spec.initialPrompt] : [...spec.args];
+
+  // Config-file materialization strategy:
+  //  - Mount path (opencode default, claude --clean): write each configFile
+  //    into the mount dir via onBeforeLaunch, so it lives only in the
+  //    sandbox and is torn down with the session.
+  //  - Non-mount path: today the only configFile producer is opencode
+  //    (opencode.json for the --agent wiring), and the non-mount opencode
+  //    path only engages under --install-in-repo. Writing opencode.json
+  //    into the user's real repo would pollute the working tree, so we
+  //    degrade: drop --agent from the argv, warn, and launch opencode with
+  //    its default agent. The persona's prompt will not be applied in that
+  //    mode; users who want it should drop --install-in-repo (the mount
+  //    default handles this cleanly).
+  const hasConfigFiles = spec.configFiles.length > 0;
+  const degradeConfigFiles = hasConfigFiles && !useClean;
+  let effectiveArgs: readonly string[] = spec.args;
+  if (degradeConfigFiles) {
+    process.stderr.write(
+      'warning: --install-in-repo cannot safely materialize the persona agent config (would write opencode.json into your repo); launching without --agent. Drop --install-in-repo to apply the persona prompt.\n'
+    );
+    effectiveArgs = stripAgentFlag(spec.args);
+  }
+  const finalArgs = spec.initialPrompt ? [...effectiveArgs, spec.initialPrompt] : [...effectiveArgs];
 
   // Print a sanitized summary rather than raw argv: spec.args for the claude
   // harness contains the resolved --mcp-config JSON and the full system
@@ -536,6 +609,16 @@ async function runInteractive(
       runtime.harness === 'claude'
         ? [...CLEAN_IGNORED_PATTERNS]
         : [...SKILL_INSTALL_IGNORED_PATTERNS];
+    // Anything we materialize into the mount via onBeforeLaunch must be
+    // hidden from the mount-mirror in both directions: without this, any
+    // opencode.json already present in the real repo would be copied into
+    // the mount (masking the per-session agent config we write), and the
+    // fresh write from onBeforeLaunch would sync back out on exit and
+    // pollute the user's working tree. Added dynamically so this stays
+    // generic for any future configFile producer.
+    for (const file of spec.configFiles) {
+      ignoredPatterns.push(file.path);
+    }
     process.stderr.write(`• sandbox mount → ${mountDir}\n`);
     // Three-stage SIGINT handler layered on top of launchOnMount's own signal
     // forwarding. launchOnMount catches the first SIGINT to kill the child
@@ -543,8 +626,12 @@ async function runInteractive(
     // both trees and can take several seconds on a large repo — during
     // which the terminal otherwise looks frozen.
     //
-    //   1st press  → announce "syncing…" so the user knows the pause is real.
-    //   2nd press  → abort `shutdownSignal`, which local-mount 0.5+ respects
+    //   1st press  → start an ora spinner so the pause is visibly live
+    //                (replaces the prior static print). onAfterSync below
+    //                transitions the spinner into a succeed/fail state once
+    //                relayfile reports the sync result.
+    //   2nd press  → update the spinner text to the "aborting" warning and
+    //                abort `shutdownSignal`, which local-mount 0.5+ respects
     //                by skipping autosync's draining reconcile and returning
     //                the partial count from the final syncBack. Cleanup
     //                still runs, so no leaked mount dir.
@@ -552,24 +639,32 @@ async function runInteractive(
     //                process.exit(130) in case the abort never resolves.
     const shutdownController = new AbortController();
     let sigintCount = 0;
+    let syncSpinner: Ora | undefined;
     const forceExitHandler = () => {
       sigintCount += 1;
       if (sigintCount === 1) {
-        process.stderr.write(
-          '\n⏳ Syncing session changes back to the repo… (press Ctrl-C again to skip sync)\n'
-        );
+        syncSpinner = ora({
+          text: 'Syncing session changes back to the repo… (Ctrl-C again to skip)',
+          stream: process.stderr
+        }).start();
         return;
       }
       if (sigintCount === 2) {
-        process.stderr.write(
-          '\n⚠ Aborting sync — partial changes will be propagated. (press Ctrl-C again to force quit)\n'
-        );
+        if (syncSpinner) {
+          syncSpinner.text =
+            'Aborting sync — partial changes will be propagated. (Ctrl-C again to force quit)';
+        }
         shutdownController.abort();
         return;
       }
-      process.stderr.write(
-        '\n✗ Force-quit: mount teardown skipped. Session dir may be left behind.\n'
-      );
+      if (syncSpinner) {
+        syncSpinner.fail('Force-quit: mount teardown skipped. Session dir may be left behind.');
+        syncSpinner = undefined;
+      } else {
+        process.stderr.write(
+          '\n✗ Force-quit: mount teardown skipped. Session dir may be left behind.\n'
+        );
+      }
       // Node-native removal rather than `rm -rf` so the emergency path
       // works on Windows too.
       try {
@@ -598,22 +693,57 @@ async function runInteractive(
         shutdownSignal: shutdownController.signal,
         // Report sync stats so the user sees confirmation rather than a
         // silent pause between the child exiting and the CLI returning.
+        //
+        // NOTE: `count` is bidirectional per relayfile's onAfterSync
+        // contract (see @relayfile/local-mount launch.d.ts) — it sums
+        // autosync activity in *both* directions (inbound project→mount
+        // and outbound mount→project, including deletes) plus the final
+        // mount→project syncBack. Phrasing this as "synced back to the
+        // repo" earlier misled sessions where inbound events dominated:
+        // a user who did no edits still saw "Synced 15 changes back"
+        // because ambient initial-mirror traffic counted. Phrase as "file
+        // events during session" so we don't overclaim direction.
         onAfterSync: (count) => {
-          if (count > 0) {
-            const qualifier = shutdownController.signal.aborted ? ' (partial)' : '';
-            process.stderr.write(`✓ Synced ${count} change(s) back to the repo${qualifier}.\n`);
+          const aborted = shutdownController.signal.aborted;
+          const qualifier = aborted ? ' (partial)' : '';
+          const message =
+            count > 0
+              ? `Session complete — ${count} file event${count === 1 ? '' : 's'} during session${qualifier}.`
+              : 'Session complete — no file events.';
+          if (syncSpinner) {
+            syncSpinner.succeed(message);
+            syncSpinner = undefined;
+          } else {
+            process.stderr.write(`✓ ${message}\n`);
           }
         },
-        ...(deferInstallToMount
+        ...(deferInstallToMount || hasConfigFiles
           ? {
               onBeforeLaunch: (dir: string) => {
-                runInstallOrThrow(install.command, installLabel, dir);
+                if (deferInstallToMount) {
+                  runInstallOrThrow(install.command, installLabel, dir);
+                }
+                for (const file of spec.configFiles) {
+                  assertSafeRelativePath(file.path);
+                  const target = join(dir, file.path);
+                  // mkdir -p for any subdirs in file.path — the
+                  // InteractiveConfigFile contract allows nested relative
+                  // paths, and writeFileSync would otherwise throw ENOENT.
+                  mkdirSync(dirname(target), { recursive: true });
+                  writeFileSync(target, file.contents, 'utf8');
+                }
               }
             }
           : {})
       });
       return result.exitCode;
     } catch (err) {
+      // If the spinner is still live when we error out, mark it failed so
+      // the pending animation doesn't hang around under the error message.
+      if (syncSpinner) {
+        syncSpinner.fail('Sync did not complete');
+        syncSpinner = undefined;
+      }
       // InstallCommandError carries the real install exit code — surfacing
       // it (rather than collapsing onto 127) lets callers distinguish a
       // failed `npx prpm install` from a missing harness binary.
@@ -631,6 +761,13 @@ async function runInteractive(
       process.stderr.write(`Failed to launch sandbox mount: ${e.message}\n`);
       return 1;
     } finally {
+      // Defensive: if neither onAfterSync nor the catch branch stopped the
+      // spinner (e.g. unexpected exit path), stop it cleanly here so the
+      // terminal is not left in spinner state.
+      if (syncSpinner) {
+        syncSpinner.stop();
+        syncSpinner = undefined;
+      }
       process.removeListener('SIGINT', forceExitHandler);
       // When the install ran inside the mount, its cleanup paths are
       // mount-relative (e.g. `.skills/<name>`, `skills/<name>`) and

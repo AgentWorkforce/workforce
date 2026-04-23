@@ -6,6 +6,7 @@ import { buildInteractiveSpec } from './harness.js';
 test('claude branch always emits --mcp-config + --strict-mcp-config', () => {
   const result = buildInteractiveSpec({
     harness: 'claude',
+    personaId: 'test-persona',
     model: 'claude-opus-4-6',
     systemPrompt: 'you are a test'
   });
@@ -26,6 +27,7 @@ test('claude branch always emits --mcp-config + --strict-mcp-config', () => {
 test('claude branch serializes resolved mcpServers into the --mcp-config payload', () => {
   const result = buildInteractiveSpec({
     harness: 'claude',
+    personaId: 'test-persona',
     model: 'claude-sonnet-4-6',
     systemPrompt: 'x',
     mcpServers: {
@@ -52,6 +54,7 @@ test('claude branch serializes resolved mcpServers into the --mcp-config payload
 test('claude branch translates permissions to flags', () => {
   const result = buildInteractiveSpec({
     harness: 'claude',
+    personaId: 'test-persona',
     model: 'claude-opus-4-6',
     systemPrompt: 'x',
     permissions: {
@@ -74,6 +77,7 @@ test('claude branch translates permissions to flags', () => {
 test('claude branch omits permission flags when unset or empty', () => {
   const result = buildInteractiveSpec({
     harness: 'claude',
+    personaId: 'test-persona',
     model: 'claude-opus-4-6',
     systemPrompt: 'x',
     permissions: { allow: [], deny: [] }
@@ -86,6 +90,7 @@ test('claude branch omits permission flags when unset or empty', () => {
 test('codex carries system prompt as initial positional; strips provider prefix from model', () => {
   const result = buildInteractiveSpec({
     harness: 'codex',
+    personaId: 'test-persona',
     model: 'openai-codex/gpt-5.3-codex',
     systemPrompt: 'system-directive'
   });
@@ -97,6 +102,7 @@ test('codex carries system prompt as initial positional; strips provider prefix 
 test('codex warns when mcpServers / permissions are declared', () => {
   const result = buildInteractiveSpec({
     harness: 'codex',
+    personaId: 'test-persona',
     model: 'openai-codex/gpt-5.3-codex',
     systemPrompt: 'x',
     mcpServers: { foo: { type: 'http', url: 'https://example.com' } },
@@ -107,22 +113,75 @@ test('codex warns when mcpServers / permissions are declared', () => {
   assert.match(result.warnings[1], /codex harness is not yet wired for runtime permission/);
 });
 
-test('opencode carries system prompt via --prompt flag (not as trailing positional cwd)', () => {
+test('opencode defines a per-persona agent in opencode.json and selects it with --agent', () => {
   const result = buildInteractiveSpec({
     harness: 'opencode',
+    personaId: 'test-persona',
     model: 'opencode/minimax-m2.5',
-    systemPrompt: 'x'
+    systemPrompt: 'you are a test'
   });
   assert.equal(result.bin, 'opencode');
-  assert.deepEqual(result.args, ['--model', 'minimax-m2.5', '--prompt', 'x']);
-  // initialPrompt must be null so the caller does not append systemPrompt as
-  // a trailing positional — opencode would interpret it as a project dir.
+  // No --prompt (that flag pre-fills the TUI input with the system prompt as
+  // a *user* message) and no bare -m (opencode's -m expects provider/model;
+  // earlier code stripped the provider and silently fell back to the default
+  // model). Model + system prompt now live in the emitted opencode.json,
+  // selected by persona id via --agent.
+  assert.deepEqual(result.args, ['--agent', 'test-persona']);
+  assert.ok(!result.args.includes('--prompt'));
+  assert.ok(!result.args.includes('--model'));
+  assert.ok(!result.args.includes('-m'));
   assert.equal(result.initialPrompt, null);
+});
+
+test('opencode configFiles carries a well-formed opencode.json with the agent definition', () => {
+  const result = buildInteractiveSpec({
+    harness: 'opencode',
+    personaId: 'test-persona',
+    model: 'opencode/minimax-m2.5',
+    systemPrompt: 'you are a test'
+  });
+  assert.equal(result.configFiles.length, 1);
+  const [file] = result.configFiles;
+  assert.equal(file.path, 'opencode.json');
+  const parsed = JSON.parse(file.contents);
+  assert.deepEqual(parsed, {
+    agent: {
+      'test-persona': {
+        model: 'opencode/minimax-m2.5',
+        prompt: 'you are a test',
+        mode: 'primary',
+        // Wildcard-allow across opencode's tool set — matches the built-in
+        // `build` agent. Without this, opencode's restrictive default kept
+        // agents from making any edits and autosync had nothing to
+        // propagate on exit.
+        permission: 'allow'
+      }
+    }
+  });
+});
+
+test('claude and codex emit an empty configFiles array', () => {
+  const claude = buildInteractiveSpec({
+    harness: 'claude',
+    personaId: 'test-persona',
+    model: 'claude-opus-4-6',
+    systemPrompt: 'x'
+  });
+  assert.deepEqual(claude.configFiles, []);
+
+  const codex = buildInteractiveSpec({
+    harness: 'codex',
+    personaId: 'test-persona',
+    model: 'openai-codex/gpt-5.3-codex',
+    systemPrompt: 'x'
+  });
+  assert.deepEqual(codex.configFiles, []);
 });
 
 test('claude branch appends --plugin-dir per entry in pluginDirs', () => {
   const result = buildInteractiveSpec({
     harness: 'claude',
+    personaId: 'test-persona',
     model: 'claude-opus-4-6',
     systemPrompt: 'x',
     pluginDirs: ['/tmp/session-a/claude/plugin', '/tmp/session-b/claude/plugin']
@@ -141,12 +200,14 @@ test('claude branch appends --plugin-dir per entry in pluginDirs', () => {
 test('claude branch omits --plugin-dir when pluginDirs is empty or absent', () => {
   const withEmpty = buildInteractiveSpec({
     harness: 'claude',
+    personaId: 'test-persona',
     model: 'claude-opus-4-6',
     systemPrompt: 'x',
     pluginDirs: []
   });
   const without = buildInteractiveSpec({
     harness: 'claude',
+    personaId: 'test-persona',
     model: 'claude-opus-4-6',
     systemPrompt: 'x'
   });
@@ -157,6 +218,7 @@ test('claude branch omits --plugin-dir when pluginDirs is empty or absent', () =
 test('non-claude harnesses warn and ignore pluginDirs', () => {
   const codex = buildInteractiveSpec({
     harness: 'codex',
+    personaId: 'test-persona',
     model: 'x',
     systemPrompt: 'x',
     pluginDirs: ['/tmp/session/plugin']
@@ -166,6 +228,7 @@ test('non-claude harnesses warn and ignore pluginDirs', () => {
 
   const opencode = buildInteractiveSpec({
     harness: 'opencode',
+    personaId: 'test-persona',
     model: 'x',
     systemPrompt: 'x',
     pluginDirs: ['/tmp/session/plugin']
@@ -179,6 +242,7 @@ test('warnings are returned, not printed — library consumers route I/O themsel
   // test would leak output into the test runner. We just assert the shape.
   const result = buildInteractiveSpec({
     harness: 'codex',
+    personaId: 'test-persona',
     model: 'x',
     systemPrompt: 'x',
     mcpServers: { a: { type: 'http', url: 'https://x' } }
