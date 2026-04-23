@@ -4,9 +4,11 @@ import assert from 'node:assert/strict';
 import {
   CLEAN_IGNORED_PATTERNS,
   SKILL_INSTALL_IGNORED_PATTERNS,
+  assertSafeRelativePath,
   decideCleanMode,
   parseAgentArgs,
-  resolveSystemPromptPlaceholders
+  resolveSystemPromptPlaceholders,
+  stripAgentFlag
 } from './cli.js';
 
 // The conflict-detection path inside parseAgentArgs uses the module-local
@@ -142,6 +144,63 @@ test('decideCleanMode: opencode defaults to mount (skills would otherwise land i
 test('decideCleanMode: opencode + --install-in-repo → no mount', () => {
   assert.deepEqual(decideCleanMode('opencode', false, true), { useClean: false });
   assert.deepEqual(decideCleanMode('opencode', true, true), { useClean: false });
+});
+
+test('stripAgentFlag: removes --agent <name> pair preserving surrounding args', () => {
+  // Degrade path: when the CLI cannot materialize opencode.json (non-mount
+  // --install-in-repo), it strips the --agent selector so opencode launches
+  // with its default agent rather than failing to resolve the unknown one.
+  assert.deepEqual(
+    stripAgentFlag(['--agent', 'persona-maker']),
+    []
+  );
+  assert.deepEqual(
+    stripAgentFlag(['--foo', '--agent', 'persona-maker', '--bar']),
+    ['--foo', '--bar']
+  );
+  assert.deepEqual(
+    stripAgentFlag(['--keep-me']),
+    ['--keep-me']
+  );
+});
+
+test('stripAgentFlag: trailing --agent without a value is preserved (caller decides)', () => {
+  // Defensive: don't swallow an argv that looks malformed — let the harness
+  // reject it so the bug surfaces instead of getting silently stripped.
+  assert.deepEqual(stripAgentFlag(['--agent']), ['--agent']);
+});
+
+test('stripAgentFlag: removes every --agent pair, not just the first', () => {
+  // Current producer emits exactly one pair, so behavior is equivalent
+  // today, but "strip all" is idempotent and safer if a future caller ever
+  // appends a second --agent for any reason.
+  assert.deepEqual(
+    stripAgentFlag(['--agent', 'a', '--agent', 'b']),
+    []
+  );
+  assert.deepEqual(
+    stripAgentFlag(['--before', '--agent', 'a', '--mid', '--agent', 'b', '--after']),
+    ['--before', '--mid', '--after']
+  );
+});
+
+test('assertSafeRelativePath: accepts typical relative paths', () => {
+  // Sanity: representative safe paths the opencode + future harnesses emit.
+  assert.doesNotThrow(() => assertSafeRelativePath('opencode.json'));
+  assert.doesNotThrow(() => assertSafeRelativePath('.opencode/config.json'));
+  assert.doesNotThrow(() => assertSafeRelativePath('nested/dir/file.json'));
+});
+
+test('assertSafeRelativePath: rejects empty, absolute, and path-traversal inputs', () => {
+  // Guards materialization against a malformed or adversarial persona trying
+  // to escape the mount via `join(dir, path)` and overwrite files outside
+  // the sandbox. Failure must surface with a clear message BEFORE any
+  // writeFileSync runs.
+  assert.throws(() => assertSafeRelativePath(''), /non-empty/);
+  assert.throws(() => assertSafeRelativePath('/etc/passwd'), /absolute/);
+  assert.throws(() => assertSafeRelativePath('../escape.json'), /\.\./);
+  assert.throws(() => assertSafeRelativePath('ok/../escape.json'), /\.\./);
+  assert.throws(() => assertSafeRelativePath('a/../../b.json'), /\.\./);
 });
 
 test('decideCleanMode: claude + clean → engaged', () => {

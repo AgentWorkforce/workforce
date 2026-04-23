@@ -1,9 +1,9 @@
 #!/usr/bin/env node
 import { spawn, spawnSync } from 'node:child_process';
 import { randomBytes } from 'node:crypto';
-import { rmSync } from 'node:fs';
+import { mkdirSync, rmSync, writeFileSync } from 'node:fs';
 import { constants, homedir } from 'node:os';
-import { join, resolve as resolvePath } from 'node:path';
+import { dirname, isAbsolute, join, resolve as resolvePath } from 'node:path';
 import { pathToFileURL } from 'node:url';
 
 import {
@@ -345,6 +345,55 @@ function sessionMountDir(sessionRoot: string): string {
   return join(sessionRoot, 'mount');
 }
 
+/**
+ * Remove every `--agent <id>` pair from a harness argv. Used on the non-mount
+ * opencode path where we cannot safely materialize the persona's
+ * opencode.json (it would land in the user's real repo), so we fall back to
+ * launching opencode without a persona-specific agent selection.
+ *
+ * Strips all occurrences rather than just the first — the current producer
+ * (harness-kit's opencode branch) emits exactly one pair, so both behaviors
+ * are equivalent today, but "remove all" is idempotent and safer if a future
+ * caller ever appends a second `--agent` for any reason. A trailing `--agent`
+ * with no following value is preserved so the malformed argv surfaces at the
+ * harness rather than getting silently swallowed here.
+ */
+export function stripAgentFlag(args: readonly string[]): string[] {
+  const out: string[] = [];
+  for (let i = 0; i < args.length; i += 1) {
+    if (args[i] === '--agent' && i + 1 < args.length) {
+      i += 1;
+      continue;
+    }
+    out.push(args[i]);
+  }
+  return out;
+}
+
+/**
+ * Validate that a configFile's relative path is safe to resolve under a
+ * sandbox/session directory. Rejects absolute paths and any segment equal to
+ * `..` so a malformed or adversarial persona cannot escape the mount via
+ * `join()` and overwrite files elsewhere. Called at materialization time so
+ * the failure surfaces with a clear path before any disk write happens.
+ */
+export function assertSafeRelativePath(relPath: string): void {
+  if (!relPath) {
+    throw new Error('configFile path must be a non-empty relative path');
+  }
+  if (isAbsolute(relPath)) {
+    throw new Error(
+      `configFile path must be relative; got absolute path ${JSON.stringify(relPath)}`
+    );
+  }
+  const segments = relPath.split(/[\\/]+/);
+  if (segments.some((s) => s === '..')) {
+    throw new Error(
+      `configFile path must not contain ".." segments; got ${JSON.stringify(relPath)}`
+    );
+  }
+}
+
 /** Patterns hidden from an interactive claude session when `--clean` is set.
  * Applied by `@relayfile/local-mount` with gitignore semantics, so bare names
  * match at any depth in the project tree (e.g. `.claude` hides both
@@ -485,6 +534,7 @@ async function runInteractive(
 
   const spec = buildInteractiveSpec({
     harness: runtime.harness,
+    personaId,
     model: runtime.model,
     systemPrompt: runtime.systemPrompt,
     mcpServers: resolvedMcp,
@@ -492,7 +542,29 @@ async function runInteractive(
     ...(installRoot !== undefined ? { pluginDirs: [installRoot] } : {})
   });
   for (const w of spec.warnings) process.stderr.write(`warning: ${w}\n`);
-  const finalArgs = spec.initialPrompt ? [...spec.args, spec.initialPrompt] : [...spec.args];
+
+  // Config-file materialization strategy:
+  //  - Mount path (opencode default, claude --clean): write each configFile
+  //    into the mount dir via onBeforeLaunch, so it lives only in the
+  //    sandbox and is torn down with the session.
+  //  - Non-mount path: today the only configFile producer is opencode
+  //    (opencode.json for the --agent wiring), and the non-mount opencode
+  //    path only engages under --install-in-repo. Writing opencode.json
+  //    into the user's real repo would pollute the working tree, so we
+  //    degrade: drop --agent from the argv, warn, and launch opencode with
+  //    its default agent. The persona's prompt will not be applied in that
+  //    mode; users who want it should drop --install-in-repo (the mount
+  //    default handles this cleanly).
+  const hasConfigFiles = spec.configFiles.length > 0;
+  const degradeConfigFiles = hasConfigFiles && !useClean;
+  let effectiveArgs: readonly string[] = spec.args;
+  if (degradeConfigFiles) {
+    process.stderr.write(
+      'warning: --install-in-repo cannot safely materialize the persona agent config (would write opencode.json into your repo); launching without --agent. Drop --install-in-repo to apply the persona prompt.\n'
+    );
+    effectiveArgs = stripAgentFlag(spec.args);
+  }
+  const finalArgs = spec.initialPrompt ? [...effectiveArgs, spec.initialPrompt] : [...effectiveArgs];
 
   // Print a sanitized summary rather than raw argv: spec.args for the claude
   // harness contains the resolved --mcp-config JSON and the full system
@@ -536,6 +608,16 @@ async function runInteractive(
       runtime.harness === 'claude'
         ? [...CLEAN_IGNORED_PATTERNS]
         : [...SKILL_INSTALL_IGNORED_PATTERNS];
+    // Anything we materialize into the mount via onBeforeLaunch must be
+    // hidden from the mount-mirror in both directions: without this, any
+    // opencode.json already present in the real repo would be copied into
+    // the mount (masking the per-session agent config we write), and the
+    // fresh write from onBeforeLaunch would sync back out on exit and
+    // pollute the user's working tree. Added dynamically so this stays
+    // generic for any future configFile producer.
+    for (const file of spec.configFiles) {
+      ignoredPatterns.push(file.path);
+    }
     process.stderr.write(`• sandbox mount → ${mountDir}\n`);
     // Three-stage SIGINT handler layered on top of launchOnMount's own signal
     // forwarding. launchOnMount catches the first SIGINT to kill the child
@@ -604,10 +686,21 @@ async function runInteractive(
             process.stderr.write(`✓ Synced ${count} change(s) back to the repo${qualifier}.\n`);
           }
         },
-        ...(deferInstallToMount
+        ...(deferInstallToMount || hasConfigFiles
           ? {
               onBeforeLaunch: (dir: string) => {
-                runInstallOrThrow(install.command, installLabel, dir);
+                if (deferInstallToMount) {
+                  runInstallOrThrow(install.command, installLabel, dir);
+                }
+                for (const file of spec.configFiles) {
+                  assertSafeRelativePath(file.path);
+                  const target = join(dir, file.path);
+                  // mkdir -p for any subdirs in file.path — the
+                  // InteractiveConfigFile contract allows nested relative
+                  // paths, and writeFileSync would otherwise throw ENOENT.
+                  mkdirSync(dirname(target), { recursive: true });
+                  writeFileSync(target, file.contents, 'utf8');
+                }
               }
             }
           : {})
