@@ -123,6 +123,10 @@ test('resolves review from custom routing profile rule', () => {
       posthog: {
         tier: 'best-value',
         rationale: 'analytics lookups via MCP'
+      },
+      'persona-authoring': {
+        tier: 'best-value',
+        rationale: 'scaffolding a persona is mechanical wiring work'
       }
     }
   });
@@ -222,6 +226,15 @@ test('resolves newly added personas from the default routing profile', () => {
   assert.equal(opencodeWorkflow.personaId, 'opencode-workflow-specialist');
   assert.equal(opencodeWorkflow.tier, 'best');
   assert.equal(opencodeWorkflow.runtime.harness, 'codex');
+});
+
+test('resolves persona-maker from the default routing profile', () => {
+  const maker = resolvePersona('persona-authoring');
+  assert.equal(maker.personaId, 'persona-maker');
+  assert.equal(maker.tier, 'best');
+  assert.equal(maker.runtime.harness, 'codex');
+  assert.equal(maker.skills.length, 1);
+  assert.equal(maker.skills[0].id, 'skill.sh/find-skills');
 });
 
 test('claude is a recognized harness value', () => {

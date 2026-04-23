@@ -82,6 +82,10 @@
     "posthog": {
       "tier": "best-value",
       "rationale": "PostHog queries are interactive analytics lookups; best-value is sufficient and keeps latency low when chatting with the MCP server."
+    },
+    "persona-authoring": {
+      "tier": "best",
+      "rationale": "New personas must satisfy a fixed conventions checklist (five wiring files, model-agnostic prompts, tier-isolation) before they typecheck; missing any step ships a broken routing entry, so depth over speed is the right default."
     }
   }
 }
