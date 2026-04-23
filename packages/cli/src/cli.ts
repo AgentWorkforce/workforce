@@ -1,9 +1,9 @@
 #!/usr/bin/env node
 import { spawn, spawnSync } from 'node:child_process';
 import { randomBytes } from 'node:crypto';
-import { rmSync, writeFileSync } from 'node:fs';
+import { mkdirSync, rmSync, writeFileSync } from 'node:fs';
 import { constants, homedir } from 'node:os';
-import { join, resolve as resolvePath } from 'node:path';
+import { dirname, isAbsolute, join, resolve as resolvePath } from 'node:path';
 import { pathToFileURL } from 'node:url';
 
 import {
@@ -346,10 +346,17 @@ function sessionMountDir(sessionRoot: string): string {
 }
 
 /**
- * Remove a single `--agent <id>` pair from a harness argv. Used on the
- * non-mount opencode path where we cannot safely materialize the persona's
+ * Remove every `--agent <id>` pair from a harness argv. Used on the non-mount
+ * opencode path where we cannot safely materialize the persona's
  * opencode.json (it would land in the user's real repo), so we fall back to
  * launching opencode without a persona-specific agent selection.
+ *
+ * Strips all occurrences rather than just the first — the current producer
+ * (harness-kit's opencode branch) emits exactly one pair, so both behaviors
+ * are equivalent today, but "remove all" is idempotent and safer if a future
+ * caller ever appends a second `--agent` for any reason. A trailing `--agent`
+ * with no following value is preserved so the malformed argv surfaces at the
+ * harness rather than getting silently swallowed here.
  */
 export function stripAgentFlag(args: readonly string[]): string[] {
   const out: string[] = [];
@@ -361,6 +368,30 @@ export function stripAgentFlag(args: readonly string[]): string[] {
     out.push(args[i]);
   }
   return out;
+}
+
+/**
+ * Validate that a configFile's relative path is safe to resolve under a
+ * sandbox/session directory. Rejects absolute paths and any segment equal to
+ * `..` so a malformed or adversarial persona cannot escape the mount via
+ * `join()` and overwrite files elsewhere. Called at materialization time so
+ * the failure surfaces with a clear path before any disk write happens.
+ */
+export function assertSafeRelativePath(relPath: string): void {
+  if (!relPath) {
+    throw new Error('configFile path must be a non-empty relative path');
+  }
+  if (isAbsolute(relPath)) {
+    throw new Error(
+      `configFile path must be relative; got absolute path ${JSON.stringify(relPath)}`
+    );
+  }
+  const segments = relPath.split(/[\\/]+/);
+  if (segments.some((s) => s === '..')) {
+    throw new Error(
+      `configFile path must not contain ".." segments; got ${JSON.stringify(relPath)}`
+    );
+  }
 }
 
 /** Patterns hidden from an interactive claude session when `--clean` is set.
@@ -662,7 +693,13 @@ async function runInteractive(
                   runInstallOrThrow(install.command, installLabel, dir);
                 }
                 for (const file of spec.configFiles) {
-                  writeFileSync(join(dir, file.path), file.contents, 'utf8');
+                  assertSafeRelativePath(file.path);
+                  const target = join(dir, file.path);
+                  // mkdir -p for any subdirs in file.path — the
+                  // InteractiveConfigFile contract allows nested relative
+                  // paths, and writeFileSync would otherwise throw ENOENT.
+                  mkdirSync(dirname(target), { recursive: true });
+                  writeFileSync(target, file.contents, 'utf8');
                 }
               }
             }

@@ -4,6 +4,7 @@ import assert from 'node:assert/strict';
 import {
   CLEAN_IGNORED_PATTERNS,
   SKILL_INSTALL_IGNORED_PATTERNS,
+  assertSafeRelativePath,
   decideCleanMode,
   parseAgentArgs,
   resolveSystemPromptPlaceholders,
@@ -167,6 +168,39 @@ test('stripAgentFlag: trailing --agent without a value is preserved (caller deci
   // Defensive: don't swallow an argv that looks malformed — let the harness
   // reject it so the bug surfaces instead of getting silently stripped.
   assert.deepEqual(stripAgentFlag(['--agent']), ['--agent']);
+});
+
+test('stripAgentFlag: removes every --agent pair, not just the first', () => {
+  // Current producer emits exactly one pair, so behavior is equivalent
+  // today, but "strip all" is idempotent and safer if a future caller ever
+  // appends a second --agent for any reason.
+  assert.deepEqual(
+    stripAgentFlag(['--agent', 'a', '--agent', 'b']),
+    []
+  );
+  assert.deepEqual(
+    stripAgentFlag(['--before', '--agent', 'a', '--mid', '--agent', 'b', '--after']),
+    ['--before', '--mid', '--after']
+  );
+});
+
+test('assertSafeRelativePath: accepts typical relative paths', () => {
+  // Sanity: representative safe paths the opencode + future harnesses emit.
+  assert.doesNotThrow(() => assertSafeRelativePath('opencode.json'));
+  assert.doesNotThrow(() => assertSafeRelativePath('.opencode/config.json'));
+  assert.doesNotThrow(() => assertSafeRelativePath('nested/dir/file.json'));
+});
+
+test('assertSafeRelativePath: rejects empty, absolute, and path-traversal inputs', () => {
+  // Guards materialization against a malformed or adversarial persona trying
+  // to escape the mount via `join(dir, path)` and overwrite files outside
+  // the sandbox. Failure must surface with a clear message BEFORE any
+  // writeFileSync runs.
+  assert.throws(() => assertSafeRelativePath(''), /non-empty/);
+  assert.throws(() => assertSafeRelativePath('/etc/passwd'), /absolute/);
+  assert.throws(() => assertSafeRelativePath('../escape.json'), /\.\./);
+  assert.throws(() => assertSafeRelativePath('ok/../escape.json'), /\.\./);
+  assert.throws(() => assertSafeRelativePath('a/../../b.json'), /\.\./);
 });
 
 test('decideCleanMode: claude + clean → engaged', () => {

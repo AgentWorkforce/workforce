@@ -91,11 +91,16 @@ function hasAnyPermission(p: PersonaPermissions | undefined): boolean {
  * codex has no dedicated system-prompt flag today — callers append it as
  * the final positional `[PROMPT]`.
  *
- * The opencode branch uses opencode's own `--prompt` flag (wired directly
- * into `args`) and returns `initialPrompt: null`. The earlier behavior of
- * appending the prompt as a trailing positional was unsafe: `opencode`'s
- * bare form treats a trailing positional as a project directory, which
- * caused the TUI to fail with "Failed to change directory to …".
+ * The opencode branch routes model + system prompt through opencode's
+ * agent abstraction (see https://opencode.ai/config.json: `agent.<id>.{
+ * model, prompt, mode }`). It emits an `opencode.json` via `configFiles`
+ * for the caller to materialize at cwd, and selects it with `--agent
+ * <personaId>`. It deliberately does NOT use `--prompt` (that flag
+ * pre-fills the TUI input with a user message) or bare `-m` (opencode
+ * expects full `provider/model` form and silently falls back to its
+ * default when given a stripped model name). `initialPrompt` is `null`
+ * so callers do not append a trailing positional, which opencode would
+ * otherwise interpret as a project directory.
  *
  * Both codex and opencode emit a warning if the persona declares
  * `mcpServers` or `permissions` — those features aren't wired for those
@@ -210,6 +215,14 @@ export function buildInteractiveSpec(input: BuildInteractiveSpecInput): Interact
           }
         ]
       };
+    }
+    default: {
+      // Exhaustiveness guard: if `Harness` gains a new variant, this
+      // assertion will fail to compile and force the maintainer to handle
+      // the new case above rather than silently dropping into an untyped
+      // fallthrough at runtime.
+      const _exhaustive: never = harness;
+      throw new Error(`Unhandled harness: ${String(_exhaustive)}`);
     }
   }
 }
