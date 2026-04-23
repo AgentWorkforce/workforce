@@ -19,6 +19,7 @@ export {
 export {
   buildInteractiveSpec,
   type BuildInteractiveSpecInput,
+  type InteractiveConfigFile,
   type InteractiveSpec
 } from './harness.js';
 
