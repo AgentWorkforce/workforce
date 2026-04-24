@@ -198,6 +198,7 @@ for the full mount layout and semantics.
 - `personas/npm-provenance-publisher.json`
 - `personas/posthog.json`
 - `personas/persona-maker.json`
+- `personas/anti-slop-auditor.json`
 
 ## Routing profiles
 

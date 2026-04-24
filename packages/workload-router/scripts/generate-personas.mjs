@@ -30,7 +30,8 @@ const exportNameMap = new Map([
   ['agent-relay-e2e-conductor', 'agentRelayE2eConductor'],
   ['capability-discoverer', 'capabilityDiscoverer'],
   ['posthog', 'posthogAgent'],
-  ['persona-maker', 'personaMaker']
+  ['persona-maker', 'personaMaker'],
+  ['anti-slop-auditor', 'antiSlopAuditor']
 ]);
 
 async function generate() {
