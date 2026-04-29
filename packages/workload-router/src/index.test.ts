@@ -120,6 +120,10 @@ test('resolves review from custom routing profile rule', () => {
         tier: 'best-value',
         rationale: 'lightweight discovery work'
       },
+      'npm-package-compat': {
+        tier: 'best-value',
+        rationale: 'mechanical package.json audits'
+      },
       posthog: {
         tier: 'best-value',
         rationale: 'analytics lookups via MCP'
@@ -131,6 +135,26 @@ test('resolves review from custom routing profile rule', () => {
       'slop-audit': {
         tier: 'minimum',
         rationale: 'quick slop sweep is enough here'
+      },
+      'api-contract-review': {
+        tier: 'best',
+        rationale: 'breaking-change classification has high blast radius'
+      },
+      'local-stack-orchestration': {
+        tier: 'best-value',
+        rationale: 'compose wiring is mechanical given the topology'
+      },
+      'e2e-validation': {
+        tier: 'best',
+        rationale: 'hop-by-hop validation is the last line of defense'
+      },
+      'write-integration-tests': {
+        tier: 'best-value',
+        rationale: 'integration test template is well-defined'
+      },
+      'agent-relay-workflow': {
+        tier: 'best-value',
+        rationale: 'workflow orchestration uses balanced reasoning'
       }
     }
   });
@@ -138,6 +162,14 @@ test('resolves review from custom routing profile rule', () => {
   assert.equal(result.personaId, 'code-reviewer');
   assert.equal(result.tier, 'minimum');
   assert.equal(result.runtime.harness, 'opencode');
+});
+
+test('resolves npm-package-compat to npm-package-bundler-guard from default routing profile', () => {
+  const result = resolvePersona('npm-package-compat');
+  assert.equal(result.personaId, 'npm-package-bundler-guard');
+  assert.equal(result.tier, 'best-value');
+  assert.equal(result.runtime.harness, 'claude');
+  assert.match(result.rationale, /balanced-default/);
 });
 
 test('legacy tier override remains available via resolvePersonaByTier', () => {
@@ -232,14 +264,16 @@ test('resolves newly added personas from the default routing profile', () => {
   assert.equal(opencodeWorkflow.runtime.harness, 'codex');
 });
 
-test('resolves persona-maker from the default routing profile', () => {
-  const maker = resolvePersona('persona-authoring');
-  assert.equal(maker.personaId, 'persona-maker');
-  assert.equal(maker.tier, 'best');
-  assert.equal(maker.runtime.harness, 'codex');
-  assert.equal(maker.skills.length, 1);
-  assert.equal(maker.skills[0].id, 'skill.sh/find-skills');
+test('resolves agent-relay-workflow persona from the default routing profile', () => {
+  const maker = resolvePersona('agent-relay-workflow');
+  assert.equal(maker.personaId, 'agent-relay-workflow');
+  assert.equal(maker.tier, 'best-value');
+  assert.equal(maker.runtime.harness, 'opencode');
+  assert.equal(maker.skills.length, 3);
+  assert.equal(maker.skills[0].id, 'skill.sh/writing-agent-relay-workflows');
 });
+
+// removed: writing-agent-relay-workflows persona renamed to agent-relay-workflow
 
 test('resolves anti-slop-auditor with the jscpd skill.sh skill attached', () => {
   const auditor = resolvePersona('slop-audit');

@@ -3,93 +3,33 @@
   "id": "balanced-default",
   "description": "Default routing policy balancing depth/latency and cost while keeping a fixed quality bar.",
   "intents": {
-    "implement-frontend": {
-      "tier": "best-value",
-      "rationale": "Most frontend tasks are iterative and benefit from strong quality-per-dollar defaults."
-    },
-    "review": {
-      "tier": "best-value",
-      "rationale": "Code review usually needs careful reasoning without always requiring max-cost models."
-    },
-    "architecture-plan": {
-      "tier": "best",
-      "rationale": "Architecture decisions are high leverage; prioritize depth and stronger reasoning."
-    },
-    "requirements-analysis": {
-      "tier": "best-value",
-      "rationale": "Most scope clarification work benefits from careful synthesis without needing the slowest tier by default."
-    },
-    "debugging": {
-      "tier": "best",
-      "rationale": "Root-cause debugging is expensive when wrong; default to deeper reasoning and stronger verification."
-    },
-    "security-review": {
-      "tier": "best",
-      "rationale": "Security review has asymmetric downside; favor deeper analysis on default policy."
-    },
-    "documentation": {
-      "tier": "best-value",
-      "rationale": "Most docs work benefits from solid code-grounded synthesis without always needing the top tier."
-    },
-    "verification": {
-      "tier": "best-value",
-      "rationale": "Completion checks need disciplined evidence review, but usually not the most expensive model."
-    },
-    "test-strategy": {
-      "tier": "best-value",
-      "rationale": "Test planning benefits from strong reasoning, but usually does not require the slowest or most expensive tier."
-    },
-    "tdd-enforcement": {
-      "tier": "best-value",
-      "rationale": "TDD coaching needs reliable process enforcement and concise feedback more than maximum-depth output."
-    },
-    "flake-investigation": {
-      "tier": "best",
-      "rationale": "Intermittent failures are expensive and subtle; prioritize deeper reasoning for reproduction and root-cause analysis."
-    },
-    "opencode-workflow-correctness": {
-      "tier": "best",
-      "rationale": "Cross-layer opencode workflow failures are expensive to misdiagnose; default to the deepest tier for end-to-end reproduction and root-cause analysis."
-    },
-    "npm-provenance": {
-      "tier": "best-value",
-      "rationale": "Publishing setup is mostly mechanical workflow configuration; best-value is sufficient when guided by the prpm/npm-trusted-publishing skill."
-    },
-    "cloud-sandbox-infra": {
-      "tier": "best",
-      "rationale": "Cloud infrastructure changes (sandbox provisioning, credential handling, session durability) have high blast radius; prioritize deeper reasoning and thorough verification."
-    },
-    "sage-slack-egress-migration": {
-      "tier": "best-value",
-      "rationale": "Slack egress migration work is mostly mechanical integration plumbing, so best-value is the default tradeoff."
-    },
-    "sage-proactive-rewire": {
-      "tier": "best-value",
-      "rationale": "Proactive rewiring is configuration-heavy coordination work that usually does not need the highest-cost tier by default."
-    },
-    "cloud-slack-proxy-guard": {
-      "tier": "best-value",
-      "rationale": "Proxy guard updates are typically policy and wiring checks, so best-value is a sensible default tier."
-    },
-    "sage-cloud-e2e-conduction": {
-      "tier": "best-value",
-      "rationale": "End-to-end conduction is orchestration-heavy work where strong reasoning is useful without requiring the top tier by default."
-    },
-    "capability-discovery": {
-      "tier": "best-value",
-      "rationale": "Searching skill.sh and prpm.dev for existing skills, agents, and hooks is lightweight research; the balanced default is sufficient when guided by the skill.sh/find-skills and @prpm/self-improving skills."
-    },
-    "posthog": {
-      "tier": "best-value",
-      "rationale": "PostHog queries are interactive analytics lookups; best-value is sufficient and keeps latency low when chatting with the MCP server."
-    },
-    "persona-authoring": {
-      "tier": "best",
-      "rationale": "New personas must satisfy a fixed conventions checklist (five wiring files, model-agnostic prompts, tier-isolation) before they typecheck; missing any step ships a broken routing entry, so depth over speed is the right default."
-    },
-    "slop-audit": {
-      "tier": "best",
-      "rationale": "Slop auditing reads across a diff or subtree and classifies findings into a multi-category taxonomy; missed slop ships unchanged, so depth over speed is the right default."
-    }
+    "implement-frontend": {"tier": "best-value", "rationale": "Most frontend tasks are iterative and benefit from strong quality-per-dollar defaults."},
+    "review": {"tier": "best-value", "rationale": "Code review usually needs careful reasoning without always requiring max-cost models."},
+    "architecture-plan": {"tier": "best", "rationale": "Architecture decisions are high leverage; prioritize depth and stronger reasoning."},
+    "requirements-analysis": {"tier": "best-value", "rationale": "Most scope clarification work benefits from careful synthesis without needing the slowest tier by default."},
+    "debugging": {"tier": "best", "rationale": "Root-cause debugging is expensive when wrong; default to deeper reasoning and stronger verification."},
+    "security-review": {"tier": "best", "rationale": "Security review has asymmetric downside; favor deeper analysis on default policy."},
+    "documentation": {"tier": "best-value", "rationale": "Most docs work benefits from solid code-grounded synthesis without always needing the top tier."},
+    "verification": {"tier": "best-value", "rationale": "Completion checks need disciplined evidence review, but usually not the most expensive model."},
+    "test-strategy": {"tier": "best-value", "rationale": "Test planning benefits from strong reasoning, but usually does not require the slowest or most expensive tier."},
+    "tdd-enforcement": {"tier": "best-value", "rationale": "TDD coaching needs reliable process enforcement and concise feedback more than maximum-depth output."},
+    "flake-investigation": {"tier": "best", "rationale": "Intermittent failures are expensive and subtle; prioritize deeper reasoning for reproduction and root-cause analysis."},
+    "opencode-workflow-correctness": {"tier": "best", "rationale": "Cross-layer opencode workflow failures are expensive to misdiagnose; default to the deepest tier for end-to-end reproduction and root-cause analysis."},
+    "npm-provenance": {"tier": "best-value", "rationale": "Publishing setup is mostly mechanical workflow configuration; best-value is sufficient when guided by the prpm/npm-trusted-publishing skill."},
+    "cloud-sandbox-infra": {"tier": "best", "rationale": "Cloud infrastructure changes (sandbox provisioning, credential handling, session durability) have high blast radius; prioritize deeper reasoning and thorough verification."},
+    "sage-slack-egress-migration": {"tier": "best-value", "rationale": "Slack egress migration work is mostly mechanical integration plumbing, so best-value is the default tradeoff."},
+    "sage-proactive-rewire": {"tier": "best-value", "rationale": "Proactive rewiring is configuration-heavy coordination work that usually does not need the highest-cost tier by default."},
+    "cloud-slack-proxy-guard": {"tier": "best-value", "rationale": "Proxy guard updates are typically policy and wiring checks, so best-value is a sensible default tier."},
+    "sage-cloud-e2e-conduction": {"tier": "best-value", "rationale": "End-to-end conduction is orchestration-heavy work where strong reasoning is useful without requiring the top tier by default."},
+    "capability-discovery": {"tier": "best-value", "rationale": "Searching skill.sh and prpm.dev for existing skills, agents, and hooks is lightweight research; the balanced default is sufficient when guided by the skill.sh/find-skills and @prpm/self-improving skills."},
+    "npm-package-compat": {"tier": "best-value", "rationale": "Package.json audits are mostly mechanical checks against known rules; best-value provides sufficient reasoning for catching misconfigurations."},
+    "posthog": {"tier": "best-value", "rationale": "PostHog queries are interactive analytics lookups; best-value is sufficient and keeps latency low when chatting with the MCP server."},
+    "persona-authoring": {"tier": "best", "rationale": "New personas must satisfy a fixed conventions checklist (five wiring files, model-agnostic prompts, tier-isolation) before they typecheck; missing any step ships a broken routing entry, so depth over speed is the right default."},
+    "slop-audit": {"tier": "best", "rationale": "Slop auditing reads across a diff or subtree and classifies findings into a multi-category taxonomy; missed slop ships unchanged, so depth over speed is the right default."},
+    "api-contract-review": {"tier": "best", "rationale": "Contract review catches silent breaking changes between deployed services; missing a discriminant collision or enum widening ships incidents, so depth over speed is the right default."},
+    "local-stack-orchestration": {"tier": "best-value", "rationale": "Compose authoring is mostly mechanical wiring once the topology is known; best-value is sufficient when guided by explicit healthcheck and pinning rules."},
+    "e2e-validation": {"tier": "best", "rationale": "End-to-end validation is the last line of defense before merge; missing a hop-level divergence ships broken behavior, so depth over speed is the right default."},
+    "write-integration-tests": {"tier": "best-value", "rationale": "Integration test authoring follows a fixed template (real substitute, wire-shape assertions, failure modes); best-value reasoning is sufficient when guided by the template."},
+    "agent-relay-workflow": {"tier": "best-value", "rationale": "new agent-relay-workflow capability requiring balanced reasoning and tooling"}
   }
 }

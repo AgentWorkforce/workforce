@@ -10,7 +10,7 @@
     "intents": {
       "type": "object",
       "additionalProperties": false,
-      "required": ["implement-frontend", "review", "architecture-plan", "requirements-analysis", "debugging", "security-review", "documentation", "verification", "test-strategy", "tdd-enforcement", "flake-investigation", "opencode-workflow-correctness", "npm-provenance", "cloud-sandbox-infra"],
+      "required": ["implement-frontend", "review", "architecture-plan", "requirements-analysis", "debugging", "security-review", "documentation", "verification", "test-strategy", "tdd-enforcement", "flake-investigation", "opencode-workflow-correctness", "npm-provenance", "cloud-sandbox-infra", "sage-slack-egress-migration", "sage-proactive-rewire", "cloud-slack-proxy-guard", "sage-cloud-e2e-conduction", "capability-discovery", "npm-package-compat", "posthog", "persona-authoring", "agent-relay-workflow", "slop-audit", "api-contract-review", "local-stack-orchestration", "e2e-validation", "write-integration-tests"],
       "properties": {
         "implement-frontend": { "$ref": "#/definitions/rule" },
         "review": { "$ref": "#/definitions/rule" },
@@ -25,7 +25,21 @@
         "flake-investigation": { "$ref": "#/definitions/rule" },
         "opencode-workflow-correctness": { "$ref": "#/definitions/rule" },
         "npm-provenance": { "$ref": "#/definitions/rule" },
-        "cloud-sandbox-infra": { "$ref": "#/definitions/rule" }
+        "cloud-sandbox-infra": { "$ref": "#/definitions/rule" },
+        "sage-slack-egress-migration": { "$ref": "#/definitions/rule" },
+        "sage-proactive-rewire": { "$ref": "#/definitions/rule" },
+        "cloud-slack-proxy-guard": { "$ref": "#/definitions/rule" },
+        "sage-cloud-e2e-conduction": { "$ref": "#/definitions/rule" },
+        "capability-discovery": { "$ref": "#/definitions/rule" },
+        "npm-package-compat": { "$ref": "#/definitions/rule" },
+        "posthog": { "$ref": "#/definitions/rule" },
+        "persona-authoring": { "$ref": "#/definitions/rule" },
+        "agent-relay-workflow": { "$ref": "#/definitions/rule" },
+        "slop-audit": { "$ref": "#/definitions/rule" },
+        "api-contract-review": { "$ref": "#/definitions/rule" },
+        "local-stack-orchestration": { "$ref": "#/definitions/rule" },
+        "e2e-validation": { "$ref": "#/definitions/rule" },
+        "write-integration-tests": { "$ref": "#/definitions/rule" }
       }
     }
   },

@@ -193,6 +193,7 @@ for the full mount layout and semantics.
 
 ## Personas
 
+- `personas/agent-relay-workflow.json`
 - `personas/frontend-implementer.json`
 - `personas/code-reviewer.json`
 - `personas/architecture-planner.json`
@@ -209,6 +210,11 @@ for the full mount layout and semantics.
 - `personas/posthog.json`
 - `personas/persona-maker.json`
 - `personas/anti-slop-auditor.json`
+- `personas/api-contract-reviewer.json`
+- `personas/docker-stack-wrangler.json`
+- `personas/e2e-validator.json`
+- `personas/integration-test-author.json`
+- `personas/npm-package-bundler-guard.json`
 
 ## Routing profiles
 
