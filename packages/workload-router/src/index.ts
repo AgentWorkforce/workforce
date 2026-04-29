@@ -2,7 +2,7 @@ import { spawn } from 'node:child_process';
 import { createHash } from 'node:crypto';
 import { resolve as resolvePath } from 'node:path';
 import type { RunnerStepExecutor, WorkflowRunRow } from '@agent-relay/sdk/workflows';
-import { frontendImplementer, codeReviewer, architecturePlanner, requirementsAnalyst, debuggerPersona, securityReviewer, technicalWriter, verifierPersona, testStrategist, tddGuard, flakeHunter, opencodeWorkflowSpecialist, npmProvenancePublisher, cloudSandboxInfra, sageSlackEgressMigrator, sageProactiveRewirer, cloudSlackProxyGuard, agentRelayE2eConductor, capabilityDiscoverer, npmPackageBundlerGuard, posthogAgent, personaMaker, antiSlopAuditor } from './generated/personas.js';
+import { frontendImplementer, codeReviewer, architecturePlanner, requirementsAnalyst, debuggerPersona, securityReviewer, technicalWriter, verifierPersona, testStrategist, tddGuard, flakeHunter, opencodeWorkflowSpecialist, npmProvenancePublisher, cloudSandboxInfra, sageSlackEgressMigrator, sageProactiveRewirer, cloudSlackProxyGuard, agentRelayE2eConductor, capabilityDiscoverer, npmPackageBundlerGuard, posthogAgent, personaMaker, antiSlopAuditor, apiContractReviewer, dockerStackWrangler, e2eValidator, integrationTestAuthor, agentRelayWorkflow } from './generated/personas.js';
 import defaultRoutingProfileJson from '../routing-profiles/default.json' with { type: 'json' };
 
 export const HARNESS_VALUES = ['opencode', 'codex', 'claude'] as const;
@@ -41,7 +41,12 @@ export const PERSONA_INTENTS = [
   'npm-package-compat',
   'posthog',
   'persona-authoring',
-  'slop-audit'
+  'agent-relay-workflow',
+  'slop-audit',
+  'api-contract-review',
+  'local-stack-orchestration',
+  'e2e-validation',
+  'write-integration-tests'
 ] as const;
 
 export type Harness = (typeof HARNESS_VALUES)[number];
@@ -1498,7 +1503,12 @@ export const personaCatalog: Record<PersonaIntent, PersonaSpec> = {
   'npm-package-compat': parsePersonaSpec(npmPackageBundlerGuard, 'npm-package-compat'),
   posthog: parsePersonaSpec(posthogAgent, 'posthog'),
   'persona-authoring': parsePersonaSpec(personaMaker, 'persona-authoring'),
-  'slop-audit': parsePersonaSpec(antiSlopAuditor, 'slop-audit')
+  'agent-relay-workflow': parsePersonaSpec(agentRelayWorkflow, 'agent-relay-workflow'),
+  'slop-audit': parsePersonaSpec(antiSlopAuditor, 'slop-audit'),
+  'api-contract-review': parsePersonaSpec(apiContractReviewer, 'api-contract-review'),
+  'local-stack-orchestration': parsePersonaSpec(dockerStackWrangler, 'local-stack-orchestration'),
+  'e2e-validation': parsePersonaSpec(e2eValidator, 'e2e-validation'),
+  'write-integration-tests': parsePersonaSpec(integrationTestAuthor, 'write-integration-tests')
 };
 
 export const routingProfiles = {
