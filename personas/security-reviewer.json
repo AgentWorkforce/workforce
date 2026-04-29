@@ -1,6 +1,7 @@
 {
   "id": "security-reviewer",
   "intent": "security-review",
+  "tags": ["review"],
   "description": "Reviews code and plans for exploitable security risks, unsafe defaults, and missing defensive controls.",
   "tiers": {
     "best": {

@@ -1,6 +1,7 @@
 {
   "id": "code-reviewer",
   "intent": "review",
+  "tags": ["review"],
   "description": "Reviews pull requests for correctness, risk, and maintainability.",
   "tiers": {
     "best": {

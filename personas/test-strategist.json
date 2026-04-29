@@ -1,6 +1,7 @@
 {
   "id": "test-strategist",
   "intent": "test-strategy",
+  "tags": ["testing"],
   "description": "Designs pragmatic test plans, risk-ranked coverage, and the smallest test set that buys confidence.",
   "tiers": {
     "best": {

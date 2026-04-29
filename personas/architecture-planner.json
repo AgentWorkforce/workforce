@@ -1,6 +1,7 @@
 {
   "id": "architecture-planner",
   "intent": "architecture-plan",
+  "tags": ["planning"],
   "description": "Produces architecture plans, tradeoffs, and migration paths.",
   "tiers": {
     "best": {

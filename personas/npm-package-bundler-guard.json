@@ -1,6 +1,7 @@
 {
   "id": "npm-package-bundler-guard",
   "intent": "npm-package-compat",
+  "tags": ["review", "release"],
   "description": "Ensures npm packages are correctly configured for consumption by bundlers (Turbopack, webpack, esbuild, Rollup). Catches exports-field misconfigurations, missing dist in files, raw TypeScript in published packages, and barrel re-export chains that break tree-shaking or bundle-time resolution.",
   "tiers": {
     "best": {

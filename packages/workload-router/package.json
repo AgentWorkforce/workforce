@@ -1,6 +1,6 @@
 {
   "name": "@agentworkforce/workload-router",
-  "version": "0.3.0",
+  "version": "0.4.0",
   "private": false,
   "type": "module",
   "main": "dist/index.js",
@@ -15,6 +15,7 @@
     "dist",
     "routing-profiles",
     "README.md",
+    "CHANGELOG.md",
     "package.json"
   ],
   "dependencies": {
@@ -30,6 +31,7 @@
   "scripts": {
     "generate:personas": "node ./scripts/generate-personas.mjs",
     "build": "npm run generate:personas && tsc -p tsconfig.json",
+    "dev": "node ./scripts/dev-watch.mjs",
     "typecheck": "tsc -p tsconfig.json --noEmit",
     "test": "npm run generate:personas && tsc -p tsconfig.json && node --test dist/index.test.js",
     "lint": "npm run generate:personas && tsc -p tsconfig.json --noEmit"

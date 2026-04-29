@@ -1,6 +1,7 @@
 {
   "id": "capability-discoverer",
   "intent": "capability-discovery",
+  "tags": ["discovery"],
   "description": "Finds existing skills, agents, and hooks for a project by searching both the skills.sh ecosystem and prpm.dev instead of hand-rolling new logic. Picks the best fit across providers and emits the exact install command.",
   "skills": [
     {

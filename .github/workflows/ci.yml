@@ -32,6 +32,12 @@ jobs:
       - name: Install deps
         run: pnpm install --frozen-lockfile
 
+      # Build first so downstream packages can resolve `@agentworkforce/*`
+      # types from the built `dist/` — the CLI's typecheck/lint depend on
+      # the router's emitted .d.ts files.
+      - name: Build
+        run: pnpm -r run build
+
       - name: Lint
         run: pnpm run lint
 

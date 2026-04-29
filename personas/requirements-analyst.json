@@ -1,6 +1,7 @@
 {
   "id": "requirements-analyst",
   "intent": "requirements-analysis",
+  "tags": ["planning"],
   "description": "Turns rough feature ideas into explicit acceptance criteria, edge cases, and open questions before planning or coding begins.",
   "tiers": {
     "best": {

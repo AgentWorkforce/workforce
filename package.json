@@ -11,6 +11,8 @@
   },
   "scripts": {
     "build": "corepack pnpm -r build",
+    "dev": "corepack pnpm -r build && corepack pnpm -r --parallel --stream run dev",
+    "dev:cli": "node packages/cli/dist/cli.js",
     "typecheck": "corepack pnpm -r typecheck && corepack pnpm run typecheck:examples",
     "typecheck:examples": "tsc -p examples/tsconfig.json --noEmit",
     "test": "corepack pnpm -r test",

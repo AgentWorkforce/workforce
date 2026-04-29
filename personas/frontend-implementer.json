@@ -1,6 +1,7 @@
 {
   "id": "frontend-implementer",
   "intent": "implement-frontend",
+  "tags": ["implementation"],
   "description": "Implements frontend UI features with strong UX and maintainable code.",
   "tiers": {
     "best": {

@@ -2,11 +2,22 @@ import { spawn } from 'node:child_process';
 import { createHash } from 'node:crypto';
 import { resolve as resolvePath } from 'node:path';
 import type { RunnerStepExecutor, WorkflowRunRow } from '@agent-relay/sdk/workflows';
-import { frontendImplementer, codeReviewer, architecturePlanner, requirementsAnalyst, debuggerPersona, securityReviewer, technicalWriter, verifierPersona, testStrategist, tddGuard, flakeHunter, opencodeWorkflowSpecialist, npmProvenancePublisher, cloudSandboxInfra, sageSlackEgressMigrator, sageProactiveRewirer, cloudSlackProxyGuard, agentRelayE2eConductor, capabilityDiscoverer, npmPackageBundlerGuard } from './generated/personas.js';
+import { frontendImplementer, codeReviewer, architecturePlanner, requirementsAnalyst, debuggerPersona, securityReviewer, technicalWriter, verifierPersona, testStrategist, tddGuard, flakeHunter, opencodeWorkflowSpecialist, npmProvenancePublisher, cloudSandboxInfra, sageSlackEgressMigrator, sageProactiveRewirer, cloudSlackProxyGuard, agentRelayE2eConductor, capabilityDiscoverer, npmPackageBundlerGuard, posthogAgent, personaMaker, antiSlopAuditor } from './generated/personas.js';
 import defaultRoutingProfileJson from '../routing-profiles/default.json' with { type: 'json' };
 
 export const HARNESS_VALUES = ['opencode', 'codex', 'claude'] as const;
 export const PERSONA_TIERS = ['best', 'best-value', 'minimum'] as const;
+export const PERSONA_TAGS = [
+  'planning',
+  'implementation',
+  'review',
+  'testing',
+  'debugging',
+  'documentation',
+  'release',
+  'discovery',
+  'analytics'
+] as const;
 export const PERSONA_INTENTS = [
   'implement-frontend',
   'review',
@@ -27,12 +38,16 @@ export const PERSONA_INTENTS = [
   'cloud-slack-proxy-guard',
   'sage-cloud-e2e-conduction',
   'capability-discovery',
-  'npm-package-compat'
+  'npm-package-compat',
+  'posthog',
+  'persona-authoring',
+  'slop-audit'
 ] as const;
 
 export type Harness = (typeof HARNESS_VALUES)[number];
 export type PersonaTier = (typeof PERSONA_TIERS)[number];
 export type PersonaIntent = (typeof PERSONA_INTENTS)[number];
+export type PersonaTag = (typeof PERSONA_TAGS)[number];
 
 export interface HarnessSettings {
   reasoning: 'low' | 'medium' | 'high';
@@ -57,12 +72,79 @@ export interface PersonaSkill {
   description: string;
 }
 
+export const PERMISSION_MODES = [
+  'default',
+  'acceptEdits',
+  'bypassPermissions',
+  'plan'
+] as const;
+export type PermissionMode = (typeof PERMISSION_MODES)[number];
+
+/**
+ * Persona-level permission policy for the harness session. Translates to the
+ * harness's native allow/deny/mode flags at spawn time. Tool-pattern syntax is
+ * passed through verbatim — `"mcp__posthog"` to allow every posthog MCP tool,
+ * `"mcp__posthog__projects-get"` for a specific one, `"Bash(git *)"` for a
+ * shell pattern. See the target harness's docs for the exact grammar.
+ */
+export interface PersonaPermissions {
+  /** Tool names/patterns to auto-approve. */
+  allow?: string[];
+  /** Tool names/patterns to always block. */
+  deny?: string[];
+  /** Permission mode for the session. */
+  mode?: PermissionMode;
+}
+
+/**
+ * MCP server config, structured to match Claude Code's `--mcp-config` JSON
+ * verbatim so the whole object can be passed through untouched. Values inside
+ * `headers` / `env` / `args` / `url` / `command` may be literal strings or
+ * `$VAR` / `${VAR}` references. Resolution happens in the runner/CLI at spawn
+ * time — this package only defines the shape, not the interpolation policy.
+ */
+export type McpServerSpec =
+  | {
+      type: 'http' | 'sse';
+      url: string;
+      headers?: Record<string, string>;
+    }
+  | {
+      type: 'stdio';
+      command: string;
+      args?: string[];
+      env?: Record<string, string>;
+    };
+
 export interface PersonaSpec {
   id: string;
   intent: PersonaIntent;
+  /**
+   * Free-form classification labels (from {@link PERSONA_TAGS}). Every persona
+   * has at least one; a persona may carry multiple tags when it spans concerns
+   * (e.g. `['testing', 'implementation']`).
+   */
+  tags: PersonaTag[];
   description: string;
   skills: PersonaSkill[];
   tiers: Record<PersonaTier, PersonaRuntime>;
+  /**
+   * Environment variables injected into the harness child process.
+   * Values may be literal strings or `$VAR` references resolved from the
+   * caller's environment at spawn time.
+   */
+  env?: Record<string, string>;
+  /**
+   * MCP servers to attach to the harness session. Only wired for `claude`
+   * today (via `--mcp-config`); other harnesses warn and skip.
+   */
+  mcpServers?: Record<string, McpServerSpec>;
+  /**
+   * Permission policy (allow/deny lists, mode) for the harness session.
+   * Only wired for `claude` today (via `--allowedTools`, `--disallowedTools`,
+   * `--permission-mode`); other harnesses warn and skip.
+   */
+  permissions?: PersonaPermissions;
 }
 
 export interface RoutingProfileRule {
@@ -82,6 +164,9 @@ export interface PersonaSelection {
   runtime: PersonaRuntime;
   skills: PersonaSkill[];
   rationale: string;
+  env?: Record<string, string>;
+  mcpServers?: Record<string, McpServerSpec>;
+  permissions?: PersonaPermissions;
 }
 
 // ---------------------------------------------------------------------------
@@ -118,6 +203,25 @@ export const HARNESS_SKILL_TARGETS: Record<Harness, HarnessSkillTarget> = {
   opencode: { asFlag: 'opencode', dir: '.skills' }
 };
 
+/**
+ * Options for {@link materializeSkills} / {@link materializeSkillsFor}.
+ *
+ * `installRoot` stages skills under an out-of-repo directory (typically
+ * `~/.agent-workforce/sessions/<id>/claude/plugin`) that doubles as a Claude
+ * Code plugin root. The SDK generates the scaffold (`.claude-plugin/plugin.json`
+ * and a `skills` symlink pointing at `.claude/skills/`), prpm installs into
+ * `<installRoot>/.claude/skills/<name>/`, and post-run cleanup removes the
+ * entire `installRoot` in one `rm -rf` — no files ever touch the repo.
+ *
+ * Only honored for `harness === 'claude'`. Passing `installRoot` with another
+ * harness throws. The caller must supply an absolute path; when the generated
+ * install command runs, it `mkdir -p`s `installRoot` and any missing parents
+ * needed for the scaffold (`.claude-plugin/`, `.claude/skills/`).
+ */
+export interface SkillMaterializationOptions {
+  installRoot?: string;
+}
+
 export interface SkillInstall {
   skillId: string;
   /** Original `source` string from the persona JSON. */
@@ -144,6 +248,13 @@ export interface SkillInstall {
 export interface SkillMaterializationPlan {
   harness: Harness;
   installs: SkillInstall[];
+  /**
+   * Absolute path to the out-of-repo stage directory, when the plan was
+   * produced with {@link SkillMaterializationOptions.installRoot}. When set,
+   * the install artifacts emit plugin scaffolding at this root and cleanup
+   * removes the whole directory instead of individual skill paths.
+   */
+  sessionInstallRoot?: string;
 }
 
 export interface PersonaInstallContext {
@@ -545,26 +656,56 @@ function providerFor(kind: SkillSourceKind): SkillProvider {
  */
 export function materializeSkills(
   skills: readonly PersonaSkill[],
-  harness: Harness
+  harness: Harness,
+  options: SkillMaterializationOptions = {}
 ): SkillMaterializationPlan {
   const target = HARNESS_SKILL_TARGETS[harness];
   if (!target) {
     throw new Error(`No skill install target configured for harness: ${harness}`);
   }
+  const { installRoot } = options;
+  if (installRoot !== undefined && harness !== 'claude') {
+    throw new Error(
+      `installRoot is only supported for the claude harness (got: ${harness}). ` +
+        `codex and opencode still install into the harness's conventional repo-relative directory.`
+    );
+  }
 
   const installs = skills.map((skill): SkillInstall => {
     const resolved = resolveSkillSource(skill.source);
     const provider = providerFor(resolved.kind);
-    const installCommand = provider.buildInstallCommand(resolved, harness);
-    const cleanupPaths = provider.cleanupPaths(resolved, harness);
+    const baseCommand = provider.buildInstallCommand(resolved, harness);
+    // In session-install-root mode, the install runs `cd <installRoot> && <prpm>`
+    // so that prpm's harness-relative dirs (`.claude/skills/<name>`) land
+    // inside the stage dir instead of the user's repo. The per-install command
+    // stays self-contained so callers who run a single install.installCommand
+    // directly still get the correct placement.
+    const installCommand =
+      installRoot !== undefined
+        ? (Object.freeze([
+            'sh',
+            '-c',
+            `cd ${shellEscape(installRoot)} && ${commandToShellString(baseCommand)}`
+          ]) as readonly string[])
+        : baseCommand;
     // For prompt-injection fallback we still want a single canonical manifest
     // path. prpm installs into the harness target dir; skill.sh installs into
     // its universal `.agents/skills` dir regardless of harness, so key off
     // whichever cleanup path ends in the installed name.
-    const installedDir =
+    const repoRelativeDir =
       resolved.kind === 'skill.sh'
         ? `.agents/skills/${resolved.installedName}`
         : `${target.dir}/${resolved.installedName}`;
+    const installedDir =
+      installRoot !== undefined ? `${installRoot}/${repoRelativeDir}` : repoRelativeDir;
+    // When the plan stages into `installRoot`, cleanup targets the whole
+    // session dir (handled at plan level in buildCleanupArtifacts). Leave
+    // per-skill cleanupPaths empty so Mode B callers running individual
+    // install.cleanupPaths don't accidentally remove unrelated things.
+    const cleanupPaths =
+      installRoot !== undefined
+        ? (Object.freeze([]) as readonly string[])
+        : provider.cleanupPaths(resolved, harness);
     return {
       skillId: skill.id,
       source: skill.source,
@@ -578,15 +719,22 @@ export function materializeSkills(
     };
   });
 
-  return { harness, installs };
+  return {
+    harness,
+    installs,
+    ...(installRoot !== undefined ? { sessionInstallRoot: installRoot } : {})
+  };
 }
 
 /**
  * Convenience wrapper: derive the install plan directly from a resolved
  * persona selection, using its tier's harness automatically.
  */
-export function materializeSkillsFor(selection: PersonaSelection): SkillMaterializationPlan {
-  return materializeSkills(selection.skills, selection.runtime.harness);
+export function materializeSkillsFor(
+  selection: PersonaSelection,
+  options: SkillMaterializationOptions = {}
+): SkillMaterializationPlan {
+  return materializeSkills(selection.skills, selection.runtime.harness, options);
 }
 
 function shellEscape(value: string): string {
@@ -600,15 +748,81 @@ function commandToShellString(command: readonly string[]): string {
   return command.map(shellEscape).join(' ');
 }
 
+/**
+ * Minimal Claude Code plugin manifest written to `<root>/.claude-plugin/plugin.json`
+ * in session-install-root mode. Claude's plugin loader treats any directory
+ * that contains this file (alongside a `skills/` tree) as a plugin; we pass
+ * the root to `claude --plugin-dir <root>` so the session sees exactly the
+ * skills we staged — and nothing the repo happens to carry.
+ */
+const SESSION_PLUGIN_MANIFEST = JSON.stringify({
+  name: 'agent-workforce-session',
+  version: '0.0.0',
+  description: 'Ephemeral skills staged by agent-workforce for this session.'
+});
+
+function buildSessionScaffoldCommand(root: string): string {
+  const q = shellEscape(root);
+  // mkdir -p creates both the plugin metadata dir and the prpm target.
+  // `ln -sfn .claude/skills skills` makes Claude's expected plugin layout
+  // (`<root>/skills/<name>/SKILL.md`) resolve to prpm's actual output
+  // (`<root>/.claude/skills/<name>/SKILL.md`) without moving any files.
+  // The -n guards against following into an existing `skills/` dir (e.g.
+  // when the session dir is reused), and -f replaces a prior symlink so
+  // the scaffold is idempotent.
+  return [
+    `mkdir -p ${q}/.claude-plugin ${q}/.claude/skills`,
+    `ln -sfn .claude/skills ${q}/skills`,
+    `printf '%s' ${shellEscape(SESSION_PLUGIN_MANIFEST)} > ${q}/.claude-plugin/plugin.json`
+  ].join(' && ');
+}
+
 function buildInstallArtifacts(plan: SkillMaterializationPlan): {
   installCommand: readonly string[];
   installCommandString: string;
 } {
-  const installCommandString =
-    plan.installs.length === 0
-      ? ':'
-      : plan.installs.map((install) => commandToShellString(install.installCommand)).join(' && ');
+  if (plan.sessionInstallRoot !== undefined) {
+    // Session mode always stages a plugin dir so the caller can pass
+    // `--plugin-dir <root>` to claude unconditionally. Even for personas
+    // with zero skills, we emit the scaffold (mkdir + manifest + symlink)
+    // so the `--plugin-dir` target exists.
+    const root = plan.sessionInstallRoot;
+    const scaffold = buildSessionScaffoldCommand(root);
+    if (plan.installs.length === 0) {
+      return {
+        installCommand: Object.freeze(['sh', '-c', scaffold]) as readonly string[],
+        installCommandString: scaffold
+      };
+    }
+    // Chain the raw provider commands after a single `cd <root>` so we emit
+    // one shell invocation instead of repeating the cd per skill. Each
+    // install.installCommand is already self-contained (`sh -c 'cd <root> &&
+    // …'`) for callers who want to run one at a time, but here we flatten
+    // to the underlying prpm argv for a cleaner chain.
+    const perSkill = plan.installs
+      .map((install) => {
+        const resolved = resolveSkillSource(install.source);
+        const provider = providerFor(resolved.kind);
+        return commandToShellString(provider.buildInstallCommand(resolved, plan.harness));
+      })
+      .join(' && ');
+    const installCommandString = `${scaffold} && cd ${shellEscape(root)} && ${perSkill}`;
+    return {
+      installCommand: Object.freeze(['sh', '-c', installCommandString]) as readonly string[],
+      installCommandString
+    };
+  }
 
+  if (plan.installs.length === 0) {
+    return {
+      installCommand: Object.freeze(['sh', '-c', ':']) as readonly string[],
+      installCommandString: ':'
+    };
+  }
+
+  const installCommandString = plan.installs
+    .map((install) => commandToShellString(install.installCommand))
+    .join(' && ');
   return {
     installCommand: Object.freeze(['sh', '-c', installCommandString]) as readonly string[],
     installCommandString
@@ -628,6 +842,17 @@ function buildCleanupArtifacts(plan: SkillMaterializationPlan): {
   cleanupCommand: readonly string[];
   cleanupCommandString: string;
 } {
+  // Session mode: cleanup is the whole stage dir. The scaffold always runs
+  // (even for zero-skill personas), so cleanup unconditionally drops the
+  // stage dir. The CLI is responsible for removing the enclosing session
+  // root; this command covers the install subtree.
+  if (plan.sessionInstallRoot !== undefined) {
+    const cleanupCommandString = `rm -rf ${shellEscape(plan.sessionInstallRoot)}`;
+    return {
+      cleanupCommand: Object.freeze(['sh', '-c', cleanupCommandString]) as readonly string[],
+      cleanupCommandString
+    };
+  }
   const allPaths = plan.installs.flatMap((install) => [...install.cleanupPaths]);
   const cleanupCommandString =
     allPaths.length === 0 ? ':' : `rm -rf ${allPaths.map(shellEscape).join(' ')}`;
@@ -973,6 +1198,26 @@ function isIntent(value: unknown): value is PersonaIntent {
   return typeof value === 'string' && PERSONA_INTENTS.includes(value as PersonaIntent);
 }
 
+function isTag(value: unknown): value is PersonaTag {
+  return typeof value === 'string' && PERSONA_TAGS.includes(value as PersonaTag);
+}
+
+function parseTags(value: unknown, context: string): PersonaTag[] {
+  if (!Array.isArray(value) || value.length === 0) {
+    throw new Error(`${context} must be a non-empty array of tags`);
+  }
+  const out: PersonaTag[] = [];
+  for (const [idx, entry] of value.entries()) {
+    if (!isTag(entry)) {
+      throw new Error(
+        `${context}[${idx}] must be one of: ${PERSONA_TAGS.join(', ')}`
+      );
+    }
+    if (!out.includes(entry)) out.push(entry);
+  }
+  return out;
+}
+
 function parseRuntime(value: unknown, context: string): PersonaRuntime {
   if (!isObject(value)) {
     throw new Error(`${context} must be an object`);
@@ -1044,7 +1289,7 @@ function parsePersonaSpec(value: unknown, expectedIntent: PersonaIntent): Person
     throw new Error(`persona[${expectedIntent}] must be an object`);
   }
 
-  const { id, intent, description, tiers, skills } = value;
+  const { id, intent, tags, description, tiers, skills, env, mcpServers, permissions } = value;
 
   if (typeof id !== 'string' || !id.trim()) {
     throw new Error(`persona[${expectedIntent}].id must be a non-empty string`);
@@ -1055,6 +1300,7 @@ function parsePersonaSpec(value: unknown, expectedIntent: PersonaIntent): Person
   if (intent !== expectedIntent) {
     throw new Error(`persona[${expectedIntent}] intent mismatch: got ${intent}`);
   }
+  const parsedTags = parseTags(tags, `persona[${expectedIntent}].tags`);
   if (typeof description !== 'string' || !description.trim()) {
     throw new Error(`persona[${expectedIntent}].description must be a non-empty string`);
   }
@@ -1068,14 +1314,117 @@ function parsePersonaSpec(value: unknown, expectedIntent: PersonaIntent): Person
   }
 
   const parsedSkills = parseSkills(skills, `persona[${expectedIntent}].skills`);
+  const parsedEnv = parseStringMap(env, `persona[${expectedIntent}].env`);
+  const parsedMcpServers = parseMcpServers(mcpServers, `persona[${expectedIntent}].mcpServers`);
+  const parsedPermissions = parsePermissions(
+    permissions,
+    `persona[${expectedIntent}].permissions`
+  );
 
   return {
     id,
     intent,
+    tags: parsedTags,
     description,
     skills: parsedSkills,
-    tiers: parsedTiers
+    tiers: parsedTiers,
+    ...(parsedEnv ? { env: parsedEnv } : {}),
+    ...(parsedMcpServers ? { mcpServers: parsedMcpServers } : {}),
+    ...(parsedPermissions ? { permissions: parsedPermissions } : {})
   };
+}
+
+function parsePermissions(
+  value: unknown,
+  context: string
+): PersonaPermissions | undefined {
+  if (value === undefined) return undefined;
+  if (!isObject(value)) {
+    throw new Error(`${context} must be an object if provided`);
+  }
+  const out: PersonaPermissions = {};
+  const { allow, deny, mode } = value;
+  if (allow !== undefined) {
+    if (!Array.isArray(allow) || allow.some((s) => typeof s !== 'string' || !s.trim())) {
+      throw new Error(`${context}.allow must be an array of non-empty strings`);
+    }
+    out.allow = allow as string[];
+  }
+  if (deny !== undefined) {
+    if (!Array.isArray(deny) || deny.some((s) => typeof s !== 'string' || !s.trim())) {
+      throw new Error(`${context}.deny must be an array of non-empty strings`);
+    }
+    out.deny = deny as string[];
+  }
+  if (mode !== undefined) {
+    if (!PERMISSION_MODES.includes(mode as PermissionMode)) {
+      throw new Error(
+        `${context}.mode must be one of: ${PERMISSION_MODES.join(', ')}`
+      );
+    }
+    out.mode = mode as PermissionMode;
+  }
+  return Object.keys(out).length > 0 ? out : undefined;
+}
+
+function parseStringMap(
+  value: unknown,
+  context: string
+): Record<string, string> | undefined {
+  if (value === undefined) return undefined;
+  if (!isObject(value)) {
+    throw new Error(`${context} must be an object if provided`);
+  }
+  const out: Record<string, string> = {};
+  for (const [key, v] of Object.entries(value)) {
+    if (typeof v !== 'string') {
+      throw new Error(`${context}.${key} must be a string`);
+    }
+    out[key] = v;
+  }
+  return out;
+}
+
+function parseMcpServers(
+  value: unknown,
+  context: string
+): Record<string, McpServerSpec> | undefined {
+  if (value === undefined) return undefined;
+  if (!isObject(value)) {
+    throw new Error(`${context} must be an object if provided`);
+  }
+  const out: Record<string, McpServerSpec> = {};
+  for (const [name, raw] of Object.entries(value)) {
+    if (!isObject(raw)) {
+      throw new Error(`${context}.${name} must be an object`);
+    }
+    const type = raw.type;
+    if (type === 'http' || type === 'sse') {
+      if (typeof raw.url !== 'string' || !raw.url.trim()) {
+        throw new Error(`${context}.${name}.url must be a non-empty string for type=${type}`);
+      }
+      const headers = parseStringMap(raw.headers, `${context}.${name}.headers`);
+      out[name] = { type, url: raw.url, ...(headers ? { headers } : {}) };
+    } else if (type === 'stdio') {
+      if (typeof raw.command !== 'string' || !raw.command.trim()) {
+        throw new Error(`${context}.${name}.command must be a non-empty string for type=stdio`);
+      }
+      const args = raw.args;
+      if (args !== undefined && (!Array.isArray(args) || args.some((a) => typeof a !== 'string'))) {
+        throw new Error(`${context}.${name}.args must be an array of strings`);
+      }
+      const env = parseStringMap(raw.env, `${context}.${name}.env`);
+      out[name] = {
+        type: 'stdio',
+        command: raw.command,
+        ...(args ? { args: args as string[] } : {}),
+        ...(env ? { env } : {})
+      };
+    } else {
+      throw new Error(`${context}.${name}.type must be one of: http, sse, stdio`);
+    }
+  }
+  return out;
 }
 
 function parseRoutingProfile(value: unknown, context: string): RoutingProfile {
@@ -1146,7 +1495,10 @@ export const personaCatalog: Record<PersonaIntent, PersonaSpec> = {
     'sage-cloud-e2e-conduction'
   ),
   'capability-discovery': parsePersonaSpec(capabilityDiscoverer, 'capability-discovery'),
-  'npm-package-compat': parsePersonaSpec(npmPackageBundlerGuard, 'npm-package-compat')
+  'npm-package-compat': parsePersonaSpec(npmPackageBundlerGuard, 'npm-package-compat'),
+  posthog: parsePersonaSpec(posthogAgent, 'posthog'),
+  'persona-authoring': parsePersonaSpec(personaMaker, 'persona-authoring'),
+  'slop-audit': parsePersonaSpec(antiSlopAuditor, 'slop-audit')
 };
 
 export const routingProfiles = {
@@ -1165,7 +1517,10 @@ export function resolvePersona(intent: PersonaIntent, profile: RoutingProfile | 
     tier: rule.tier,
     runtime: spec.tiers[rule.tier],
     skills: spec.skills,
-    rationale: `${profileSpec.id}: ${rule.rationale}`
+    rationale: `${profileSpec.id}: ${rule.rationale}`,
+    ...(spec.env ? { env: spec.env } : {}),
+    ...(spec.mcpServers ? { mcpServers: spec.mcpServers } : {}),
+    ...(spec.permissions ? { permissions: spec.permissions } : {})
   };
 }
 
@@ -1180,7 +1535,10 @@ export function resolvePersonaByTier(intent: PersonaIntent, tier: PersonaTier = 
     tier,
     runtime: spec.tiers[tier],
     skills: spec.skills,
-    rationale: `legacy-tier-override: ${tier}`
+    rationale: `legacy-tier-override: ${tier}`,
+    ...(spec.env ? { env: spec.env } : {}),
+    ...(spec.mcpServers ? { mcpServers: spec.mcpServers } : {}),
+    ...(spec.permissions ? { permissions: spec.permissions } : {})
   };
 }
 
@@ -1262,12 +1620,33 @@ export function usePersona(
     harness?: Harness;
     tier?: PersonaTier;
     profile?: RoutingProfile | RoutingProfileId;
+    /**
+     * Stage claude skills under this absolute directory instead of the
+     * repo's `.claude/skills/`. See {@link SkillMaterializationOptions.installRoot}.
+     */
+    installRoot?: string;
   } = {}
 ): PersonaContext {
   const baseSelection = options.tier
     ? resolvePersonaByTier(intent, options.tier)
     : resolvePersona(intent, options.profile ?? 'default');
 
+  return useSelection(baseSelection, {
+    harness: options.harness,
+    installRoot: options.installRoot
+  });
+}
+
+/**
+ * Same as {@link usePersona}, but takes a pre-resolved {@link PersonaSelection}
+ * instead of an intent. Use this when you have a selection produced outside
+ * the standard repo catalog — for example, a user-local persona override
+ * loaded from disk — and want the same install/sendMessage surface.
+ */
+export function useSelection(
+  baseSelection: PersonaSelection,
+  options: { harness?: Harness; installRoot?: string } = {}
+): PersonaContext {
   const effectiveHarness = options.harness ?? baseSelection.runtime.harness;
   const selection =
     effectiveHarness === baseSelection.runtime.harness
@@ -1280,10 +1659,12 @@ export function usePersona(
           }
         };
 
+  const materializationOptions: SkillMaterializationOptions =
+    options.installRoot !== undefined ? { installRoot: options.installRoot } : {};
   const installPlan =
     effectiveHarness === baseSelection.runtime.harness
-      ? materializeSkillsFor(selection)
-      : materializeSkills(selection.skills, effectiveHarness);
+      ? materializeSkillsFor(selection, materializationOptions)
+      : materializeSkills(selection.skills, effectiveHarness, materializationOptions);
 
   const { installCommand, installCommandString } = buildInstallArtifacts(installPlan);
   const { cleanupCommand, cleanupCommandString } = buildCleanupArtifacts(installPlan);
