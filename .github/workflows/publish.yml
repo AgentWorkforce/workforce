@@ -13,6 +13,7 @@ on:
           - workload-router
           - harness-kit
           - cli
+          - agentworkforce
       version:
         description: 'Version bump type (ignored if custom_version is set)'
         required: true
@@ -98,10 +99,11 @@ jobs:
         run: |
           case "${{ github.event.inputs.package }}" in
             all)
-              # Must be in dependency order: router → harness-kit → cli.
-              echo "packages=workload-router harness-kit cli" >> "$GITHUB_OUTPUT"
+              # Must be in dependency order: router → harness-kit → cli →
+              # agentworkforce (the wrapper depends on cli).
+              echo "packages=workload-router harness-kit cli agentworkforce" >> "$GITHUB_OUTPUT"
               ;;
-            workload-router|harness-kit|cli)
+            workload-router|harness-kit|cli|agentworkforce)
               echo "packages=${{ github.event.inputs.package }}" >> "$GITHUB_OUTPUT"
               ;;
             *)
@@ -125,8 +127,9 @@ jobs:
         run: |
           set -euo pipefail
           for pkg in ${{ steps.targets.outputs.packages }}; do
+            NPM_NAME=$(node -p "require('./packages/$pkg/package.json').name")
             LOCAL=$(node -p "require('./packages/$pkg/package.json').version")
-            REMOTE=$(npm view "@agentworkforce/$pkg" versions --json 2>/dev/null \
+            REMOTE=$(npm view "$NPM_NAME" versions --json 2>/dev/null \
               | node -e '
                 const raw = require("fs").readFileSync(0, "utf8").trim() || "[]";
                 const parsed = JSON.parse(raw);
@@ -143,7 +146,7 @@ jobs:
                 process.stdout.write(stable.length ? stable[stable.length - 1] : "");
               ' || echo "")
             if [ -z "$REMOTE" ]; then
-              echo "@agentworkforce/$pkg: no stable releases on npm yet — OK"
+              echo "$NPM_NAME: no stable releases on npm yet — OK"
               continue
             fi
             CMP=$(node -e '
@@ -158,10 +161,10 @@ jobs:
               console.log(0);
             ' "$LOCAL" "$REMOTE")
             if [ "$CMP" = "-1" ]; then
-              echo "::error title=npm/git version drift::@agentworkforce/$pkg: package.json is at $LOCAL but npm has $REMOTE published. A previous publish run likely succeeded on npm but failed before tagging. Bump packages/$pkg/package.json to >= $REMOTE on a branch, push, then re-run this workflow. (You may also want to tag the prior release commit as $pkg-v$REMOTE so the changelog generator picks the right baseline.)"
+              echo "::error title=npm/git version drift::$NPM_NAME: package.json is at $LOCAL but npm has $REMOTE published. A previous publish run likely succeeded on npm but failed before tagging. Bump packages/$pkg/package.json to >= $REMOTE on a branch, push, then re-run this workflow. (You may also want to tag the prior release commit as $pkg-v$REMOTE so the changelog generator picks the right baseline.)"
               exit 1
             fi
-            echo "@agentworkforce/$pkg: local=$LOCAL, npm=$REMOTE — OK"
+            echo "$NPM_NAME: local=$LOCAL, npm=$REMOTE — OK"
           done
 
       - name: Bump versions
@@ -199,12 +202,13 @@ jobs:
           for entry in ${{ steps.bump.outputs.versions }}; do
             pkg="${entry%%:*}"
             ver="${entry##*:}"
-            EXISTS=$(npm view "@agentworkforce/$pkg@$ver" version 2>/dev/null || true)
+            NPM_NAME=$(node -p "require('./packages/$pkg/package.json').name")
+            EXISTS=$(npm view "$NPM_NAME@$ver" version 2>/dev/null || true)
             if [ -n "$EXISTS" ]; then
-              echo "::error title=Version already published::@agentworkforce/$pkg@$ver is already on npm. Pick a different bump type or set custom_version to a higher version."
+              echo "::error title=Version already published::$NPM_NAME@$ver is already on npm. Pick a different bump type or set custom_version to a higher version."
               exit 1
             fi
-            echo "@agentworkforce/$pkg@$ver: unpublished — OK"
+            echo "$NPM_NAME@$ver: unpublished — OK"
           done
 
       # Per-package CHANGELOG.md generation. For each package being published,
@@ -222,6 +226,7 @@ jobs:
 
           const [,, pkg, newVersion, today] = process.argv;
           const path = `packages/${pkg}/CHANGELOG.md`;
+          const npmName = JSON.parse(readFileSync(`packages/${pkg}/package.json`, 'utf-8')).name;
 
           if (newVersion.includes('-')) {
             console.log(`prerelease ${pkg}@${newVersion}: skipping`);
@@ -325,7 +330,7 @@ jobs:
           const newEntry = lines.join('\n');
 
           if (!existing) {
-            const header = `# Changelog\n\nAll notable changes to \`@agentworkforce/${pkg}\` will be documented in this file.\n\nThe format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),\nand this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).\n\n## [Unreleased]\n\n`;
+            const header = `# Changelog\n\nAll notable changes to \`${npmName}\` will be documented in this file.\n\nThe format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),\nand this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).\n\n## [Unreleased]\n\n`;
             writeFileSync(path, header + newEntry + '\n');
           } else {
             // Insert after the [Unreleased] block, before the first versioned entry.
@@ -359,7 +364,8 @@ jobs:
             for entry in ${{ steps.bump.outputs.versions }}; do
               pkg="${entry%%:*}"
               version="${entry##*:}"
-              MSG+=" @agentworkforce/$pkg@$version"
+              NPM_NAME=$(node -p "require('./packages/$pkg/package.json').name")
+              MSG+=" $NPM_NAME@$version"
             done
             git commit -m "$MSG"
           fi
@@ -393,11 +399,17 @@ jobs:
           fi
 
           for pkg in ${{ steps.targets.outputs.packages }}; do
-            echo "==> Packing @agentworkforce/$pkg"
-            pnpm --filter "@agentworkforce/$pkg" pack --pack-destination "$PACK_DIR"
-            TARBALL=$(ls -1t "$PACK_DIR"/agentworkforce-$pkg-*.tgz | head -n1)
-            if [ -z "$TARBALL" ] || [ ! -f "$TARBALL" ]; then
-              echo "::error::could not find packed tarball for $pkg in $PACK_DIR" >&2
+            NPM_NAME=$(node -p "require('./packages/$pkg/package.json').name")
+            VERSION=$(node -p "require('./packages/$pkg/package.json').version")
+            # `pnpm pack` writes <name-without-@>-<ver>.tgz with `/` → `-`.
+            # @agentworkforce/cli@0.4.0 → agentworkforce-cli-0.4.0.tgz
+            # agentworkforce@0.4.0      → agentworkforce-0.4.0.tgz
+            TARBALL_BASENAME="$(echo "${NPM_NAME#@}" | tr '/' '-')-${VERSION}.tgz"
+            echo "==> Packing $NPM_NAME"
+            pnpm --filter "$NPM_NAME" pack --pack-destination "$PACK_DIR"
+            TARBALL="$PACK_DIR/$TARBALL_BASENAME"
+            if [ ! -f "$TARBALL" ]; then
+              echo "::error::could not find packed tarball $TARBALL_BASENAME in $PACK_DIR" >&2
               ls -la "$PACK_DIR" >&2 || true
               exit 1
             fi
@@ -413,7 +425,8 @@ jobs:
           for entry in ${{ steps.bump.outputs.versions }}; do
             pkg="${entry%%:*}"
             version="${entry##*:}"
-            git tag -a "$pkg-v$version" -m "@agentworkforce/$pkg@$version"
+            NPM_NAME=$(node -p "require('./packages/$pkg/package.json').name")
+            git tag -a "$pkg-v$version" -m "$NPM_NAME@$version"
           done
           git push origin HEAD --follow-tags
 
@@ -425,7 +438,8 @@ jobs:
             for entry in ${{ steps.bump.outputs.versions }}; do
               pkg="${entry%%:*}"
               version="${entry##*:}"
-              echo "- \`@agentworkforce/$pkg@$version\`"
+              NPM_NAME=$(node -p "require('./packages/$pkg/package.json').name")
+              echo "- \`$NPM_NAME@$version\`"
             done
             echo ""
             echo "- **dist-tag**: \`${{ github.event.inputs.tag }}\`"
@@ -436,94 +450,158 @@ jobs:
             fi
           } >> "$GITHUB_STEP_SUMMARY"
 
-  # One GitHub Release per package tag. Matches the relay pattern
-  # (softprops/action-gh-release@v2 + generate_release_notes). Runs in parallel
-  # across packages; each cell is gated on whether its package was published.
+  # One GitHub Release per publish run. Per-package git tags are still pushed
+  # above (so the next publish's changelog generator can find them), but the
+  # public GitHub Release is anchored to a single canonical tag — `agentworkforce`
+  # if the wrapper was bumped, otherwise the first package in the run. The
+  # release body lists every published package and inlines each one's
+  # CHANGELOG block, so the releases page has one item per version instead of
+  # 4 near-duplicate entries per `all` publish.
   create-release:
-    name: Release @agentworkforce/${{ matrix.package }}
+    name: Create GitHub Release
     needs: publish
     if: ${{ github.event.inputs.dry_run != 'true' && (github.event.inputs.version != 'none' || github.event.inputs.custom_version != '') }}
     runs-on: ubuntu-latest
     permissions:
       contents: write
-    strategy:
-      fail-fast: false
-      matrix:
-        package: [workload-router, harness-kit, cli]
     steps:
-      - name: Check if this package was published
-        id: check
+      - name: Resolve canonical release
+        id: release
         run: |
+          set -euo pipefail
+
           VERSIONS='${{ needs.publish.outputs.versions }}'
+          canonical=""
           for entry in $VERSIONS; do
             pkg="${entry%%:*}"
-            ver="${entry##*:}"
-            if [ "$pkg" = "${{ matrix.package }}" ]; then
-              echo "published=true" >> "$GITHUB_OUTPUT"
-              echo "version=$ver" >> "$GITHUB_OUTPUT"
-              if [[ "$ver" == *-* ]]; then
-                echo "prerelease=true" >> "$GITHUB_OUTPUT"
-              else
-                echo "prerelease=false" >> "$GITHUB_OUTPUT"
-              fi
-              exit 0
+            if [ -z "$canonical" ]; then
+              canonical="$entry"
+            fi
+            if [ "$pkg" = "agentworkforce" ]; then
+              canonical="$entry"
+              break
             fi
           done
-          echo "published=false" >> "$GITHUB_OUTPUT"
+
+          if [ -z "$canonical" ]; then
+            echo "::error title=Missing release target::publish job did not report any package versions"
+            exit 1
+          fi
+
+          pkg="${canonical%%:*}"
+          ver="${canonical##*:}"
+          echo "canonical_pkg=$pkg" >> "$GITHUB_OUTPUT"
+          echo "version=$ver" >> "$GITHUB_OUTPUT"
+          echo "tag_name=$pkg-v$ver" >> "$GITHUB_OUTPUT"
+          if [[ "$ver" == *-* ]]; then
+            echo "prerelease=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "prerelease=false" >> "$GITHUB_OUTPUT"
+          fi
 
       - name: Checkout
-        if: steps.check.outputs.published == 'true'
         uses: actions/checkout@v4
         with:
-          # Need the tag that the publish job just pushed.
-          ref: ${{ matrix.package }}-v${{ steps.check.outputs.version }}
+          # Need the canonical tag that the publish job just pushed — it
+          # points at the chore(release) commit with all bumped CHANGELOGs.
+          ref: ${{ steps.release.outputs.tag_name }}
 
-      # Prefer the per-package CHANGELOG section that was generated and
-      # committed during publish. Falls back to auto-generated notes for
-      # prereleases and first publishes (where no CHANGELOG entry exists).
-      - name: Extract changelog notes
-        if: steps.check.outputs.published == 'true'
+      - name: Build combined release notes
         id: notes
         run: |
-          pkg="${{ matrix.package }}"
-          ver="${{ steps.check.outputs.version }}"
-          file="packages/$pkg/CHANGELOG.md"
-          out=/tmp/release-notes.md
-          : > "$out"
-          if [ -f "$file" ]; then
-            awk -v prefix="## [$ver]" '
-              index($0, prefix) == 1 { flag=1; print; next }
-              /^## \[/ && flag { exit }
-              flag { print }
-            ' "$file" > "$out"
-          fi
-          if [ -s "$out" ]; then
-            echo "has_notes=true" >> "$GITHUB_OUTPUT"
-          else
-            echo "has_notes=false" >> "$GITHUB_OUTPUT"
-          fi
+          cat > /tmp/build-release-notes.mjs << 'GENEOF'
+          import { appendFileSync, existsSync, readFileSync, writeFileSync } from 'node:fs';
 
-      - name: Create GitHub Release (stable, with changelog)
-        if: steps.check.outputs.published == 'true' && steps.check.outputs.prerelease != 'true' && steps.notes.outputs.has_notes == 'true'
+          const versionsRaw = process.env.VERSIONS || '';
+          const canonicalPkg = process.env.CANONICAL_PKG;
+          const canonicalVersion = process.env.CANONICAL_VERSION;
+
+          const packageOrder = ['workload-router', 'harness-kit', 'cli', 'agentworkforce'];
+          const entries = versionsRaw.trim().split(/\s+/).filter(Boolean).map((entry) => {
+            const idx = entry.indexOf(':');
+            return { pkg: entry.slice(0, idx), ver: entry.slice(idx + 1) };
+          }).sort((a, b) => packageOrder.indexOf(a.pkg) - packageOrder.indexOf(b.pkg));
+
+          if (entries.length === 0) {
+            throw new Error('publish job did not report any package versions');
+          }
+
+          const packageInfo = entries.map(({ pkg, ver }) => {
+            const pkgJson = JSON.parse(readFileSync(`packages/${pkg}/package.json`, 'utf8'));
+            return {
+              pkg,
+              ver,
+              npmName: pkgJson.name,
+              tag: `${pkg}-v${ver}`,
+            };
+          });
+
+          const canonical =
+            packageInfo.find((entry) => entry.pkg === canonicalPkg && entry.ver === canonicalVersion) ||
+            packageInfo[0];
+
+          function escapeRegExp(value) {
+            return value.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+          }
+
+          function extractChangelogBody(path, version) {
+            if (!existsSync(path)) return '';
+            const raw = readFileSync(path, 'utf8');
+            const headerRe = new RegExp(`^## \\[${escapeRegExp(version)}\\][^\\n]*\\n`, 'm');
+            const header = raw.match(headerRe);
+            if (!header || header.index === undefined) return '';
+            const start = header.index + header[0].length;
+            const tail = raw.slice(start);
+            const next = tail.match(/^## \[/m);
+            const end = next && next.index !== undefined ? start + next.index : raw.length;
+            return raw.slice(start, end).trim();
+          }
+
+          // Per-package changelogs use ### headings; nest them one level deeper
+          // so they live under the ### <package> heading we add below.
+          function nestChangelogHeadings(notes) {
+            return notes.replace(/^(#{3,5}) /gm, '#$1 ');
+          }
+
+          const lines = ['## Packages', ''];
+          for (const entry of packageInfo) {
+            lines.push(`- \`${entry.npmName}@${entry.ver}\` (tag: \`${entry.tag}\`)`);
+          }
+
+          const packageNotes = packageInfo
+            .map((entry) => ({
+              ...entry,
+              notes: extractChangelogBody(`packages/${entry.pkg}/CHANGELOG.md`, entry.ver),
+            }))
+            .filter((entry) => entry.notes.length > 0);
+
+          if (packageNotes.length > 0) {
+            lines.push('', '## Package Changelogs', '');
+            for (const entry of packageNotes) {
+              lines.push(`### ${entry.npmName}`, '', nestChangelogHeadings(entry.notes), '');
+            }
+          } else {
+            lines.push('', '## Release Notes', '', '_No changelog entries were generated for this release._');
+          }
+
+          writeFileSync('/tmp/release-notes.md', `${lines.join('\n').trimEnd()}\n`);
+
+          // Display name on the releases page. Always anchor to the canonical
+          // package so consumers see e.g. `agentworkforce@0.5.0` rather than
+          // a bare scoped package version.
+          const releaseName = `${canonical.npmName}@${canonical.ver}`;
+          appendFileSync(process.env.GITHUB_OUTPUT, `release_name=${releaseName}\n`);
+          GENEOF
+
+          VERSIONS='${{ needs.publish.outputs.versions }}' \
+          CANONICAL_PKG='${{ steps.release.outputs.canonical_pkg }}' \
+          CANONICAL_VERSION='${{ steps.release.outputs.version }}' \
+          node /tmp/build-release-notes.mjs
+
+      - name: Create GitHub Release
         uses: softprops/action-gh-release@v2
         with:
-          tag_name: ${{ matrix.package }}-v${{ steps.check.outputs.version }}
-          name: "@agentworkforce/${{ matrix.package }}@${{ steps.check.outputs.version }}"
+          tag_name: ${{ steps.release.outputs.tag_name }}
+          name: ${{ steps.notes.outputs.release_name }}
           body_path: /tmp/release-notes.md
-
-      - name: Create GitHub Release (stable, auto notes)
-        if: steps.check.outputs.published == 'true' && steps.check.outputs.prerelease != 'true' && steps.notes.outputs.has_notes != 'true'
-        uses: softprops/action-gh-release@v2
-        with:
-          tag_name: ${{ matrix.package }}-v${{ steps.check.outputs.version }}
-          name: "@agentworkforce/${{ matrix.package }}@${{ steps.check.outputs.version }}"
-          generate_release_notes: true
-
-      - name: Create GitHub Release (prerelease)
-        if: steps.check.outputs.published == 'true' && steps.check.outputs.prerelease == 'true'
-        uses: softprops/action-gh-release@v2
-        with:
-          tag_name: ${{ matrix.package }}-v${{ steps.check.outputs.version }}
-          name: "@agentworkforce/${{ matrix.package }}@${{ steps.check.outputs.version }} (prerelease)"
-          prerelease: true
-          generate_release_notes: true
+          prerelease: ${{ steps.release.outputs.prerelease }}
