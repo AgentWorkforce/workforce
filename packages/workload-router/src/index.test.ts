@@ -151,6 +151,10 @@ test('resolves review from custom routing profile rule', () => {
       'write-integration-tests': {
         tier: 'best-value',
         rationale: 'integration test template is well-defined'
+      },
+      'agent-relay-workflow': {
+        tier: 'best-value',
+        rationale: 'workflow orchestration uses balanced reasoning'
       }
     }
   });
@@ -158,6 +162,14 @@ test('resolves review from custom routing profile rule', () => {
   assert.equal(result.personaId, 'code-reviewer');
   assert.equal(result.tier, 'minimum');
   assert.equal(result.runtime.harness, 'opencode');
+});
+
+test('resolves npm-package-compat to npm-package-bundler-guard from default routing profile', () => {
+  const result = resolvePersona('npm-package-compat');
+  assert.equal(result.personaId, 'npm-package-bundler-guard');
+  assert.equal(result.tier, 'best-value');
+  assert.equal(result.runtime.harness, 'claude');
+  assert.match(result.rationale, /balanced-default/);
 });
 
 test('legacy tier override remains available via resolvePersonaByTier', () => {
