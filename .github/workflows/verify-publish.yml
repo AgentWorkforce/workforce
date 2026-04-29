@@ -15,6 +15,7 @@ on:
         type: choice
         options:
           - '@agentworkforce/cli'
+          - 'agentworkforce'
           - '@agentworkforce/harness-kit'
           - '@agentworkforce/workload-router'
       version:
@@ -54,31 +55,41 @@ jobs:
           echo "Verifying ${{ github.event.inputs.package }}@$RESOLVED"
 
       - name: CLI smoke test
-        if: ${{ github.event.inputs.package == '@agentworkforce/cli' }}
+        if: ${{ github.event.inputs.package == '@agentworkforce/cli' || github.event.inputs.package == 'agentworkforce' }}
         run: |
           set -euo pipefail
+          # The two CLI packages install different bin names: the scoped
+          # @agentworkforce/cli ships `agent-workforce`; the top-level
+          # `agentworkforce` package ships `agentworkforce`. The CLI itself
+          # derives its USAGE bin name from process.argv[1], so we expect
+          # the help block to use whichever name is on PATH.
+          if [ "${{ github.event.inputs.package }}" = "agentworkforce" ]; then
+            BIN="agentworkforce"
+          else
+            BIN="agent-workforce"
+          fi
           npm install -g "${{ github.event.inputs.package }}@${{ steps.resolve.outputs.version }}"
           # --help should exit 0 and print the usage block.
-          output=$(agent-workforce --help)
+          output=$("$BIN" --help)
           echo "$output"
-          echo "$output" | grep -q "Usage: agent-workforce agent" || {
-            echo "::error::--help output did not include expected usage block" >&2
+          echo "$output" | grep -q "Usage: $BIN " || {
+            echo "::error::--help output did not include expected usage block (looking for 'Usage: $BIN ')" >&2
             exit 1
           }
           # Bare invocation should exit non-zero with the usage text.
-          if agent-workforce > /dev/null 2>&1; then
-            echo "::error::bare agent-workforce should exit non-zero (missing subcommand)" >&2
+          if "$BIN" > /dev/null 2>&1; then
+            echo "::error::bare $BIN should exit non-zero (missing subcommand)" >&2
             exit 1
           fi
           # Unknown persona should exit non-zero and list the catalog.
-          if agent-workforce agent __definitely_not_a_persona__ > /dev/null 2>&1; then
+          if "$BIN" agent __definitely_not_a_persona__ > /dev/null 2>&1; then
             echo "::error::unknown persona should exit non-zero" >&2
             exit 1
           fi
           echo "CLI smoke test passed."
 
       - name: Library smoke test (ESM import + exports surface)
-        if: ${{ github.event.inputs.package != '@agentworkforce/cli' }}
+        if: ${{ github.event.inputs.package != '@agentworkforce/cli' && github.event.inputs.package != 'agentworkforce' }}
         run: |
           set -euo pipefail
           WORKDIR=$(mktemp -d)

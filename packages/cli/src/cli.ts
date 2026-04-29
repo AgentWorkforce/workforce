@@ -33,7 +33,22 @@ import { launchOnMount } from '@relayfile/local-mount';
 import ora, { type Ora } from 'ora';
 import { loadLocalPersonas, type PersonaSource } from './local-personas.js';
 
-const USAGE = `Usage: agent-workforce <command> [args...]
+// Derived from the binary the user actually invoked. Lets the same dist file
+// drive multiple npm bins (`agent-workforce` from @agentworkforce/cli,
+// `agentworkforce` from the top-level wrapper package) without baking either
+// name into the help text. Falls back to `agent-workforce` for the bare
+// `node dist/cli.js` case so the test suite, which spawns cli.js directly,
+// still sees the historical name.
+const BIN_NAME = (() => {
+  const arg1 = process.argv[1];
+  if (!arg1) return 'agent-workforce';
+  const base = arg1.split(/[/\\]/).pop() ?? '';
+  const stripped = base.replace(/\.(m?js|cjs)$/, '');
+  if (!stripped || stripped === 'cli') return 'agent-workforce';
+  return stripped;
+})();
+
+const USAGE = `Usage: ${BIN_NAME} <command> [args...]
 
 Commands:
   agent [flags] <persona>[@<tier>] [task...]
@@ -98,12 +113,12 @@ loader implicitly inherits from the same-id persona below. (Override the home
 layer path via AGENT_WORKFORCE_CONFIG_DIR.)
 
 Examples:
-  agent-workforce agent npm-provenance-publisher@best
-  agent-workforce agent my-posthog@best
-  agent-workforce agent review@best-value "look at the diff on this branch"
-  agent-workforce list
-  agent-workforce show posthog
-  agent-workforce harness check
+  ${BIN_NAME} agent npm-provenance-publisher@best
+  ${BIN_NAME} agent my-posthog@best
+  ${BIN_NAME} agent review@best-value "look at the diff on this branch"
+  ${BIN_NAME} list
+  ${BIN_NAME} show posthog
+  ${BIN_NAME} harness check
 `;
 
 function die(msg: string, withUsage = true): never {
@@ -984,7 +999,7 @@ function parseListArgs(args: readonly string[]): {
       json = true;
     } else if (arg === '-h' || arg === '--help') {
       process.stdout.write(
-        'Usage: agent-workforce list [--all] [--json] [--filter-rating <tier>] [--filter-harness <harness>] [--filter-tag <tag>] [--no-display-description]\n'
+        `Usage: ${BIN_NAME} list [--all] [--json] [--filter-rating <tier>] [--filter-harness <harness>] [--filter-tag <tag>] [--no-display-description]\n`
       );
       process.exit(0);
     } else if (arg === '--all' || arg === '--no-recommended') {
@@ -1064,7 +1079,7 @@ function parseShowArgs(args: readonly string[]): {
     } else if (arg === '--all') {
       all = true;
     } else if (arg === '-h' || arg === '--help') {
-      process.stdout.write('Usage: agent-workforce show <persona>[@<tier>] [--all] [--json]\n');
+      process.stdout.write(`Usage: ${BIN_NAME} show <persona>[@<tier>] [--all] [--json]\n`);
       process.exit(0);
     } else if (arg.startsWith('--')) {
       die(`show: unexpected flag "${arg}".`);
@@ -1253,7 +1268,7 @@ function runHarnessCheck(): never {
   process.exit(0);
 }
 
-async function main(): Promise<void> {
+export async function main(): Promise<void> {
   const argv = process.argv.slice(2);
   const [subcommand, ...rest] = argv;
 

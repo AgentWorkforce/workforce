@@ -33,15 +33,25 @@ model, system prompt, env vars, MCP servers, and permissions wired up.
 
 ### Install
 
+From npm (recommended):
+
+```bash
+npm i -g agentworkforce
+```
+
+That puts the `agentworkforce` command on your PATH. (The same CLI is also
+published as `@agentworkforce/cli`, which exposes the same code under the
+historical `agent-workforce` bin name — pick whichever name you prefer.)
+
 From the monorepo checkout:
 
 ```bash
 corepack pnpm -r build
 corepack pnpm --filter @agentworkforce/cli link --global
+# or:  corepack pnpm --filter agentworkforce link --global
 ```
 
-`agent-workforce` is now on your PATH. (Or run the built bin directly:
-`./packages/cli/dist/cli.js …`.)
+(Or run the built bin directly: `./packages/cli/dist/cli.js …`.)
 
 ### Usage
 

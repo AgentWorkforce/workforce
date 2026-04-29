@@ -1,0 +1,37 @@
+{
+  "name": "agentworkforce",
+  "version": "0.4.0",
+  "private": false,
+  "description": "Top-level installer for the Agent Workforce CLI (installs the `agentworkforce` command). Wraps @agentworkforce/cli.",
+  "type": "module",
+  "bin": {
+    "agentworkforce": "./bin/agentworkforce.js"
+  },
+  "files": [
+    "bin",
+    "README.md",
+    "CHANGELOG.md",
+    "package.json"
+  ],
+  "scripts": {
+    "build": "chmod +x bin/agentworkforce.js",
+    "dev": "chmod +x bin/agentworkforce.js",
+    "typecheck": "node --check bin/agentworkforce.js",
+    "lint": "node --check bin/agentworkforce.js",
+    "test": "node --check bin/agentworkforce.js"
+  },
+  "engines": {
+    "node": ">=22"
+  },
+  "dependencies": {
+    "@agentworkforce/cli": "workspace:*"
+  },
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/AgentWorkforce/workforce",
+    "directory": "packages/agentworkforce"
+  },
+  "publishConfig": {
+    "access": "public"
+  }
+}
