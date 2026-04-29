@@ -194,25 +194,34 @@ export function buildInteractiveSpec(input: BuildInteractiveSpecInput): Interact
       // with the persona's prompt + full-provider-form model, selected via
       // `--agent <personaId>` at launch. We emit that file via configFiles
       // so the CLI can drop it into the mount dir before exec.
-      // `permission: 'allow'` is wildcard-allow across every opencode tool
-      // (read / edit / bash / webfetch / etc.), matching the built-in
-      // `build` agent's effective permissions. Without this, opencode
-      // applies its restrictive default and agent-side edits never reach
-      // the mount (the user-visible symptom: "I asked the agent to change
-      // files and nothing synced"). The mount already sandboxes writes
-      // so wildcard-allow does not escape to the real repo outside of
-      // autosync, and callers who want a read-only persona (e.g. a code
+      // `permission: { '*': 'allow' }` is wildcard-allow across every
+      // opencode tool (read / edit / bash / webfetch / etc.), matching the
+      // built-in `build` agent's effective permissions. Without this,
+      // opencode applies its restrictive default and agent-side edits never
+      // reach the mount (the user-visible symptom: "I asked the agent to
+      // change files and nothing synced"). The mount already sandboxes
+      // writes so wildcard-allow does not escape to the real repo outside
+      // of autosync, and callers who want a read-only persona (e.g. a code
       // reviewer) can override this in a follow-up PR that threads a
       // richer permission spec through the persona config — the current
       // harness-kit PersonaPermissions shape is claude-specific and
       // already warned about for opencode.
+      //
+      // The bare-string form `permission: 'allow'` was valid in older
+      // opencode versions but is rejected by 1.14.x: the agent decoder
+      // runs `Object.assign({}, $.permission)` before the schema's own
+      // string→`{'*': str}` normalizer fires, which spreads the string's
+      // indexed chars and then fails validation against
+      // `'ask' | 'allow' | 'deny'` ("Expected PermissionActionConfig, got
+      // 'a' / 'l' / 'l' / 'o' / 'w'"). Emitting the object form directly
+      // avoids that pre-decode step.
       const agentConfig = {
         agent: {
           [personaId]: {
             model,
             prompt: systemPrompt,
             mode: 'primary',
-            permission: 'allow'
+            permission: { '*': 'allow' }
           }
         }
       };

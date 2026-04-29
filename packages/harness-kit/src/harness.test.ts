@@ -153,8 +153,11 @@ test('opencode configFiles carries a well-formed opencode.json with the agent de
         // Wildcard-allow across opencode's tool set — matches the built-in
         // `build` agent. Without this, opencode's restrictive default kept
         // agents from making any edits and autosync had nothing to
-        // propagate on exit.
-        permission: 'allow'
+        // propagate on exit. Object form (not bare 'allow' string) because
+        // opencode 1.14.x's agent-config decoder Object.assigns the value
+        // before its string-normalizer runs, which mangles strings into
+        // their indexed chars.
+        permission: { '*': 'allow' }
       }
     }
   });
