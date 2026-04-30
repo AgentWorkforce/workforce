@@ -392,11 +392,11 @@ persona session, add it to the persona's `mcpServers` block.
 ## Interactive
 
 ```sh
-agent-workforce agent [--install-in-repo] [--clean] <persona>[@<tier>]
+agent-workforce agent [--install-in-repo] <persona>[@<tier>]
 ```
 
-`--install-in-repo` and `--clean` are mutually exclusive — see
-[**Clean mode**](#clean-mode) below.
+By default, claude and opencode sessions run inside a sandbox mount — see
+[**Sandbox mount**](#sandbox-mount) below. `--install-in-repo` opts out.
 
 1. Resolves the persona, walks the cascade, resolves `$VAR` refs.
 2. **Stages skills outside the repo by default** (claude interactive only —
@@ -483,19 +483,20 @@ stage dir conflicts with something else (network filesystem, read-only
   into a new stage dir. A `~/.agent-workforce/cache/` content-addressed cache
   is planned but not wired up.
 
-## Clean mode
+## Sandbox mount
 
-`--clean` launches an interactive claude session inside a
+By default, claude and opencode interactive sessions run inside a
 [`@relayfile/local-mount`](https://www.npmjs.com/package/@relayfile/local-mount)
-symlink mount that hides the repo's Claude Code configuration from the
-session — so the model sees persona context + user-level context, and
-nothing the repo itself declares.
+symlink mount that hides repo-level harness configuration from the session
+and routes skill-install writes into the sandbox — so the model sees
+persona context + user-level context, and nothing the repo itself declares.
+Codex sessions never mount (no harness-side support).
 
-```sh
-agent-workforce agent --clean <persona>[@<tier>]
-```
+`--install-in-repo` opts out and runs against the real cwd.
 
 **What's hidden (gitignore semantics, at any depth):**
+
+For claude:
 
 | Pattern | Rationale |
 | --- | --- |
@@ -504,18 +505,35 @@ agent-workforce agent --clean <persona>[@<tier>]
 | `.claude` | Repo Claude Code config dir (settings, agents, skills, commands) |
 | `.mcp.json` | Repo-declared MCP servers |
 
+For opencode (skill-install pollution that would otherwise leak back to
+the repo):
+
+| Pattern | Rationale |
+| --- | --- |
+| `.agents`, `.claude/skills`, `.factory/skills`, `.kiro/skills`, `skills` | skill.sh universal install root + per-harness symlink farms |
+| `.opencode`, `.skills` | prpm `--as <harness>` output roots |
+| `prpm.lock`, `skills-lock.json` | provider lockfiles |
+
 **What's preserved:**
 
 - **User-level context** under `~/.claude/` — `CLAUDE.md`, skills, etc.
-  still load. `--clean` scrubs the *project*, not the user. To exclude
+  still load. The mount scrubs the *project*, not the user. To exclude
   user-level context too, launch under a scratch `$HOME`.
-- **Persona skills.** The `--plugin-dir` passed to claude resolves to an
-  absolute path *outside* the mount, so staged skills from
-  `~/.agent-workforce/sessions/<id>/claude/plugin/` load normally.
-- **Keychain auth.** `--clean` does NOT pass `--bare`; it only hides
-  files via the mount. Claude Code's macOS keychain login stays active.
+- **Persona skills.** For claude, the `--plugin-dir` passed to the harness
+  resolves to an absolute path *outside* the mount, so staged skills from
+  `~/.agent-workforce/sessions/<id>/claude/plugin/` load normally. For
+  opencode, the install runs inside the mount so the writes land in the
+  sandbox.
+- **Keychain auth.** The mount does not pass `--bare`; it only hides
+  files. Claude Code's macOS keychain login stays active.
 - **Persona `mcpServers`.** Still passed via `--mcp-config` — unaffected
   by the mount. The repo's `.mcp.json` is hidden regardless.
+- **Git.** `.git` is included in the mount (one-way project→mount sync per
+  `@relayfile/local-mount` 0.6+'s `includeGit`). Tracked paths matching
+  the hidden patterns are flagged `skip-worktree` so `git status` doesn't
+  report them as deleted, and the patterns are added to `.git/info/exclude`
+  to suppress untracked-and-hidden files. Mount-side commits/refs are
+  sandboxed and discarded on cleanup — `git push` to persist work.
 
 ### Session layout
 
@@ -531,22 +549,13 @@ is generated once and both paths are derived from it:
     │       ├── .claude-plugin/plugin.json
     │       ├── skills → .claude/skills
     │       └── .claude/skills/<name>/SKILL.md
-    └── mount/                                     ← --clean: claude's cwd
+    └── mount/                                     ← session cwd
         └── <mirrored project tree, minus the hidden patterns>
 ```
 
 `@relayfile/local-mount` handles mount creation, process spawn,
 SIGINT/SIGTERM forwarding, write syncback, and cleanup on exit. The
 agent-workforce CLI just wires the paths and passes the persona's argv.
-
-### Interactions with other flags
-
-- **`--clean` + `--install-in-repo` is rejected** — they ask for
-  incompatible things. `--install-in-repo` stages skills into the real
-  repo's `.claude/skills/`; `--clean` hides the real repo. Pick one.
-- **`--clean` on codex/opencode is a warning no-op.** Only the claude
-  harness gets the mount (it's the only one whose native surface includes
-  the hidden patterns).
 
 ### Example
 
@@ -555,7 +564,7 @@ agent-workforce CLI just wires the paths and passes the persona's argv.
 # .mcp.json hidden — session sees the persona's staged skills plus your
 # user-level ~/.claude/CLAUDE.md, nothing else from this repo.
 export POSTHOG_API_KEY=phx_…
-agent-workforce agent --clean posthog@best
+agent-workforce agent posthog@best
 ```
 
 On exit: mount is synced back to the real repo, then torn down; skill
