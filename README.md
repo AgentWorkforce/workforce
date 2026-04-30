@@ -147,13 +147,16 @@ layer for reusing installs across sessions is planned but not yet wired up. See
 **[packages/cli/README.md#skill-staging](./packages/cli/README.md#skill-staging)**
 for the full mechanics.
 
-### Clean mode (`--clean`)
+### Sandbox mount (default for claude / opencode)
 
-For interactive `claude` sessions, `--clean` launches the harness inside a
+Interactive `claude` and `opencode` sessions launch inside a
 [`@relayfile/local-mount`](https://www.npmjs.com/package/@relayfile/local-mount)
-sandbox that hides repo-level Claude Code configuration from the model:
+sandbox by default. The mount hides repo-level harness configuration
+(claude) and routes skill-install writes into the sandbox (opencode), so
+the model sees persona context + user-level context — and nothing the
+repo itself declares. Codex sessions never mount.
 
-| Hidden in `--clean` mode | Still visible |
+| Hidden in the mount (claude) | Still visible |
 | --- | --- |
 | `CLAUDE.md` (at any depth) | `~/.claude/CLAUDE.md` (user-level) |
 | `CLAUDE.local.md` | `~/.claude/skills/` (user-level skills) |
@@ -162,23 +165,26 @@ sandbox that hides repo-level Claude Code configuration from the model:
 |  | your keychain auth (unchanged) |
 
 ```bash
-agent-workforce agent --clean posthog@best
+agent-workforce agent posthog@best
 ```
 
-The repo tree is mirrored into
-`~/.agent-workforce/sessions/<id>/mount/` via symlinks; claude sees the
-mount as its cwd. Writes inside the mount sync back to the real repo on
-exit. Ignore semantics follow gitignore — `.claude` hides nested variants
-like `packages/foo/.claude/` too.
+The repo tree is mirrored into `~/.agent-workforce/sessions/<id>/mount/`
+via symlinks; the harness sees the mount as its cwd. Writes inside the
+mount sync back to the real repo on exit. Ignore semantics follow
+gitignore — `.claude` hides nested variants like `packages/foo/.claude/`
+too. `.git` is included in the mount (one-way project→mount sync) so git
+commands work inside the sandbox; mount-side commits are discarded on
+cleanup, so push to persist work.
 
-**Scope:** interactive claude only. Pass it to codex/opencode and the flag
-is ignored with a note. `--clean` and `--install-in-repo` are mutually
-exclusive — they ask for opposite things.
+**Opt out:** `--install-in-repo` runs against the real cwd and stages
+skills into the repo's harness-conventional dirs. Useful when you want to
+inspect installed skills on disk or when the mount conflicts with
+something else (network filesystem, etc.).
 
-**Caveat:** user-level Claude Code config in `~/.claude/` still loads
-inside the session. `--clean` hides the *repo's* context, not the user's.
-If you need to hide user-level config too, launch under a scratch
-`$HOME`. See **[packages/cli/README.md#clean-mode](./packages/cli/README.md#clean-mode)**
+**Caveat:** user-level harness config in `~/.claude/` etc. still loads
+inside the session — the mount hides the *repo's* context, not the
+user's. If you need to hide user-level config too, launch under a scratch
+`$HOME`. See **[packages/cli/README.md#sandbox-mount](./packages/cli/README.md#sandbox-mount)**
 for the full mount layout and semantics.
 
 ## Packages

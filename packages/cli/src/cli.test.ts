@@ -5,6 +5,8 @@ import {
   CLEAN_IGNORED_PATTERNS,
   SKILL_INSTALL_IGNORED_PATTERNS,
   assertSafeRelativePath,
+  buildMountGitExcludeBlock,
+  configureGitForMount,
   decideCleanMode,
   parseAgentArgs,
   resolveSystemPromptPlaceholders,
@@ -59,91 +61,65 @@ function trapExit(): ExitTrap {
   return trap;
 }
 
-test('parseAgentArgs: --clean sets flag and preserves positional selector', () => {
-  const { flags, positional } = parseAgentArgs(['--clean', 'posthog@best']);
-  assert.equal(flags.clean, true);
-  assert.equal(flags.installInRepo, false);
+test('parseAgentArgs: --install-in-repo sets flag and preserves positional selector', () => {
+  const { flags, positional } = parseAgentArgs(['--install-in-repo', 'posthog@best']);
+  assert.equal(flags.installInRepo, true);
   assert.deepEqual(positional, ['posthog@best']);
 });
 
 test('parseAgentArgs: preserves trailing positionals after the selector', () => {
   const { flags, positional } = parseAgentArgs([
-    '--clean',
+    '--install-in-repo',
     'review@best-value',
     'extra-arg'
   ]);
-  assert.equal(flags.clean, true);
+  assert.equal(flags.installInRepo, true);
   assert.deepEqual(positional, ['review@best-value', 'extra-arg']);
 });
 
-test('parseAgentArgs: no flags → both false', () => {
+test('parseAgentArgs: no flags → installInRepo false', () => {
   const { flags, positional } = parseAgentArgs(['posthog']);
-  assert.equal(flags.clean, false);
   assert.equal(flags.installInRepo, false);
   assert.deepEqual(positional, ['posthog']);
 });
 
-test('parseAgentArgs: --clean + --install-in-repo rejected with clear message', () => {
-  const trap = trapExit();
-  try {
-    assert.throws(
-      () => parseAgentArgs(['--clean', '--install-in-repo', 'posthog']),
-      /__exit_trap__:1/
-    );
-    assert.deepEqual(trap.exits, [1]);
-    assert.match(trap.stderr, /mutually exclusive/);
-    assert.match(trap.stderr, /--install-in-repo/);
-    assert.match(trap.stderr, /--clean/);
-  } finally {
-    trap.restore();
-  }
-});
-
-test('parseAgentArgs: flag conflict rejected regardless of flag order', () => {
-  const trap = trapExit();
-  try {
-    assert.throws(
-      () => parseAgentArgs(['--install-in-repo', '--clean', 'posthog']),
-      /__exit_trap__:1/
-    );
-    assert.match(trap.stderr, /mutually exclusive/);
-  } finally {
-    trap.restore();
-  }
-});
-
 test('parseAgentArgs: -- stops flag parsing, positional args after are preserved', () => {
   const { flags, positional } = parseAgentArgs([
-    '--clean',
     '--',
     '--install-in-repo',
     'posthog'
   ]);
-  // --install-in-repo AFTER `--` is positional, not a flag, so no conflict.
-  assert.equal(flags.clean, true);
+  // --install-in-repo AFTER `--` is positional, not a flag.
   assert.equal(flags.installInRepo, false);
   assert.deepEqual(positional, ['--install-in-repo', 'posthog']);
 });
 
-test('decideCleanMode: claude + clean=false → no mount', () => {
-  assert.deepEqual(decideCleanMode('claude', false), { useClean: false });
+test('decideCleanMode: claude defaults to mount (parity with opencode)', () => {
+  // claude and opencode both default to the sandbox mount; the includeGit
+  // path in relayfile 0.6 keeps `.git` in the mount so git operations work
+  // inside it. --install-in-repo is the only opt-out.
+  assert.deepEqual(decideCleanMode('claude'), { useClean: true });
 });
 
-test('decideCleanMode: codex + clean=false → no mount', () => {
-  assert.deepEqual(decideCleanMode('codex', false), { useClean: false });
+test('decideCleanMode: claude + --install-in-repo disengages mount', () => {
+  assert.deepEqual(decideCleanMode('claude', true), { useClean: false });
 });
 
 test('decideCleanMode: opencode defaults to mount (skills would otherwise land in repo)', () => {
   // Opencode has no installRoot support in the SDK, so the mount is the only
   // way to keep `.opencode/skills/`, `.agents/skills/`, prpm.lock, etc. out
   // of the real repo. Default-on for non-in-repo runs.
-  assert.deepEqual(decideCleanMode('opencode', false), { useClean: true });
-  assert.deepEqual(decideCleanMode('opencode', true), { useClean: true });
+  assert.deepEqual(decideCleanMode('opencode'), { useClean: true });
 });
 
 test('decideCleanMode: opencode + --install-in-repo → no mount', () => {
-  assert.deepEqual(decideCleanMode('opencode', false, true), { useClean: false });
-  assert.deepEqual(decideCleanMode('opencode', true, true), { useClean: false });
+  assert.deepEqual(decideCleanMode('opencode', true), { useClean: false });
+});
+
+test('decideCleanMode: codex never mounts', () => {
+  // No sandbox mount support for codex; --install-in-repo is moot.
+  assert.deepEqual(decideCleanMode('codex'), { useClean: false });
+  assert.deepEqual(decideCleanMode('codex', true), { useClean: false });
 });
 
 test('stripAgentFlag: removes --agent <name> pair preserving surrounding args', () => {
@@ -201,17 +177,6 @@ test('assertSafeRelativePath: rejects empty, absolute, and path-traversal inputs
   assert.throws(() => assertSafeRelativePath('../escape.json'), /\.\./);
   assert.throws(() => assertSafeRelativePath('ok/../escape.json'), /\.\./);
   assert.throws(() => assertSafeRelativePath('a/../../b.json'), /\.\./);
-});
-
-test('decideCleanMode: claude + clean → engaged', () => {
-  assert.deepEqual(decideCleanMode('claude', true), { useClean: true });
-});
-
-test('decideCleanMode: codex + clean → disengaged with warning naming harness', () => {
-  const codex = decideCleanMode('codex', true);
-  assert.equal(codex.useClean, false);
-  assert.match(codex.warning ?? '', /claude harness/);
-  assert.match(codex.warning ?? '', /codex/);
 });
 
 test('CLEAN_IGNORED_PATTERNS: covers the declared repo-level claude config files', () => {
@@ -328,22 +293,109 @@ test('main: extra positional after the persona selector is rejected', async () =
   assert.equal(exitCode, 1);
 });
 
-test('main: --clean on an interactive non-claude session warns and proceeds without mount', async () => {
-  // npm-provenance-publisher@best runs on codex. --clean should warn and the
-  // run should continue down the non-mount spawn path (which then fails to
-  // spawn codex because PATH is scrubbed). We should NEVER see a
+test('buildMountGitExcludeBlock: emits a header comment and one line per pattern, leading and trailing newline', () => {
+  const out = buildMountGitExcludeBlock(['CLAUDE.md', '.claude']);
+  // Leading newline ensures the block stays separated from any prior
+  // content already in .git/info/exclude.
+  assert.ok(out.startsWith('\n'), 'expected leading newline');
+  assert.ok(out.endsWith('\n'), 'expected trailing newline');
+  assert.match(out, /^# agentworkforce:/m);
+  assert.match(out, /^CLAUDE\.md$/m);
+  assert.match(out, /^\.claude$/m);
+});
+
+test('configureGitForMount: marks tracked hidden paths as skip-worktree and appends to .git/info/exclude', async () => {
+  // Integration test against a real local git repo: stand up a tiny tracked
+  // tree, run the configurator, and verify the index/exclude state. Mirrors
+  // the runtime call site (onBeforeLaunch in runInteractive), so a regression
+  // in either the ls-files plumbing or the exclude-block format surfaces here.
+  const { mkdtempSync, mkdirSync, writeFileSync, readFileSync, rmSync } =
+    await import('node:fs');
+  const { tmpdir } = await import('node:os');
+  const { join } = await import('node:path');
+  const { spawnSync } = await import('node:child_process');
+
+  const dir = mkdtempSync(join(tmpdir(), 'aw-git-mount-'));
+  try {
+    const run = (...args: string[]) => spawnSync('git', args, { cwd: dir });
+    run('init', '-q');
+    run('config', 'user.email', 'test@example.com');
+    run('config', 'user.name', 'Test');
+    // commit.gpgsign defaults vary by host; force off so this test doesn't
+    // hang on a missing/locked GPG agent.
+    run('config', 'commit.gpgsign', 'false');
+
+    writeFileSync(join(dir, 'CLAUDE.md'), 'hidden\n');
+    mkdirSync(join(dir, '.claude'), { recursive: true });
+    writeFileSync(join(dir, '.claude', 'config.json'), '{}\n');
+    writeFileSync(join(dir, 'src.ts'), 'visible\n');
+
+    run('add', '.');
+    run('commit', '-q', '-m', 'init');
+
+    configureGitForMount(dir, ['CLAUDE.md', '.claude']);
+
+    const excludeText = readFileSync(
+      join(dir, '.git', 'info', 'exclude'),
+      'utf8'
+    );
+    assert.match(excludeText, /^CLAUDE\.md$/m);
+    assert.match(excludeText, /^\.claude$/m);
+    assert.match(excludeText, /^# agentworkforce:/m);
+
+    // `git ls-files -v` prefixes each path with a one-letter status: 'H' for
+    // unmodified, 'S' for skip-worktree. Hidden tracked files should flip to
+    // 'S'; visible files stay 'H'.
+    const ls = run('ls-files', '-v');
+    const out = ls.stdout.toString('utf8');
+    assert.match(out, /^S CLAUDE\.md$/m);
+    assert.match(out, /^S \.claude\/config\.json$/m);
+    assert.match(out, /^H src\.ts$/m);
+
+    // Temp exclude list used internally must be cleaned up.
+    const fs = await import('node:fs');
+    assert.ok(
+      !fs.existsSync(join(dir, '.git', 'info', '.aw-skip-list')),
+      'expected internal scratch file to be removed'
+    );
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test('configureGitForMount: no-op when the mount has no .git', async () => {
+  // Project isn't a repo, or relayfile ran with includeGit:false. Helper
+  // must return silently rather than throw — the rest of onBeforeLaunch
+  // still has install + configFile work to do.
+  const { mkdtempSync, rmSync } = await import('node:fs');
+  const { tmpdir } = await import('node:os');
+  const { join } = await import('node:path');
+  const dir = mkdtempSync(join(tmpdir(), 'aw-git-noop-'));
+  try {
+    assert.doesNotThrow(() =>
+      configureGitForMount(dir, ['CLAUDE.md', '.claude'])
+    );
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test('configureGitForMount: empty patterns is a no-op', () => {
+  // Defensive: callers that compute patterns dynamically may end up with
+  // an empty list; we should not touch the index in that case.
+  assert.doesNotThrow(() => configureGitForMount('/nonexistent-path', []));
+});
+
+test('main: codex sessions never engage the sandbox mount', async () => {
+  // npm-provenance-publisher@best runs on codex; codex has no sandbox mount
+  // support, so the run continues down the non-mount spawn path (which then
+  // fails to spawn codex because PATH is scrubbed). We should NEVER see a
   // "sandbox mount → …" line, which the mount branch emits before calling
   // launchOnMount.
   const { stderr } = await runCliCapturingStderr([
     'agent',
-    '--clean',
     'npm-provenance-publisher@best'
   ]);
-  assert.match(
-    stderr,
-    /--clean is only supported for the claude harness/,
-    'expected non-claude clean warning to surface'
-  );
   assert.ok(
     !/sandbox mount →/.test(stderr),
     `expected the mount branch to be skipped; saw stderr:\n${stderr}`

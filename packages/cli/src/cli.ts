@@ -1,7 +1,7 @@
 #!/usr/bin/env node
 import { spawn, spawnSync } from 'node:child_process';
 import { randomBytes } from 'node:crypto';
-import { mkdirSync, rmSync, writeFileSync } from 'node:fs';
+import { appendFileSync, existsSync, mkdirSync, rmSync, writeFileSync } from 'node:fs';
 import { constants, homedir } from 'node:os';
 import { dirname, isAbsolute, join, resolve as resolvePath } from 'node:path';
 import { pathToFileURL } from 'node:url';
@@ -57,29 +57,20 @@ Commands:
                       session.
 
                       Flags:
-                        --install-in-repo   Install skills into the repo's
+                        --install-in-repo   Disengage the sandbox mount and
+                                            install skills into the repo's
                                             harness-conventional directory
                                             (.claude/skills, .opencode/skills,
                                             .agents/skills, etc.). By default,
-                                            interactive claude sessions stage
-                                            skills under ~/.agent-workforce/
-                                            sessions/<id>/ and pass --plugin-dir;
-                                            interactive opencode sessions run
-                                            inside a @relayfile/local-mount
-                                            sandbox so npx prpm install / npx
-                                            skills add writes never touch the
-                                            real repo.
-                        --clean             Launch interactive claude inside a
-                                            @relayfile/local-mount sandbox that
-                                            also hides the repo's CLAUDE.md,
-                                            CLAUDE.local.md, .claude, and
-                                            .mcp.json from the session. Persona
-                                            skills and keychain auth are
-                                            preserved. No-op for opencode
-                                            (mount is already on by default);
-                                            codex still warns and proceeds
-                                            without a mount. Incompatible
-                                            with --install-in-repo.
+                                            interactive claude and opencode
+                                            sessions run inside a
+                                            @relayfile/local-mount sandbox so
+                                            npx prpm install / npx skills add
+                                            writes never touch the real repo
+                                            and CLAUDE.md / .claude / .mcp.json
+                                            are hidden from the session. Codex
+                                            sessions never mount and ignore
+                                            this flag.
   list [flags]        List available personas from the cascade (pwd → home →
                       library). By default shows one row per persona at the
                       recommended tier for its intent; pass --all to see every
@@ -303,7 +294,7 @@ function removeSessionRoot(sessionRoot: string | undefined): void {
  *
  *   ~/.agent-workforce/sessions/<personaId>-<timestamp>-<rand>/
  *     ├── claude/plugin/     ← skill install target + --plugin-dir
- *     └── mount/             ← @relayfile/local-mount mount (--clean only)
+ *     └── mount/             ← @relayfile/local-mount mount
  *
  * The timestamp + random suffix keep concurrent sessions from colliding on
  * the same dir. Both the skill-install path and the mount path are derived
@@ -371,7 +362,7 @@ export function assertSafeRelativePath(relPath: string): void {
   }
 }
 
-/** Patterns hidden from an interactive claude session when `--clean` is set.
+/** Patterns hidden from an interactive claude session by the sandbox mount.
  * Applied by `@relayfile/local-mount` with gitignore semantics, so bare names
  * match at any depth in the project tree (e.g. `.claude` hides both
  * `./.claude/` and `./packages/foo/.claude/`). */
@@ -408,46 +399,106 @@ export const SKILL_INSTALL_IGNORED_PATTERNS = [
 ] as const;
 
 /**
+ * Build the block appended to `<mount>/.git/info/exclude` so untracked-and-
+ * hidden files (e.g. `.claude/skills/` materialized by skill installs, or
+ * `opencode.json` written by `onBeforeLaunch`) don't surface under
+ * "Untracked files" in `git status` inside the mount.
+ *
+ * Exported pure helper for unit-testing the formatting separately from the
+ * disk-writing wrapper below.
+ */
+export function buildMountGitExcludeBlock(patterns: readonly string[]): string {
+  const lines = [
+    '',
+    '# agentworkforce: patterns hidden from this sandboxed session.',
+    '# Tracked paths matching these patterns are also marked skip-worktree',
+    '# so `git status` does not report them as deleted.',
+    ...patterns,
+    ''
+  ];
+  return lines.join('\n');
+}
+
+/**
+ * Configure the mount's per-session `.git` so paths hidden by the relayfile
+ * mount don't show as deleted/untracked inside the sandbox.
+ *
+ * - Appends `patterns` to `.git/info/exclude` so untracked-and-hidden files
+ *   don't show up under "Untracked files".
+ * - Marks every tracked file matching one of the patterns as skip-worktree
+ *   so `git status` doesn't list it as deleted (the work tree omits it on
+ *   purpose, not by user action).
+ *
+ * Best-effort: if the mount has no `.git` (project isn't a repo, or
+ * `includeGit: false`) or any git command fails, returns silently. The
+ * mount's `.git` is per-session and `noSyncBack` per relayfile 0.6+, so
+ * writes here are sandboxed and never leak to the user's main checkout.
+ */
+export function configureGitForMount(mountDir: string, patterns: readonly string[]): void {
+  if (patterns.length === 0) return;
+  const infoDir = join(mountDir, '.git', 'info');
+  if (!existsSync(infoDir)) return;
+
+  appendFileSync(join(infoDir, 'exclude'), buildMountGitExcludeBlock(patterns));
+
+  // Use git's own gitignore matcher to pick which tracked files to flag,
+  // keeping semantics aligned with relayfile's (gitignore-style, basename-
+  // anywhere) filter. `--cached -i --exclude-from=<file>` (without
+  // `--exclude-standard`) lists only tracked files matched by the supplied
+  // patterns — not the repo's own .gitignore.
+  const tmpExcludes = join(infoDir, '.aw-skip-list');
+  try {
+    writeFileSync(tmpExcludes, patterns.join('\n') + '\n');
+    const ls = spawnSync(
+      'git',
+      ['ls-files', '-z', '--cached', '-i', `--exclude-from=${tmpExcludes}`],
+      { cwd: mountDir }
+    );
+    if (ls.status !== 0) return;
+    const files = ls.stdout.toString('utf8').split('\0').filter(Boolean);
+    if (files.length === 0) return;
+    // Chunk to stay well under typical argv-length limits on huge repos.
+    const CHUNK = 200;
+    for (let i = 0; i < files.length; i += CHUNK) {
+      spawnSync(
+        'git',
+        ['update-index', '--skip-worktree', '--', ...files.slice(i, i + CHUNK)],
+        { cwd: mountDir }
+      );
+    }
+  } finally {
+    try {
+      rmSync(tmpExcludes, { force: true });
+    } catch {
+      /* best-effort */
+    }
+  }
+}
+
+/**
  * Decide whether to run the interactive session inside a
  * `@relayfile/local-mount` sandbox.
  *
- * - Claude: mount only engages when the user passes `--clean` explicitly
- *   (its purpose there is to hide CLAUDE.md / .claude / .mcp.json from the
- *   session). Out-of-repo skill staging is handled separately via
- *   `installRoot` + `--plugin-dir`.
- * - Opencode: the SDK cannot stage skills out-of-repo for this harness
- *   (there is no `installRoot` support), so the mount is the only way to
- *   keep `npx prpm install` / `npx skills add` writes out of the project.
- *   Default to mount unless the user opts in with `--install-in-repo`.
- * - Codex: no auto-mount yet. `--clean` still emits the existing
- *   "claude-only" warning so current behavior is preserved.
+ * - Claude / opencode: mount engages by default. Hides CLAUDE.md / .claude
+ *   / .mcp.json (claude) and routes `npx prpm install` / `npx skills add`
+ *   writes (both) into the sandbox. Disengage with `--install-in-repo`.
+ * - Codex: no sandbox mount support, always runs against the real cwd.
  *
  * Pure — no side effects, trivially testable.
  */
 export function decideCleanMode(
   harness: Harness,
-  clean: boolean,
   installInRepo = false
-): { useClean: boolean; warning?: string } {
-  if (harness === 'claude') {
-    return { useClean: clean };
-  }
-  if (harness === 'opencode') {
-    if (installInRepo) return { useClean: false };
-    return { useClean: true };
-  }
-  if (clean) {
-    return {
-      useClean: false,
-      warning: `--clean is only supported for the claude harness (this session uses ${harness}). Ignoring flag.`
-    };
+): { useClean: boolean } {
+  if (harness === 'claude' || harness === 'opencode') {
+    return { useClean: !installInRepo };
   }
   return { useClean: false };
 }
 
 async function runInteractive(
   selection: PersonaSelection,
-  options: { installInRepo?: boolean; clean?: boolean } = {}
+  options: { installInRepo?: boolean } = {}
 ): Promise<number> {
   const { runtime, personaId, tier } = selection;
   // `installRoot` (out-of-repo skill staging via `--plugin-dir`) is currently
@@ -456,18 +507,13 @@ async function runInteractive(
   // running them inside a @relayfile/local-mount sandbox (see `useClean`
   // below). The --install-in-repo flag forces legacy in-repo installs
   // across the board.
-  const cleanDecision = decideCleanMode(
+  const useClean = decideCleanMode(
     runtime.harness,
-    options.clean === true,
     options.installInRepo === true
-  );
-  if (cleanDecision.warning) {
-    process.stderr.write(`warning: ${cleanDecision.warning}\n`);
-  }
-  const useClean = cleanDecision.useClean;
+  ).useClean;
   // A session dir is needed whenever we either (a) stage skills out-of-repo
-  // via claude's installRoot, or (b) open a mount. Opencode reaches (b) by
-  // default; claude reaches both when --clean is set, and just (a) otherwise.
+  // via claude's installRoot, or (b) open a mount. Both engage for claude/
+  // opencode by default; --install-in-repo disengages both.
   const useSessionDir =
     !options.installInRepo && (runtime.harness === 'claude' || useClean);
   const sessionRoot = useSessionDir ? generateSessionRoot(personaId) : undefined;
@@ -521,9 +567,9 @@ async function runInteractive(
   for (const w of spec.warnings) process.stderr.write(`warning: ${w}\n`);
 
   // Config-file materialization strategy:
-  //  - Mount path (opencode default, claude --clean): write each configFile
-  //    into the mount dir via onBeforeLaunch, so it lives only in the
-  //    sandbox and is torn down with the session.
+  //  - Mount path (claude/opencode default): write each configFile into the
+  //    mount dir via onBeforeLaunch, so it lives only in the sandbox and is
+  //    torn down with the session.
   //  - Non-mount path: today the only configFile producer is opencode
   //    (opencode.json for the --agent wiring), and the non-mount opencode
   //    path only engages under --install-in-repo. Writing opencode.json
@@ -570,12 +616,14 @@ async function runInteractive(
   // Mount branch: delegate process lifecycle (spawn, signal forwarding,
   // syncback, cleanup) to @relayfile/local-mount.
   //
-  // For claude: mount engages only when `--clean` is set, to hide the repo's
-  // claude config from the session. Skill plugin dir lives outside the mount
-  // at an absolute path, so claude resolves `--plugin-dir` normally.
+  // For claude and opencode: mount engages by default (unless
+  // `--install-in-repo`). For claude this hides CLAUDE.md / .claude /
+  // .mcp.json; for opencode it routes `npx prpm install` / `npx skills
+  // add` writes into the sandbox (skill plugin dir for claude lives
+  // outside the mount at an absolute path, so claude still resolves
+  // `--plugin-dir` normally).
   //
-  // For opencode: mount engages by default (unless `--install-in-repo`), and
-  // the install itself runs inside the mount via `onBeforeLaunch` so that
+  // The install itself runs inside the mount via `onBeforeLaunch` so that
   // `npx prpm install` / `npx skills add` writes land in the sandbox. The
   // skill-install paths are added to `ignoredPatterns` so they are neither
   // copied in from the real repo nor synced back on exit.
@@ -663,6 +711,13 @@ async function runInteractive(
         // branch: persona env overlays the inherited environment.
         env: resolvedEnv ? { ...process.env, ...resolvedEnv } : process.env,
         agentName: personaId,
+        // Pull `.git` into the mount so git commands work inside the
+        // sandbox. relayfile 0.6+ treats this as a one-way project→mount
+        // sync: host-side `.git` changes propagate in, mount-side commits/
+        // refs stay sandboxed and are discarded on cleanup. The agent must
+        // `git push` to persist work — local-only commits evaporate with
+        // the session.
+        includeGit: true,
         // Second Ctrl-C aborts this signal → local-mount skips autosync's
         // draining reconcile and returns the partial syncBack count. Cleanup
         // still runs, so there's no leaked mount dir.
@@ -693,24 +748,26 @@ async function runInteractive(
             process.stderr.write(`✓ ${message}\n`);
           }
         },
-        ...(deferInstallToMount || hasConfigFiles
-          ? {
-              onBeforeLaunch: (dir: string) => {
-                if (deferInstallToMount) {
-                  runInstallOrThrow(install.command, installLabel, dir);
-                }
-                for (const file of spec.configFiles) {
-                  assertSafeRelativePath(file.path);
-                  const target = join(dir, file.path);
-                  // mkdir -p for any subdirs in file.path — the
-                  // InteractiveConfigFile contract allows nested relative
-                  // paths, and writeFileSync would otherwise throw ENOENT.
-                  mkdirSync(dirname(target), { recursive: true });
-                  writeFileSync(target, file.contents, 'utf8');
-                }
-              }
-            }
-          : {})
+        onBeforeLaunch: (dir: string) => {
+          // Run before install / configFile writes so the freshly written
+          // files (e.g. `.opencode/`, `opencode.json`) aren't yet present
+          // when we run `git ls-files` to pick skip-worktree candidates —
+          // we don't need them flagged in the index, just hidden via the
+          // `.git/info/exclude` block.
+          configureGitForMount(dir, ignoredPatterns);
+          if (deferInstallToMount) {
+            runInstallOrThrow(install.command, installLabel, dir);
+          }
+          for (const file of spec.configFiles) {
+            assertSafeRelativePath(file.path);
+            const target = join(dir, file.path);
+            // mkdir -p for any subdirs in file.path — the
+            // InteractiveConfigFile contract allows nested relative
+            // paths, and writeFileSync would otherwise throw ENOENT.
+            mkdirSync(dirname(target), { recursive: true });
+            writeFileSync(target, file.contents, 'utf8');
+          }
+        }
       });
       return result.exitCode;
     } catch (err) {
@@ -1275,22 +1332,20 @@ export async function main(): Promise<void> {
   const selection = buildSelection(target.spec, target.tier, target.kind);
 
   const code = await runInteractive(selection, {
-    installInRepo: flags.installInRepo,
-    clean: flags.clean
+    installInRepo: flags.installInRepo
   });
   process.exit(code);
 }
 
 export interface AgentFlags {
   installInRepo: boolean;
-  clean: boolean;
 }
 
 export function parseAgentArgs(args: readonly string[]): {
   flags: AgentFlags;
   positional: string[];
 } {
-  const flags: AgentFlags = { installInRepo: false, clean: false };
+  const flags: AgentFlags = { installInRepo: false };
   const positional: string[] = [];
   let seenDoubleDash = false;
   for (const arg of args) {
@@ -1306,22 +1361,11 @@ export function parseAgentArgs(args: readonly string[]): {
       flags.installInRepo = true;
       continue;
     }
-    if (arg === '--clean') {
-      flags.clean = true;
-      continue;
-    }
     if (arg === '-h' || arg === '--help') {
       process.stdout.write(USAGE);
       process.exit(0);
     }
     positional.push(arg);
-  }
-  if (flags.installInRepo && flags.clean) {
-    die(
-      'agent: --install-in-repo and --clean are mutually exclusive. ' +
-        '--install-in-repo stages skills into the real repo; --clean hides ' +
-        'the repo behind a mount. Pick one.'
-    );
   }
   return { flags, positional };
 }
