@@ -155,6 +155,10 @@ test('resolves review from custom routing profile rule', () => {
       'agent-relay-workflow': {
         tier: 'best-value',
         rationale: 'workflow orchestration uses balanced reasoning'
+      },
+      'relay-orchestrator': {
+        tier: 'best-value',
+        rationale: 'relay orchestration uses balanced reasoning'
       }
     }
   });
@@ -274,6 +278,15 @@ test('resolves agent-relay-workflow persona from the default routing profile', (
 });
 
 // removed: writing-agent-relay-workflows persona renamed to agent-relay-workflow
+
+test('resolves relay-orchestrator persona from the default routing profile', () => {
+  const relay = resolvePersona('relay-orchestrator');
+  assert.equal(relay.personaId, 'relay-orchestrator');
+  assert.equal(relay.tier, 'best-value');
+  assert.equal(relay.runtime.harness, 'opencode');
+  assert.equal(relay.skills.length, 1);
+  assert.equal(relay.skills[0].id, 'running-headless-orchestrator');
+});
 
 test('resolves anti-slop-auditor with the jscpd skill.sh skill attached', () => {
   const auditor = resolvePersona('slop-audit');
