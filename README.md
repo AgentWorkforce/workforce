@@ -215,6 +215,7 @@ for the full mount layout and semantics.
 - `personas/e2e-validator.json`
 - `personas/integration-test-author.json`
 - `personas/npm-package-bundler-guard.json`
+- `personas/relay-orchestrator.json`
 
 ## Routing profiles
 

@@ -2,7 +2,7 @@ import { spawn } from 'node:child_process';
 import { createHash } from 'node:crypto';
 import { resolve as resolvePath } from 'node:path';
 import type { RunnerStepExecutor, WorkflowRunRow } from '@agent-relay/sdk/workflows';
-import { frontendImplementer, codeReviewer, architecturePlanner, requirementsAnalyst, debuggerPersona, securityReviewer, technicalWriter, verifierPersona, testStrategist, tddGuard, flakeHunter, opencodeWorkflowSpecialist, npmProvenancePublisher, cloudSandboxInfra, sageSlackEgressMigrator, sageProactiveRewirer, cloudSlackProxyGuard, agentRelayE2eConductor, capabilityDiscoverer, npmPackageBundlerGuard, posthogAgent, personaMaker, antiSlopAuditor, apiContractReviewer, dockerStackWrangler, e2eValidator, integrationTestAuthor, agentRelayWorkflow } from './generated/personas.js';
+import { frontendImplementer, codeReviewer, architecturePlanner, requirementsAnalyst, debuggerPersona, securityReviewer, technicalWriter, verifierPersona, testStrategist, tddGuard, flakeHunter, opencodeWorkflowSpecialist, npmProvenancePublisher, cloudSandboxInfra, sageSlackEgressMigrator, sageProactiveRewirer, cloudSlackProxyGuard, agentRelayE2eConductor, capabilityDiscoverer, npmPackageBundlerGuard, posthogAgent, personaMaker, antiSlopAuditor, apiContractReviewer, dockerStackWrangler, e2eValidator, integrationTestAuthor, agentRelayWorkflow, relayOrchestrator } from './generated/personas.js';
 import defaultRoutingProfileJson from '../routing-profiles/default.json' with { type: 'json' };
 
 export const HARNESS_VALUES = ['opencode', 'codex', 'claude'] as const;
@@ -46,7 +46,8 @@ export const PERSONA_INTENTS = [
   'api-contract-review',
   'local-stack-orchestration',
   'e2e-validation',
-  'write-integration-tests'
+  'write-integration-tests',
+  'relay-orchestrator'
 ] as const;
 
 export type Harness = (typeof HARNESS_VALUES)[number];
@@ -1508,7 +1509,8 @@ export const personaCatalog: Record<PersonaIntent, PersonaSpec> = {
   'api-contract-review': parsePersonaSpec(apiContractReviewer, 'api-contract-review'),
   'local-stack-orchestration': parsePersonaSpec(dockerStackWrangler, 'local-stack-orchestration'),
   'e2e-validation': parsePersonaSpec(e2eValidator, 'e2e-validation'),
-  'write-integration-tests': parsePersonaSpec(integrationTestAuthor, 'write-integration-tests')
+  'write-integration-tests': parsePersonaSpec(integrationTestAuthor, 'write-integration-tests'),
+  'relay-orchestrator': parsePersonaSpec(relayOrchestrator, 'relay-orchestrator')
 };
 
 export const routingProfiles = {

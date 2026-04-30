@@ -37,7 +37,8 @@ const exportNameMap = new Map([
   ['api-contract-reviewer', 'apiContractReviewer'],
   ['docker-stack-wrangler', 'dockerStackWrangler'],
   ['e2e-validator', 'e2eValidator'],
-  ['integration-test-author', 'integrationTestAuthor']
+  ['integration-test-author', 'integrationTestAuthor'],
+  ['relay-orchestrator', 'relayOrchestrator']
 ]);
 
 async function generate() {
