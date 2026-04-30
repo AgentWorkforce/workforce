@@ -619,7 +619,7 @@ export const relayOrchestrator = {
   "skills": [
     {
       "id": "running-headless-orchestrator",
-      "source": "https://github.com/agentworkforce/skills",
+      "source": "https://github.com/agentworkforce/skills#running-headless-orchestrator",
       "description": "Headless relay orchestrator skill to coordinate agent calls and spawn heavier models as needed."
     }
   ],

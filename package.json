@@ -4,7 +4,6 @@
   "version": "0.1.0",
   "packageManager": "pnpm@10.17.1",
   "devDependencies": {
-    "@agent-relay/sdk": "^4.0.5",
     "@types/node": "^22.18.0",
     "agent-trajectories": "^0.5.3",
     "typescript": "^5.9.2"

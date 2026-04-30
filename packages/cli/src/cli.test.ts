@@ -66,14 +66,14 @@ test('parseAgentArgs: --clean sets flag and preserves positional selector', () =
   assert.deepEqual(positional, ['posthog@best']);
 });
 
-test('parseAgentArgs: --clean accepts a task after the selector', () => {
+test('parseAgentArgs: preserves trailing positionals after the selector', () => {
   const { flags, positional } = parseAgentArgs([
     '--clean',
     'review@best-value',
-    'look at the diff'
+    'extra-arg'
   ]);
   assert.equal(flags.clean, true);
-  assert.deepEqual(positional, ['review@best-value', 'look at the diff']);
+  assert.deepEqual(positional, ['review@best-value', 'extra-arg']);
 });
 
 test('parseAgentArgs: no flags → both false', () => {
@@ -318,14 +318,14 @@ async function runCliCapturingStderr(args: string[]): Promise<{
   return { stderr, exitCode };
 }
 
-test('main: --clean on a one-shot run emits the ignore note', async () => {
-  const { stderr } = await runCliCapturingStderr([
+test('main: extra positional after the persona selector is rejected', async () => {
+  const { stderr, exitCode } = await runCliCapturingStderr([
     'agent',
-    '--clean',
     'posthog',
     'hello'
   ]);
-  assert.match(stderr, /--clean is ignored for one-shot runs/);
+  assert.match(stderr, /unexpected argument "hello"/);
+  assert.equal(exitCode, 1);
 });
 
 test('main: --clean on an interactive non-claude session warns and proceeds without mount', async () => {

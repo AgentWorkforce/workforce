@@ -56,15 +56,12 @@ corepack pnpm --filter @agentworkforce/cli link --global
 ### Usage
 
 ```
-agent-workforce agent <persona>[@<tier>] [task...]
+agent-workforce agent <persona>[@<tier>]
 agent-workforce list [flags]
 agent-workforce harness check
 ```
 
-- `agent` — run a persona.
-  - **No task** → drops you into an interactive harness session.
-  - **Task string** → runs one-shot via `usePersona().sendMessage()` and
-    streams output.
+- `agent` — drops you into an interactive harness session for the persona.
   - `<tier>` is `best` | `best-value` | `minimum` (default: `best-value`).
   - `<persona>` resolves across three layers, highest first:
     1. `./.agent-workforce/*.json` — project-local
@@ -86,8 +83,8 @@ the value from the next lower layer; everything else cascades through.
 ### Examples
 
 ```bash
-# One-shot against the built-in code reviewer
-agent-workforce agent review@best-value "look at the diff on this branch"
+# Interactive code reviewer
+agent-workforce agent review@best-value
 
 # Interactive PostHog session — the built-in persona ships with the PostHog
 # MCP server wired up and its tools auto-approved.
@@ -144,10 +141,9 @@ to the legacy behavior and install into the repo's `.claude/skills/`, pass
 agent-workforce agent --install-in-repo code-reviewer@best
 ```
 
-V1 scope: claude interactive only. codex, opencode, and one-shot runs still
-use the repo-relative install path. A content-addressed
-`~/.agent-workforce/cache/` layer for reusing installs across sessions is
-planned but not yet wired up. See
+V1 scope: claude interactive only. codex and opencode still use the
+repo-relative install path. A content-addressed `~/.agent-workforce/cache/`
+layer for reusing installs across sessions is planned but not yet wired up. See
 **[packages/cli/README.md#skill-staging](./packages/cli/README.md#skill-staging)**
 for the full mechanics.
 
@@ -175,9 +171,9 @@ mount as its cwd. Writes inside the mount sync back to the real repo on
 exit. Ignore semantics follow gitignore — `.claude` hides nested variants
 like `packages/foo/.claude/` too.
 
-**Scope:** interactive claude only. Pass it to codex/opencode or to a
-one-shot run and the flag is ignored with a note. `--clean` and
-`--install-in-repo` are mutually exclusive — they ask for opposite things.
+**Scope:** interactive claude only. Pass it to codex/opencode and the flag
+is ignored with a note. `--clean` and `--install-in-repo` are mutually
+exclusive — they ask for opposite things.
 
 **Caveat:** user-level Claude Code config in `~/.claude/` still loads
 inside the session. `--clean` hides the *repo's* context, not the user's.
@@ -189,7 +185,7 @@ for the full mount layout and semantics.
 
 - `packages/workload-router` — TypeScript SDK for typed persona + routing profile resolution (harness-agnostic).
 - `packages/harness-kit` — Composable primitives for launching a persona's harness: env-ref resolution, MCP server translation, per-harness argv building. The layer the CLI sits on top of. Depend on this directly if you're building your own orchestrator on top of `@agentworkforce/workload-router` and want the same behaviors.
-- `packages/cli` — `agent-workforce` command-line front end: spawn a persona's harness (claude/codex/opencode) from the shell, interactively or one-shot. See **[packages/cli/README.md](./packages/cli/README.md)** for the full docs, and the [CLI](#cli) section below for a quick tour.
+- `packages/cli` — `agent-workforce` command-line front end: spawn a persona's harness (claude/codex/opencode) from the shell. See **[packages/cli/README.md](./packages/cli/README.md)** for the full docs, and the [CLI](#cli) section below for a quick tour.
 
 ## Personas
 
@@ -226,38 +222,19 @@ for the full mount layout and semantics.
 
 The recommended entry point is **`usePersona(intent)`** — a synchronous,
 side-effect-free factory that resolves a persona and returns grouped install
-metadata plus a `sendMessage()` closure. Calling it does nothing but
-pre-compute the routing; nothing is installed or spawned until you call
-`sendMessage()` or run the install command yourself.
+metadata. Calling it does nothing but pre-compute the routing; nothing is
+installed or spawned until you run the install command yourself.
 
 ```ts
 import { usePersona } from '@agentworkforce/workload-router';
+import { spawnSync } from 'node:child_process';
 
-const { sendMessage } = usePersona('npm-provenance');
+const { selection, install } = usePersona('npm-provenance');
 
-// Installs the persona's skills, then runs the persona's harness agent
-// with your task. Returns a PersonaExecution — awaitable, with
-// `cancel()` and a `runId` promise attached.
-//
-// `await sendMessage(...)` only resolves on `status: 'completed'`. Non-zero
-// exits / timeouts throw PersonaExecutionError; cancellation throws
-// AbortError. Both carry the typed ExecuteResult on `err.result`.
-try {
-  const result = await sendMessage('Set up npm trusted publishing for this repo', {
-    workingDirectory: '.',
-    timeoutSeconds: 600,
-  });
-  // result.status === 'completed' here
-} catch (err) {
-  const execErr = err as Error & {
-    result?: { status: string; stderr: string; exitCode: number | null };
-  };
-  console.error(
-    'persona run failed',
-    execErr.result?.status,
-    execErr.result?.stderr,
-  );
-}
+// Materialize the persona's skills into the repo, then hand `selection`
+// (`personaId`, `tier`, `runtime`, `skills`, `rationale`) to your harness
+// launcher of choice.
+spawnSync(install.commandString, { shell: true, stdio: 'inherit' });
 ```
 
 > Despite the `use*` prefix, **`usePersona` is not a React hook.** It is a
@@ -266,11 +243,7 @@ try {
 The full return shape is:
 
 ```ts
-const {
-  selection,
-  install,
-  sendMessage,
-} = usePersona('npm-provenance');
+const { selection, install } = usePersona('npm-provenance');
 ```
 
 - `selection`: resolved persona choice and runtime metadata.
@@ -278,43 +251,13 @@ const {
 - `install.plan`: pure skill-install plan with no side effects.
 - `install.command`: full install command as an argv array.
 - `install.commandString`: full install command as a shell string.
-- `sendMessage(task, options?)`: runs the persona and returns an awaitable `PersonaExecution`.
+- `install.cleanupCommand` / `install.cleanupCommandString`: removes the
+  ephemeral artifact paths the provider scattered during install (the
+  provider lockfile is preserved). For empty plans this is a shell no-op.
 
-For the full API — the install-only mode, pre-staged install with
-`installSkills: false`, cancellation via `AbortSignal`, streaming progress,
-the `runId` timing contract, and the double-install caveat when mixing
-modes — see **[`packages/workload-router/README.md`](./packages/workload-router/README.md)**.
-
-<details>
-<summary>Low-level primitives (advanced use — prefer <code>usePersona</code> for new code)</summary>
-
-If you need to resolve a persona and materialize its skill install plan
-**without** running an agent — or you want to drive install yourself with
-custom process management — `usePersona` is built on top of two pure
-helpers you can call directly:
-
-```ts
-import { resolvePersona, materializeSkillsFor } from '@agentworkforce/workload-router';
-import { spawnSync } from 'node:child_process';
-
-const selection = resolvePersona('npm-provenance');
-// selection -> { personaId, tier, runtime, skills, rationale }
-
-const plan = materializeSkillsFor(selection);
-for (const install of plan.installs) {
-  // install.installCommand is an argv array (safer for execFile/spawn).
-  // For a shell string, use `usePersona(...).install.commandString`.
-  spawnSync(install.installCommand[0], install.installCommand.slice(1), { stdio: 'inherit' });
-}
-```
-
-These primitives are exported for callers who need direct access to the
-plan object or want to skip the `sendMessage()` workflow entirely. New code
-should prefer `usePersona` — it consolidates routing, install planning,
-and agent execution into one call and gives you cancellation / progress /
-run-id observability for free.
-
-</details>
+For the underlying primitives — `resolvePersona`, `materializeSkillsFor`,
+and friends — see
+**[`packages/workload-router/README.md`](./packages/workload-router/README.md)**.
 
 ## OpenClaw integration pattern
 
@@ -334,17 +277,15 @@ run-id observability for free.
    - `npm-provenance`
    - `posthog`
 2. Call `usePersona(intent, { profile? })` to resolve the persona and
-   receive the selected persona, grouped install metadata, and a
-   `sendMessage()` closure bound to its runtime (harness, model, settings,
-   prompt).
-3. Call `sendMessage(task, opts)` to install the persona's skills and invoke
-   its harness agent in one step. Use `AbortSignal` / `execution.cancel()`
-   for cancellation and `onProgress` to stream stdout/stderr.
+   receive the selected persona plus grouped install metadata bound to its
+   runtime (harness, model, settings, prompt).
+3. Run `install.commandString` to materialize the persona's skills into the
+   repo, then spawn the harness CLI yourself with `selection.runtime`. The
+   `agent-workforce` CLI is the reference implementation of step 3 — see
+   `packages/cli/src/cli.ts`.
 
-If you need to bypass `sendMessage()` and spawn the agent yourself — for
-example, to integrate with an existing orchestrator — `resolvePersona` +
-`materializeSkillsFor` remain available as the underlying primitives
-(see the collapsed section above).
+`resolvePersona` and `materializeSkillsFor` are also exported as the
+underlying primitives if you want to bypass `usePersona`.
 
 See runnable mapping example:
 - `examples/openclaw-routing.ts`

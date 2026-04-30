@@ -5,14 +5,12 @@ A thin command-line front end for the workload-router. Spawns the harness CLI
 built-in one from `/personas/`, or a user-local one that extends a built-in.
 
 ```
-agent-workforce agent <persona>[@<tier>] [task...]
+agent-workforce agent <persona>[@<tier>]
 agent-workforce list [flags]
 agent-workforce harness check
 ```
 
-- `agent` — no `task` drops you into an interactive session with the harness;
-  a `task...` argument runs one-shot (via `usePersona().sendMessage()`) and
-  streams output to stdout/stderr.
+- `agent` — drops you into an interactive session with the harness.
 - `list` — print the persona catalog as a table (or JSON). See
   [`## List`](#list) below for every flag.
 - `harness check` — probe which harnesses (`claude`, `codex`, `opencode`)
@@ -50,7 +48,7 @@ corepack pnpm --filter @agentworkforce/cli link --global
 ## Selectors
 
 ```
-agent-workforce agent <persona>[@<tier>] [task...]
+agent-workforce agent <persona>[@<tier>]
 ```
 
 - `<persona>` — matches, in order:
@@ -65,8 +63,8 @@ Unknown persona prints the full catalog with each entry's origin.
 ### Examples
 
 ```sh
-# One-shot against the built-in code reviewer
-agent-workforce agent review@best-value "look at the diff on this branch"
+# Interactive code reviewer
+agent-workforce agent review@best-value
 
 # Interactive PostHog session (library persona, needs POSTHOG_API_KEY)
 agent-workforce agent posthog@best
@@ -391,9 +389,7 @@ persona session self-contained and prevents cross-contamination with the
 agents you normally run. If you need one of your personal MCPs inside a
 persona session, add it to the persona's `mcpServers` block.
 
-## Interactive vs one-shot
-
-### Interactive
+## Interactive
 
 ```sh
 agent-workforce agent [--install-in-repo] [--clean] <persona>[@<tier>]
@@ -426,27 +422,6 @@ agent-workforce agent [--install-in-repo] [--clean] <persona>[@<tier>]
 6. Propagates the harness's exit code.
 
 Signals (SIGINT, SIGTERM) are forwarded to the child.
-
-### One-shot
-
-```sh
-agent-workforce agent <persona>[@<tier>] "<task…>"
-```
-
-Non-interactive. Delegates to `usePersona(intent, { tier }).sendMessage(task)`
-from the workload-router SDK, which spawns an ad-hoc single-step workflow:
-install skills → run agent → cleanup. Stdout/stderr stream live; exit code
-matches the agent's.
-
-Env from the persona is passed through via `ExecuteOptions.env`. `mcpServers`
-is currently **ignored with a warning** in one-shot mode — the SDK workflow
-path doesn't thread MCP config yet.
-
-One-shot mode still installs into the repo regardless of `--install-in-repo`;
-out-of-repo staging only applies to the interactive path today because the
-agent-relay workflow SDK doesn't yet thread `--plugin-dir` into the claude
-agent adapter. `--install-in-repo` passed to a one-shot run prints a `note:`
-and is a no-op.
 
 ## Skill staging
 
@@ -507,7 +482,6 @@ stage dir conflicts with something else (network filesystem, read-only
 - **No cache layer yet.** Every interactive session runs a fresh prpm install
   into a new stage dir. A `~/.agent-workforce/cache/` content-addressed cache
   is planned but not wired up.
-- **One-shot path unchanged.** See the paragraph under "One-shot" above.
 
 ## Clean mode
 
@@ -573,9 +547,6 @@ agent-workforce CLI just wires the paths and passes the persona's argv.
 - **`--clean` on codex/opencode is a warning no-op.** Only the claude
   harness gets the mount (it's the only one whose native surface includes
   the hidden patterns).
-- **`--clean` on a one-shot run is a warning no-op.** The agent-relay
-  workflow SDK doesn't thread mount integration today; matches how
-  `--install-in-repo` behaves in one-shot mode.
 
 ### Example
 

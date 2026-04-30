@@ -1,12 +1,8 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { chmodSync, existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
-import { tmpdir } from 'node:os';
-import { join } from 'node:path';
 import {
   HARNESS_SKILL_TARGETS,
   HARNESS_VALUES,
-  PersonaExecutionError,
   materializeSkills,
   materializeSkillsFor,
   personaCatalog,
@@ -15,21 +11,6 @@ import {
   usePersona,
   useSelection
 } from './index.js';
-
-function writeNodeExecutable(dir: string, name: string, source: string): string {
-  const filePath = join(dir, name);
-  writeFileSync(filePath, `#!/usr/bin/env node\n${source}\n`, 'utf8');
-  chmodSync(filePath, 0o755);
-  return filePath;
-}
-
-function buildEnv(dir: string, extra: NodeJS.ProcessEnv = {}): NodeJS.ProcessEnv {
-  return {
-    ...process.env,
-    PATH: `${dir}:${process.env.PATH ?? ''}`,
-    ...extra
-  };
-}
 
 test('resolves frontend implementer from default routing profile', () => {
   const result = resolvePersona('implement-frontend');
@@ -674,7 +655,7 @@ test('materializeSkills handles personas with no skills', () => {
   assert.equal(plan.installs.length, 0);
 });
 
-test('usePersona combines selection, grouped install metadata, and sendMessage into a frozen context', () => {
+test('usePersona combines selection and grouped install metadata into a frozen context', () => {
   const context = usePersona('npm-provenance');
   const selection = resolvePersona('npm-provenance');
   const plan = materializeSkillsFor(selection);
@@ -690,224 +671,3 @@ test('usePersona combines selection, grouped install metadata, and sendMessage i
   assert.ok(Object.isFrozen(context.install.command));
 });
 
-test('usePersona.sendMessage runs the selected harness and returns stdout, stderr, and run metadata', async () => {
-  const dir = mkdtempSync(join(tmpdir(), 'use-persona-success-'));
-  try {
-    writeNodeExecutable(
-      dir,
-      'codex',
-      `
-const { writeFileSync } = require('node:fs');
-const args = process.argv.slice(2);
-writeFileSync('codex-args.json', JSON.stringify(args), 'utf8');
-writeFileSync('codex-env.json', JSON.stringify({ TEST_ENV: process.env.TEST_ENV }), 'utf8');
-process.stdout.write('stub-stdout');
-process.stderr.write('stub-stderr');
-`
-    );
-
-    const context = usePersona('architecture-plan', { harness: 'codex' });
-    const progress: Array<{ stream: 'stdout' | 'stderr'; text: string }> = [];
-    const execution = context.sendMessage('Draft the migration plan', {
-      workingDirectory: dir,
-      env: buildEnv(dir, { TEST_ENV: 'persona-send-message' }),
-      onProgress: (chunk) => progress.push(chunk)
-    });
-
-    const runId = await execution.runId;
-    const result = await execution;
-    const args = JSON.parse(readFileSync(join(dir, 'codex-args.json'), 'utf8')) as string[];
-    const env = JSON.parse(readFileSync(join(dir, 'codex-env.json'), 'utf8')) as {
-      TEST_ENV: string;
-    };
-
-    assert.equal(result.status, 'completed');
-    assert.equal(result.output, 'stub-stdout');
-    assert.equal(result.stderr, 'stub-stderr');
-    assert.equal(result.exitCode, 0);
-    assert.equal(result.workflowRunId, runId);
-    assert.deepEqual(args.slice(0, 2), ['exec', '--dangerously-bypass-approvals-and-sandbox']);
-    assert.match(args[2], /System Instructions:/);
-    assert.match(args[2], /Draft the migration plan/);
-    assert.deepEqual(env, { TEST_ENV: 'persona-send-message' });
-    assert.deepEqual(progress, [
-      { stream: 'stdout', text: 'stub-stdout' },
-      { stream: 'stderr', text: 'stub-stderr' }
-    ]);
-  } finally {
-    rmSync(dir, { recursive: true, force: true });
-  }
-});
-
-test('usePersona.sendMessage installs persona skills before running the agent step', async () => {
-  const dir = mkdtempSync(join(tmpdir(), 'use-persona-install-'));
-  try {
-    writeNodeExecutable(
-      dir,
-      'npx',
-      `
-const { writeFileSync } = require('node:fs');
-writeFileSync('install-ran.txt', process.argv.slice(2).join(' '), 'utf8');
-`
-    );
-    writeNodeExecutable(
-      dir,
-      'codex',
-      `
-const { existsSync, writeFileSync } = require('node:fs');
-if (!existsSync('install-ran.txt')) {
-  process.stderr.write('install step did not run');
-  process.exit(9);
-}
-writeFileSync('agent-saw-install.txt', 'yes', 'utf8');
-process.stdout.write('agent-after-install');
-`
-    );
-
-    const context = usePersona('npm-provenance', { harness: 'codex' });
-    const result = await context.sendMessage('Configure publishing', {
-      workingDirectory: dir,
-      env: buildEnv(dir)
-    });
-
-    assert.equal(result.status, 'completed');
-    assert.match(readFileSync(join(dir, 'install-ran.txt'), 'utf8'), /prpm install/);
-    assert.equal(readFileSync(join(dir, 'agent-saw-install.txt'), 'utf8'), 'yes');
-  } finally {
-    rmSync(dir, { recursive: true, force: true });
-  }
-});
-
-test('usePersona.sendMessage keeps skill files on disk for the agent, then cleans them up after', async () => {
-  // Regression guard for the Devin-flagged P1: cleanup used to be chained
-  // into the install step with `&& rm -rf`, so by the time the agent step
-  // ran the skill manifest was already gone. This test:
-  //   1. Uses a fake `npx` that writes a stub SKILL.md into the exact path
-  //      listed in the install plan's cleanupPaths (simulating prpm install).
-  //   2. Uses a fake `codex` that asserts the SKILL.md IS present and
-  //      captures its location, then writes an agent-ran sentinel.
-  //   3. Asserts that after sendMessage settles, the cleanupPaths have been
-  //      removed — proving the post-agent cleanup step ran.
-  const dir = mkdtempSync(join(tmpdir(), 'use-persona-cleanup-'));
-  try {
-    // The install plan cleanupPaths for npm-provenance under codex is
-    // `.agents/skills/npm-trusted-publishing`. The fake npx must materialize
-    // a SKILL.md inside that dir so the agent can verify it.
-    writeNodeExecutable(
-      dir,
-      'npx',
-      `
-const { mkdirSync, writeFileSync } = require('node:fs');
-const path = require('node:path');
-const skillDir = path.join(process.cwd(), '.agents/skills/npm-trusted-publishing');
-mkdirSync(skillDir, { recursive: true });
-writeFileSync(path.join(skillDir, 'SKILL.md'), '# npm trusted publishing', 'utf8');
-`
-    );
-    writeNodeExecutable(
-      dir,
-      'codex',
-      `
-const { existsSync, writeFileSync } = require('node:fs');
-const skillPath = '.agents/skills/npm-trusted-publishing/SKILL.md';
-if (!existsSync(skillPath)) {
-  process.stderr.write('SKILL.md missing during agent step');
-  process.exit(9);
-}
-writeFileSync('agent-saw-skill.txt', 'yes', 'utf8');
-process.stdout.write('agent-read-skill');
-`
-    );
-
-    const context = usePersona('npm-provenance', { harness: 'codex' });
-    // Sanity check: plan must say this is the path we expect to verify.
-    assert.deepEqual(
-      context.install.plan.installs[0]?.cleanupPaths,
-      ['.agents/skills/npm-trusted-publishing']
-    );
-
-    const result = await context.sendMessage('Configure publishing', {
-      workingDirectory: dir,
-      env: buildEnv(dir)
-    });
-
-    assert.equal(result.status, 'completed');
-    // Agent must have seen the skill during its run.
-    assert.equal(readFileSync(join(dir, 'agent-saw-skill.txt'), 'utf8'), 'yes');
-    // Post-agent cleanup must have removed the skill artifact path.
-    assert.equal(
-      existsSync(join(dir, '.agents/skills/npm-trusted-publishing')),
-      false,
-      'cleanup step should have removed the skill artifact dir after the agent ran'
-    );
-  } finally {
-    rmSync(dir, { recursive: true, force: true });
-  }
-});
-
-test('usePersona.sendMessage maps non-zero exits to PersonaExecutionError with captured stderr', async () => {
-  const dir = mkdtempSync(join(tmpdir(), 'use-persona-fail-'));
-  try {
-    writeNodeExecutable(
-      dir,
-      'codex',
-      `
-process.stderr.write('boom');
-process.exit(17);
-`
-    );
-
-    const context = usePersona('architecture-plan', { harness: 'codex' });
-    await assert.rejects(
-      context.sendMessage('Fail this run', {
-        workingDirectory: dir,
-        env: buildEnv(dir)
-      }),
-      (error: unknown) => {
-        assert.ok(error instanceof PersonaExecutionError);
-        assert.equal(error.result.status, 'failed');
-        assert.equal(error.result.exitCode, 17);
-        assert.equal(error.result.stderr, 'boom');
-        return true;
-      }
-    );
-  } finally {
-    rmSync(dir, { recursive: true, force: true });
-  }
-});
-
-test('usePersona.sendMessage supports cancellation via AbortSignal', async () => {
-  const dir = mkdtempSync(join(tmpdir(), 'use-persona-cancel-'));
-  try {
-    writeNodeExecutable(
-      dir,
-      'codex',
-      `
-process.stdout.write('started');
-setInterval(() => {}, 1_000);
-`
-    );
-
-    const controller = new AbortController();
-    const context = usePersona('architecture-plan', { harness: 'codex' });
-    const execution = context.sendMessage('Wait for cancellation', {
-      workingDirectory: dir,
-      env: buildEnv(dir),
-      signal: controller.signal
-    });
-
-    await execution.runId;
-    controller.abort();
-
-    await assert.rejects(execution, (error: unknown) => {
-      const abortError = error as Error & {
-        result?: { status?: string; output?: string };
-      };
-      assert.equal(abortError.name, 'AbortError');
-      assert.equal(abortError.result?.status, 'cancelled');
-      return true;
-    });
-  } finally {
-    rmSync(dir, { recursive: true, force: true });
-  }
-});

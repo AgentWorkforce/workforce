@@ -51,11 +51,10 @@ const BIN_NAME = (() => {
 const USAGE = `Usage: ${BIN_NAME} <command> [args...]
 
 Commands:
-  agent [flags] <persona>[@<tier>] [task...]
+  agent [flags] <persona>[@<tier>]
                       Run a persona. Tier one of: ${PERSONA_TIERS.join(' | ')}
-                      (default: best-value). If [task] is provided, runs one-shot
-                      non-interactively; otherwise drops into an interactive
-                      harness session.
+                      (default: best-value). Drops into an interactive harness
+                      session.
 
                       Flags:
                         --install-in-repo   Install skills into the repo's
@@ -115,7 +114,7 @@ layer path via AGENT_WORKFORCE_CONFIG_DIR.)
 Examples:
   ${BIN_NAME} agent npm-provenance-publisher@best
   ${BIN_NAME} agent my-posthog@best
-  ${BIN_NAME} agent review@best-value "look at the diff on this branch"
+  ${BIN_NAME} agent review@best-value
   ${BIN_NAME} list
   ${BIN_NAME} show posthog
   ${BIN_NAME} harness check
@@ -209,44 +208,6 @@ function emitDropWarnings(lines: string[]): void {
   process.stderr.write(
     `        (referenced env vars were not set — proceeding without those values; if the agent relies on them it may need to authenticate interactively, e.g. via OAuth.)\n`
   );
-}
-
-async function runOneShot(
-  selection: PersonaSelection,
-  task: string
-): Promise<never> {
-  const { runtime } = selection;
-  process.stderr.write(
-    `→ ${selection.personaId} [${selection.tier}] via ${runtime.harness} (${runtime.model})\n`
-  );
-
-  const envResolution = resolveStringMapLenient(selection.env, process.env, 'env');
-  emitDropWarnings(formatDropWarnings(envResolution.dropped, [], []));
-
-  if (selection.mcpServers && Object.keys(selection.mcpServers).length > 0) {
-    process.stderr.write(
-      `warning: mcpServers are not yet wired through the one-shot (sendMessage) path; the agent will run without MCP. Use interactive mode for MCP access.\n`
-    );
-  }
-
-  const ctx = useSelection(selection);
-  const execution = ctx.sendMessage(task, {
-    env: envResolution.value,
-    onProgress: ({ stream, text }) => {
-      (stream === 'stderr' ? process.stderr : process.stdout).write(text);
-    }
-  });
-  try {
-    const result = await execution;
-    process.exit(result.exitCode ?? 0);
-  } catch (err) {
-    const typed = err as Error & {
-      result?: { exitCode: number | null; status: string; stderr?: string };
-    };
-    const status = typed.result?.status ?? 'failed';
-    process.stderr.write(`\n[${status}] ${typed.message}\n`);
-    process.exit(typed.result?.exitCode ?? 1);
-  }
 }
 
 function signalExitCode(signal: NodeJS.Signals | null): number {
@@ -1304,39 +1265,20 @@ export async function main(): Promise<void> {
   }
 
   const { flags, positional } = parseAgentArgs(rest);
-  const [selector, ...taskParts] = positional;
+  const [selector, ...extra] = positional;
   if (!selector) die('agent: missing persona selector.');
+  if (extra.length > 0) {
+    die(`agent: unexpected argument "${extra[0]}". The agent subcommand only takes a persona selector.`);
+  }
 
   const target = parseSelector(selector);
   const selection = buildSelection(target.spec, target.tier, target.kind);
 
-  if (taskParts.length > 0) {
-    // One-shot (sendMessage) currently goes through the agent-relay workflow
-    // SDK, which doesn't yet thread `--plugin-dir` into claude. For now it
-    // keeps the legacy in-repo install regardless of --install-in-repo so
-    // skills remain visible to the model. Flipping this requires upstream
-    // SDK work on the claude agent adapter.
-    if (flags.installInRepo) {
-      process.stderr.write(
-        'note: --install-in-repo is redundant for one-shot runs (already the current behavior).\n'
-      );
-    }
-    if (flags.clean) {
-      // Parallel to --install-in-repo: the agent-relay workflow SDK doesn't
-      // thread @relayfile/local-mount integration today, so --clean on a
-      // one-shot run is a no-op. Interactive mode gets the sandbox.
-      process.stderr.write(
-        'note: --clean is ignored for one-shot runs; it currently only applies to interactive claude sessions.\n'
-      );
-    }
-    await runOneShot(selection, taskParts.join(' '));
-  } else {
-    const code = await runInteractive(selection, {
-      installInRepo: flags.installInRepo,
-      clean: flags.clean
-    });
-    process.exit(code);
-  }
+  const code = await runInteractive(selection, {
+    installInRepo: flags.installInRepo,
+    clean: flags.clean
+  });
+  process.exit(code);
 }
 
 export interface AgentFlags {
