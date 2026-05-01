@@ -24,6 +24,20 @@ export {
 } from './harness.js';
 
 export {
+  buildNonInteractiveSpec,
+  makeRunnablePersonaContext,
+  useRunnablePersona,
+  useRunnableSelection,
+  type NonInteractiveSpec,
+  type PersonaExecution,
+  type PersonaExecutionResult,
+  type PersonaSendOptions,
+  type RunnablePersonaContext,
+  type RunnablePersonaOptions,
+  type RunnableSelectionOptions
+} from './runner.js';
+
+export {
   detectHarness,
   detectHarnesses,
   type HarnessAvailability

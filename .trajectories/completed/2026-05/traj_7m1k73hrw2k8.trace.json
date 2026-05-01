@@ -1,0 +1,59 @@
+{
+  "version": "1.0.0",
+  "id": "03dae7ba-f43e-4402-ac18-3cb804848bdc",
+  "timestamp": "2026-05-01T19:00:30.468Z",
+  "trajectory": "traj_7m1k73hrw2k8",
+  "files": [
+    {
+      "path": "packages/agentworkforce/package.json",
+      "conversations": [
+        {
+          "contributor": {
+            "type": "ai"
+          },
+          "ranges": [
+            {
+              "start_line": 1,
+              "end_line": 6,
+              "revision": "e746d8a20e2ea947c7edf9d32544e3017ca68a30"
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "path": "packages/harness-kit/package.json",
+      "conversations": [
+        {
+          "contributor": {
+            "type": "ai"
+          },
+          "ranges": [
+            {
+              "start_line": 1,
+              "end_line": 6,
+              "revision": "e746d8a20e2ea947c7edf9d32544e3017ca68a30"
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "path": "packages/workload-router/package.json",
+      "conversations": [
+        {
+          "contributor": {
+            "type": "ai"
+          },
+          "ranges": [
+            {
+              "start_line": 1,
+              "end_line": 6,
+              "revision": "e746d8a20e2ea947c7edf9d32544e3017ca68a30"
+            }
+          ]
+        }
+      ]
+    }
+  ]
+}
