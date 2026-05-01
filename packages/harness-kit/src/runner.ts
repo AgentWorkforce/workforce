@@ -85,6 +85,8 @@ interface ConfigWrite {
   previous?: string;
 }
 
+const FORCE_KILL_GRACE_MS = 1_000;
+
 export function useRunnablePersona(
   intent: PersonaIntent,
   options: RunnablePersonaOptions = {}
@@ -161,6 +163,15 @@ export function makeRunnablePersonaContext(
       };
       const bin = options.commandOverrides?.[context.selection.runtime.harness] ?? spec.bin;
       const signal = anySignal([controller.signal, sendOptions.signal]);
+      if (signal?.aborted) {
+        return {
+          status: 'cancelled',
+          output: '',
+          stderr: warningText + abortReason(signal, cancelReason),
+          exitCode: null,
+          durationMs: Date.now() - startedAt
+        };
+      }
       const configWrites = materializeConfigFiles(cwd, spec.configFiles);
       try {
         if (sendOptions.installSkills === true && context.install.commandString !== ':') {
@@ -329,6 +340,9 @@ async function spawnCapture(
   if (!bin) {
     return { stdout: '', stderr: 'missing command\n', exitCode: 127, status: 'failed' };
   }
+  if (options.signal?.aborted) {
+    return { stdout: '', stderr: abortReason(options.signal), exitCode: null, status: 'cancelled' };
+  }
 
   return await new Promise((resolve) => {
     let stdout = '';
@@ -336,6 +350,7 @@ async function spawnCapture(
     let settled = false;
     let timedOut = false;
     let cancelled = false;
+    let forceKillTimeout: NodeJS.Timeout | undefined;
     const child = spawn(bin, [...args], {
       cwd: options.cwd,
       env: options.env,
@@ -346,6 +361,9 @@ async function spawnCapture(
         ? setTimeout(() => {
             timedOut = true;
             child.kill('SIGTERM');
+            forceKillTimeout = setTimeout(() => {
+              if (!settled) child.kill('SIGKILL');
+            }, FORCE_KILL_GRACE_MS);
           }, options.timeoutSeconds * 1000)
         : undefined;
     const abort = () => {
@@ -358,6 +376,7 @@ async function spawnCapture(
       if (settled) return;
       settled = true;
       if (timeout) clearTimeout(timeout);
+      if (forceKillTimeout) clearTimeout(forceKillTimeout);
       options.signal?.removeEventListener('abort', abort);
       resolve({
         stdout,
@@ -385,6 +404,14 @@ async function spawnCapture(
   });
 }
 
+function abortReason(signal: AbortSignal, fallback = 'cancelled'): string {
+  return signal.reason instanceof Error
+    ? signal.reason.message
+    : typeof signal.reason === 'string'
+      ? signal.reason
+      : fallback;
+}
+
 function anySignal(signals: Array<AbortSignal | undefined>): AbortSignal | undefined {
   const active = signals.filter((signal): signal is AbortSignal => signal !== undefined);
   if (active.length === 0) return undefined;
@@ -392,10 +419,10 @@ function anySignal(signals: Array<AbortSignal | undefined>): AbortSignal | undef
   const controller = new AbortController();
   for (const signal of active) {
     if (signal.aborted) {
-      controller.abort();
+      controller.abort(signal.reason);
       break;
     }
-    signal.addEventListener('abort', () => controller.abort(), { once: true });
+    signal.addEventListener('abort', () => controller.abort(signal.reason), { once: true });
   }
   return controller.signal;
 }

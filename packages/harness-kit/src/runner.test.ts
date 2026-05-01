@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { chmodSync, mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSync } from 'node:fs';
+import { chmodSync, existsSync, mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
@@ -142,6 +142,62 @@ process.exit(7);
     assert.equal(result.status, 'failed');
     assert.equal(result.exitCode, 7);
     assert.equal(result.stderr, 'boom');
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test('useRunnableSelection does not spawn when called with an already-aborted signal', async () => {
+  const dir = mkdtempSync(join(tmpdir(), 'aw-runner-aborted-'));
+  try {
+    const marker = join(dir, 'spawned');
+    const harness = writeHarness(
+      dir,
+      `#!/usr/bin/env node
+require('node:fs').writeFileSync(${JSON.stringify(marker)}, 'spawned');
+process.stdout.write('should-not-run');
+`
+    );
+    const controller = new AbortController();
+    controller.abort('cancel-before-start');
+    const context = useRunnableSelection(fakeSelection(), {
+      commandOverrides: { codex: harness }
+    });
+    const result = await context.sendMessage('task', {
+      workingDirectory: dir,
+      signal: controller.signal
+    });
+
+    assert.equal(result.status, 'cancelled');
+    assert.equal(result.output, '');
+    assert.match(result.stderr, /cancel-before-start/);
+    assert.equal(existsSync(marker), false);
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test('useRunnableSelection force-kills a child that ignores timeout SIGTERM', async () => {
+  const dir = mkdtempSync(join(tmpdir(), 'aw-runner-timeout-'));
+  try {
+    const harness = writeHarness(
+      dir,
+      `#!/usr/bin/env node
+process.on('SIGTERM', () => {});
+setInterval(() => {}, 1000);
+`
+    );
+    const context = useRunnableSelection(fakeSelection(), {
+      commandOverrides: { codex: harness }
+    });
+    const result = await context.sendMessage('task', {
+      workingDirectory: dir,
+      timeoutSeconds: 0.2
+    });
+
+    assert.equal(result.status, 'timeout');
+    assert.equal(result.exitCode, null);
+    assert.ok(result.durationMs >= 1_000, 'expected timeout to wait for the forced kill grace period');
   } finally {
     rmSync(dir, { recursive: true, force: true });
   }
