@@ -1,0 +1,61 @@
+{
+  "id": "traj_7m1k73hrw2k8",
+  "version": 1,
+  "task": {
+    "title": "Add Workforce runnable persona sendMessage bridge"
+  },
+  "status": "completed",
+  "startedAt": "2026-05-01T18:52:31.913Z",
+  "completedAt": "2026-05-01T19:00:30.407Z",
+  "agents": [
+    {
+      "name": "default",
+      "role": "lead",
+      "joinedAt": "2026-05-01T18:58:51.766Z"
+    }
+  ],
+  "chapters": [
+    {
+      "id": "chap_otmwo2ibx2w1",
+      "title": "Work",
+      "agentName": "default",
+      "startedAt": "2026-05-01T18:58:51.766Z",
+      "endedAt": "2026-05-01T19:00:30.407Z",
+      "events": [
+        {
+          "ts": 1777661931767,
+          "type": "decision",
+          "content": "Added runnable persona bridge in harness-kit instead of workload-router: Added runnable persona bridge in harness-kit instead of workload-router",
+          "raw": {
+            "question": "Added runnable persona bridge in harness-kit instead of workload-router",
+            "chosen": "Added runnable persona bridge in harness-kit instead of workload-router",
+            "alternatives": [],
+            "reasoning": "workload-router remains the pure selection/install metadata layer; harness-kit already owns per-harness command knowledge and can safely expose the side-effecting sendMessage bridge Ricky needs."
+          },
+          "significance": "high"
+        }
+      ]
+    }
+  ],
+  "retrospective": {
+    "summary": "Added a harness-kit runnable persona bridge with non-interactive sendMessage execution, fake-harness tests, README docs, and updated @relayfile/local-mount to 0.6.1 so the pulled main branch typechecks with includeGit.",
+    "approach": "Standard approach",
+    "confidence": 0.9
+  },
+  "commits": [
+    "e746d8a",
+    "8051d7b"
+  ],
+  "filesChanged": [
+    "packages/agentworkforce/package.json",
+    "packages/harness-kit/package.json",
+    "packages/workload-router/package.json"
+  ],
+  "projectId": "/Users/khaliqgant/Projects/AgentWorkforce/workforce",
+  "tags": [],
+  "_trace": {
+    "startRef": "1eab74d214aa7bd00de842bce7e35f380e45cd69",
+    "endRef": "e746d8a20e2ea947c7edf9d32544e3017ca68a30",
+    "traceId": "03dae7ba-f43e-4402-ac18-3cb804848bdc"
+  }
+}
