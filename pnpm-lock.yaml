@@ -42,7 +42,7 @@ importers:
   packages/harness-kit:
     dependencies:
       '@agentworkforce/workload-router':
-        specifier: workspace:*
+        specifier: workspace:^
         version: link:../workload-router
 
   packages/workload-router: {}

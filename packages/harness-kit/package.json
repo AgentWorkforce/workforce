@@ -1,6 +1,6 @@
 {
   "name": "@agentworkforce/harness-kit",
-  "version": "0.5.4",
+  "version": "0.5.5",
   "private": false,
   "type": "module",
   "main": "dist/index.js",
@@ -18,7 +18,7 @@
     "package.json"
   ],
   "dependencies": {
-    "@agentworkforce/workload-router": "workspace:*"
+    "@agentworkforce/workload-router": "workspace:^"
   },
   "repository": {
     "type": "git",
