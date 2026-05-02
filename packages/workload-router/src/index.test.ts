@@ -254,8 +254,9 @@ test('resolves agent-relay-workflow persona from the default routing profile', (
   assert.equal(maker.personaId, 'agent-relay-workflow');
   assert.equal(maker.tier, 'best-value');
   assert.equal(maker.runtime.harness, 'opencode');
-  assert.equal(maker.skills.length, 3);
+  assert.equal(maker.skills.length, 4);
   assert.equal(maker.skills[0].id, 'skill.sh/writing-agent-relay-workflows');
+  assert.equal(maker.skills[3].id, 'prpm/choosing-swarm-patterns');
 });
 
 // removed: writing-agent-relay-workflows persona renamed to agent-relay-workflow

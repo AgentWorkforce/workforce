@@ -48,6 +48,11 @@ export const agentRelayWorkflow = {
       "id": "prpm/relay-80-100-workflow",
       "source": "https://prpm.dev/packages/@agent-relay/relay-80-100-workflow",
       "description": "PRPM-based provisioning for agent-relay/relay-80-100-workflow"
+    },
+    {
+      "id": "prpm/choosing-swarm-patterns",
+      "source": "https://prpm.dev/packages/@agent-relay/choosing-swarm-patterns",
+      "description": "PRPM-based provisioning for agent-relay/choosing-swarm-patterns"
     }
   ],
   "tiers": {
