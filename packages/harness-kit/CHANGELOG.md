@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.5.5] - 2026-05-02
+
+### Fixed
+
+- Publish harness-kit with a compatible workload-router dependency range so npm can resolve the released packages together.
+
 ### Added
 
 - Add a `useRunnablePersona` / `useRunnableSelection` bridge that launches the selected harness non-interactively and returns captured execution results.
@@ -15,7 +21,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Dependencies
 
-- Sync package versions to 0.5.3
+- Sync package versions to 0.5.4
 
 ## [0.2.1] - 2026-04-29
 

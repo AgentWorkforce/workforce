@@ -11,7 +11,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Dependencies
 
-- Sync package versions to 0.5.3
+- Sync package versions to 0.5.4
 
 ## [0.5.1] - 2026-04-30
 
@@ -30,4 +30,3 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Released
 
 - v0.4.1
-
