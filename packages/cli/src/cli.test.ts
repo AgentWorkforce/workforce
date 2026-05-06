@@ -236,6 +236,23 @@ test('SKILL_INSTALL_IGNORED_PATTERNS: keeps skill-install artifacts out of the r
 // the dispatch path tries next — the assertions target stderr shape alone.
 async function runCliCapturingStderr(args: string[]): Promise<{
   stderr: string;
+  stdout: string;
+  exitCode: number | null;
+}>;
+async function runCliCapturingStderr(
+  args: string[],
+  extraEnv: NodeJS.ProcessEnv
+): Promise<{
+  stderr: string;
+  stdout: string;
+  exitCode: number | null;
+}>;
+async function runCliCapturingStderr(
+  args: string[],
+  extraEnv: NodeJS.ProcessEnv = {}
+): Promise<{
+  stderr: string;
+  stdout: string;
   exitCode: number | null;
 }> {
   const { spawn } = await import('node:child_process');
@@ -249,6 +266,7 @@ async function runCliCapturingStderr(args: string[]): Promise<{
   const child = spawn(process.execPath, [cliPath, ...args], {
     env: {
       ...process.env,
+      ...extraEnv,
       // Force any harness spawn to ENOENT so the run terminates quickly.
       PATH: '/nonexistent-path-for-test',
       POSTHOG_API_KEY: 'dummy'
@@ -257,8 +275,12 @@ async function runCliCapturingStderr(args: string[]): Promise<{
   });
 
   let stderr = '';
+  let stdout = '';
   child.stderr.on('data', (buf: Buffer) => {
     stderr += buf.toString();
+  });
+  child.stdout.on('data', (buf: Buffer) => {
+    stdout += buf.toString();
   });
 
   const exitCode: number | null = await new Promise((resolve) => {
@@ -280,7 +302,7 @@ async function runCliCapturingStderr(args: string[]): Promise<{
     }, 15_000);
   });
 
-  return { stderr, exitCode };
+  return { stderr, stdout, exitCode };
 }
 
 test('main: extra positional after the persona selector is rejected', async () => {
@@ -291,6 +313,56 @@ test('main: extra positional after the persona selector is rejected', async () =
   ]);
   assert.match(stderr, /unexpected argument "hello"/);
   assert.equal(exitCode, 1);
+});
+
+test('main: sources add/list/remove manages persona source dirs', async () => {
+  const { mkdtempSync, mkdirSync, rmSync } = await import('node:fs');
+  const { tmpdir } = await import('node:os');
+  const { join } = await import('node:path');
+
+  const root = mkdtempSync(join(tmpdir(), 'aw-sources-cli-'));
+  const workforceHome = join(root, 'home', '.agentworkforce', 'workforce');
+  const userPersonaDir = join(workforceHome, 'personas');
+  const customDir = join(root, 'checked-out-personas');
+  mkdirSync(userPersonaDir, { recursive: true });
+  mkdirSync(customDir, { recursive: true });
+  try {
+    const env = { AGENT_WORKFORCE_HOME: workforceHome };
+    let res = await runCliCapturingStderr(['sources', 'list', '--json'], env);
+    assert.equal(res.exitCode, 0);
+    let parsed = JSON.parse(res.stdout) as {
+      personaDirs: string[];
+      sources: Array<{ source: string; config: string; dir: string }>;
+    };
+    assert.deepEqual(parsed.personaDirs, [userPersonaDir]);
+    assert.equal(parsed.sources[0]?.source, 'cwd');
+    assert.equal(parsed.sources[1]?.source, 'user');
+
+    res = await runCliCapturingStderr(
+      ['sources', 'add', customDir, '--position', '1'],
+      env
+    );
+    assert.equal(res.exitCode, 0);
+    assert.match(res.stdout, /Added persona source directory/);
+
+    res = await runCliCapturingStderr(['sources', 'list', '--json'], env);
+    assert.equal(res.exitCode, 0);
+    parsed = JSON.parse(res.stdout) as typeof parsed;
+    assert.deepEqual(parsed.personaDirs, [customDir, userPersonaDir]);
+    assert.equal(parsed.sources[1]?.source, 'dir:1');
+    assert.equal(parsed.sources[2]?.source, 'user');
+
+    res = await runCliCapturingStderr(['sources', 'remove', '1'], env);
+    assert.equal(res.exitCode, 0);
+    assert.match(res.stdout, /Removed persona source directory/);
+
+    res = await runCliCapturingStderr(['sources', 'list', '--json'], env);
+    assert.equal(res.exitCode, 0);
+    parsed = JSON.parse(res.stdout) as typeof parsed;
+    assert.deepEqual(parsed.personaDirs, [userPersonaDir]);
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
 });
 
 test('buildMountGitExcludeBlock: emits a header comment and one line per pattern, leading and trailing newline', () => {

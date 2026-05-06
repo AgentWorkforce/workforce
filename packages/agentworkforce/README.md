@@ -12,6 +12,7 @@ Then:
 agentworkforce agent <persona>[@<tier>]
 agentworkforce list [flags]
 agentworkforce show <persona>
+agentworkforce sources <list|add|remove>
 agentworkforce harness check
 ```
 

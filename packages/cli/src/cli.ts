@@ -1,7 +1,7 @@
 #!/usr/bin/env node
 import { spawn, spawnSync } from 'node:child_process';
 import { randomBytes } from 'node:crypto';
-import { appendFileSync, existsSync, mkdirSync, rmSync, writeFileSync } from 'node:fs';
+import { appendFileSync, existsSync, mkdirSync, rmSync, statSync, writeFileSync } from 'node:fs';
 import { constants, homedir } from 'node:os';
 import { dirname, isAbsolute, join, resolve as resolvePath } from 'node:path';
 import { pathToFileURL } from 'node:url';
@@ -31,7 +31,14 @@ import {
 } from '@agentworkforce/harness-kit';
 import { launchOnMount } from '@relayfile/local-mount';
 import ora, { type Ora } from 'ora';
-import { loadLocalPersonas, type PersonaSource } from './local-personas.js';
+import {
+  buildPersonaSourceDirectories,
+  loadLocalPersonas,
+  loadPersonaSourceConfig,
+  normalizePersonaDir,
+  savePersonaSourceConfig,
+  type PersonaSource
+} from './local-personas.js';
 
 // Derived from the binary the user actually invoked. Lets the same dist file
 // drive multiple npm bins (`agent-workforce` from @agentworkforce/cli,
@@ -71,10 +78,10 @@ Commands:
                                             are hidden from the session. Codex
                                             sessions never mount and ignore
                                             this flag.
-  list [flags]        List available personas from the cascade (pwd → home →
-                      library). By default shows one row per persona at the
-                      recommended tier for its intent; pass --all to see every
-                      tier. Flags:
+  list [flags]        List available personas from the cascade (cwd →
+                      configured persona dirs → library). By default shows
+                      one row per persona at the recommended tier for its
+                      intent; pass --all to see every tier. Flags:
                         --all                         show every tier (overrides default)
                         --json                        emit JSON instead of a table
                         --filter-rating <tier>        only show this tier; disables
@@ -87,20 +94,28 @@ Commands:
                         --no-display-description      hide the DESCRIPTION column
   show <persona>[@<tier>]
                       Print the fully-resolved spec for a single persona,
-                      including which cascade layer defined it (pwd, home,
-                      library). By default shows only the recommended tier for
-                      the persona's intent; pass @<tier> to pick one, or --all
-                      to see every tier. Flags:
+                      including which cascade layer defined it (cwd, user,
+                      dir:<n>, library). By default shows only the recommended
+                      tier for the persona's intent; pass @<tier> to pick one,
+                      or --all to see every tier. Flags:
                         --all         include every tier (overrides default)
                         --json        emit the resolved PersonaSpec as JSON
+  sources list [--json]
+                      List persona source directories in cascade order.
+  sources add <dir> [--position <n>]
+                      Add a configurable persona source directory. Position is
+                      1-based among configurable dirs after the fixed cwd dir.
+  sources remove <dir|n>
+                      Remove a configurable persona source directory by path or
+                      1-based configurable position.
   harness check       Probe which harnesses (claude, codex, opencode) are
                       installed and runnable on this machine.
 
-Local personas cascade: <cwd>/.agent-workforce/*.json → ~/.agent-workforce/*.json → repo library.
+Local personas cascade: <cwd>/.agentworkforce/workforce/*.json → configured persona dirs → repo library.
 Each layer only needs to specify fields it overrides; everything else inherits
 from the next lower layer. "extends" explicitly names a base; omit it and the
-loader implicitly inherits from the same-id persona below. (Override the home
-layer path via AGENT_WORKFORCE_CONFIG_DIR.)
+loader implicitly inherits from the same-id persona below. By default the only
+configured persona dir is ~/.agentworkforce/workforce/personas.
 
 Examples:
   ${BIN_NAME} agent npm-provenance-publisher@best
@@ -108,6 +123,8 @@ Examples:
   ${BIN_NAME} agent review@best-value
   ${BIN_NAME} list
   ${BIN_NAME} show posthog
+  ${BIN_NAME} sources list
+  ${BIN_NAME} sources add ../my-personas --position 1
   ${BIN_NAME} harness check
 `;
 
@@ -869,6 +886,213 @@ function formatAvailabilityTable(results: readonly HarnessAvailability[]): strin
   return [line(headers), ...rows.map(line)].join('\n') + '\n';
 }
 
+interface SourceDirRow {
+  cascade: string;
+  config: string;
+  source: string;
+  exists: string;
+  dir: string;
+}
+
+function collectSourceDirRows(): {
+  configPath: string;
+  personaDirs: string[];
+  rows: SourceDirRow[];
+} {
+  const { directories, config } = buildPersonaSourceDirectories();
+  const rows: SourceDirRow[] = directories.map((sourceDir, idx) => ({
+    cascade: String(idx + 1),
+    config: sourceDir.configurable ? String(config.personaDirs.indexOf(sourceDir.dir) + 1) : '-',
+    source: sourceDir.source,
+    exists: existsSync(sourceDir.dir) ? 'yes' : 'no',
+    dir: sourceDir.dir
+  }));
+  rows.push({
+    cascade: String(rows.length + 1),
+    config: '-',
+    source: 'library',
+    exists: 'yes',
+    dir: '(built-in)'
+  });
+  return { configPath: config.configPath, personaDirs: config.personaDirs, rows };
+}
+
+function formatSourcesTable(rows: readonly SourceDirRow[], configPath: string): string {
+  const headers: SourceDirRow = {
+    cascade: 'CASCADE',
+    config: 'CONFIG',
+    source: 'SOURCE',
+    exists: 'EXISTS',
+    dir: 'DIR'
+  };
+  const cols = ['cascade', 'config', 'source', 'exists', 'dir'] as const;
+  const widths = Object.fromEntries(
+    cols.map((c) => [c, Math.max(headers[c].length, ...rows.map((r) => r[c].length))])
+  ) as Record<(typeof cols)[number], number>;
+  const line = (row: SourceDirRow) =>
+    cols.map((c) => row[c].padEnd(widths[c])).join('  ').trimEnd();
+  return [
+    `Config: ${configPath}`,
+    [line(headers), ...rows.map(line)].join('\n'),
+    ''
+  ].join('\n');
+}
+
+function parseSourcesListArgs(args: readonly string[]): { json: boolean } {
+  let json = false;
+  for (const arg of args) {
+    if (arg === '--json') {
+      json = true;
+    } else if (arg === '-h' || arg === '--help') {
+      process.stdout.write(`Usage: ${BIN_NAME} sources list [--json]\n`);
+      process.exit(0);
+    } else {
+      die(`sources list: unexpected argument "${arg}".`);
+    }
+  }
+  return { json };
+}
+
+function runSourcesList(args: readonly string[]): never {
+  const { json } = parseSourcesListArgs(args);
+  const { configPath, personaDirs, rows } = collectSourceDirRows();
+  if (json) {
+    process.stdout.write(JSON.stringify({ configPath, personaDirs, sources: rows }, null, 2) + '\n');
+  } else {
+    process.stdout.write(formatSourcesTable(rows, configPath));
+  }
+  process.exit(0);
+}
+
+function assertDirectoryForAdd(dir: string): void {
+  try {
+    if (!existsSync(dir)) {
+      die(`sources add: directory does not exist: ${dir}`);
+    }
+    if (!statSync(dir).isDirectory()) {
+      die(`sources add: path is not a directory: ${dir}`);
+    }
+  } catch (err) {
+    if ((err as Error).message.startsWith('sources add:')) throw err;
+    die(`sources add: could not inspect ${dir}: ${(err as Error).message}`);
+  }
+}
+
+function parseSourcesAddArgs(args: readonly string[]): { dir: string; position?: number } {
+  let dir: string | undefined;
+  let position: number | undefined;
+  const valueOf = (i: number, flag: string): string => {
+    const v = args[i + 1];
+    if (v === undefined || v.startsWith('--')) {
+      die(`sources add: ${flag} requires a value.`);
+    }
+    return v;
+  };
+  for (let i = 0; i < args.length; i++) {
+    const arg = args[i];
+    if (arg === '-h' || arg === '--help') {
+      process.stdout.write(`Usage: ${BIN_NAME} sources add <dir> [--position <n>]\n`);
+      process.exit(0);
+    } else if (arg === '--position') {
+      const raw = valueOf(i++, arg);
+      const parsed = Number(raw);
+      if (!Number.isInteger(parsed) || parsed < 1) {
+        die(`sources add: --position must be a positive integer.`);
+      }
+      position = parsed;
+    } else if (arg.startsWith('--')) {
+      die(`sources add: unexpected flag "${arg}".`);
+    } else if (dir === undefined) {
+      dir = arg;
+    } else {
+      die(`sources add: unexpected argument "${arg}".`);
+    }
+  }
+  if (!dir) die('sources add: missing directory.');
+  return { dir, position };
+}
+
+function runSourcesAdd(args: readonly string[]): never {
+  const { dir: rawDir, position } = parseSourcesAddArgs(args);
+  const dir = normalizePersonaDir(rawDir);
+  assertDirectoryForAdd(dir);
+
+  const config = loadPersonaSourceConfig();
+  if (config.personaDirs.includes(dir)) {
+    die(`sources add: directory is already configured: ${dir}`);
+  }
+  const insertAt = position === undefined ? config.personaDirs.length : position - 1;
+  if (insertAt < 0 || insertAt > config.personaDirs.length) {
+    die(
+      `sources add: --position must be between 1 and ${config.personaDirs.length + 1}.`
+    );
+  }
+  const nextDirs = [...config.personaDirs];
+  nextDirs.splice(insertAt, 0, dir);
+  const saved = savePersonaSourceConfig(nextDirs);
+  process.stdout.write(
+    `Added persona source directory at configurable position ${insertAt + 1}: ${dir}\nConfig: ${saved.configPath}\n`
+  );
+  process.exit(0);
+}
+
+function parseSourcesRemoveArgs(args: readonly string[]): { target: string } {
+  let target: string | undefined;
+  for (const arg of args) {
+    if (arg === '-h' || arg === '--help') {
+      process.stdout.write(`Usage: ${BIN_NAME} sources remove <dir|config-position>\n`);
+      process.exit(0);
+    } else if (arg.startsWith('--')) {
+      die(`sources remove: unexpected flag "${arg}".`);
+    } else if (target === undefined) {
+      target = arg;
+    } else {
+      die(`sources remove: unexpected argument "${arg}".`);
+    }
+  }
+  if (!target) die('sources remove: missing directory or config-position.');
+  return { target };
+}
+
+function runSourcesRemove(args: readonly string[]): never {
+  const { target } = parseSourcesRemoveArgs(args);
+  const config = loadPersonaSourceConfig();
+  let idx: number;
+  if (/^[1-9]\d*$/.test(target)) {
+    idx = Number(target) - 1;
+  } else {
+    const dir = normalizePersonaDir(target);
+    idx = config.personaDirs.indexOf(dir);
+  }
+  if (idx < 0 || idx >= config.personaDirs.length) {
+    die(`sources remove: no configurable persona source matched "${target}".`);
+  }
+  const nextDirs = [...config.personaDirs];
+  const [removed] = nextDirs.splice(idx, 1);
+  const saved = savePersonaSourceConfig(nextDirs);
+  process.stdout.write(
+    `Removed persona source directory from configurable position ${idx + 1}: ${removed}\nConfig: ${saved.configPath}\n`
+  );
+  process.exit(0);
+}
+
+function runSources(args: readonly string[]): never {
+  const [action, ...rest] = args;
+  if (!action || action === '-h' || action === '--help') {
+    process.stdout.write(
+      `Usage: ${BIN_NAME} sources <list|add|remove> [args...]\n` +
+        `  ${BIN_NAME} sources list [--json]\n` +
+        `  ${BIN_NAME} sources add <dir> [--position <n>]\n` +
+        `  ${BIN_NAME} sources remove <dir|config-position>\n`
+    );
+    process.exit(action ? 0 : 1);
+  }
+  if (action === 'list') runSourcesList(rest);
+  if (action === 'add') runSourcesAdd(rest);
+  if (action === 'remove') runSourcesRemove(rest);
+  die(`sources: unknown action "${action}". Expected: list, add, remove.`);
+}
+
 interface PersonaListRow {
   persona: string;
   source: PersonaSource;
@@ -1140,7 +1364,7 @@ function resolveShowTarget(
   let source: PersonaSource = 'library';
   if (localSpec) {
     spec = localSpec;
-    source = local.sources.get(key) ?? 'pwd';
+    source = local.sources.get(key) ?? 'cwd';
   } else {
     const byIntent = (personaCatalog as Record<string, PersonaSpec>)[key];
     if (byIntent) {
@@ -1301,6 +1525,10 @@ export async function main(): Promise<void> {
 
   if (subcommand === 'show') {
     runShow(rest);
+  }
+
+  if (subcommand === 'sources') {
+    runSources(rest);
   }
 
   if (subcommand === 'harness') {

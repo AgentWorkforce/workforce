@@ -2,17 +2,22 @@
 
 A thin command-line front end for the workload-router. Spawns the harness CLI
 (`claude`, `codex`, `opencode`) configured by a selected **persona** — either a
-built-in one from `/personas/`, or a user-local one that extends a built-in.
+built-in one from `/personas/`, or an installed/local one that extends a lower
+source.
 
 ```
 agent-workforce agent <persona>[@<tier>]
 agent-workforce list [flags]
+agent-workforce show <persona>[@<tier>]
+agent-workforce sources <list|add|remove>
 agent-workforce harness check
 ```
 
 - `agent` — drops you into an interactive session with the harness.
 - `list` — print the persona catalog as a table (or JSON). See
   [`## List`](#list) below for every flag.
+- `show` — print the resolved spec for one persona.
+- `sources` — list, add, or remove persona source directories.
 - `harness check` — probe which harnesses (`claude`, `codex`, `opencode`)
   are installed. See [`## Harness check`](#harness-check) below.
 
@@ -52,8 +57,9 @@ agent-workforce agent <persona>[@<tier>]
 ```
 
 - `<persona>` — matches, in order:
-  1. A **pwd-local** id (files in `<cwd>/.agent-workforce/*.json`)
-  2. A **home-local** id (files in `~/.agent-workforce/*.json`)
+  1. A **cwd-local** id (files in `<cwd>/.agentworkforce/workforce/*.json`)
+  2. A configured persona source dir, in order. The default is
+     `~/.agentworkforce/workforce/personas/*.json`.
   3. A **library** persona — by intent first (e.g. `review`), then by id
      (e.g. `code-reviewer`)
 - `<tier>` — `best` | `best-value` | `minimum`. Defaults to `best-value`.
@@ -80,7 +86,8 @@ agent-workforce list [flags]
 ```
 
 Prints the merged persona catalog — everything the `agent` subcommand would
-accept as a selector — including cascade source (`library`, `home`, `pwd`),
+accept as a selector — including cascade source (`library`, `user`, `cwd`,
+or `dir:<n>`),
 harness, model, description, and tier ("rating"). One row per persona-tier
 combination; by default only the **recommended tier per intent** is shown
 (as declared in
@@ -121,6 +128,44 @@ agent-workforce list --no-display-description
 
 # Machine-readable
 agent-workforce list --json --filter-harness claude
+```
+
+## Sources
+
+```
+agent-workforce sources list [--json]
+agent-workforce sources add <dir> [--position <n>]
+agent-workforce sources remove <dir|config-position>
+```
+
+The fixed project source is always first:
+`<cwd>/.agentworkforce/workforce/*.json`.
+
+After that, the CLI reads an ordered list of configurable persona directories
+from `~/.agentworkforce/workforce/config.json`. If no config exists, the list
+defaults to `~/.agentworkforce/workforce/personas`. This makes installed
+personas work as plain JSON files in the default user location, or from any
+checked-out repo you add as a source directory.
+
+`sources add` appends by default. `--position <n>` inserts at the 1-based
+position among configurable directories, so `--position 1` gives that directory
+the highest priority after the fixed cwd source. `sources remove` accepts either
+that configurable position or an exact path.
+
+Examples:
+
+```sh
+# Show the full source cascade, including fixed cwd and library entries
+agent-workforce sources list
+
+# Install personas from another checkout, below the default user persona dir
+agent-workforce sources add ~/src/company-personas/personas
+
+# Give a checked-out persona repo priority over the default user dir
+agent-workforce sources add ~/src/company-personas/personas --position 1
+
+# Remove the first configurable persona source
+agent-workforce sources remove 1
 ```
 
 ## Harness check
@@ -169,17 +214,21 @@ See `/personas/*.json` for all built-ins.
 Local persona files layer on top of the library. Resolution precedence (highest
 wins):
 
-1. `<cwd>/.agent-workforce/*.json` — **pwd**
-2. `~/.agent-workforce/*.json` — **home** (override path via
-   `AGENT_WORKFORCE_CONFIG_DIR`)
+1. `<cwd>/.agentworkforce/workforce/*.json` — **cwd**
+2. Configurable persona source dirs, in order. Default:
+   `~/.agentworkforce/workforce/personas/*.json` — **user**
 3. Built-in personas in `/personas/` — **library**
 
 Local files are **partial overlays**: only the fields you set replace the
 inherited value. Everything else cascades through from below.
 
+Set `AGENT_WORKFORCE_HOME` to move the `~/.agentworkforce/workforce` config
+root. The legacy `AGENT_WORKFORCE_CONFIG_DIR` env var is still honored as a
+direct override for the default user persona directory.
+
 ### Minimal override: add your API key
 
-`~/.agent-workforce/my-posthog.json`:
+`~/.agentworkforce/workforce/personas/my-posthog.json`:
 
 ```json
 {
@@ -198,7 +247,7 @@ That inherits every field from the library `posthog` persona, then layers your
 If your file's `id` matches a persona in a lower layer and you omit `extends`,
 the loader implicitly inherits from that same-id base:
 
-`<cwd>/.agent-workforce/posthog.json`:
+`<cwd>/.agentworkforce/workforce/posthog.json`:
 
 ```json
 {
@@ -207,29 +256,30 @@ the loader implicitly inherits from that same-id base:
 }
 ```
 
-Resolving `posthog` now hits this pwd override first; it inherits the rest
+Resolving `posthog` now hits this cwd override first; it inherits the rest
 (MCP, tiers, description, etc.) from the library `posthog`.
 
 ### Cascade chain
 
-A pwd file can extend a home file, which extends the library:
+A cwd file can extend a user or configured-dir file, which extends the library:
 
 ```
-~/.agent-workforce/ph-base.json:
+~/.agentworkforce/workforce/personas/ph-base.json:
 { "id": "ph-base", "extends": "posthog", "env": { "POSTHOG_ORG": "acme" } }
 
-<cwd>/.agent-workforce/ph-prod.json:
+<cwd>/.agentworkforce/workforce/ph-prod.json:
 { "id": "ph-prod", "extends": "ph-base", "env": { "POSTHOG_API_KEY": "$PROD_KEY" } }
 ```
 
 Resolving `ph-prod`:
 
 - Start with library `posthog` (MCP, tiers, prompt, …)
-- Layer home `ph-base` on top (adds `POSTHOG_ORG=acme`)
-- Layer pwd `ph-prod` on top (adds `POSTHOG_API_KEY`)
+- Layer user `ph-base` on top (adds `POSTHOG_ORG=acme`)
+- Layer cwd `ph-prod` on top (adds `POSTHOG_API_KEY`)
 
-`extends` is resolved **strictly against lower layers** — pwd extends home or
-library, home extends library, library has no `extends`.
+`extends` is resolved **strictly against lower layers** — cwd extends configured
+dirs or library, configured dirs extend lower configured dirs or library, and
+library has no `extends`.
 
 ### Override shape (all fields except `id` optional)
 
@@ -320,9 +370,9 @@ eyeball.
   warning and fall back to their defaults when `permissions` is set.
 - **Cascade merge:** `allow` and `deny` are unions across layers (deduped on
   merge); `mode` is replaced by the topmost layer that sets it. So the
-  library can declare the minimum-viable allow list, home can layer on
-  project-wide denies, and pwd can add per-project patterns — they all
-  compose.
+  library can declare the minimum-viable allow list, a user or configured
+  persona source can layer shared denies, and cwd can add per-project patterns
+  — they all compose.
 
 ### Example: PostHog with auto-approve
 

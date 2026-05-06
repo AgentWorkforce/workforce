@@ -58,21 +58,27 @@ corepack pnpm --filter @agentworkforce/cli link --global
 ```
 agent-workforce agent <persona>[@<tier>]
 agent-workforce list [flags]
+agent-workforce sources <list|add|remove>
 agent-workforce harness check
 ```
 
 - `agent` — drops you into an interactive harness session for the persona.
   - `<tier>` is `best` | `best-value` | `minimum` (default: `best-value`).
-  - `<persona>` resolves across three layers, highest first:
-    1. `./.agent-workforce/*.json` — project-local
-    2. `~/.agent-workforce/*.json` — user-local
+  - `<persona>` resolves across source layers, highest first:
+    1. `./.agentworkforce/workforce/*.json` — project-local
+    2. Configured persona source dirs. Default:
+       `~/.agentworkforce/workforce/personas/*.json`
     3. Built-in personas in `/personas/`
-- `list` — print the catalog of personas from the cascade (pwd → home →
-  library). Columns: persona, source, harness, model, rating, description.
+- `list` — print the catalog of personas from the cascade (cwd →
+  configured dirs → library). Columns: persona, source, harness, model,
+  rating, description.
   By default shows one row per persona at the recommended tier for its
   intent. Flags: `--all`, `--json`, `--filter-rating <tier>`,
   `--filter-harness <harness>`, `--no-display-description`. See
   **[packages/cli/README.md](./packages/cli/README.md#list)** for details.
+- `sources` — list, add, or remove configured persona source directories.
+  This is how you include personas installed into another checkout or repo.
+  See **[packages/cli/README.md](./packages/cli/README.md#sources)**.
 - `harness check` — probe which harnesses (`claude`, `codex`, `opencode`)
   are installed and runnable on this machine. Prints a table with status,
   version, and the resolved path for each.
@@ -94,7 +100,7 @@ agent-workforce agent posthog@best
 
 ### Local persona override
 
-Project-local `./.agent-workforce/my-posthog.json`:
+Project-local `./.agentworkforce/workforce/my-posthog.json`:
 
 ```json
 {
