@@ -229,6 +229,28 @@ test('AGENT_WORKFORCE_CONFIG_DIR is trimmed before use (whitespace tolerated)', 
   });
 });
 
+test('AGENT_WORKFORCE_CONFIG_DIR does not bypass configured source dirs', () => {
+  withLayers(({ home, homeDir }) => {
+    const extraDir = join(home, 'extra-personas');
+    mkdirSync(extraDir, { recursive: true });
+    const workforceHomeDir = join(home, '.agentworkforce', 'workforce');
+    writeJson(join(workforceHomeDir, 'config.json'), {
+      personaDirs: [homeDir, extraDir]
+    });
+
+    const prev = process.env.AGENT_WORKFORCE_CONFIG_DIR;
+    process.env.AGENT_WORKFORCE_CONFIG_DIR = `   ${homeDir}   `;
+    try {
+      const config = loadPersonaSourceConfig({ workforceHomeDir });
+      assert.equal(config.userPersonaDir, homeDir);
+      assert.deepEqual(config.personaDirs, [homeDir, extraDir]);
+    } finally {
+      if (prev === undefined) delete process.env.AGENT_WORKFORCE_CONFIG_DIR;
+      else process.env.AGENT_WORKFORCE_CONFIG_DIR = prev;
+    }
+  });
+});
+
 test('returns empty result when neither layer exists', () => {
   const loaded = loadLocalPersonas({
     cwd: '/tmp/agentworkforce-nonexistent-pwd-zzz',

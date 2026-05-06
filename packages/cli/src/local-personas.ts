@@ -162,10 +162,6 @@ function dedupeDirs(dirs: readonly string[], warnings: string[]): string[] {
 
 export function loadPersonaSourceConfig(options: LoadOptions = {}): PersonaSourceConfig {
   const workforceHomeDir = options.workforceHomeDir ?? defaultWorkforceHomeDir();
-  const legacyUserDirOverride =
-    options.userPersonaDir === undefined &&
-    options.homeDir === undefined &&
-    process.env.AGENT_WORKFORCE_CONFIG_DIR?.trim();
   const userPersonaDir = normalizePersonaDir(
     options.userPersonaDir ?? options.homeDir ?? defaultUserPersonaDir(workforceHomeDir)
   );
@@ -174,9 +170,7 @@ export function loadPersonaSourceConfig(options: LoadOptions = {}): PersonaSourc
   );
   const warnings: string[] = [];
   const configuredDirs =
-    options.personaDirs ??
-    (legacyUserDirOverride ? [userPersonaDir] : readConfigPersonaDirs(configPath, warnings)) ??
-    [userPersonaDir];
+    options.personaDirs ?? readConfigPersonaDirs(configPath, warnings) ?? [userPersonaDir];
 
   return {
     configPath,
