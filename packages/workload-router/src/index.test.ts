@@ -256,6 +256,9 @@ test('resolves agent-relay-workflow persona from the default routing profile', (
   assert.equal(maker.runtime.harness, 'opencode');
   assert.equal(maker.skills.length, 3);
   assert.equal(maker.skills[0].id, 'skill.sh/writing-agent-relay-workflows');
+  assert.match(maker.runtime.systemPrompt, /complete workflow source/);
+  assert.match(maker.runtime.systemPrompt, /GitHub primitive shipping steps/);
+  assert.match(maker.runtime.systemPrompt, /createGitHubStep/);
 });
 
 // removed: writing-agent-relay-workflows persona renamed to agent-relay-workflow
@@ -670,4 +673,3 @@ test('usePersona combines selection and grouped install metadata into a frozen c
   assert.ok(Object.isFrozen(context.install.plan));
   assert.ok(Object.isFrozen(context.install.command));
 });
-
