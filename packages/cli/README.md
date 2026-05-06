@@ -1,4 +1,4 @@
-# agent-workforce CLI
+# agentworkforce CLI
 
 A thin command-line front end for the workload-router. Spawns the harness CLI
 (`claude`, `codex`, `opencode`) configured by a selected **persona** — either a
@@ -6,11 +6,11 @@ built-in one from `/personas/`, or an installed/local one that extends a lower
 source.
 
 ```
-agent-workforce agent <persona>[@<tier>]
-agent-workforce list [flags]
-agent-workforce show <persona>[@<tier>]
-agent-workforce sources <list|add|remove>
-agent-workforce harness check
+agentworkforce agent <persona>[@<tier>]
+agentworkforce list [flags]
+agentworkforce show <persona>[@<tier>]
+agentworkforce sources <list|add|remove>
+agentworkforce harness check
 ```
 
 - `agent` — drops you into an interactive session with the harness.
@@ -34,6 +34,8 @@ The CLI ships under two npm names that point at the same code:
 Both depend on `@agentworkforce/workload-router` and `@agentworkforce/harness-kit`
 via the pnpm workspace. The CLI derives its help-text bin name from
 `process.argv[1]`, so `--help` shows whichever name you invoked.
+The examples below use the recommended top-level `agentworkforce` command; if
+you installed `@agentworkforce/cli` directly, substitute `agent-workforce`.
 
 From npm:
 
@@ -47,13 +49,15 @@ From the repo checkout:
 
 ```sh
 corepack pnpm -r build
+corepack pnpm --filter agentworkforce link --global
+# or, for the scoped-package bin:
 corepack pnpm --filter @agentworkforce/cli link --global
 ```
 
 ## Selectors
 
 ```
-agent-workforce agent <persona>[@<tier>]
+agentworkforce agent <persona>[@<tier>]
 ```
 
 - `<persona>` — matches, in order:
@@ -70,19 +74,19 @@ Unknown persona prints the full catalog with each entry's origin.
 
 ```sh
 # Interactive code reviewer
-agent-workforce agent review@best-value
+agentworkforce agent review@best-value
 
 # Interactive PostHog session (library persona, needs POSTHOG_API_KEY)
-agent-workforce agent posthog@best
+agentworkforce agent posthog@best
 
 # Interactive against a local override
-agent-workforce agent my-posthog@best
+agentworkforce agent my-posthog@best
 ```
 
 ## List
 
 ```
-agent-workforce list [flags]
+agentworkforce list [flags]
 ```
 
 Prints the merged persona catalog — everything the `agent` subcommand would
@@ -112,30 +116,30 @@ the allowed values.
 
 ```sh
 # Default: one row per persona, recommended tier only
-agent-workforce list
+agentworkforce list
 
 # See every tier
-agent-workforce list --all
+agentworkforce list --all
 
 # Only the top tier across the catalog — independent of recommendations
-agent-workforce list --filter-rating best
+agentworkforce list --filter-rating best
 
 # All claude-harness personas (any tier)
-agent-workforce list --all --filter-harness claude
+agentworkforce list --all --filter-harness claude
 
 # Compact table for a narrow terminal
-agent-workforce list --no-display-description
+agentworkforce list --no-display-description
 
 # Machine-readable
-agent-workforce list --json --filter-harness claude
+agentworkforce list --json --filter-harness claude
 ```
 
 ## Sources
 
 ```
-agent-workforce sources list [--json]
-agent-workforce sources add <dir> [--position <n>]
-agent-workforce sources remove <dir|config-position>
+agentworkforce sources list [--json]
+agentworkforce sources add <dir> [--position <n>]
+agentworkforce sources remove <dir|config-position>
 ```
 
 The fixed project source is always first:
@@ -156,22 +160,22 @@ Examples:
 
 ```sh
 # Show the full source cascade, including fixed cwd and library entries
-agent-workforce sources list
+agentworkforce sources list
 
 # Install personas from another checkout, below the default user persona dir
-agent-workforce sources add ~/src/company-personas/personas
+agentworkforce sources add ~/src/company-personas/personas
 
 # Give a checked-out persona repo priority over the default user dir
-agent-workforce sources add ~/src/company-personas/personas --position 1
+agentworkforce sources add ~/src/company-personas/personas --position 1
 
 # Remove the first configurable persona source
-agent-workforce sources remove 1
+agentworkforce sources remove 1
 ```
 
 ## Harness check
 
 ```
-agent-workforce harness check
+agentworkforce harness check
 ```
 
 Probes your PATH for each supported harness binary (`claude`, `codex`,
@@ -239,7 +243,7 @@ direct override for the default user persona directory.
 ```
 
 That inherits every field from the library `posthog` persona, then layers your
-`env` on top. `agent-workforce agent my-posthog@best` now works as long as
+`env` on top. `agentworkforce agent my-posthog@best` now works as long as
 `POSTHOG_API_KEY` is exported in your shell.
 
 ### Same-id override (implicit extends)
@@ -442,7 +446,7 @@ persona session, add it to the persona's `mcpServers` block.
 ## Interactive
 
 ```sh
-agent-workforce agent [--install-in-repo] <persona>[@<tier>]
+agentworkforce agent [--install-in-repo] <persona>[@<tier>]
 ```
 
 By default, claude and opencode sessions run inside a sandbox mount — see
@@ -517,7 +521,7 @@ Pass `--install-in-repo` to fall back to the legacy behavior (skills land in
 the repo's `.claude/skills/` directory, cleaned on exit):
 
 ```sh
-agent-workforce agent --install-in-repo code-reviewer@best
+agentworkforce agent --install-in-repo code-reviewer@best
 ```
 
 Useful when you want to inspect the installed skills on disk, or when the
@@ -605,7 +609,7 @@ is generated once and both paths are derived from it:
 
 `@relayfile/local-mount` handles mount creation, process spawn,
 SIGINT/SIGTERM forwarding, write syncback, and cleanup on exit. The
-agent-workforce CLI just wires the paths and passes the persona's argv.
+agentworkforce CLI just wires the paths and passes the persona's argv.
 
 ### Example
 
@@ -614,7 +618,7 @@ agent-workforce CLI just wires the paths and passes the persona's argv.
 # .mcp.json hidden — session sees the persona's staged skills plus your
 # user-level ~/.claude/CLAUDE.md, nothing else from this repo.
 export POSTHOG_API_KEY=phx_…
-agent-workforce agent posthog@best
+agentworkforce agent posthog@best
 ```
 
 On exit: mount is synced back to the real repo, then torn down; skill

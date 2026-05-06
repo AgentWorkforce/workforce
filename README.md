@@ -25,7 +25,7 @@ A **routing profile** is policy-only. It does not carry runtime fields; it only 
 
 ## CLI
 
-The `agent-workforce` binary (published as `@agentworkforce/cli`) is the
+The `agentworkforce` command is the
 fastest way to actually *run* a persona. It resolves the persona from the
 built-in catalog or your local overrides, installs any declared skills,
 and execs the harness CLI (`claude`, `codex`, or `opencode`) with the right
@@ -41,7 +41,7 @@ npm i -g agentworkforce
 
 That puts the `agentworkforce` command on your PATH. (The same CLI is also
 published as `@agentworkforce/cli`, which exposes the same code under the
-historical `agent-workforce` bin name — pick whichever name you prefer.)
+historical `agent-workforce` bin name.)
 
 From the monorepo checkout:
 
@@ -56,10 +56,10 @@ corepack pnpm --filter @agentworkforce/cli link --global
 ### Usage
 
 ```
-agent-workforce agent <persona>[@<tier>]
-agent-workforce list [flags]
-agent-workforce sources <list|add|remove>
-agent-workforce harness check
+agentworkforce agent <persona>[@<tier>]
+agentworkforce list [flags]
+agentworkforce sources <list|add|remove>
+agentworkforce harness check
 ```
 
 - `agent` — drops you into an interactive harness session for the persona.
@@ -90,12 +90,12 @@ the value from the next lower layer; everything else cascades through.
 
 ```bash
 # Interactive code reviewer
-agent-workforce agent review@best-value
+agentworkforce agent review@best-value
 
 # Interactive PostHog session — the built-in persona ships with the PostHog
 # MCP server wired up and its tools auto-approved.
 export POSTHOG_API_KEY=phx_…
-agent-workforce agent posthog@best
+agentworkforce agent posthog@best
 ```
 
 ### Local persona override
@@ -113,7 +113,7 @@ Project-local `./.agentworkforce/workforce/my-posthog.json`:
 }
 ```
 
-`agent-workforce agent my-posthog@best` inherits everything from the built-in
+`agentworkforce agent my-posthog@best` inherits everything from the built-in
 `posthog` persona, layers your env var and narrower allow list on top, and
 launches claude against the PostHog MCP server with only the two named tools
 auto-approved.
@@ -144,7 +144,7 @@ to the legacy behavior and install into the repo's `.claude/skills/`, pass
 `--install-in-repo`:
 
 ```bash
-agent-workforce agent --install-in-repo code-reviewer@best
+agentworkforce agent --install-in-repo code-reviewer@best
 ```
 
 V1 scope: claude interactive only. codex and opencode still use the
@@ -171,7 +171,7 @@ repo itself declares. Codex sessions never mount.
 |  | your keychain auth (unchanged) |
 
 ```bash
-agent-workforce agent posthog@best
+agentworkforce agent posthog@best
 ```
 
 The repo tree is mirrored into `~/.agent-workforce/sessions/<id>/mount/`
@@ -197,7 +197,7 @@ for the full mount layout and semantics.
 
 - `packages/workload-router` — TypeScript SDK for typed persona + routing profile resolution (harness-agnostic).
 - `packages/harness-kit` — Composable primitives for launching a persona's harness: env-ref resolution, MCP server translation, per-harness argv building. The layer the CLI sits on top of. Depend on this directly if you're building your own orchestrator on top of `@agentworkforce/workload-router` and want the same behaviors.
-- `packages/cli` — `agent-workforce` command-line front end: spawn a persona's harness (claude/codex/opencode) from the shell. See **[packages/cli/README.md](./packages/cli/README.md)** for the full docs, and the [CLI](#cli) section below for a quick tour.
+- `packages/cli` — command-line front end behind the `agentworkforce` wrapper and `agent-workforce` scoped-package bin: spawn a persona's harness (claude/codex/opencode) from the shell. See **[packages/cli/README.md](./packages/cli/README.md)** for the full docs, and the [CLI](#cli) section below for a quick tour.
 
 ## Personas
 
@@ -293,7 +293,7 @@ and friends — see
    runtime (harness, model, settings, prompt).
 3. Run `install.commandString` to materialize the persona's skills into the
    repo, then spawn the harness CLI yourself with `selection.runtime`. The
-   `agent-workforce` CLI is the reference implementation of step 3 — see
+   `agentworkforce` CLI is the reference implementation of step 3 — see
    `packages/cli/src/cli.ts`.
 
 `resolvePersona` and `materializeSkillsFor` are also exported as the
