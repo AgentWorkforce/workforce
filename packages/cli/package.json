@@ -3,9 +3,6 @@
   "version": "0.5.5",
   "private": false,
   "type": "module",
-  "bin": {
-    "agent-workforce": "dist/cli.js"
-  },
   "files": [
     "dist",
     "README.md",
