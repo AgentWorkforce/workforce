@@ -39,16 +39,13 @@ From npm (recommended):
 npm i -g agentworkforce
 ```
 
-That puts the `agentworkforce` command on your PATH. (The same CLI is also
-published as `@agentworkforce/cli`, which exposes the same code under the
-historical `agent-workforce` bin name.)
+That puts the `agentworkforce` command on your PATH.
 
 From the monorepo checkout:
 
 ```bash
 corepack pnpm -r build
-corepack pnpm --filter @agentworkforce/cli link --global
-# or:  corepack pnpm --filter agentworkforce link --global
+corepack pnpm --filter agentworkforce link --global
 ```
 
 (Or run the built bin directly: `./packages/cli/dist/cli.js …`.)
@@ -197,7 +194,7 @@ for the full mount layout and semantics.
 
 - `packages/workload-router` — TypeScript SDK for typed persona + routing profile resolution (harness-agnostic).
 - `packages/harness-kit` — Composable primitives for launching a persona's harness: env-ref resolution, MCP server translation, per-harness argv building. The layer the CLI sits on top of. Depend on this directly if you're building your own orchestrator on top of `@agentworkforce/workload-router` and want the same behaviors.
-- `packages/cli` — command-line front end behind the `agentworkforce` wrapper and `agent-workforce` scoped-package bin: spawn a persona's harness (claude/codex/opencode) from the shell. See **[packages/cli/README.md](./packages/cli/README.md)** for the full docs, and the [CLI](#cli) section below for a quick tour.
+- `packages/cli` — command-line implementation used by the `agentworkforce` wrapper: spawn a persona's harness (claude/codex/opencode) from the shell. See **[packages/cli/README.md](./packages/cli/README.md)** for the full docs, and the [CLI](#cli) section below for a quick tour.
 
 ## Personas
 

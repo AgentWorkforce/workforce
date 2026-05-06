@@ -40,18 +40,15 @@ import {
   type PersonaSource
 } from './local-personas.js';
 
-// Derived from the binary the user actually invoked. Lets the same dist file
-// drive multiple npm bins (`agent-workforce` from @agentworkforce/cli,
-// `agentworkforce` from the top-level wrapper package) without baking either
-// name into the help text. Falls back to `agent-workforce` for the bare
-// `node dist/cli.js` case so the test suite, which spawns cli.js directly,
-// still sees the historical name.
+// Derived from the binary the user actually invoked. The published command is
+// the top-level `agentworkforce` wrapper, while direct `node dist/cli.js` runs
+// fall back to that same command name for stable help text.
 const BIN_NAME = (() => {
   const arg1 = process.argv[1];
-  if (!arg1) return 'agent-workforce';
+  if (!arg1) return 'agentworkforce';
   const base = arg1.split(/[/\\]/).pop() ?? '';
   const stripped = base.replace(/\.(m?js|cjs)$/, '');
-  if (!stripped || stripped === 'cli') return 'agent-workforce';
+  if (!stripped || stripped === 'cli') return 'agentworkforce';
   return stripped;
 })();
 

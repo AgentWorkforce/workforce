@@ -23,26 +23,13 @@ agentworkforce harness check
 
 ## Install
 
-The CLI ships under two npm names that point at the same code:
-
-- **`@agentworkforce/cli`** — the scoped package; installs the
-  `agent-workforce` bin.
-- **`agentworkforce`** — a thin top-level wrapper; installs the
-  `agentworkforce` bin so the global install command and command name match
-  (`npm i -g agentworkforce`).
-
-Both depend on `@agentworkforce/workload-router` and `@agentworkforce/harness-kit`
-via the pnpm workspace. The CLI derives its help-text bin name from
-`process.argv[1]`, so `--help` shows whichever name you invoked.
-The examples below use the recommended top-level `agentworkforce` command; if
-you installed `@agentworkforce/cli` directly, substitute `agent-workforce`.
+Install the top-level `agentworkforce` package. It provides the
+`agentworkforce` bin and depends on this internal CLI package.
 
 From npm:
 
 ```sh
-npm i -g agentworkforce      # provides `agentworkforce`
-# or
-npm i -g @agentworkforce/cli # provides `agent-workforce`
+npm i -g agentworkforce
 ```
 
 From the repo checkout:
@@ -50,8 +37,6 @@ From the repo checkout:
 ```sh
 corepack pnpm -r build
 corepack pnpm --filter agentworkforce link --global
-# or, for the scoped-package bin:
-corepack pnpm --filter @agentworkforce/cli link --global
 ```
 
 ## Selectors
