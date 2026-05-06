@@ -1,8 +1,7 @@
 ![AgentWorkforce banner](./workforce-readme-banner.png)
 
-# workforce
+Saved configurations of coding agents you can save and share with your collegues.
 
-Shared AgentWorkforce primitives for persona-driven orchestration.
 
 ## Core frame
 

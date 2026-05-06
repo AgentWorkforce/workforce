@@ -18,7 +18,7 @@
     "package.json"
   ],
   "dependencies": {
-    "@agentworkforce/workload-router": "workspace:^"
+    "@agentworkforce/workload-router": "workspace:*"
   },
   "repository": {
     "type": "git",
