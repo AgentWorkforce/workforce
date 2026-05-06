@@ -21,7 +21,7 @@ pnpm add @agentworkforce/harness-kit @agentworkforce/workload-router
 
 ## What's in the box
 
-### `buildInteractiveSpec(input)` — translate a persona to a spawnable argv
+### `buildInteractiveSpec(input)` — translate a persona to an interactive argv
 
 Takes the fields off a `PersonaSelection` (harness, model, systemPrompt,
 mcpServers, permissions) and returns `{bin, args, initialPrompt, warnings}`.
@@ -55,6 +55,7 @@ for (const w of warnings) console.warn(w);
 // Build the exec spec.
 const spec = buildInteractiveSpec({
   harness: selection.runtime.harness,
+  personaId: selection.personaId,
   model: selection.runtime.model,
   systemPrompt: selection.runtime.systemPrompt,
   mcpServers: mcpResolution.servers,
@@ -69,6 +70,40 @@ spawn(spec.bin, args, {
   env: { ...process.env, ...(envResolution.value ?? {}) }
 });
 ```
+
+### `useRunnablePersona(intent)` — run a persona non-interactively
+
+For orchestrators that need a programmatic `sendMessage()` surface, the kit
+also exposes a thin runner around the same router + harness translation path.
+It resolves the persona, launches the selected harness in non-interactive
+mode, captures stdout/stderr, reports progress chunks, supports cancellation
+and timeouts, and returns a stable execution result.
+
+```ts
+import { useRunnablePersona } from '@agentworkforce/harness-kit';
+
+const persona = useRunnablePersona('agent-relay-workflow');
+const run = persona.sendMessage('Write a workflow artifact as structured JSON.', {
+  workingDirectory: process.cwd(),
+  name: 'workflow-writer',
+  timeoutSeconds: persona.selection.runtime.harnessSettings.timeoutSeconds,
+  inputs: { outputPath: 'workflows/generated/docs-audit.ts' },
+  onProgress: (chunk) => process.stderr.write(chunk.text)
+});
+
+const result = await run;
+if (result.status !== 'completed') {
+  throw new Error(result.stderr || `persona run failed: ${result.status}`);
+}
+console.log(result.output);
+```
+
+The runner maps harnesses to their non-interactive command shapes:
+`claude --print`, `codex exec`, and `opencode run`. It writes generated
+config files such as `opencode.json` only for the duration of the child
+process and restores or removes them afterward. Skill installation is opt-in
+with `installSkills: true`; callers that need stronger filesystem isolation
+should keep using a mount/sandbox layer around the runner.
 
 ### Claude harness guarantees
 
@@ -143,6 +178,7 @@ export interface DroppedMcpServer { name: string; refs: string[] }
 export function buildInteractiveSpec(input: BuildInteractiveSpecInput): InteractiveSpec
 export interface BuildInteractiveSpecInput {
   harness: Harness;
+  personaId: string;
   model: string;
   systemPrompt: string;
   mcpServers?: Record<string, McpServerSpec>;
@@ -154,16 +190,29 @@ export interface InteractiveSpec {
   initialPrompt: string | null;
   warnings: string[];
 }
+
+// Runnable personas
+export function useRunnablePersona(intent, options?): RunnablePersonaContext
+export function useRunnableSelection(selection, options?): RunnablePersonaContext
+export interface RunnablePersonaContext {
+  selection: PersonaSelection;
+  install: PersonaInstallContext;
+  sendMessage(task, options?): PersonaExecution;
+}
+export interface PersonaExecutionResult {
+  status: 'completed' | 'failed' | 'cancelled' | 'timeout';
+  output: string;
+  stderr: string;
+  exitCode: number | null;
+  durationMs: number;
+}
 ```
 
 ## Status
 
 Small, stable surface focused on the three things a harness spawner needs:
-resolve env refs, resolve MCP config, build argv. It does **not** spawn
-processes, manage stdio, install skills, or talk to the filesystem — those
-live in the CLI because different consumers will want different behaviors
-there (CI pipelines, IDE plugins, test harnesses, etc.).
-
-A future `useSelection().run()` convenience in the router may wrap these
-helpers into a one-liner — if that happens, it'll be built on top of this
-package, not a replacement for it.
+resolve env refs, resolve MCP config, and build argv. The default exports are
+still pure when you use `buildInteractiveSpec` directly. The
+`useRunnablePersona` convenience is intentionally the small side-effecting
+layer for consumers that want the same harness knowledge plus a captured
+non-interactive child process.

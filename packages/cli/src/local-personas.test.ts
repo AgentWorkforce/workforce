@@ -4,7 +4,7 @@ import { mkdtempSync, mkdirSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
-import { loadLocalPersonas } from './local-personas.js';
+import { loadLocalPersonas, loadPersonaSourceConfig } from './local-personas.js';
 
 type Dirs = { cwd: string; home: string; pwdDir: string; homeDir: string };
 
@@ -12,8 +12,8 @@ function withLayers<T>(fn: (dirs: Dirs) => T): T {
   const root = mkdtempSync(join(tmpdir(), 'agentworkforce-cascade-'));
   const cwd = join(root, 'project');
   const home = join(root, 'home');
-  const pwdDir = join(cwd, '.agent-workforce');
-  const homeDir = join(home, '.agent-workforce');
+  const pwdDir = join(cwd, '.agentworkforce', 'workforce', 'personas');
+  const homeDir = join(home, '.agentworkforce', 'workforce', 'personas');
   mkdirSync(pwdDir, { recursive: true });
   mkdirSync(homeDir, { recursive: true });
   try {
@@ -27,7 +27,7 @@ function writeJson(path: string, value: unknown): void {
   writeFileSync(path, JSON.stringify(value));
 }
 
-test('home layer extends library and merges env', () => {
+test('user layer extends library and merges env', () => {
   withLayers(({ cwd, homeDir }) => {
     writeJson(join(homeDir, 'my-posthog.json'), {
       id: 'my-posthog',
@@ -38,7 +38,7 @@ test('home layer extends library and merges env', () => {
     assert.deepEqual(loaded.warnings, []);
     const spec = loaded.byId.get('my-posthog');
     assert.ok(spec);
-    assert.equal(loaded.sources.get('my-posthog'), 'home');
+    assert.equal(loaded.sources.get('my-posthog'), 'user');
     assert.equal(spec.intent, 'posthog');
     assert.equal(spec.env?.POSTHOG_API_KEY, '$POSTHOG_API_KEY');
     assert.equal(spec.env?.EXTRA, 'literal');
@@ -46,7 +46,7 @@ test('home layer extends library and merges env', () => {
   });
 });
 
-test('pwd layer overrides home layer for the same id', () => {
+test('cwd layer overrides user layer for the same id', () => {
   withLayers(({ cwd, homeDir, pwdDir }) => {
     writeJson(join(homeDir, 'ph.json'), {
       id: 'ph',
@@ -61,15 +61,15 @@ test('pwd layer overrides home layer for the same id', () => {
     const loaded = loadLocalPersonas({ cwd, homeDir });
     assert.deepEqual(loaded.warnings, []);
     const spec = loaded.byId.get('ph');
-    assert.equal(loaded.sources.get('ph'), 'pwd');
-    // pwd's env wins; note home is NOT layered here (pwd overrides home as a whole,
-    // not merges). Base is library/posthog directly via pwd's own `extends`.
+    assert.equal(loaded.sources.get('ph'), 'cwd');
+    // cwd's env wins; note user is NOT layered here (cwd overrides user as a whole,
+    // not merges). Base is library/posthog directly via cwd's own `extends`.
     assert.equal(spec?.env?.POSTHOG_API_KEY, 'pwd-value');
     assert.equal(spec?.env?.FROM_HOME, undefined);
   });
 });
 
-test('implicit same-id extends: pwd file with id=posthog inherits from library posthog', () => {
+test('implicit same-id extends: cwd file with id=posthog inherits from library posthog', () => {
   withLayers(({ cwd, homeDir, pwdDir }) => {
     writeJson(join(pwdDir, 'posthog.json'), {
       id: 'posthog',
@@ -79,7 +79,7 @@ test('implicit same-id extends: pwd file with id=posthog inherits from library p
     assert.deepEqual(loaded.warnings, []);
     const spec = loaded.byId.get('posthog');
     assert.ok(spec);
-    assert.equal(loaded.sources.get('posthog'), 'pwd');
+    assert.equal(loaded.sources.get('posthog'), 'cwd');
     // Library fields still flow through (mcpServers, tiers, description).
     assert.ok(spec.mcpServers?.posthog);
     assert.equal(spec.tiers.best.harness, 'claude');
@@ -87,15 +87,15 @@ test('implicit same-id extends: pwd file with id=posthog inherits from library p
   });
 });
 
-test('cascade chain: pwd extends home extends library', () => {
+test('cascade chain: cwd extends user extends library', () => {
   withLayers(({ cwd, homeDir, pwdDir }) => {
-    // home defines a mid-layer override that adds a default env key.
+    // user defines a mid-layer override that adds a default env key.
     writeJson(join(homeDir, 'ph-base.json'), {
       id: 'ph-base',
       extends: 'posthog',
       env: { DEFAULT_ORG: 'acme' }
     });
-    // pwd extends the home persona (not the library directly).
+    // cwd extends the user persona (not the library directly).
     writeJson(join(pwdDir, 'ph-prod.json'), {
       id: 'ph-prod',
       extends: 'ph-base',
@@ -110,6 +110,55 @@ test('cascade chain: pwd extends home extends library', () => {
     assert.equal(prod.env?.POSTHOG_API_KEY, '$PROD_KEY');
     // MCP from library is preserved.
     assert.ok(prod.mcpServers?.posthog);
+  });
+});
+
+test('configured source directories cascade in configured order', () => {
+  withLayers(({ cwd, home, homeDir }) => {
+    const extraDir = join(home, 'checked-out-personas');
+    mkdirSync(extraDir, { recursive: true });
+    writeJson(join(homeDir, 'ph.json'), {
+      id: 'ph',
+      extends: 'posthog',
+      env: { DEFAULT_ORG: 'acme', POSTHOG_API_KEY: 'user-key' }
+    });
+    writeJson(join(extraDir, 'ph.json'), {
+      id: 'ph',
+      env: { POSTHOG_API_KEY: 'extra-key' }
+    });
+    const configPath = join(home, '.agentworkforce', 'workforce', 'config.json');
+    writeJson(configPath, { personaDirs: [extraDir, homeDir] });
+
+    const loaded = loadLocalPersonas({ cwd, userPersonaDir: homeDir, configPath });
+    assert.deepEqual(loaded.warnings, []);
+    const spec = loaded.byId.get('ph');
+    assert.equal(loaded.sources.get('ph'), 'dir:1');
+    assert.equal(spec?.env?.DEFAULT_ORG, 'acme');
+    assert.equal(spec?.env?.POSTHOG_API_KEY, 'extra-key');
+  });
+});
+
+test('source config defaults to the dotless user persona directory', () => {
+  withLayers(({ home }) => {
+    const workforceHomeDir = join(home, '.agentworkforce', 'workforce');
+    const config = loadPersonaSourceConfig({ workforceHomeDir });
+    assert.equal(config.userPersonaDir, join(workforceHomeDir, 'personas'));
+    assert.deepEqual(config.personaDirs, [join(workforceHomeDir, 'personas')]);
+  });
+});
+
+test('cwd workforce config file is not scanned as a persona', () => {
+  withLayers(({ cwd, homeDir, pwdDir }) => {
+    writeJson(join(cwd, '.agentworkforce', 'workforce', 'config.json'), {
+      personaDirs: [homeDir]
+    });
+    writeJson(join(pwdDir, 'ph.json'), {
+      id: 'ph',
+      extends: 'posthog'
+    });
+    const loaded = loadLocalPersonas({ cwd, homeDir });
+    assert.deepEqual(loaded.warnings, []);
+    assert.ok(loaded.byId.has('ph'));
   });
 });
 
@@ -195,6 +244,28 @@ test('AGENT_WORKFORCE_CONFIG_DIR is trimmed before use (whitespace tolerated)', 
   });
 });
 
+test('AGENT_WORKFORCE_CONFIG_DIR does not bypass configured source dirs', () => {
+  withLayers(({ home, homeDir }) => {
+    const extraDir = join(home, 'extra-personas');
+    mkdirSync(extraDir, { recursive: true });
+    const workforceHomeDir = join(home, '.agentworkforce', 'workforce');
+    writeJson(join(workforceHomeDir, 'config.json'), {
+      personaDirs: [homeDir, extraDir]
+    });
+
+    const prev = process.env.AGENT_WORKFORCE_CONFIG_DIR;
+    process.env.AGENT_WORKFORCE_CONFIG_DIR = `   ${homeDir}   `;
+    try {
+      const config = loadPersonaSourceConfig({ workforceHomeDir });
+      assert.equal(config.userPersonaDir, homeDir);
+      assert.deepEqual(config.personaDirs, [homeDir, extraDir]);
+    } finally {
+      if (prev === undefined) delete process.env.AGENT_WORKFORCE_CONFIG_DIR;
+      else process.env.AGENT_WORKFORCE_CONFIG_DIR = prev;
+    }
+  });
+});
+
 test('returns empty result when neither layer exists', () => {
   const loaded = loadLocalPersonas({
     cwd: '/tmp/agentworkforce-nonexistent-pwd-zzz',
@@ -207,7 +278,7 @@ test('returns empty result when neither layer exists', () => {
 test('permissions merge: allow/deny union dedup, mode overrides', () => {
   withLayers(({ cwd, homeDir, pwdDir }) => {
     // Base posthog already has permissions.allow = ["mcp__posthog"] in the
-    // library file. Home adds a Bash deny + sets default mode; pwd adds
+    // library file. User adds a Bash deny + sets default mode; cwd adds
     // another allow and overrides the mode.
     writeJson(join(homeDir, 'ph.json'), {
       id: 'ph',

@@ -1,11 +1,8 @@
 {
   "name": "@agentworkforce/cli",
-  "version": "0.5.3",
+  "version": "0.6.0",
   "private": false,
   "type": "module",
-  "bin": {
-    "agent-workforce": "dist/cli.js"
-  },
   "files": [
     "dist",
     "README.md",
@@ -15,7 +12,7 @@
   "dependencies": {
     "@agentworkforce/harness-kit": "workspace:*",
     "@agentworkforce/workload-router": "workspace:*",
-    "@relayfile/local-mount": "^0.6.0",
+    "@relayfile/local-mount": "^0.6.1",
     "ora": "^9.4.0"
   },
   "repository": {

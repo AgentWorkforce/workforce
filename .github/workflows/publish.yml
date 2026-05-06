@@ -1,19 +1,8 @@
-name: Publish Package
+name: Publish Packages
 
 on:
   workflow_dispatch:
     inputs:
-      package:
-        description: 'Which package(s) to publish'
-        required: true
-        default: cli
-        type: choice
-        options:
-          - all
-          - workload-router
-          - harness-kit
-          - cli
-          - agentworkforce
       version:
         description: 'Version bump type (ignored if custom_version is set)'
         required: true
@@ -66,15 +55,15 @@ jobs:
       versions: ${{ steps.bump.outputs.versions }}
     steps:
       - name: Checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@v6
         with:
           fetch-depth: 0
 
       - name: Setup pnpm
-        uses: pnpm/action-setup@v4
+        uses: pnpm/action-setup@v5
 
       - name: Setup Node
-        uses: actions/setup-node@v4
+        uses: actions/setup-node@v6
         with:
           node-version: '22.14.0'
           registry-url: 'https://registry.npmjs.org'
@@ -83,89 +72,111 @@ jobs:
       - name: Install deps
         run: pnpm install --frozen-lockfile
 
-      # Build + test everything regardless of which package is being released —
-      # the CLI depends on harness-kit which depends on workload-router via
-      # workspace:*. `pnpm publish` rewrites those specs to concrete versions
-      # at pack time, and we want every package's dist/ to be fresh when that
-      # happens.
+      # Packages publish in lockstep. Build + test the whole workspace so every
+      # package's dist/ is fresh before `pnpm pack` rewrites workspace:* deps
+      # to concrete versions at pack time.
       - name: Build workspace
         run: pnpm -r run build
 
       - name: Run tests
         run: pnpm -r run test
 
-      - name: Resolve target packages (dep order)
+      - name: Resolve target packages
         id: targets
         run: |
-          case "${{ github.event.inputs.package }}" in
-            all)
-              # Must be in dependency order: router → harness-kit → cli →
-              # agentworkforce (the wrapper depends on cli).
-              echo "packages=workload-router harness-kit cli agentworkforce" >> "$GITHUB_OUTPUT"
-              ;;
-            workload-router|harness-kit|cli|agentworkforce)
-              echo "packages=${{ github.event.inputs.package }}" >> "$GITHUB_OUTPUT"
-              ;;
-            *)
-              echo "Unknown package: ${{ github.event.inputs.package }}" >&2
-              exit 1
-              ;;
-          esac
+          # Dependency order: workload-router → harness-kit → cli → agentworkforce.
+          # The top-level `agentworkforce` wrapper depends on `@agentworkforce/cli`,
+          # so it must publish last.
+          echo "packages=workload-router harness-kit cli agentworkforce" >> "$GITHUB_OUTPUT"
 
-      # Catches the failure mode that bit us on 2026-04-23: a previous
-      # publish run shipped @agentworkforce/*@0.3.0 to npm but failed at the
-      # final `git push origin HEAD --follow-tags` step (a concurrent PR
-      # merge made main non-fast-forwardable), so neither the *-v0.3.0 tags
-      # nor the chore(release) commit landed on main. A naive re-run would
-      # clone at 0.2.x, bump to 0.3.0 again, and hit npm's "cannot publish
-      # over previously published versions: 0.3.0."
+      # Lockstep baseline heal. The workspace publishes every package at the
+      # same version, so if any package's local version lags either its own
+      # npm `latest` or another workspace package, pull it up to the highest
+      # stable version across the whole set before the bump step runs. This
+      # absorbs two failure modes:
       #
-      # If npm's highest stable version is greater than what package.json
-      # has, abort here with a clear remediation message rather than
-      # letting the bump produce a doomed version downstream.
-      - name: Verify local versions are in sync with npm
+      #   1. A previous publish run shipped @agentworkforce/*@X to npm but
+      #      failed at the Tag + push step, so main did not receive the
+      #      release commit or tags.
+      #   2. Packages drifted because older releases were allowed to publish
+      #      only one package at a time.
+      #
+      # The downstream "Verify new versions are not yet published" step still
+      # catches the case where the post-bump version collides with an existing
+      # npm version.
+      - name: Heal local versions to lockstep baseline
         run: |
           set -euo pipefail
-          for pkg in ${{ steps.targets.outputs.packages }}; do
-            NPM_NAME=$(node -p "require('./packages/$pkg/package.json').name")
-            LOCAL=$(node -p "require('./packages/$pkg/package.json').version")
-            REMOTE=$(npm view "$NPM_NAME" versions --json 2>/dev/null \
-              | node -e '
-                const raw = require("fs").readFileSync(0, "utf8").trim() || "[]";
-                const parsed = JSON.parse(raw);
-                const arr = Array.isArray(parsed) ? parsed : [parsed];
-                const stable = arr.filter((v) => typeof v === "string" && !v.includes("-"));
-                stable.sort((a, b) => {
-                  const pa = a.split(".").map(Number);
-                  const pb = b.split(".").map(Number);
-                  for (let i = 0; i < 3; i++) {
-                    if ((pa[i] || 0) !== (pb[i] || 0)) return (pa[i] || 0) - (pb[i] || 0);
-                  }
-                  return 0;
-                });
-                process.stdout.write(stable.length ? stable[stable.length - 1] : "");
-              ' || echo "")
-            if [ -z "$REMOTE" ]; then
-              echo "$NPM_NAME: no stable releases on npm yet — OK"
-              continue
-            fi
-            CMP=$(node -e '
-              const [a, b] = process.argv.slice(1);
-              const pa = a.split(".").map(Number);
-              const pb = b.split(".").map(Number);
-              for (let i = 0; i < 3; i++) {
-                const da = pa[i] || 0;
-                const db = pb[i] || 0;
-                if (da !== db) { console.log(da < db ? -1 : 1); process.exit(0); }
-              }
-              console.log(0);
-            ' "$LOCAL" "$REMOTE")
-            if [ "$CMP" = "-1" ]; then
-              echo "::error title=npm/git version drift::$NPM_NAME: package.json is at $LOCAL but npm has $REMOTE published. A previous publish run likely succeeded on npm but failed before tagging. Bump packages/$pkg/package.json to >= $REMOTE on a branch, push, then re-run this workflow. (You may also want to tag the prior release commit as $pkg-v$REMOTE so the changelog generator picks the right baseline.)"
-              exit 1
-            fi
-            echo "$NPM_NAME: local=$LOCAL, npm=$REMOTE — OK"
-          done
+          cat > /tmp/lockstep-heal.mjs << 'HEALEOF'
+          import { execSync } from 'node:child_process';
+          import { readFileSync } from 'node:fs';
+
+          const packages = process.argv.slice(2);
+          const cmp = (a, b) => {
+            const pa = a.split('.').map(Number);
+            const pb = b.split('.').map(Number);
+            for (let i = 0; i < 3; i++) {
+              const da = pa[i] || 0;
+              const db = pb[i] || 0;
+              if (da !== db) return da - db;
+            }
+            return 0;
+          };
+          const isStable = (v) => typeof v === 'string' && /^\d+\.\d+\.\d+$/.test(v);
+
+          const info = packages.map((pkg) => {
+            const json = JSON.parse(readFileSync(`packages/${pkg}/package.json`, 'utf8'));
+            let npmHighest = null;
+            try {
+              const raw = execSync(`npm view ${json.name} versions --json`, {
+                encoding: 'utf8',
+                stdio: ['ignore', 'pipe', 'ignore'],
+              }).trim() || '[]';
+              const parsed = JSON.parse(raw);
+              const arr = Array.isArray(parsed) ? parsed : [parsed];
+              const stable = arr.filter(isStable).sort(cmp);
+              if (stable.length) npmHighest = stable[stable.length - 1];
+            } catch {
+              // unpublished package: leave npmHighest null
+            }
+            return { pkg, name: json.name, local: json.version, npmHighest };
+          });
+
+          const candidates = info.flatMap((e) => [e.local, e.npmHighest]).filter(isStable);
+          if (candidates.length === 0) {
+            console.log('Lockstep baseline: (no stable versions yet, skipping heal)');
+            process.exit(0);
+          }
+          candidates.sort(cmp);
+          const baseline = candidates[candidates.length - 1];
+          console.log(`Lockstep baseline: ${baseline}`);
+
+          const heals = [];
+          for (const e of info) {
+            const remote = e.npmHighest ?? 'unpublished';
+            if (isStable(e.local) && cmp(e.local, baseline) < 0) {
+              heals.push(e);
+              console.log(`  ${e.name}: local=${e.local} npm=${remote} - healing to ${baseline}`);
+            } else {
+              console.log(`  ${e.name}: local=${e.local} npm=${remote} - OK`);
+            }
+          }
+
+          for (const e of heals) {
+            execSync(`npm version ${baseline} --no-git-tag-version --allow-same-version`, {
+              cwd: `packages/${e.pkg}`,
+              stdio: 'inherit',
+            });
+          }
+
+          if (heals.length === 0) {
+            console.log('All packages at baseline - no heal needed.');
+          } else {
+            console.log(`Healed ${heals.length} package(s) up to ${baseline}.`);
+          }
+          HEALEOF
+
+          node /tmp/lockstep-heal.mjs ${{ steps.targets.outputs.packages }}
 
       - name: Bump versions
         id: bump
@@ -191,11 +202,11 @@ jobs:
           done
           echo "versions=${VERSIONS# }" >> "$GITHUB_OUTPUT"
 
-      # Belt-and-suspenders alongside the parity check above: even if the
-      # local→npm baseline is in sync, the computed bump might still collide
-      # with an existing version (e.g. a one-off publish from another
-      # branch). Catch it before we waste a build + before npm rejects with
-      # a less specific error.
+      # Belt-and-suspenders alongside the baseline heal above: even if the
+      # local and npm baselines are aligned, the computed bump might still
+      # collide with an existing version (e.g. a one-off publish from another
+      # branch). Catch it before we waste a build + before npm rejects with a
+      # less specific error.
       - name: Verify new versions are not yet published
         run: |
           set -euo pipefail
@@ -452,11 +463,9 @@ jobs:
 
   # One GitHub Release per publish run. Per-package git tags are still pushed
   # above (so the next publish's changelog generator can find them), but the
-  # public GitHub Release is anchored to a single canonical tag — `agentworkforce`
-  # if the wrapper was bumped, otherwise the first package in the run. The
-  # release body lists every published package and inlines each one's
-  # CHANGELOG block, so the releases page has one item per version instead of
-  # 4 near-duplicate entries per `all` publish.
+  # public GitHub Release is anchored to the `agentworkforce` tag for lockstep
+  # publishes. The release body lists every published package and inlines each
+  # one's CHANGELOG block, so the releases page has one item per version.
   create-release:
     name: Create GitHub Release
     needs: publish
@@ -500,7 +509,7 @@ jobs:
           fi
 
       - name: Checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@v6
         with:
           # Need the canonical tag that the publish job just pushed — it
           # points at the chore(release) commit with all bumped CHANGELOGs.
@@ -599,7 +608,7 @@ jobs:
           node /tmp/build-release-notes.mjs
 
       - name: Create GitHub Release
-        uses: softprops/action-gh-release@v2
+        uses: softprops/action-gh-release@v3
         with:
           tag_name: ${{ steps.release.outputs.tag_name }}
           name: ${{ steps.notes.outputs.release_name }}

@@ -1,6 +1,6 @@
-import { readFileSync, readdirSync, existsSync } from 'node:fs';
+import { existsSync, mkdirSync, readFileSync, readdirSync, writeFileSync } from 'node:fs';
 import { homedir } from 'node:os';
-import { join } from 'node:path';
+import { dirname, isAbsolute, join, resolve as resolvePath } from 'node:path';
 
 import {
   personaCatalog,
@@ -17,7 +17,7 @@ import {
 /**
  * User-defined persona override. Local files are partial overlays — only the
  * fields you specify replace the inherited base; everything else cascades down
- * through pwd → home → library.
+ * through cwd → configured persona dirs → library.
  *
  * `extends` names the base explicitly by id or intent. If omitted, the loader
  * implicitly inherits from the same-id persona found in the next lower layer.
@@ -45,13 +45,29 @@ export interface LocalPersonaOverride {
   tiers?: Partial<Record<PersonaTier, Partial<PersonaRuntime>>>;
 }
 
-type Layer = 'pwd' | 'home';
-const LAYER_ORDER: Layer[] = ['pwd', 'home'];
+export type PersonaSource = string;
 
-export type PersonaSource = Layer | 'library';
+interface SourceLayer {
+  key: string;
+  source: PersonaSource;
+  dir: string;
+}
+
+export interface PersonaSourceDirectory {
+  source: PersonaSource;
+  dir: string;
+  configurable: boolean;
+}
+
+export interface PersonaSourceConfig {
+  configPath: string;
+  personaDirs: string[];
+  userPersonaDir: string;
+  warnings: string[];
+}
 
 export interface LoadedLocalPersonas {
-  /** Final resolved specs by id, with the cascade applied (pwd wins over home wins over library). */
+  /** Final resolved specs by id, with the cascade applied (higher source dirs win). */
   byId: Map<string, PersonaSpec>;
   /** Where each id in `byId` was defined (top-most layer that declared it). */
   sources: Map<string, PersonaSource>;
@@ -60,22 +76,155 @@ export interface LoadedLocalPersonas {
 
 export interface LoadOptions {
   cwd?: string;
+  /**
+   * Back-compat alias for userPersonaDir. Historically local personas lived
+   * directly in this directory.
+   */
   homeDir?: string;
+  userPersonaDir?: string;
+  workforceHomeDir?: string;
+  configPath?: string;
+  /** Full ordered list of configurable persona dirs after cwd and before library. */
+  personaDirs?: string[];
 }
 
-function defaultHomeDir(): string {
-  const override = process.env.AGENT_WORKFORCE_CONFIG_DIR?.trim();
+export function defaultWorkforceHomeDir(): string {
+  const override = process.env.AGENT_WORKFORCE_HOME?.trim();
   if (override) return override;
-  return join(homedir(), '.agent-workforce');
+  return join(homedir(), '.agentworkforce', 'workforce');
 }
 
-function defaultPwdDir(cwd: string): string {
-  return join(cwd, '.agent-workforce');
+export function defaultUserPersonaDir(workforceHomeDir = defaultWorkforceHomeDir()): string {
+  const legacyOverride = process.env.AGENT_WORKFORCE_CONFIG_DIR?.trim();
+  if (legacyOverride) return legacyOverride;
+  return join(workforceHomeDir, 'personas');
+}
+
+export function defaultPersonaConfigPath(workforceHomeDir = defaultWorkforceHomeDir()): string {
+  return join(workforceHomeDir, 'config.json');
+}
+
+export function defaultCwdPersonaDir(cwd: string): string {
+  return join(cwd, '.agentworkforce', 'workforce', 'personas');
+}
+
+export function expandHomePath(input: string): string {
+  if (input === '~') return homedir();
+  if (input.startsWith('~/') || input.startsWith('~\\')) {
+    return join(homedir(), input.slice(2));
+  }
+  return input;
+}
+
+export function normalizePersonaDir(input: string, baseDir = process.cwd()): string {
+  const expanded = expandHomePath(input.trim());
+  return isAbsolute(expanded) ? resolvePath(expanded) : resolvePath(baseDir, expanded);
+}
+
+function readConfigPersonaDirs(path: string, warnings: string[]): string[] | undefined {
+  if (!existsSync(path)) return undefined;
+  try {
+    const parsed = JSON.parse(readFileSync(path, 'utf8')) as unknown;
+    if (!isPlainObject(parsed)) {
+      warnings.push(`[config] ${path}: must be a JSON object`);
+      return undefined;
+    }
+    const dirs = parsed.personaDirs;
+    if (dirs === undefined) return undefined;
+    if (
+      !Array.isArray(dirs) ||
+      dirs.some((dir) => typeof dir !== 'string' || !dir.trim())
+    ) {
+      warnings.push(`[config] ${path}: personaDirs must be an array of non-empty strings`);
+      return undefined;
+    }
+    return dirs.map((dir) => normalizePersonaDir(dir, dirname(path)));
+  } catch (err) {
+    warnings.push(`[config] ${path}: ${(err as Error).message}`);
+    return undefined;
+  }
+}
+
+function dedupeDirs(dirs: readonly string[], warnings: string[]): string[] {
+  const seen = new Set<string>();
+  const out: string[] = [];
+  for (const dir of dirs) {
+    const normalized = normalizePersonaDir(dir);
+    if (seen.has(normalized)) {
+      warnings.push(`[config] duplicate persona source directory ${normalized}; keeping first.`);
+      continue;
+    }
+    seen.add(normalized);
+    out.push(normalized);
+  }
+  return out;
+}
+
+export function loadPersonaSourceConfig(options: LoadOptions = {}): PersonaSourceConfig {
+  const workforceHomeDir = options.workforceHomeDir ?? defaultWorkforceHomeDir();
+  const userPersonaDir = normalizePersonaDir(
+    options.userPersonaDir ?? options.homeDir ?? defaultUserPersonaDir(workforceHomeDir)
+  );
+  const configPath = normalizePersonaDir(
+    options.configPath ?? defaultPersonaConfigPath(workforceHomeDir)
+  );
+  const warnings: string[] = [];
+  const configuredDirs =
+    options.personaDirs ?? readConfigPersonaDirs(configPath, warnings) ?? [userPersonaDir];
+
+  return {
+    configPath,
+    personaDirs: dedupeDirs(configuredDirs, warnings),
+    userPersonaDir,
+    warnings
+  };
+}
+
+export function savePersonaSourceConfig(
+  personaDirs: readonly string[],
+  options: LoadOptions = {}
+): PersonaSourceConfig {
+  const config = loadPersonaSourceConfig({ ...options, personaDirs: [...personaDirs] });
+  mkdirSync(dirname(config.configPath), { recursive: true });
+  writeFileSync(
+    config.configPath,
+    JSON.stringify({ personaDirs: config.personaDirs }, null, 2) + '\n',
+    'utf8'
+  );
+  return config;
+}
+
+function sourceForPersonaDir(
+  dir: string,
+  idx: number,
+  userPersonaDir: string
+): PersonaSource {
+  return dir === userPersonaDir ? 'user' : `dir:${idx + 1}`;
+}
+
+export function buildPersonaSourceDirectories(
+  options: LoadOptions = {}
+): { directories: PersonaSourceDirectory[]; config: PersonaSourceConfig } {
+  const cwd = options.cwd ?? process.cwd();
+  const config = loadPersonaSourceConfig(options);
+  const directories: PersonaSourceDirectory[] = [
+    {
+      source: 'cwd',
+      dir: defaultCwdPersonaDir(cwd),
+      configurable: false
+    },
+    ...config.personaDirs.map((dir, idx) => ({
+      source: sourceForPersonaDir(dir, idx, config.userPersonaDir),
+      dir,
+      configurable: true
+    }))
+  ];
+  return { directories, config };
 }
 
 function readLayerDir(
   dir: string,
-  layer: Layer,
+  layer: SourceLayer,
   warnings: string[]
 ): Map<string, LocalPersonaOverride> {
   const out = new Map<string, LocalPersonaOverride>();
@@ -85,7 +234,7 @@ function readLayerDir(
   try {
     entries = readdirSync(dir).filter((n) => n.endsWith('.json'));
   } catch (err) {
-    warnings.push(`[${layer}] could not read ${dir}: ${(err as Error).message}`);
+    warnings.push(`[${layer.source}] could not read ${dir}: ${(err as Error).message}`);
     return out;
   }
 
@@ -93,14 +242,14 @@ function readLayerDir(
     const path = join(dir, file);
     try {
       const raw = readFileSync(path, 'utf8');
-      const parsed = parseOverride(JSON.parse(raw), `[${layer}] ${file}`);
+      const parsed = parseOverride(JSON.parse(raw), `[${layer.source}] ${file}`);
       if (out.has(parsed.id)) {
-        warnings.push(`[${layer}] ${file}: duplicate id "${parsed.id}" within layer; skipping.`);
+        warnings.push(`[${layer.source}] ${file}: duplicate id "${parsed.id}" within layer; skipping.`);
         continue;
       }
       out.set(parsed.id, parsed);
     } catch (err) {
-      warnings.push(`[${layer}] ${file}: ${(err as Error).message}`);
+      warnings.push(`[${layer.source}] ${file}: ${(err as Error).message}`);
     }
   }
   return out;
@@ -267,13 +416,15 @@ function findInLibrary(key: string): PersonaSpec | undefined {
 function findInLowerLayers(
   key: string,
   startLayerIdx: number,
-  overrides: Record<Layer, Map<string, LocalPersonaOverride>>,
+  layers: readonly SourceLayer[],
+  overrides: Map<string, Map<string, LocalPersonaOverride>>,
   resolving: Set<string>
 ): PersonaSpec | undefined {
-  for (let i = startLayerIdx; i < LAYER_ORDER.length; i++) {
-    const layer = LAYER_ORDER[i];
-    if (overrides[layer].has(key)) {
-      return resolveInLayer(key, layer, overrides, resolving);
+  for (let i = startLayerIdx; i < layers.length; i++) {
+    const layer = layers[i];
+    const layerOverrides = overrides.get(layer.key);
+    if (layerOverrides?.has(key)) {
+      return resolveInLayer(key, i, layers, overrides, resolving);
     }
   }
   return findInLibrary(key);
@@ -281,26 +432,31 @@ function findInLowerLayers(
 
 function resolveInLayer(
   id: string,
-  layer: Layer,
-  overrides: Record<Layer, Map<string, LocalPersonaOverride>>,
+  layerIdx: number,
+  layers: readonly SourceLayer[],
+  overrides: Map<string, Map<string, LocalPersonaOverride>>,
   resolving: Set<string>
 ): PersonaSpec {
-  const key = `${layer}:${id}`;
+  const layer = layers[layerIdx];
+  const key = `${layer.key}:${id}`;
   if (resolving.has(key)) {
     throw new Error(`extends cycle detected through ${[...resolving, key].join(' -> ')}`);
   }
   resolving.add(key);
   try {
-    const override = overrides[layer].get(id);
+    const override = overrides.get(layer.key)?.get(id);
     if (!override) {
       throw new Error(`internal: resolveInLayer called for missing ${key}`);
     }
     const baseKey = override.extends ?? override.id;
-    const layerIdx = LAYER_ORDER.indexOf(layer);
-    const base = findInLowerLayers(baseKey, layerIdx + 1, overrides, resolving);
+    const base = findInLowerLayers(baseKey, layerIdx + 1, layers, overrides, resolving);
     if (!base) {
+      const lowerLayers = [
+        ...layers.slice(layerIdx + 1).map((lower) => lower.source),
+        'library'
+      ].join(', ');
       const hint = override.extends
-        ? `extends "${override.extends}" does not match any persona in lower layers (home, library)`
+        ? `extends "${override.extends}" does not match any persona in lower layers (${lowerLayers})`
         : `no lower-layer persona with id "${override.id}" to implicitly inherit from; add extends or define the persona in a lower layer`;
       throw new Error(hint);
     }
@@ -374,27 +530,34 @@ function dedupe(values: string[]): string[] {
 }
 
 export function loadLocalPersonas(options: LoadOptions = {}): LoadedLocalPersonas {
-  const cwd = options.cwd ?? process.cwd();
-  const homeDir = options.homeDir ?? defaultHomeDir();
-  const warnings: string[] = [];
+  const sourceDirs = buildPersonaSourceDirectories(options);
+  const warnings: string[] = [...sourceDirs.config.warnings];
+  const layers: SourceLayer[] = sourceDirs.directories.map((sourceDir, idx) => ({
+    key: `${idx}:${sourceDir.source}:${sourceDir.dir}`,
+    source: sourceDir.source,
+    dir: sourceDir.dir
+  }));
 
-  const overrides: Record<Layer, Map<string, LocalPersonaOverride>> = {
-    pwd: readLayerDir(defaultPwdDir(cwd), 'pwd', warnings),
-    home: readLayerDir(homeDir, 'home', warnings)
-  };
+  const overrides = new Map<string, Map<string, LocalPersonaOverride>>();
+  for (const layer of layers) {
+    overrides.set(layer.key, readLayerDir(layer.dir, layer, warnings));
+  }
 
   const byId = new Map<string, PersonaSpec>();
   const sources = new Map<string, PersonaSource>();
 
-  for (const layer of LAYER_ORDER) {
-    for (const id of overrides[layer].keys()) {
+  for (let i = 0; i < layers.length; i++) {
+    const layer = layers[i];
+    const layerOverrides = overrides.get(layer.key);
+    if (!layerOverrides) continue;
+    for (const id of layerOverrides.keys()) {
       if (byId.has(id)) continue; // higher-layer already won
       try {
-        const resolved = resolveInLayer(id, layer, overrides, new Set());
+        const resolved = resolveInLayer(id, i, layers, overrides, new Set());
         byId.set(id, resolved);
-        sources.set(id, layer);
+        sources.set(id, layer.source);
       } catch (err) {
-        warnings.push(`[${layer}] ${id}: ${(err as Error).message}`);
+        warnings.push(`[${layer.source}] ${id}: ${(err as Error).message}`);
       }
     }
   }
