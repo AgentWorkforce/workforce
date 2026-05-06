@@ -56,6 +56,7 @@ corepack pnpm --filter agentworkforce link --global
 ```
 agentworkforce agent <persona>[@<tier>]
 agentworkforce list [flags]
+agentworkforce install [flags] <pkg|path>
 agentworkforce sources <list|add|remove>
 agentworkforce harness check
 ```
@@ -74,6 +75,10 @@ agentworkforce harness check
   intent. Flags: `--all`, `--json`, `--filter-rating <tier>`,
   `--filter-harness <harness>`, `--no-display-description`. See
   **[packages/cli/README.md](./packages/cli/README.md#list)** for details.
+- `install` — copy persona JSON files from an npm package or local package
+  directory into `./.agentworkforce/workforce/personas/`. Installed files are
+  project-owned and editable. There is no install manifest, lockfile, update
+  command, or registry beyond the npm package spec you pass.
 - `sources` — list, add, or remove configured persona source directories.
   This is how you include personas installed into another checkout or repo.
   See **[packages/cli/README.md](./packages/cli/README.md#sources)**.
@@ -94,6 +99,70 @@ agentworkforce agent review@best-value
 # MCP server wired up and its tools auto-approved.
 export POSTHOG_API_KEY=phx_…
 agentworkforce agent posthog@best
+```
+
+### Persona pack installs
+
+Install a persona pack into the current project:
+
+```bash
+agentworkforce install @agentrelay/personas
+agentworkforce install @agentrelay/personas@1.2.3
+agentworkforce install @agentrelay/personas@latest --persona relay-orchestrator
+agentworkforce install ./local-personas --persona relay-orchestrator --persona code-reviewer
+```
+
+The command copies matching `*.json` persona files into
+`./.agentworkforce/workforce/personas/`, flattening nested package paths to
+plain filenames. Existing files are skipped and reported as conflicts by
+default; pass `--overwrite` to replace them:
+
+```bash
+agentworkforce install @agentrelay/personas --overwrite
+```
+
+Persona packs use npm as the distribution mechanism. A package can point at
+its persona directory with `package.json` metadata, or fall back to a top-level
+`personas/` directory:
+
+```json
+{
+  "name": "@acme/personas",
+  "version": "1.0.0",
+  "files": ["personas"],
+  "keywords": ["agentworkforce-personas"],
+  "agentworkforce": {
+    "personas": "personas"
+  }
+}
+```
+
+```
+@acme/personas/
+├── package.json
+└── personas/
+    ├── reviewer.json
+    └── release-runner.json
+```
+
+`install` is a copy utility. Use it when a project should own and edit its
+persona files. `sources add <dir>` is separate: it points the cascade at a live
+directory and does not copy files.
+
+Worked authoring flow:
+
+```bash
+mkdir -p acme-personas/personas
+cd acme-personas
+npm init -y
+npm pkg set name=@acme/personas version=1.0.0
+npm pkg set 'files[0]=personas' 'keywords[0]=agentworkforce-personas'
+npm pkg set agentworkforce.personas=personas
+$EDITOR personas/reviewer.json
+npm publish --access public
+cd ../my-project
+agentworkforce install @acme/personas --persona reviewer
+git add .agentworkforce/workforce/personas/reviewer.json
 ```
 
 ### Local persona override

@@ -9,6 +9,7 @@ source.
 agentworkforce agent <persona>[@<tier>]
 agentworkforce list [flags]
 agentworkforce show <persona>[@<tier>]
+agentworkforce install [flags] <pkg|path>
 agentworkforce sources <list|add|remove>
 agentworkforce harness check
 ```
@@ -17,6 +18,8 @@ agentworkforce harness check
 - `list` — print the persona catalog as a table (or JSON). See
   [`## List`](#list) below for every flag.
 - `show` — print the resolved spec for one persona.
+- `install` — copy persona JSON files from an npm or local persona pack into
+  the current project's fixed cwd source directory.
 - `sources` — list, add, or remove persona source directories.
 - `harness check` — probe which harnesses (`claude`, `codex`, `opencode`)
   are installed. See [`## Harness check`](#harness-check) below.
@@ -66,6 +69,150 @@ agentworkforce agent posthog@best
 
 # Interactive against a local override
 agentworkforce agent my-posthog@best
+```
+
+## Install persona packs
+
+```
+agentworkforce install <pkg|path> [--persona <id> ...] [--overwrite]
+```
+
+`install` is a shadcn-style copy utility for persona JSON. It copies persona
+files into the current project's fixed cwd layer:
+`<cwd>/.agentworkforce/workforce/personas/`.
+
+Once copied, files are project-owned. Edit them directly and commit them to
+git. The CLI does not create an install ledger, lockfile, manifest, update
+command, uninstall command, diff command, or central AgentWorkforce registry.
+
+### Package and path forms
+
+Npm package specs are resolved with `npm pack`, so npm auth, npm config,
+private packages, tags, and versions work the same way they do for npm:
+
+```sh
+agentworkforce install @agentrelay/personas
+agentworkforce install @agentrelay/personas@1.2.3
+agentworkforce install @agentrelay/personas@latest
+```
+
+Local path installs read directly from the directory:
+
+```sh
+agentworkforce install ./local-personas
+agentworkforce install /absolute/path/to/local-personas
+```
+
+### Selecting personas
+
+By default, every `*.json` file in the pack's persona directory is copied.
+Use repeated `--persona <id>` flags to install a subset by persona `id`:
+
+```sh
+agentworkforce install @agentrelay/personas --persona relay-orchestrator
+agentworkforce install @agentrelay/personas --persona relay-orchestrator --persona code-reviewer
+```
+
+If any requested id is missing, the command exits non-zero before copying
+anything.
+
+### Conflicts and overwrite
+
+Target filenames are flattened into the cwd persona directory:
+
+```
+package/personas/nested/code-reviewer.json
+  -> .agentworkforce/workforce/personas/code-reviewer.json
+```
+
+If the target file already exists, the installer reports a conflict, skips
+that file, and exits non-zero. Non-conflicting files from the same run may
+still be copied. Pass `--overwrite` to replace existing files unconditionally:
+
+```sh
+agentworkforce install @agentrelay/personas --overwrite
+```
+
+Filename collisions across packages use the same rule. The install layer does
+not namespace files by package; avoid shipping two pack files with the same
+basename if they are expected to be installed together.
+
+### Persona pack format
+
+A pack can contain multiple personas:
+
+```text
+@agentrelay/personas
+├── package.json
+└── personas/
+    ├── relay-orchestrator.json
+    ├── code-reviewer.json
+    └── e2e-validator.json
+```
+
+`package.json` may declare the persona directory:
+
+```json
+{
+  "name": "@agentrelay/personas",
+  "version": "1.2.3",
+  "files": ["personas"],
+  "keywords": ["agentworkforce-personas"],
+  "agentworkforce": {
+    "personas": "personas"
+  }
+}
+```
+
+Resolution rules:
+
+1. Read `package.json.agentworkforce.personas` if present.
+2. Otherwise use a top-level `personas/` directory.
+3. Recursively copy every `*.json` file from that directory, flattening to
+   `<cwd>/.agentworkforce/workforce/personas/<basename>.json`.
+
+Local path installs use the same metadata rules.
+
+### Relationship to sources
+
+Use `install` when this project should receive editable copies:
+
+```sh
+agentworkforce install @acme/personas
+git add .agentworkforce/workforce/personas
+```
+
+Use `sources add` when you want the cascade to point at a live directory
+without copying:
+
+```sh
+agentworkforce sources add ~/src/acme-personas/personas
+```
+
+Both feed the same cascade. `install` writes to the fixed cwd layer, while
+`sources` changes the configured source directories in
+`~/.agentworkforce/workforce/config.json`.
+
+### Author and publish a persona pack
+
+```sh
+mkdir -p acme-personas/personas
+cd acme-personas
+npm init -y
+npm pkg set name=@acme/personas version=1.0.0
+npm pkg set 'files[0]=personas' 'keywords[0]=agentworkforce-personas'
+npm pkg set agentworkforce.personas=personas
+$EDITOR personas/reviewer.json
+npm publish --access public
+```
+
+Then install it in a project:
+
+```sh
+cd ../my-project
+agentworkforce install @acme/personas --persona reviewer
+agentworkforce list --filter-tag review
+agentworkforce agent reviewer@best-value
 ```
 
 ## List
@@ -295,6 +442,11 @@ library has no `extends`.
 changes — `systemPrompt`, `harness`, and `harnessSettings` still come from the
 base. Use top-level `systemPrompt` if you want to replace the prompt
 uniformly across all tiers.
+
+To define a standalone local persona that does not inherit from a lower layer,
+include `intent` and a complete `tiers` object for `best`, `best-value`, and
+`minimum`. This is the shape persona packs usually ship before `install`
+copies them into the cwd layer.
 
 ## Env references & secrets
 

@@ -39,6 +39,7 @@ import {
   savePersonaSourceConfig,
   type PersonaSource
 } from './local-personas.js';
+import { installPersonas, type PersonaInstallResult } from './persona-install.js';
 
 const USAGE = `Usage: agentworkforce <command> [args...]
 
@@ -85,6 +86,13 @@ Commands:
                       or --all to see every tier. Flags:
                         --all         include every tier (overrides default)
                         --json        emit the resolved PersonaSpec as JSON
+  install [flags] <pkg|path>
+                      Copy persona JSON files from an npm package or local
+                      package directory into
+                      <cwd>/.agentworkforce/workforce/personas/. Flags:
+                        --persona <id>  install only the matching persona id;
+                                        repeat to install multiple
+                        --overwrite     replace existing target files
   sources list [--json]
                       List persona source directories in cascade order.
   sources add <dir> [--position <n>]
@@ -108,6 +116,8 @@ Examples:
   agentworkforce agent review@best-value
   agentworkforce list
   agentworkforce show posthog
+  agentworkforce install @agentrelay/personas --persona relay-orchestrator
+  agentworkforce install ./local-personas --overwrite
   agentworkforce sources list
   agentworkforce sources add ../my-personas --position 1
   agentworkforce harness check
@@ -1078,6 +1088,100 @@ function runSources(args: readonly string[]): never {
   die(`sources: unknown action "${action}". Expected: list, add, remove.`);
 }
 
+export interface PersonaInstallArgs {
+  source: string;
+  personaIds: string[];
+  overwrite: boolean;
+}
+
+export function parseInstallArgs(args: readonly string[]): PersonaInstallArgs {
+  let source: string | undefined;
+  const personaIds: string[] = [];
+  let overwrite = false;
+  const valueOf = (i: number, flag: string): string => {
+    const v = args[i + 1];
+    if (v === undefined || v.startsWith('--')) {
+      throw new Error(`install: ${flag} requires a value.`);
+    }
+    return v;
+  };
+
+  for (let i = 0; i < args.length; i++) {
+    const arg = args[i];
+    if (arg === '--overwrite') {
+      overwrite = true;
+    } else if (arg === '--persona') {
+      const value = valueOf(i++, arg);
+      if (!value.trim()) throw new Error('install: --persona requires a non-empty value.');
+      personaIds.push(value);
+    } else if (arg.startsWith('--')) {
+      throw new Error(`install: unexpected flag "${arg}".`);
+    } else if (source === undefined) {
+      source = arg;
+    } else {
+      throw new Error(`install: unexpected argument "${arg}".`);
+    }
+  }
+
+  if (!source) throw new Error('install: missing package or local path.');
+  return { source, personaIds, overwrite };
+}
+
+function formatPersonaInstallSummary(result: PersonaInstallResult): string {
+  const lines: string[] = [];
+  for (const persona of result.installed) {
+    lines.push(`installed ${persona.id} -> ${persona.targetPath}`);
+  }
+  if (result.installed.length > 0) {
+    lines.push(
+      `Installed ${result.installed.length} persona(s) into ${result.targetDir}.`
+    );
+  }
+  return lines.length > 0 ? lines.join('\n') + '\n' : '';
+}
+
+function formatPersonaInstallConflicts(result: PersonaInstallResult): string {
+  if (result.conflicts.length === 0) return '';
+  const lines = result.conflicts.map(
+    (conflict) =>
+      `conflict ${conflict.id}: ${conflict.targetPath} already exists (use --overwrite to replace it)`
+  );
+  lines.push(
+    `Skipped ${result.conflicts.length} existing persona file(s); re-run with --overwrite to replace.`
+  );
+  return lines.join('\n') + '\n';
+}
+
+function runPersonaInstall(args: readonly string[]): never {
+  if (args.includes('-h') || args.includes('--help')) {
+    process.stdout.write(
+      'Usage: agentworkforce install <pkg|path> [--persona <id> ...] [--overwrite]\n'
+    );
+    process.exit(0);
+  }
+  let parsed: PersonaInstallArgs;
+  try {
+    parsed = parseInstallArgs(args);
+  } catch (err) {
+    die((err as Error).message);
+  }
+
+  let result: PersonaInstallResult;
+  try {
+    result = installPersonas({
+      source: parsed.source,
+      personaIds: parsed.personaIds,
+      overwrite: parsed.overwrite
+    });
+  } catch (err) {
+    die((err as Error).message, false);
+  }
+
+  process.stdout.write(formatPersonaInstallSummary(result));
+  process.stderr.write(formatPersonaInstallConflicts(result));
+  process.exit(result.conflicts.length > 0 ? 1 : 0);
+}
+
 interface PersonaListRow {
   persona: string;
   source: PersonaSource;
@@ -1510,6 +1614,10 @@ export async function main(): Promise<void> {
 
   if (subcommand === 'show') {
     runShow(rest);
+  }
+
+  if (subcommand === 'install') {
+    runPersonaInstall(rest);
   }
 
   if (subcommand === 'sources') {

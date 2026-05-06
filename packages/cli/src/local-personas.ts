@@ -3,10 +3,13 @@ import { homedir } from 'node:os';
 import { dirname, isAbsolute, join, resolve as resolvePath } from 'node:path';
 
 import {
+  HARNESS_VALUES,
+  PERSONA_INTENTS,
   personaCatalog,
   PERSONA_TAGS,
   PERSONA_TIERS,
   type McpServerSpec,
+  type PersonaIntent,
   type PersonaPermissions,
   type PersonaRuntime,
   type PersonaSpec,
@@ -19,12 +22,18 @@ import {
  * fields you specify replace the inherited base; everything else cascades down
  * through cwd → configured persona dirs → library.
  *
- * `extends` names the base explicitly by id or intent. If omitted, the loader
- * implicitly inherits from the same-id persona found in the next lower layer.
+ * `extends` names the base explicitly by id or intent. If omitted and the file
+ * has no `intent`, the loader implicitly inherits from the same-id persona
+ * found in the next lower layer. Files with `intent` are standalone personas.
  */
 export interface LocalPersonaOverride {
   id: string;
   extends?: string;
+  /**
+   * When present without `extends`, the file is a complete standalone
+   * persona instead of an overlay inheriting from a lower cascade layer.
+   */
+  intent?: PersonaIntent;
   /**
    * Classification tags. When provided, replaces the inherited base's tags
    * entirely (matching the replace-wholesale semantics used for `skills`).
@@ -270,6 +279,9 @@ function parseOverride(value: unknown, context: string): LocalPersonaOverride {
   if (raw.extends !== undefined && (typeof raw.extends !== 'string' || !raw.extends.trim())) {
     throw new Error(`${context}.extends must be a non-empty string if provided`);
   }
+  if (raw.intent !== undefined && !PERSONA_INTENTS.includes(raw.intent as PersonaIntent)) {
+    throw new Error(`${context}.intent must be one of: ${PERSONA_INTENTS.join(', ')}`);
+  }
   if (raw.systemPrompt !== undefined && typeof raw.systemPrompt !== 'string') {
     throw new Error(`${context}.systemPrompt must be a string if provided`);
   }
@@ -300,6 +312,7 @@ function parseOverride(value: unknown, context: string): LocalPersonaOverride {
   return {
     id: raw.id,
     extends: raw.extends as string | undefined,
+    intent: raw.intent as PersonaIntent | undefined,
     tags: raw.tags as PersonaTag[] | undefined,
     description: raw.description as string | undefined,
     skills: raw.skills as PersonaSpec['skills'] | undefined,
@@ -408,6 +421,98 @@ function findInLibrary(key: string): PersonaSpec | undefined {
   return undefined;
 }
 
+function isStandaloneOverride(
+  override: LocalPersonaOverride
+): override is LocalPersonaOverride & { intent: PersonaIntent } {
+  return override.extends === undefined && override.intent !== undefined;
+}
+
+function requireStandaloneField<T>(value: T | undefined, context: string): T {
+  if (value === undefined) {
+    throw new Error(`${context} is required for standalone personas`);
+  }
+  return value;
+}
+
+function assertStandaloneRuntime(
+  runtime: Partial<PersonaRuntime> | undefined,
+  context: string
+): PersonaRuntime {
+  if (!runtime) {
+    throw new Error(`${context} is required for standalone personas`);
+  }
+  if (
+    typeof runtime.harness !== 'string' ||
+    !HARNESS_VALUES.includes(runtime.harness as PersonaRuntime['harness'])
+  ) {
+    throw new Error(`${context}.harness must be one of: ${HARNESS_VALUES.join(', ')}`);
+  }
+  if (typeof runtime.model !== 'string' || !runtime.model.trim()) {
+    throw new Error(`${context}.model must be a non-empty string`);
+  }
+  if (typeof runtime.systemPrompt !== 'string' || !runtime.systemPrompt.trim()) {
+    throw new Error(`${context}.systemPrompt must be a non-empty string`);
+  }
+  const settings = runtime.harnessSettings as unknown;
+  if (!isPlainObject(settings)) {
+    throw new Error(`${context}.harnessSettings must be an object`);
+  }
+  const reasoning = settings.reasoning;
+  if (reasoning !== 'low' && reasoning !== 'medium' && reasoning !== 'high') {
+    throw new Error(`${context}.harnessSettings.reasoning must be one of: low, medium, high`);
+  }
+  const timeoutSeconds = settings.timeoutSeconds;
+  if (typeof timeoutSeconds !== 'number' || !Number.isFinite(timeoutSeconds) || timeoutSeconds <= 0) {
+    throw new Error(`${context}.harnessSettings.timeoutSeconds must be a positive number`);
+  }
+  return {
+    harness: runtime.harness as PersonaRuntime['harness'],
+    model: runtime.model,
+    systemPrompt: runtime.systemPrompt,
+    harnessSettings: {
+      reasoning,
+      timeoutSeconds
+    }
+  };
+}
+
+function standaloneSpecFromOverride(
+  override: LocalPersonaOverride & { intent: PersonaIntent }
+): PersonaSpec {
+  const tiers = {} as Record<PersonaTier, PersonaRuntime>;
+  const rawTiers = requireStandaloneField(
+    override.tiers,
+    `standalone persona "${override.id}".tiers`
+  );
+  for (const tier of PERSONA_TIERS) {
+    tiers[tier] = assertStandaloneRuntime(
+      rawTiers[tier],
+      `standalone persona "${override.id}".tiers.${tier}`
+    );
+  }
+
+  const env = override.env;
+  const mcpServers = override.mcpServers;
+  const permissions = override.permissions;
+  return {
+    id: override.id,
+    intent: override.intent,
+    tags: requireStandaloneField(
+      override.tags,
+      `standalone persona "${override.id}".tags`
+    ),
+    description: requireStandaloneField(
+      override.description,
+      `standalone persona "${override.id}".description`
+    ),
+    skills: override.skills ?? [],
+    tiers,
+    ...(env ? { env } : {}),
+    ...(mcpServers ? { mcpServers } : {}),
+    ...(permissions ? { permissions } : {})
+  };
+}
+
 /**
  * Mutual-recursion with resolveInLayer: given a base key, walk strictly-lower
  * layers until we find a persona with that id (local layers) or an id/intent
@@ -447,6 +552,9 @@ function resolveInLayer(
     const override = overrides.get(layer.key)?.get(id);
     if (!override) {
       throw new Error(`internal: resolveInLayer called for missing ${key}`);
+    }
+    if (isStandaloneOverride(override)) {
+      return standaloneSpecFromOverride(override);
     }
     const baseKey = override.extends ?? override.id;
     const base = findInLowerLayers(baseKey, layerIdx + 1, layers, overrides, resolving);
