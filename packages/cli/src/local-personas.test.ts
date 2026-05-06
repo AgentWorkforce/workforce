@@ -12,7 +12,7 @@ function withLayers<T>(fn: (dirs: Dirs) => T): T {
   const root = mkdtempSync(join(tmpdir(), 'agentworkforce-cascade-'));
   const cwd = join(root, 'project');
   const home = join(root, 'home');
-  const pwdDir = join(cwd, '.agentworkforce', 'workforce');
+  const pwdDir = join(cwd, '.agentworkforce', 'workforce', 'personas');
   const homeDir = join(home, '.agentworkforce', 'workforce', 'personas');
   mkdirSync(pwdDir, { recursive: true });
   mkdirSync(homeDir, { recursive: true });
@@ -144,6 +144,21 @@ test('source config defaults to the dotless user persona directory', () => {
     const config = loadPersonaSourceConfig({ workforceHomeDir });
     assert.equal(config.userPersonaDir, join(workforceHomeDir, 'personas'));
     assert.deepEqual(config.personaDirs, [join(workforceHomeDir, 'personas')]);
+  });
+});
+
+test('cwd workforce config file is not scanned as a persona', () => {
+  withLayers(({ cwd, homeDir, pwdDir }) => {
+    writeJson(join(cwd, '.agentworkforce', 'workforce', 'config.json'), {
+      personaDirs: [homeDir]
+    });
+    writeJson(join(pwdDir, 'ph.json'), {
+      id: 'ph',
+      extends: 'posthog'
+    });
+    const loaded = loadLocalPersonas({ cwd, homeDir });
+    assert.deepEqual(loaded.warnings, []);
+    assert.ok(loaded.byId.has('ph'));
   });
 });
 

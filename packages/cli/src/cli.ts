@@ -108,7 +108,7 @@ Commands:
   harness check       Probe which harnesses (claude, codex, opencode) are
                       installed and runnable on this machine.
 
-Local personas cascade: <cwd>/.agentworkforce/workforce/*.json → configured persona dirs → repo library.
+Local personas cascade: <cwd>/.agentworkforce/workforce/personas/*.json → configured persona dirs → repo library.
 Each layer only needs to specify fields it overrides; everything else inherits
 from the next lower layer. "extends" explicitly names a base; omit it and the
 loader implicitly inherits from the same-id persona below. By default the only

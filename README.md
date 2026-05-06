@@ -64,7 +64,7 @@ agentworkforce harness check
 - `agent` — drops you into an interactive harness session for the persona.
   - `<tier>` is `best` | `best-value` | `minimum` (default: `best-value`).
   - `<persona>` resolves across source layers, highest first:
-    1. `./.agentworkforce/workforce/*.json` — project-local
+    1. `./.agentworkforce/workforce/personas/*.json` — project-local
     2. Configured persona source dirs. Default:
        `~/.agentworkforce/workforce/personas/*.json`
     3. Built-in personas in `/personas/`
@@ -99,7 +99,7 @@ agentworkforce agent posthog@best
 
 ### Local persona override
 
-Project-local `./.agentworkforce/workforce/my-posthog.json`:
+Project-local `./.agentworkforce/workforce/personas/my-posthog.json`:
 
 ```json
 {

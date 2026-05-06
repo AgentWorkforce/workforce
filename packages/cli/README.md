@@ -46,7 +46,7 @@ agentworkforce agent <persona>[@<tier>]
 ```
 
 - `<persona>` — matches, in order:
-  1. A **cwd-local** id (files in `<cwd>/.agentworkforce/workforce/*.json`)
+  1. A **cwd-local** id (files in `<cwd>/.agentworkforce/workforce/personas/*.json`)
   2. A configured persona source dir, in order. The default is
      `~/.agentworkforce/workforce/personas/*.json`.
   3. A **library** persona — by intent first (e.g. `review`), then by id
@@ -128,7 +128,7 @@ agentworkforce sources remove <dir|config-position>
 ```
 
 The fixed project source is always first:
-`<cwd>/.agentworkforce/workforce/*.json`.
+`<cwd>/.agentworkforce/workforce/personas/*.json`.
 
 After that, the CLI reads an ordered list of configurable persona directories
 from `~/.agentworkforce/workforce/config.json`. If no config exists, the list
@@ -203,7 +203,7 @@ See `/personas/*.json` for all built-ins.
 Local persona files layer on top of the library. Resolution precedence (highest
 wins):
 
-1. `<cwd>/.agentworkforce/workforce/*.json` — **cwd**
+1. `<cwd>/.agentworkforce/workforce/personas/*.json` — **cwd**
 2. Configurable persona source dirs, in order. Default:
    `~/.agentworkforce/workforce/personas/*.json` — **user**
 3. Built-in personas in `/personas/` — **library**
@@ -236,7 +236,7 @@ That inherits every field from the library `posthog` persona, then layers your
 If your file's `id` matches a persona in a lower layer and you omit `extends`,
 the loader implicitly inherits from that same-id base:
 
-`<cwd>/.agentworkforce/workforce/posthog.json`:
+`<cwd>/.agentworkforce/workforce/personas/posthog.json`:
 
 ```json
 {
@@ -256,7 +256,7 @@ A cwd file can extend a user or configured-dir file, which extends the library:
 ~/.agentworkforce/workforce/personas/ph-base.json:
 { "id": "ph-base", "extends": "posthog", "env": { "POSTHOG_ORG": "acme" } }
 
-<cwd>/.agentworkforce/workforce/ph-prod.json:
+<cwd>/.agentworkforce/workforce/personas/ph-prod.json:
 { "id": "ph-prod", "extends": "ph-base", "env": { "POSTHOG_API_KEY": "$PROD_KEY" } }
 ```
 

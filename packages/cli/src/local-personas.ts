@@ -105,7 +105,7 @@ export function defaultPersonaConfigPath(workforceHomeDir = defaultWorkforceHome
 }
 
 export function defaultCwdPersonaDir(cwd: string): string {
-  return join(cwd, '.agentworkforce', 'workforce');
+  return join(cwd, '.agentworkforce', 'workforce', 'personas');
 }
 
 export function expandHomePath(input: string): string {
