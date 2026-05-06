@@ -40,9 +40,7 @@ import {
   type PersonaSource
 } from './local-personas.js';
 
-const BIN_NAME = 'agentworkforce';
-
-const USAGE = `Usage: ${BIN_NAME} <command> [args...]
+const USAGE = `Usage: agentworkforce <command> [args...]
 
 Commands:
   agent [flags] <persona>[@<tier>]
@@ -105,14 +103,14 @@ loader implicitly inherits from the same-id persona below. By default the only
 configured persona dir is ~/.agentworkforce/workforce/personas.
 
 Examples:
-  ${BIN_NAME} agent npm-provenance-publisher@best
-  ${BIN_NAME} agent my-posthog@best
-  ${BIN_NAME} agent review@best-value
-  ${BIN_NAME} list
-  ${BIN_NAME} show posthog
-  ${BIN_NAME} sources list
-  ${BIN_NAME} sources add ../my-personas --position 1
-  ${BIN_NAME} harness check
+  agentworkforce agent npm-provenance-publisher@best
+  agentworkforce agent my-posthog@best
+  agentworkforce agent review@best-value
+  agentworkforce list
+  agentworkforce show posthog
+  agentworkforce sources list
+  agentworkforce sources add ../my-personas --position 1
+  agentworkforce harness check
 `;
 
 function die(msg: string, withUsage = true): never {
@@ -931,7 +929,7 @@ function parseSourcesListArgs(args: readonly string[]): { json: boolean } {
     if (arg === '--json') {
       json = true;
     } else if (arg === '-h' || arg === '--help') {
-      process.stdout.write(`Usage: ${BIN_NAME} sources list [--json]\n`);
+      process.stdout.write('Usage: agentworkforce sources list [--json]\n');
       process.exit(0);
     } else {
       die(`sources list: unexpected argument "${arg}".`);
@@ -978,7 +976,7 @@ function parseSourcesAddArgs(args: readonly string[]): { dir: string; position?:
   for (let i = 0; i < args.length; i++) {
     const arg = args[i];
     if (arg === '-h' || arg === '--help') {
-      process.stdout.write(`Usage: ${BIN_NAME} sources add <dir> [--position <n>]\n`);
+      process.stdout.write('Usage: agentworkforce sources add <dir> [--position <n>]\n');
       process.exit(0);
     } else if (arg === '--position') {
       const raw = valueOf(i++, arg);
@@ -1027,7 +1025,7 @@ function parseSourcesRemoveArgs(args: readonly string[]): { target: string } {
   let target: string | undefined;
   for (const arg of args) {
     if (arg === '-h' || arg === '--help') {
-      process.stdout.write(`Usage: ${BIN_NAME} sources remove <dir|config-position>\n`);
+      process.stdout.write('Usage: agentworkforce sources remove <dir|config-position>\n');
       process.exit(0);
     } else if (arg.startsWith('--')) {
       die(`sources remove: unexpected flag "${arg}".`);
@@ -1067,10 +1065,10 @@ function runSources(args: readonly string[]): never {
   const [action, ...rest] = args;
   if (!action || action === '-h' || action === '--help') {
     process.stdout.write(
-      `Usage: ${BIN_NAME} sources <list|add|remove> [args...]\n` +
-        `  ${BIN_NAME} sources list [--json]\n` +
-        `  ${BIN_NAME} sources add <dir> [--position <n>]\n` +
-        `  ${BIN_NAME} sources remove <dir|config-position>\n`
+      'Usage: agentworkforce sources <list|add|remove> [args...]\n' +
+        '  agentworkforce sources list [--json]\n' +
+        '  agentworkforce sources add <dir> [--position <n>]\n' +
+        '  agentworkforce sources remove <dir|config-position>\n'
     );
     process.exit(action ? 0 : 1);
   }
@@ -1228,7 +1226,7 @@ function parseListArgs(args: readonly string[]): {
       json = true;
     } else if (arg === '-h' || arg === '--help') {
       process.stdout.write(
-        `Usage: ${BIN_NAME} list [--all] [--json] [--filter-rating <tier>] [--filter-harness <harness>] [--filter-tag <tag>] [--no-display-description]\n`
+        'Usage: agentworkforce list [--all] [--json] [--filter-rating <tier>] [--filter-harness <harness>] [--filter-tag <tag>] [--no-display-description]\n'
       );
       process.exit(0);
     } else if (arg === '--all' || arg === '--no-recommended') {
@@ -1308,7 +1306,7 @@ function parseShowArgs(args: readonly string[]): {
     } else if (arg === '--all') {
       all = true;
     } else if (arg === '-h' || arg === '--help') {
-      process.stdout.write(`Usage: ${BIN_NAME} show <persona>[@<tier>] [--all] [--json]\n`);
+      process.stdout.write('Usage: agentworkforce show <persona>[@<tier>] [--all] [--json]\n');
       process.exit(0);
     } else if (arg.startsWith('--')) {
       die(`show: unexpected flag "${arg}".`);
