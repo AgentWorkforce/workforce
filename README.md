@@ -1,3 +1,5 @@
+![AgentWorkforce banner](./workforce-readme-banner.png)
+
 # workforce
 
 Shared AgentWorkforce primitives for persona-driven orchestration.
