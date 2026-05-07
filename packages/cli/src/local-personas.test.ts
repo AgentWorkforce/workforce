@@ -210,6 +210,20 @@ test('warns when extends base does not exist in lower layers', () => {
   });
 });
 
+test('warns when an overlay combines extends with standalone intent', () => {
+  withLayers(({ cwd, homeDir }) => {
+    writeJson(join(homeDir, 'broken.json'), {
+      id: 'broken',
+      extends: 'posthog',
+      intent: 'review'
+    });
+    const loaded = loadLocalPersonas({ cwd, homeDir });
+    assert.equal(loaded.byId.size, 0);
+    assert.equal(loaded.warnings.length, 1);
+    assert.match(loaded.warnings[0], /intent cannot be combined with \.extends/);
+  });
+});
+
 test('warns on duplicate ids within a single layer', () => {
   withLayers(({ cwd, homeDir }) => {
     writeJson(join(homeDir, 'a.json'), { id: 'dup', extends: 'posthog' });

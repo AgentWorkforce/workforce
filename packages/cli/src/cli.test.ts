@@ -10,6 +10,7 @@ import {
   configureGitForMount,
   decideCleanMode,
   parseAgentArgs,
+  parseInstallArgs,
   resolveSystemPromptPlaceholders,
   stripAgentFlag
 } from './cli.js';
@@ -93,6 +94,24 @@ test('parseAgentArgs: -- stops flag parsing, positional args after are preserved
   // --install-in-repo AFTER `--` is positional, not a flag.
   assert.equal(flags.installInRepo, false);
   assert.deepEqual(positional, ['--install-in-repo', 'posthog']);
+});
+
+test('parseInstallArgs: accepts package specs, repeatable persona flags, and overwrite', () => {
+  assert.deepEqual(
+    parseInstallArgs([
+      '@scope/pkg@1.2.3',
+      '--persona',
+      'relay-orchestrator',
+      '--persona',
+      'code-reviewer',
+      '--overwrite'
+    ]),
+    {
+      source: '@scope/pkg@1.2.3',
+      personaIds: ['relay-orchestrator', 'code-reviewer'],
+      overwrite: true
+    }
+  );
 });
 
 test('decideCleanMode: claude defaults to mount (parity with opencode)', () => {
