@@ -28,7 +28,7 @@ import { usePersona } from '@agentworkforce/workload-router';
 const { selection, install } = usePersona('npm-provenance');
 ```
 
-- `selection`: the resolved persona choice for the given intent/profile. Includes `personaId`, `tier`, `runtime`, `skills`, `inputs`, and `rationale`.
+- `selection`: the resolved persona choice for the given intent/profile. Includes `personaId`, `tier`, `runtime`, `skills`, `inputs`, `mount`, and `rationale`.
 - `install`: grouped install metadata.
 - `install.plan`: a pure description of what skill installs would be needed for that persona on that harness. No processes run when you read this.
 - `install.command`: the full install command as an argv array for `spawn`/`execFile`.
@@ -65,6 +65,9 @@ Personas may declare prompt-visible runtime inputs:
       "default": "."
     },
     "REPORT_PATH": "release-report.md"
+  },
+  "mount": {
+    "readonlyPatterns": ["*", "!docs/**"]
   },
   "tiers": {
     "best": {

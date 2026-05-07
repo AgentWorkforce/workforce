@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdtempSync, mkdirSync, rmSync, readFileSync } from 'node:fs';
+import { mkdtempSync, mkdirSync, rmSync, readFileSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
@@ -10,6 +10,7 @@ import {
   CREATE_SELECTOR,
   SKILL_INSTALL_IGNORED_PATTERNS,
   assertSafeRelativePath,
+  buildRelayfileMountPatterns,
   buildMountGitExcludeBlock,
   configureGitForMount,
   decideCleanMode,
@@ -320,6 +321,50 @@ test('SKILL_INSTALL_IGNORED_PATTERNS: keeps skill-install artifacts out of the r
     'prpm.lock',
     'skills-lock.json'
   ]);
+});
+
+test('buildRelayfileMountPatterns: merges Relayfile dotfiles with built-in claude mount rules', () => {
+  const dir = mkdtempSync(join(tmpdir(), 'aw-relayfile-patterns-'));
+  try {
+    writeFileSync(join(dir, '.agentignore'), 'secrets/\n.env\n', 'utf8');
+    writeFileSync(join(dir, '.agentreadonly'), 'package.json\n*.lock\n', 'utf8');
+    writeFileSync(join(dir, '.nextjs-marketing.agentignore'), 'coverage/\n', 'utf8');
+    writeFileSync(
+      join(dir, '.nextjs-marketing.agentreadonly'),
+      'app/api/**\nauth/**\n',
+      'utf8'
+    );
+
+    const patterns = buildRelayfileMountPatterns({
+      projectDir: dir,
+      personaId: 'nextjs-marketing',
+      harness: 'claude',
+      mount: {
+        ignoredPatterns: ['tmp/persona/**'],
+        readonlyPatterns: ['*', '!app/**']
+      },
+      configFilePaths: ['opencode.json']
+    });
+
+    assert.deepEqual(patterns.ignoredPatterns, [
+      'secrets/',
+      '.env',
+      'coverage/',
+      'tmp/persona/**',
+      ...CLEAN_IGNORED_PATTERNS,
+      'opencode.json'
+    ]);
+    assert.deepEqual(patterns.readonlyPatterns, [
+      'package.json',
+      '*.lock',
+      'app/api/**',
+      'auth/**',
+      '*',
+      '!app/**'
+    ]);
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
 });
 
 // Integration-ish subprocess helper: spawn the built CLI, collect stderr,

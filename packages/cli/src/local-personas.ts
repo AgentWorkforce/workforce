@@ -11,6 +11,7 @@ import {
   type McpServerSpec,
   type PersonaIntent,
   type PersonaInputSpec,
+  type PersonaMount,
   type PersonaPermissions,
   type PersonaRuntime,
   type PersonaSpec,
@@ -45,6 +46,11 @@ export interface LocalPersonaOverride {
   inputs?: Record<string, PersonaInputSpec>;
   env?: Record<string, string>;
   mcpServers?: Record<string, McpServerSpec>;
+  /**
+   * Relayfile mount policy. Pattern lists append to the inherited base so
+   * gitignore negations in the overlay can intentionally narrow/reopen scope.
+   */
+  mount?: PersonaMount;
   /**
    * Permission policy. `allow` and `deny` append to the base's lists (dedup
    * on merge); `mode` replaces the base's mode when set.
@@ -343,6 +349,7 @@ function parseOverride(value: unknown, context: string): LocalPersonaOverride {
   const inputs = parseInputsShape(raw.inputs, `${context}.inputs`);
   assertStringMap(raw.env, `${context}.env`);
   assertMcpServersShape(raw.mcpServers, `${context}.mcpServers`);
+  assertMountShape(raw.mount, `${context}.mount`);
   assertPermissionsShape(raw.permissions, `${context}.permissions`);
   assertTiersShape(raw.tiers, `${context}.tiers`);
 
@@ -356,6 +363,7 @@ function parseOverride(value: unknown, context: string): LocalPersonaOverride {
     inputs,
     env: raw.env as LocalPersonaOverride['env'],
     mcpServers: raw.mcpServers as LocalPersonaOverride['mcpServers'],
+    mount: raw.mount as LocalPersonaOverride['mount'],
     permissions: raw.permissions as LocalPersonaOverride['permissions'],
     systemPrompt: raw.systemPrompt as string | undefined,
     tiers: raw.tiers as LocalPersonaOverride['tiers']
@@ -474,6 +482,20 @@ function assertPermissionsShape(value: unknown, context: string): void {
   }
 }
 
+function assertMountShape(value: unknown, context: string): void {
+  if (value === undefined) return;
+  if (!isPlainObject(value)) {
+    throw new Error(`${context} must be an object if provided`);
+  }
+  for (const key of ['ignoredPatterns', 'readonlyPatterns'] as const) {
+    const list = value[key];
+    if (list === undefined) continue;
+    if (!Array.isArray(list) || list.some((s) => typeof s !== 'string' || !s.trim())) {
+      throw new Error(`${context}.${key} must be an array of non-empty strings`);
+    }
+  }
+}
+
 function assertTiersShape(value: unknown, context: string): void {
   if (value === undefined) return;
   if (!isPlainObject(value)) {
@@ -581,6 +603,7 @@ function standaloneSpecFromOverride(
   const inputs = override.inputs;
   const env = override.env;
   const mcpServers = override.mcpServers;
+  const mount = override.mount;
   const permissions = override.permissions;
   return {
     id: override.id,
@@ -598,6 +621,7 @@ function standaloneSpecFromOverride(
     tiers,
     ...(env ? { env } : {}),
     ...(mcpServers ? { mcpServers } : {}),
+    ...(mount ? { mount } : {}),
     ...(permissions ? { permissions } : {})
   };
 }
@@ -696,6 +720,7 @@ function mergeOverride(base: PersonaSpec, override: LocalPersonaOverride): Perso
     override.mcpServers || base.mcpServers
       ? { ...(base.mcpServers ?? {}), ...(override.mcpServers ?? {}) }
       : undefined;
+  const mount = mergeMount(base.mount, override.mount);
   const permissions = mergePermissions(base.permissions, override.permissions);
 
   return {
@@ -708,7 +733,28 @@ function mergeOverride(base: PersonaSpec, override: LocalPersonaOverride): Perso
     tiers,
     ...(env ? { env } : {}),
     ...(mcpServers ? { mcpServers } : {}),
+    ...(mount ? { mount } : {}),
     ...(permissions ? { permissions } : {})
+  };
+}
+
+function mergeMount(
+  base: PersonaMount | undefined,
+  override: PersonaMount | undefined
+): PersonaMount | undefined {
+  if (!base && !override) return undefined;
+  const ignoredPatterns = [
+    ...(base?.ignoredPatterns ?? []),
+    ...(override?.ignoredPatterns ?? [])
+  ];
+  const readonlyPatterns = [
+    ...(base?.readonlyPatterns ?? []),
+    ...(override?.readonlyPatterns ?? [])
+  ];
+  if (ignoredPatterns.length === 0 && readonlyPatterns.length === 0) return undefined;
+  return {
+    ...(ignoredPatterns.length > 0 ? { ignoredPatterns } : {}),
+    ...(readonlyPatterns.length > 0 ? { readonlyPatterns } : {})
   };
 }
 

@@ -515,6 +515,10 @@ library has no `extends`.
   },
   "env": { … },                // union, local wins per key
   "mcpServers": { … },         // union by server name, local wins per key
+  "mount": {                   // Relayfile file scope; pattern arrays append
+    "ignoredPatterns": ["…"],
+    "readonlyPatterns": ["…"]
+  },
   "permissions": {             // allow/deny union (dedup), mode replaces
     "allow": ["…"], "deny": ["…"], "mode": "default"
   },
@@ -616,6 +620,9 @@ Use this when you are not extending an existing persona:
     "allow": ["Bash(npm *)"],
     "deny": ["Bash(npm publish *)"],
     "mode": "default"
+  },
+  "mount": {
+    "readonlyPatterns": ["*"]
   },
   "tiers": {
     "best": {
@@ -729,12 +736,39 @@ either a literal string or an env reference. Two forms:
 Secrets therefore stay in your shell/keychain, not in files on disk — local
 persona JSON remains commit-safe as long as you only use references.
 
+## Relayfile mount rules
+
+Interactive `claude` and `opencode` sessions run inside a Relayfile mount by
+default. File visibility and writability are controlled by the persona's
+`mount` block plus project-level dotfiles:
+
+```jsonc
+{
+  "mount": {
+    "ignoredPatterns": ["secrets/**", ".env*"],
+    "readonlyPatterns": [
+      "*",
+      "!docs/",
+      "!docs/**"
+    ]
+  }
+}
+```
+
+- `ignoredPatterns` are omitted from the mount entirely.
+- `readonlyPatterns` are copied into the mount but edits do not sync back.
+- Patterns use gitignore semantics, so later `!` negations can reopen paths.
+- Persona patterns append to inherited persona patterns. At launch, the CLI
+  also merges project-root `.agentignore`, `.agentreadonly`,
+  `.<personaId>.agentignore`, and `.<personaId>.agentreadonly`.
+
 ## Permissions
 
 A persona can declare which tool calls the harness should auto-approve, block,
 or gate via a permission mode. Skip the approval prompts for trusted tools
 (e.g. a persona's own MCP server); keep them on for anything you want to
-eyeball.
+eyeball. File visibility and writability are not defined here; use Relayfile
+mount rules (`.agentignore` / `.agentreadonly`) for that.
 
 ```jsonc
 {
@@ -747,9 +781,8 @@ eyeball.
 ```
 
 - **Tool patterns** are passed through verbatim; use the harness's native
-  grammar. For Claude Code: `Bash(<pattern>)`, `Edit(<glob>)`,
-  `mcp__<server>` (all tools from that server), `mcp__<server>__<tool>`
-  (specific tool).
+  grammar. For Claude Code: `Bash(<pattern>)`, `mcp__<server>` (all tools
+  from that server), `mcp__<server>__<tool>` (specific tool).
 - **Harness support today:** only `claude` is wired (flags: `--allowedTools`,
   `--disallowedTools`, `--permission-mode`). codex and opencode emit a
   warning and fall back to their defaults when `permissions` is set.
@@ -922,12 +955,22 @@ stage dir conflicts with something else (network filesystem, read-only
 
 By default, claude and opencode interactive sessions run inside a
 [`@relayfile/local-mount`](https://www.npmjs.com/package/@relayfile/local-mount)
-symlink mount that hides repo-level harness configuration from the session
-and routes skill-install writes into the sandbox — so the model sees
-persona context + user-level context, and nothing the repo itself declares.
-Codex sessions never mount (no harness-side support).
+mount that hides repo-level harness configuration from the session, applies
+the persona `mount` block plus Relayfile `.agentignore` / `.agentreadonly`
+rules, and routes skill-install writes into the sandbox — so the model sees
+persona context + user-level context, and only the project files the mount
+exposes. Codex sessions never mount (no harness-side support).
 
 `--install-in-repo` opts out and runs against the real cwd.
+
+The CLI reads these files from the project root before creating the mount:
+
+| File | Effect |
+| --- | --- |
+| `.agentignore` | Hide matching files for every persona. |
+| `.agentreadonly` | Copy matching files into the mount as read-only and skip syncing their edits back. |
+| `.<personaId>.agentignore` | Hide matching files only for that persona. |
+| `.<personaId>.agentreadonly` | Make matching files read-only only for that persona. |
 
 **What's hidden (gitignore semantics, at any depth):**
 

@@ -378,6 +378,32 @@ test('inputs merge across local persona layers', () => {
   });
 });
 
+test('mount patterns merge across local persona layers', () => {
+  withLayers(({ cwd, homeDir, pwdDir }) => {
+    writeJson(join(homeDir, 'site-agent.json'), {
+      id: 'site-agent',
+      extends: 'frontend-implementer',
+      mount: {
+        ignoredPatterns: ['.env*'],
+        readonlyPatterns: ['*']
+      }
+    });
+    writeJson(join(pwdDir, 'site-agent.json'), {
+      id: 'site-agent',
+      extends: 'site-agent',
+      mount: {
+        ignoredPatterns: ['secrets/**'],
+        readonlyPatterns: ['!app/**']
+      }
+    });
+    const loaded = loadLocalPersonas({ cwd, homeDir });
+    assert.deepEqual(loaded.warnings, []);
+    const spec = loaded.byId.get('site-agent');
+    assert.deepEqual(spec?.mount?.ignoredPatterns, ['.env*', 'secrets/**']);
+    assert.deepEqual(spec?.mount?.readonlyPatterns, ['*', '!app/**']);
+  });
+});
+
 test('inputs are preserved on standalone local personas', () => {
   withLayers(({ cwd, homeDir }) => {
     writeJson(join(homeDir, 'standalone-reviewer.json'), {

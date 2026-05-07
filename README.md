@@ -1,28 +1,242 @@
 ![AgentWorkforce banner](./workforce-readme-banner.png)
+Single-purpose AI agent configs, versioned and shared like code. 
 
-Saved configurations of coding agents you can save and share with your collegues.
+Personas are based on taking a harness like **Claude Code**, **OpenCode** or **Codex** and defining its **job**, **skills**, and **mcp servers**. File visibility and writability are enforced by Relayfile mount rules in persona JSON or `.agentignore` / `.agentreadonly` files. Control your agent's context per instance and commit it to your repository for the rest of your team to use.
+
+The great token squeeze:tm: is coming and you're probably still using opus for everything. Instead of using a sledgehammer to knock in some screws, use an agentworkforce persona to design a screwdriver.
+
+## Quick start
+It's super easy to define a persona.
+
+```bash
+npx agentworkforce create --name=frontend-implementer
+```
+This will drop you into an instance of claude with a special set of skills to help you create a persona. Once it's generated, you can then use it. By default, this will be saved to your current working directory at `./agentworkforce/workforce/personas`
+
+```bash
+npx agentworkforce agent frontend-implementer
+```
+Voila! You've got a reusable persona focused on your teams specific needs for a frontend-implementer.
 
 
-## Core frame
+## Inside a persona
 
-A **persona** is the runtime source of truth:
+A persona is a JSON file. Top-level fields apply to every tier; the `tiers` block holds per-tier overrides.
 
-- prompt (`systemPrompt`)
-- model
-- harness
-- harness settings
-- optional `skills` array of `{ id, source, description }` entries for reusable capability guidance (e.g. prpm.dev packages)
+| Field | What it defines |
+|-------|-----------------|
+| `systemPrompt` | The agent's job — what it's for and how it should work |
+| `harness` + `model` | Which tool (`claude` / `codex` / `opencode`) and which model |
+| `skills` | Capability packages declared by source (prpm, GitHub, `scope/name`); installed at launch into the right harness directory |
+| `mcpServers` | External tool servers wired into the session |
+| `permissions` | Pre-approved shell + MCP tools; not file scope |
+| `mount` | Relayfile ignore/read-only patterns for file visibility and writability |
+| `tiers` | `best`, `best-value`, `minimum` — depth and cost dial; same correctness bar |
 
-Each persona supports service tiers:
+Tiering controls depth, latency, and cost — **not** the quality bar. A **routing profile** layers on top: policy-only, selects which persona tier to use per intent.
 
-- `best`
-- `best-value`
-- `minimum`
+## Examples
+Sometimes the quickest way to understand the value of personas is to see real
+examples. These are intentionally verbose; useful personas tend to grow as teams
+capture local conventions.
 
-Tiering controls depth, latency budget, and model cost envelope — **not** the quality bar.
-All tiers should enforce the same correctness/safety standards; lower tiers should be more concise, not lower-quality.
+### Next.js marketing website agent
+A persona specifically for a Next.js marketing surface. This local
+overlay inherits the generic frontend implementer, switches tiers to Claude so
+MCP and tool permissions are enforced today, and attaches a browser MCP for
+visual checks. File scope is handled by the Relayfile `mount` block.
 
-A **routing profile** is policy-only. It does not carry runtime fields; it only selects which persona tier to use per intent and explains why.
+```json
+{
+  "id": "nextjs-marketing",
+  "extends": "frontend-implementer",
+  "description": "Builds and edits the marketing surface of a Next.js app with SEO, accessibility, and visual QA in scope.",
+  "mcpServers": {
+    "browser": {
+      "type": "stdio",
+      "command": "npx",
+      "args": ["-y", "@playwright/mcp@latest", "--browser", "chrome"]
+    }
+  },
+  "permissions": {
+    "allow": [
+      "Bash(npm run lint)",
+      "Bash(npm run typecheck)",
+      "Bash(npm run build)",
+      "mcp__browser"
+    ],
+    "deny": [
+      "Bash(rm -rf *)",
+      "Bash(npm publish *)"
+    ],
+    "mode": "default"
+  },
+  "mount": {
+    "readonlyPatterns": [
+      "*",
+      "!app/",
+      "!app/(marketing)/",
+      "!app/(marketing)/**",
+      "!app/page.tsx",
+      "!components/",
+      "!components/marketing/",
+      "!components/marketing/**",
+      "!public/",
+      "!public/**"
+    ]
+  },
+  "systemPrompt": "You own only the Next.js marketing surface. Work inside app/(marketing), app/page.tsx, components/marketing, and public assets unless the user explicitly expands scope. Preserve existing design-system conventions, metadata, structured data, responsive behavior, accessibility, and Core Web Vitals. Use the browser MCP for visual inspection before completion when a page changes. Output contract: changed files, visual checks performed, commands run, and any SEO or accessibility risks left open.",
+  "tiers": {
+    "best": {
+      "harness": "claude",
+      "model": "claude-opus-4-6",
+      "harnessSettings": { "reasoning": "high", "timeoutSeconds": 1200 }
+    },
+    "best-value": {
+      "harness": "claude",
+      "model": "claude-sonnet-4-6",
+      "harnessSettings": { "reasoning": "medium", "timeoutSeconds": 900 }
+    },
+    "minimum": {
+      "harness": "claude",
+      "model": "claude-haiku-4-5-20251001",
+      "harnessSettings": { "reasoning": "low", "timeoutSeconds": 600 }
+    }
+  }
+}
+```
+
+```bash
+agentworkforce agent nextjs-marketing@best-value
+```
+
+### Code Reviewer
+Tune the built-in reviewer for a repo where API compatibility and migration
+risk matter more than style commentary.
+
+```json
+{
+  "id": "api-reviewer",
+  "extends": "review",
+  "description": "Reviews this repository's changes with extra focus on API compatibility, migrations, and regression risk.",
+  "mount": {
+    "readonlyPatterns": ["*"]
+  },
+  "systemPrompt": "Review the current diff for correctness, API compatibility, migration safety, data loss risk, and missing tests. Lead with blockers only; classify other comments as Suggestions or Questions. Ignore formatter-managed style and broad refactors unless they hide a real defect. Output contract: findings ordered by severity with file references, then open questions, then the exact checks you inspected.",
+  "tiers": {
+    "best": {
+      "harnessSettings": { "reasoning": "high", "timeoutSeconds": 1200 }
+    },
+    "best-value": {
+      "harnessSettings": { "reasoning": "medium", "timeoutSeconds": 900 }
+    },
+    "minimum": {
+      "harnessSettings": { "reasoning": "low", "timeoutSeconds": 600 }
+    }
+  }
+}
+```
+
+```bash
+agentworkforce agent api-reviewer@best-value
+```
+
+### Documentation writer
+Add a project-specific writer that inherits the technical writer persona, but
+binds the docs target through a prompt-visible input.
+
+```json
+{
+  "id": "docs-writer",
+  "extends": "technical-writer",
+  "description": "Updates developer docs for this project using the real code as source of truth.",
+  "inputs": {
+    "DOCS_PATH": {
+      "description": "Primary docs file or directory to update.",
+      "env": "DOCS_PATH",
+      "default": "docs/"
+    }
+  },
+  "mount": {
+    "readonlyPatterns": [
+      "*",
+      "!docs/",
+      "!docs/**"
+    ]
+  },
+  "systemPrompt": "Write or update documentation under $DOCS_PATH. Inspect the implementation before writing, prefer task-focused examples, and call out prerequisites, defaults, and failure modes. Do not invent behavior that is not present in code. Output contract: docs changed, examples added or updated, source files inspected, and caveats."
+}
+```
+
+```bash
+DOCS_PATH=docs/api.md agentworkforce agent docs-writer@best-value
+```
+
+### NPM release guard
+Extend the release persona for a package that should use trusted publishing and
+provenance. This one also switches tiers to Claude so the publish deny list is
+enforced by the current CLI. The mount rule keeps source files read-only while
+release checks run.
+
+```json
+{
+  "id": "npm-release-guard",
+  "extends": "npm-provenance",
+  "description": "Checks npm release readiness for one package and blocks unsafe publish paths.",
+  "inputs": {
+    "PACKAGE_DIR": {
+      "description": "Package directory to inspect.",
+      "env": "PACKAGE_DIR",
+      "default": "."
+    }
+  },
+  "permissions": {
+    "allow": [
+      "Bash(npm view *)",
+      "Bash(npm pack --dry-run)",
+      "Bash(npm run build)",
+      "Bash(npm run test)"
+    ],
+    "deny": [
+      "Bash(npm publish *)",
+      "Bash(git push *)"
+    ],
+    "mode": "default"
+  },
+  "mount": {
+    "readonlyPatterns": ["*"]
+  },
+  "systemPrompt": "Check release readiness for $PACKAGE_DIR. Verify package metadata, repository URL, files included by npm pack, build/test status, OIDC trusted publishing, id-token workflow permissions, and provenance. Do not publish or push. Output contract: blockers first, evidence checked, exact commands run, and remaining manual release steps.",
+  "tiers": {
+    "best": {
+      "harness": "claude",
+      "model": "claude-opus-4-6",
+      "harnessSettings": { "reasoning": "high", "timeoutSeconds": 1200 }
+    },
+    "best-value": {
+      "harness": "claude",
+      "model": "claude-sonnet-4-6",
+      "harnessSettings": { "reasoning": "medium", "timeoutSeconds": 900 }
+    },
+    "minimum": {
+      "harness": "claude",
+      "model": "claude-haiku-4-5-20251001",
+      "harnessSettings": { "reasoning": "low", "timeoutSeconds": 600 }
+    }
+  }
+}
+```
+
+```bash
+PACKAGE_DIR=packages/cli agentworkforce agent npm-release-guard@best-value
+```
+
+> [!note]
+> Put each persona JSON file at
+> `./.agentworkforce/workforce/personas/<id>.json` or create it with
+> `agentworkforce create`. You can keep Relayfile mount rules in the persona
+> JSON `mount` block, or in project-root `.agentignore` / `.agentreadonly`
+> dotfiles. Launch with `agentworkforce agent <id>@<tier>`.
 
 ## CLI
 
@@ -250,7 +464,10 @@ Interactive `claude` and `opencode` sessions launch inside a
 sandbox by default. The mount hides repo-level harness configuration
 (claude) and routes skill-install writes into the sandbox (opencode), so
 the model sees persona context + user-level context — and nothing the
-repo itself declares. Codex sessions never mount.
+repo itself declares. The mount also enforces Relayfile rules from the
+persona's `mount` block plus project-local `.agentignore`, `.agentreadonly`,
+`.<personaId>.agentignore`, and `.<personaId>.agentreadonly`. Codex sessions
+never mount.
 
 | Hidden in the mount (claude) | Still visible |
 | --- | --- |
@@ -264,13 +481,13 @@ repo itself declares. Codex sessions never mount.
 agentworkforce agent posthog@best
 ```
 
-The repo tree is mirrored into `~/.agent-workforce/sessions/<id>/mount/`
-via symlinks; the harness sees the mount as its cwd. Writes inside the
-mount sync back to the real repo on exit. Ignore semantics follow
-gitignore — `.claude` hides nested variants like `packages/foo/.claude/`
-too. `.git` is included in the mount (one-way project→mount sync) so git
-commands work inside the sandbox; mount-side commits are discarded on
-cleanup, so push to persist work.
+The repo tree is mirrored into `~/.agent-workforce/sessions/<id>/mount/`;
+the harness sees the mount as its cwd. Writes inside the mount sync back to
+the real repo on exit unless the path is ignored or read-only by Relayfile
+rules. Ignore and read-only semantics follow gitignore — `.claude` hides
+nested variants like `packages/foo/.claude/` too. `.git` is included in the
+mount (one-way project→mount sync) so git commands work inside the sandbox;
+mount-side commits are discarded on cleanup, so push to persist work.
 
 **Opt out:** `--install-in-repo` runs against the real cwd and stages
 skills into the repo's harness-conventional dirs. Useful when you want to

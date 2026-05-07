@@ -118,6 +118,18 @@ export interface PersonaPermissions {
 }
 
 /**
+ * Relayfile mount policy for interactive sessions. Patterns use gitignore
+ * syntax. `ignoredPatterns` are omitted from the mount entirely;
+ * `readonlyPatterns` are copied into the mount but edits do not sync back.
+ * Launchers may merge these with project-level `.agentignore` /
+ * `.agentreadonly` dotfiles.
+ */
+export interface PersonaMount {
+  ignoredPatterns?: string[];
+  readonlyPatterns?: string[];
+}
+
+/**
  * MCP server config, structured to match Claude Code's `--mcp-config` JSON
  * verbatim so the whole object can be passed through untouched. Values inside
  * `headers` / `env` / `args` / `url` / `command` may be literal strings or
@@ -172,6 +184,11 @@ export interface PersonaSpec {
    * `--permission-mode`); other harnesses warn and skip.
    */
   permissions?: PersonaPermissions;
+  /**
+   * Relayfile mount policy for file visibility and writability. Applied by
+   * launchers that run the harness inside `@relayfile/local-mount`.
+   */
+  mount?: PersonaMount;
 }
 
 export interface RoutingProfileRule {
@@ -196,6 +213,7 @@ export interface PersonaSelection {
   env?: Record<string, string>;
   mcpServers?: Record<string, McpServerSpec>;
   permissions?: PersonaPermissions;
+  mount?: PersonaMount;
 }
 
 // ---------------------------------------------------------------------------
@@ -814,6 +832,47 @@ function parseSkills(value: unknown, context: string): PersonaSkill[] {
   });
 }
 
+function parseStringList(
+  value: unknown,
+  context: string
+): string[] | undefined {
+  if (value === undefined) return undefined;
+  if (!Array.isArray(value)) {
+    throw new Error(`${context} must be an array if provided`);
+  }
+  const parsed = value.map((entry, idx) => {
+    if (typeof entry !== 'string' || !entry.trim()) {
+      throw new Error(`${context}[${idx}] must be a non-empty string`);
+    }
+    return entry;
+  });
+  return parsed.length > 0 ? parsed : undefined;
+}
+
+function parseMount(
+  value: unknown,
+  context: string
+): PersonaMount | undefined {
+  if (value === undefined) return undefined;
+  if (!isObject(value)) {
+    throw new Error(`${context} must be an object if provided`);
+  }
+  const ignoredPatterns = parseStringList(
+    value.ignoredPatterns,
+    `${context}.ignoredPatterns`
+  );
+  const readonlyPatterns = parseStringList(
+    value.readonlyPatterns,
+    `${context}.readonlyPatterns`
+  );
+  return ignoredPatterns || readonlyPatterns
+    ? {
+        ...(ignoredPatterns ? { ignoredPatterns } : {}),
+        ...(readonlyPatterns ? { readonlyPatterns } : {})
+      }
+    : undefined;
+}
+
 const INPUT_NAME_RE = /^[A-Z_][A-Z0-9_]*$/;
 
 function assertInputName(name: string, context: string): void {
@@ -876,7 +935,7 @@ function parsePersonaSpec(value: unknown, expectedIntent: PersonaIntent): Person
     throw new Error(`persona[${expectedIntent}] must be an object`);
   }
 
-  const { id, intent, tags, description, tiers, skills, inputs, env, mcpServers, permissions } = value;
+  const { id, intent, tags, description, tiers, skills, inputs, env, mcpServers, permissions, mount } = value;
 
   if (typeof id !== 'string' || !id.trim()) {
     throw new Error(`persona[${expectedIntent}].id must be a non-empty string`);
@@ -908,6 +967,7 @@ function parsePersonaSpec(value: unknown, expectedIntent: PersonaIntent): Person
     permissions,
     `persona[${expectedIntent}].permissions`
   );
+  const parsedMount = parseMount(mount, `persona[${expectedIntent}].mount`);
 
   return {
     id,
@@ -919,7 +979,8 @@ function parsePersonaSpec(value: unknown, expectedIntent: PersonaIntent): Person
     tiers: parsedTiers,
     ...(parsedEnv ? { env: parsedEnv } : {}),
     ...(parsedMcpServers ? { mcpServers: parsedMcpServers } : {}),
-    ...(parsedPermissions ? { permissions: parsedPermissions } : {})
+    ...(parsedPermissions ? { permissions: parsedPermissions } : {}),
+    ...(parsedMount ? { mount: parsedMount } : {})
   };
 }
 
@@ -1116,7 +1177,8 @@ export function resolvePersona(intent: PersonaIntent, profile: RoutingProfile | 
     ...(spec.inputs ? { inputs: spec.inputs } : {}),
     ...(spec.env ? { env: spec.env } : {}),
     ...(spec.mcpServers ? { mcpServers: spec.mcpServers } : {}),
-    ...(spec.permissions ? { permissions: spec.permissions } : {})
+    ...(spec.permissions ? { permissions: spec.permissions } : {}),
+    ...(spec.mount ? { mount: spec.mount } : {})
   };
 }
 
@@ -1135,7 +1197,8 @@ export function resolvePersonaByTier(intent: PersonaIntent, tier: PersonaTier = 
     ...(spec.inputs ? { inputs: spec.inputs } : {}),
     ...(spec.env ? { env: spec.env } : {}),
     ...(spec.mcpServers ? { mcpServers: spec.mcpServers } : {}),
-    ...(spec.permissions ? { permissions: spec.permissions } : {})
+    ...(spec.permissions ? { permissions: spec.permissions } : {}),
+    ...(spec.mount ? { mount: spec.mount } : {})
   };
 }
 

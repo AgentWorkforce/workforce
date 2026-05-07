@@ -23,6 +23,7 @@ import {
   useSelection,
   type Harness,
   type PersonaIntent,
+  type PersonaMount,
   type PersonaSelection,
   type PersonaSpec,
   type PersonaTag,
@@ -40,7 +41,7 @@ import {
   type HarnessAvailability,
   type InteractiveSpec
 } from '@agentworkforce/harness-kit';
-import { launchOnMount } from '@relayfile/local-mount';
+import { launchOnMount, readAgentDotfiles } from '@relayfile/local-mount';
 import ora, { type Ora } from 'ora';
 import {
   buildPersonaSourceDirectories,
@@ -248,7 +249,8 @@ function buildSelection(spec: PersonaSpec, tier: PersonaTier, kind: 'repo' | 'lo
     ...(spec.inputs ? { inputs: spec.inputs } : {}),
     ...(spec.env ? { env: spec.env } : {}),
     ...(spec.mcpServers ? { mcpServers: spec.mcpServers } : {}),
-    ...(spec.permissions ? { permissions: spec.permissions } : {})
+    ...(spec.permissions ? { permissions: spec.permissions } : {}),
+    ...(spec.mount ? { mount: spec.mount } : {})
   };
 }
 
@@ -456,6 +458,40 @@ export const SKILL_INSTALL_IGNORED_PATTERNS = [
   'prpm.lock',
   'skills-lock.json'
 ] as const;
+
+export interface RelayfileMountPatterns {
+  ignoredPatterns: string[];
+  readonlyPatterns: string[];
+}
+
+export function buildRelayfileMountPatterns(input: {
+  projectDir: string;
+  personaId: string;
+  harness: Harness;
+  mount?: PersonaMount;
+  configFilePaths?: readonly string[];
+}): RelayfileMountPatterns {
+  const dotfiles = readAgentDotfiles(input.projectDir, {
+    agentName: input.personaId
+  });
+  const builtInIgnored =
+    input.harness === 'claude'
+      ? CLEAN_IGNORED_PATTERNS
+      : SKILL_INSTALL_IGNORED_PATTERNS;
+
+  return {
+    ignoredPatterns: [
+      ...dotfiles.ignoredPatterns,
+      ...(input.mount?.ignoredPatterns ?? []),
+      ...builtInIgnored,
+      ...(input.configFilePaths ?? [])
+    ],
+    readonlyPatterns: [
+      ...dotfiles.readonlyPatterns,
+      ...(input.mount?.readonlyPatterns ?? [])
+    ]
+  };
+}
 
 /**
  * Build the block appended to `<mount>/.git/info/exclude` so untracked-and-
@@ -709,10 +745,6 @@ async function runInteractive(
   // copied in from the real repo nor synced back on exit.
   if (useClean && sessionRoot) {
     const mountDir = sessionMountDir(sessionRoot);
-    const ignoredPatterns: string[] =
-      runtime.harness === 'claude'
-        ? [...CLEAN_IGNORED_PATTERNS]
-        : [...SKILL_INSTALL_IGNORED_PATTERNS];
     // Anything we materialize into the mount via onBeforeLaunch must be
     // hidden from the mount-mirror in both directions: without this, any
     // opencode.json already present in the real repo would be copied into
@@ -720,9 +752,13 @@ async function runInteractive(
     // fresh write from onBeforeLaunch would sync back out on exit and
     // pollute the user's working tree. Added dynamically so this stays
     // generic for any future configFile producer.
-    for (const file of spec.configFiles) {
-      ignoredPatterns.push(file.path);
-    }
+    const { ignoredPatterns, readonlyPatterns } = buildRelayfileMountPatterns({
+      projectDir: process.cwd(),
+      personaId,
+      harness: runtime.harness,
+      mount: effectiveSelection.mount,
+      configFilePaths: spec.configFiles.map((file) => file.path)
+    });
     process.stderr.write(`• sandbox mount → ${mountDir}\n`);
     // Three-stage SIGINT handler layered on top of launchOnMount's own signal
     // forwarding. launchOnMount catches the first SIGINT to kill the child
@@ -798,6 +834,7 @@ async function runInteractive(
         // `git push` to persist work — local-only commits evaporate with
         // the session.
         includeGit: true,
+        readonlyPatterns,
         // Second Ctrl-C aborts this signal → local-mount skips autosync's
         // draining reconcile and returns the partial syncBack count. Cleanup
         // still runs, so there's no leaked mount dir.
@@ -1640,6 +1677,20 @@ function formatPersonaShow(
     if (perms.mode) lines.push(`  mode:  ${perms.mode}`);
     if (perms.allow?.length) lines.push(`  allow: ${perms.allow.join(', ')}`);
     if (perms.deny?.length) lines.push(`  deny:  ${perms.deny.join(', ')}`);
+  }
+
+  lines.push('');
+  lines.push('MOUNT');
+  const mount = spec.mount;
+  if (!mount || (!mount.ignoredPatterns?.length && !mount.readonlyPatterns?.length)) {
+    lines.push('  (none)');
+  } else {
+    if (mount.ignoredPatterns?.length) {
+      lines.push(`  ignored:  ${mount.ignoredPatterns.join(', ')}`);
+    }
+    if (mount.readonlyPatterns?.length) {
+      lines.push(`  readonly: ${mount.readonlyPatterns.join(', ')}`);
+    }
   }
 
   lines.push('');
