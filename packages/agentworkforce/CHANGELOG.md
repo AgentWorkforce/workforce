@@ -13,6 +13,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   selection, and passes `TARGET_DIR` / `CREATE_MODE` persona inputs.
 - `agentworkforce --version` now prints the installed package version.
 
+## [0.8.0] - 2026-05-07
+
+### Added
+
+- **Add persona create mode**
+
 ## [0.7.0] - 2026-05-07
 
 ### Fixed

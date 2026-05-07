@@ -14,6 +14,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Persona source config supports `defaultCreateTarget` for the implicit create target.
 - `--version`/`-v` now prints the CLI package version.
 
+## [0.8.0] - 2026-05-07
+
+### Added
+
+- **Add persona create mode**
+
+### Fixed
+
+- Preserve standalone persona inputs
+
 ## [0.7.0] - 2026-05-07
 
 ### Added
