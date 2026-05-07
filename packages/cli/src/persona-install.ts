@@ -291,7 +291,7 @@ function defaultResolveNpmPackage(spec: string, tempDir: string): string {
 
   const packed = spawnSync(
     npmExecutable(),
-    ['pack', spec, '--pack-destination', packDir, '--json'],
+    ['pack', spec, '--pack-destination', packDir, '--json', '--ignore-scripts'],
     { encoding: 'utf8', shell: false }
   );
   if (packed.status !== 0) {
