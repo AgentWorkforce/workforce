@@ -115,10 +115,12 @@ agentworkforce agent posthog@best
 Install a persona pack into the current project:
 
 ```bash
+agentworkforce install @agentworkforce/personas-core
+agentworkforce install @agentworkforce/personas-core@0.8.0 --persona code-reviewer
 agentworkforce install @agentrelay/personas
 agentworkforce install @agentrelay/personas@1.2.3
 agentworkforce install @agentrelay/personas@latest --persona relay-orchestrator
-agentworkforce install ./local-personas --persona relay-orchestrator --persona code-reviewer
+agentworkforce install ./local-personas --persona code-reviewer
 ```
 
 The command copies matching `*.json` persona files into
@@ -153,6 +155,18 @@ its persona directory with `package.json` metadata, or fall back to a top-level
     ├── reviewer.json
     └── release-runner.json
 ```
+
+First-party examples:
+
+- `@agentworkforce/personas-core` is owned in this repo and contains generic
+  personas such as `code-reviewer`, `frontend-implementer`, `verifier`, and
+  `test-strategist`.
+- `@agentrelay/personas` is owned by the Relay repo and contains Relay-specific
+  personas such as `relay-orchestrator`.
+
+`persona-maker` remains part of the internal built-in distribution. You do not
+need to install `@agentworkforce/personas-core` before running
+`agentworkforce create`.
 
 `install` is a copy utility. Use it when a project should own and edit its
 persona files. `sources add <dir>` is separate: it points the cascade at a live
