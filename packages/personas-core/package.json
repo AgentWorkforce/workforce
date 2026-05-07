@@ -1,0 +1,33 @@
+{
+  "name": "@agentworkforce/personas-core",
+  "version": "0.8.0",
+  "private": false,
+  "type": "module",
+  "description": "Core first-party AgentWorkforce persona pack.",
+  "files": [
+    "personas",
+    "scripts",
+    "README.md",
+    "package.json"
+  ],
+  "keywords": [
+    "agentworkforce",
+    "agentworkforce-personas",
+    "personas"
+  ],
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/AgentWorkforce/workforce",
+    "directory": "packages/personas-core"
+  },
+  "publishConfig": {
+    "access": "public"
+  },
+  "agentworkforce": {
+    "personas": "personas"
+  },
+  "scripts": {
+    "lint": "node scripts/validate-personas.mjs",
+    "test": "node scripts/validate-personas.mjs"
+  }
+}
