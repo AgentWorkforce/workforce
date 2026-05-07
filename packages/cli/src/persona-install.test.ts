@@ -1,11 +1,11 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
-import { tmpdir } from 'node:os';
+import { homedir, tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
 
 import { loadLocalPersonas } from './local-personas.js';
-import { installPersonas, isLocalInstallSource } from './persona-install.js';
+import { expandHomePath, installPersonas, isLocalInstallSource } from './persona-install.js';
 
 function withTemp<T>(fn: (root: string) => T): T {
   const root = mkdtempSync(join(tmpdir(), 'aw-persona-install-'));
@@ -51,6 +51,8 @@ test('isLocalInstallSource: npm package specs with versions are not treated as p
   assert.equal(isLocalInstallSource('@scope/pkg@latest'), false);
   assert.equal(isLocalInstallSource('./local-personas'), true);
   assert.equal(isLocalInstallSource('/tmp/local-personas'), true);
+  assert.equal(isLocalInstallSource('~\\local-personas'), true);
+  assert.equal(expandHomePath('~\\local-personas'), join(homedir(), 'local-personas'));
 });
 
 test('installs multiple personas from a local fixture package', () => {
