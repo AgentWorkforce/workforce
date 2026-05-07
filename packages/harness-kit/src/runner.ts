@@ -17,6 +17,7 @@ import {
 
 import { resolveStringMapLenient } from './env-refs.js';
 import { buildInteractiveSpec, type BuildInteractiveSpecInput } from './harness.js';
+import { renderPersonaInputs, resolvePersonaInputs } from './inputs.js';
 import { formatDropWarnings, resolveMcpServersLenient } from './mcp.js';
 
 export interface PersonaSendOptions {
@@ -133,8 +134,15 @@ export function makeRunnablePersonaContext(
     const promise = (async (): Promise<PersonaExecutionResult> => {
       const cwd = sendOptions.workingDirectory ?? process.cwd();
       const callerEnv = sendOptions.env ? { ...process.env, ...sendOptions.env } : process.env;
-      const envResolution = resolveStringMapLenient(context.selection.env, callerEnv, 'env');
-      const mcpResolution = resolveMcpServersLenient(context.selection.mcpServers, callerEnv);
+      const inputResolution = resolvePersonaInputs(
+        context.selection.inputs,
+        sendOptions.inputs,
+        callerEnv
+      );
+      const inputEnv = inputResolution.values;
+      const envWithInputs = { ...callerEnv, ...inputEnv };
+      const envResolution = resolveStringMapLenient(context.selection.env, envWithInputs, 'env');
+      const mcpResolution = resolveMcpServersLenient(context.selection.mcpServers, envWithInputs);
       const dropWarnings = formatDropWarnings(
         envResolution.dropped,
         mcpResolution.dropped,
@@ -144,7 +152,10 @@ export function makeRunnablePersonaContext(
         harness: context.selection.runtime.harness,
         personaId: context.selection.personaId,
         model: context.selection.runtime.model,
-        systemPrompt: context.selection.runtime.systemPrompt,
+        systemPrompt: renderPersonaInputs(
+          context.selection.runtime.systemPrompt,
+          inputResolution.values
+        ),
         mcpServers: mcpResolution.servers,
         permissions: context.selection.permissions,
         task: withInputs(task, sendOptions.inputs),
@@ -159,7 +170,8 @@ export function makeRunnablePersonaContext(
 
       const env = {
         ...callerEnv,
-        ...(envResolution.value ?? {})
+        ...(envResolution.value ?? {}),
+        ...inputEnv
       };
       const bin = options.commandOverrides?.[context.selection.runtime.harness] ?? spec.bin;
       const signal = anySignal([controller.signal, sendOptions.signal]);

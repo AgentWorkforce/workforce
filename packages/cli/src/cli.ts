@@ -32,6 +32,9 @@ import {
   buildInteractiveSpec,
   detectHarnesses,
   formatDropWarnings,
+  MissingPersonaInputError,
+  renderPersonaInputs,
+  resolvePersonaInputs,
   resolveMcpServersLenient,
   resolveStringMapLenient,
   type HarnessAvailability,
@@ -41,6 +44,7 @@ import { launchOnMount } from '@relayfile/local-mount';
 import ora, { type Ora } from 'ora';
 import {
   buildPersonaSourceDirectories,
+  defaultCwdPersonaDir,
   loadLocalPersonas,
   loadPersonaSourceConfig,
   normalizePersonaDir,
@@ -52,6 +56,18 @@ import { installPersonas, type PersonaInstallResult } from './persona-install.js
 const USAGE = `Usage: agentworkforce <command> [args...]
 
 Commands:
+  create [flags]     Opens persona-maker@best for creating a new
+                      persona, with target path passed as persona inputs.
+                      Flags:
+                        --to <target>       Storage target: cwd, user, dir:n,
+                                            library, or an explicit path.
+                                            Default: cwd when
+                                            .agentworkforce/workforce exists,
+                                            otherwise config defaultCreateTarget,
+                                            otherwise user.
+                        --save-default      Persist --to as defaultCreateTarget in
+                                            ~/.agentworkforce/workforce/config.json.
+                        --install-in-repo   Same behavior as agent.
   agent [flags] <persona>[@<tier>]
                       Run a persona. Tier one of: ${PERSONA_TIERS.join(' | ')}
                       (default: best-value). Drops into an interactive harness
@@ -123,6 +139,8 @@ loader implicitly inherits from the same-id persona below. By default the only
 configured persona dir is ~/.agentworkforce/workforce/personas.
 
 Examples:
+  agentworkforce create
+  agentworkforce create --to user
   agentworkforce agent npm-provenance-publisher@best
   agentworkforce agent my-posthog@best
   agentworkforce agent review@best-value
@@ -152,6 +170,10 @@ function readPackageVersion(): string {
 }
 
 export const CLI_VERSION = readPackageVersion();
+export const CREATE_SELECTOR = 'persona-maker@best';
+
+const CREATE_INPUT_TARGET_DIR = 'TARGET_DIR';
+const CREATE_INPUT_CREATE_MODE = 'CREATE_MODE';
 
 const local = loadLocalPersonas();
 for (const warning of local.warnings) {
@@ -223,6 +245,7 @@ function buildSelection(spec: PersonaSpec, tier: PersonaTier, kind: 'repo' | 'lo
     runtime,
     skills: spec.skills,
     rationale: kind === 'local' ? `local-override: ${spec.id}` : `cli-tier-override: ${tier}`,
+    ...(spec.inputs ? { inputs: spec.inputs } : {}),
     ...(spec.env ? { env: spec.env } : {}),
     ...(spec.mcpServers ? { mcpServers: spec.mcpServers } : {}),
     ...(spec.permissions ? { permissions: spec.permissions } : {})
@@ -536,7 +559,23 @@ async function runInteractive(
   selection: PersonaSelection,
   options: { installInRepo?: boolean } = {}
 ): Promise<number> {
-  const { runtime, personaId, tier } = selection;
+  const inputResolution = resolvePersonaInputs(
+    selection.inputs,
+    selection.inputValues,
+    process.env
+  );
+  const renderedSystemPrompt = renderPersonaInputs(
+    selection.runtime.systemPrompt,
+    inputResolution.values
+  );
+  const effectiveSelection: PersonaSelection = {
+    ...selection,
+    runtime: {
+      ...selection.runtime,
+      systemPrompt: renderedSystemPrompt
+    }
+  };
+  const { runtime, personaId, tier } = effectiveSelection;
   // `installRoot` (out-of-repo skill staging via `--plugin-dir`) is currently
   // claude-only; the workload-router SDK throws if it's set for other
   // harnesses. For opencode, we instead keep installs out of the repo by
@@ -558,18 +597,23 @@ async function runInteractive(
       ? sessionInstallRoot(sessionRoot)
       : undefined;
   const ctx = useSelection(
-    selection,
+    effectiveSelection,
     installRoot !== undefined ? { installRoot } : {}
   );
   const { install } = ctx;
   process.stderr.write(`→ ${personaId} [${tier}] via ${runtime.harness} (${runtime.model})\n`);
 
-  const envResolution = resolveStringMapLenient(selection.env, process.env, 'env');
-  const mcpResolution = resolveMcpServersLenient(selection.mcpServers, process.env);
+  const inputEnv = inputResolution.values;
+  const callerEnv = { ...process.env, ...inputEnv };
+  const envResolution = resolveStringMapLenient(effectiveSelection.env, callerEnv, 'env');
+  const mcpResolution = resolveMcpServersLenient(effectiveSelection.mcpServers, callerEnv);
   emitDropWarnings(
     formatDropWarnings(envResolution.dropped, mcpResolution.dropped, mcpResolution.droppedServers)
   );
-  const resolvedEnv = envResolution.value;
+  const resolvedEnv =
+    Object.keys(inputEnv).length > 0 || envResolution.value
+      ? { ...(envResolution.value ?? {}), ...inputEnv }
+      : undefined;
   const resolvedMcp = mcpResolution.servers;
 
   // In session mode the install command is never `:` — it at minimum runs
@@ -597,7 +641,7 @@ async function runInteractive(
     model: runtime.model,
     systemPrompt: runtime.systemPrompt,
     mcpServers: resolvedMcp,
-    permissions: selection.permissions,
+    permissions: effectiveSelection.permissions,
     ...(installRoot !== undefined ? { pluginDirs: [installRoot] } : {})
   });
   for (const w of spec.warnings) process.stderr.write(`warning: ${w}\n`);
@@ -635,14 +679,14 @@ async function runInteractive(
   if (runtime.harness === 'claude') {
     const servers = Object.keys(resolvedMcp ?? {});
     summary.push(`mcp-strict=${servers.length ? servers.join(',') : '(none)'}`);
-    if (selection.permissions?.allow?.length) {
-      summary.push(`allow=${selection.permissions.allow.length} rule(s)`);
+    if (effectiveSelection.permissions?.allow?.length) {
+      summary.push(`allow=${effectiveSelection.permissions.allow.length} rule(s)`);
     }
-    if (selection.permissions?.deny?.length) {
-      summary.push(`deny=${selection.permissions.deny.length} rule(s)`);
+    if (effectiveSelection.permissions?.deny?.length) {
+      summary.push(`deny=${effectiveSelection.permissions.deny.length} rule(s)`);
     }
-    if (selection.permissions?.mode) {
-      summary.push(`mode=${selection.permissions.mode}`);
+    if (effectiveSelection.permissions?.mode) {
+      summary.push(`mode=${effectiveSelection.permissions.mode}`);
     }
   }
   if (spec.initialPrompt) summary.push('initial-prompt=<systemPrompt>');
@@ -916,6 +960,7 @@ interface SourceDirRow {
 function collectSourceDirRows(): {
   configPath: string;
   personaDirs: string[];
+  defaultCreateTarget?: string;
   rows: SourceDirRow[];
 } {
   const { directories, config } = buildPersonaSourceDirectories();
@@ -933,10 +978,19 @@ function collectSourceDirRows(): {
     exists: 'yes',
     dir: '(built-in)'
   });
-  return { configPath: config.configPath, personaDirs: config.personaDirs, rows };
+  return {
+    configPath: config.configPath,
+    personaDirs: config.personaDirs,
+    ...(config.defaultCreateTarget ? { defaultCreateTarget: config.defaultCreateTarget } : {}),
+    rows
+  };
 }
 
-function formatSourcesTable(rows: readonly SourceDirRow[], configPath: string): string {
+function formatSourcesTable(
+  rows: readonly SourceDirRow[],
+  configPath: string,
+  defaultCreateTarget: string | undefined
+): string {
   const headers: SourceDirRow = {
     cascade: 'CASCADE',
     config: 'CONFIG',
@@ -952,6 +1006,7 @@ function formatSourcesTable(rows: readonly SourceDirRow[], configPath: string): 
     cols.map((c) => row[c].padEnd(widths[c])).join('  ').trimEnd();
   return [
     `Config: ${configPath}`,
+    `Default create target: ${defaultCreateTarget ?? '(auto)'}`,
     [line(headers), ...rows.map(line)].join('\n'),
     ''
   ].join('\n');
@@ -974,11 +1029,13 @@ function parseSourcesListArgs(args: readonly string[]): { json: boolean } {
 
 function runSourcesList(args: readonly string[]): never {
   const { json } = parseSourcesListArgs(args);
-  const { configPath, personaDirs, rows } = collectSourceDirRows();
+  const { configPath, personaDirs, defaultCreateTarget, rows } = collectSourceDirRows();
   if (json) {
-    process.stdout.write(JSON.stringify({ configPath, personaDirs, sources: rows }, null, 2) + '\n');
+    process.stdout.write(
+      JSON.stringify({ configPath, personaDirs, defaultCreateTarget, sources: rows }, null, 2) + '\n'
+    );
   } else {
-    process.stdout.write(formatSourcesTable(rows, configPath));
+    process.stdout.write(formatSourcesTable(rows, configPath, defaultCreateTarget));
   }
   process.exit(0);
 }
@@ -1539,6 +1596,20 @@ function formatPersonaShow(
   }
 
   lines.push('');
+  lines.push('INPUTS');
+  const inputs = Object.entries(spec.inputs ?? {});
+  if (inputs.length === 0) {
+    lines.push('  (none)');
+  } else {
+    for (const [name, input] of inputs) {
+      lines.push(`  - ${name}`);
+      if (input.description) lines.push(`      description: ${input.description}`);
+      lines.push(`      env:         ${input.env ?? name}`);
+      lines.push(`      default:     ${input.default ?? '(required)'}`);
+    }
+  }
+
+  lines.push('');
   lines.push('MCP SERVERS');
   const servers = Object.entries(spec.mcpServers ?? {});
   if (servers.length === 0) {
@@ -1623,6 +1694,114 @@ function runHarnessCheck(): never {
   process.exit(0);
 }
 
+interface CreateTarget {
+  raw: string;
+  kind: string;
+  dir: string;
+  createMode: 'local' | 'built-in';
+}
+
+function defaultCreateTargetSelector(): string {
+  if (existsSync(join(process.cwd(), '.agentworkforce', 'workforce'))) {
+    return 'cwd';
+  }
+  return loadPersonaSourceConfig().defaultCreateTarget ?? 'user';
+}
+
+function resolveCreateTarget(rawTarget: string | undefined): CreateTarget {
+  const raw = rawTarget?.trim() || defaultCreateTargetSelector();
+  const config = loadPersonaSourceConfig();
+
+  if (raw === 'cwd') {
+    return {
+      raw,
+      kind: 'cwd',
+      dir: defaultCwdPersonaDir(process.cwd()),
+      createMode: 'local'
+    };
+  }
+  if (raw === 'user') {
+    return {
+      raw,
+      kind: 'user',
+      dir: config.userPersonaDir,
+      createMode: 'local'
+    };
+  }
+  if (raw === 'library') {
+    const dir = resolvePath(process.cwd(), 'personas');
+    if (!existsSync(dir)) {
+      die(
+        'create: --to library requires running from the AgentWorkforce repo root, where ./personas exists.'
+      );
+    }
+    return {
+      raw,
+      kind: 'library',
+      dir,
+      createMode: 'built-in'
+    };
+  }
+  const dirMatch = /^dir:([1-9]\d*)$/.exec(raw);
+  if (dirMatch) {
+    const idx = Number(dirMatch[1]) - 1;
+    const dir = config.personaDirs[idx];
+    if (!dir) {
+      die(`create: ${raw} does not exist. Run "agentworkforce sources list" to see configured dirs.`);
+    }
+    return {
+      raw,
+      kind: raw,
+      dir,
+      createMode: 'local'
+    };
+  }
+
+  return {
+    raw: normalizePersonaDir(raw),
+    kind: 'path',
+    dir: normalizePersonaDir(raw),
+    createMode: 'local'
+  };
+}
+
+function buildCreateInputValues(target: CreateTarget): Record<string, string> {
+  return {
+    [CREATE_INPUT_TARGET_DIR]: target.dir,
+    [CREATE_INPUT_CREATE_MODE]: target.createMode
+  };
+}
+
+function ensureCreateTargetDir(target: CreateTarget): void {
+  if (target.createMode === 'built-in') return;
+  mkdirSync(target.dir, { recursive: true });
+}
+
+function saveDefaultCreateTarget(target: CreateTarget): void {
+  const config = loadPersonaSourceConfig();
+  const raw = target.kind === 'path' ? target.dir : target.raw;
+  const saved = savePersonaSourceConfig(config.personaDirs, { defaultCreateTarget: raw });
+  process.stderr.write(`• default create target saved: ${raw}\n`);
+  process.stderr.write(`• config: ${saved.configPath}\n`);
+}
+
+async function runAgentSelector(
+  selector: string,
+  flags: AgentFlags,
+  inputValues?: Record<string, string>
+): Promise<never> {
+  const target = parseSelector(selector);
+  const selection = {
+    ...buildSelection(target.spec, target.tier, target.kind),
+    ...(inputValues ? { inputValues } : {})
+  };
+
+  const code = await runInteractive(selection, {
+    installInRepo: flags.installInRepo
+  });
+  process.exit(code);
+}
+
 export async function main(): Promise<void> {
   const argv = process.argv.slice(2);
   const [subcommand, ...rest] = argv;
@@ -1667,6 +1846,11 @@ export async function main(): Promise<void> {
     runHarnessCheck();
   }
 
+  if (subcommand === 'create') {
+    const { flags, selector, inputValues } = parseCreateArgs(rest);
+    await runAgentSelector(selector, flags, inputValues);
+  }
+
   if (subcommand !== 'agent') {
     die(`Unknown subcommand "${subcommand}".`);
   }
@@ -1678,17 +1862,16 @@ export async function main(): Promise<void> {
     die(`agent: unexpected argument "${extra[0]}". The agent subcommand only takes a persona selector.`);
   }
 
-  const target = parseSelector(selector);
-  const selection = buildSelection(target.spec, target.tier, target.kind);
-
-  const code = await runInteractive(selection, {
-    installInRepo: flags.installInRepo
-  });
-  process.exit(code);
+  await runAgentSelector(selector, flags);
 }
 
 export interface AgentFlags {
   installInRepo: boolean;
+}
+
+export interface CreateFlags extends AgentFlags {
+  to?: string;
+  saveDefault: boolean;
 }
 
 export function parseAgentArgs(args: readonly string[]): {
@@ -1720,6 +1903,72 @@ export function parseAgentArgs(args: readonly string[]): {
   return { flags, positional };
 }
 
+export function parseCreateArgs(args: readonly string[]): {
+  flags: CreateFlags;
+  selector: string;
+  inputValues: Record<string, string>;
+} {
+  const flags: CreateFlags = { installInRepo: false, saveDefault: false };
+  let seenDoubleDash = false;
+  const positional: string[] = [];
+  const valueOf = (i: number, flag: string): string => {
+    const v = args[i + 1];
+    if (v === undefined || v.startsWith('--')) {
+      die(`create: ${flag} requires a value.`);
+    }
+    return v;
+  };
+
+  for (let i = 0; i < args.length; i += 1) {
+    const arg = args[i];
+    if (seenDoubleDash) {
+      positional.push(arg);
+      continue;
+    }
+    if (arg === '--') {
+      seenDoubleDash = true;
+      continue;
+    }
+    if (arg === '--install-in-repo') {
+      flags.installInRepo = true;
+      continue;
+    }
+    if (arg === '--to') {
+      flags.to = valueOf(i, arg);
+      i += 1;
+      continue;
+    }
+    if (arg === '--save-default') {
+      flags.saveDefault = true;
+      continue;
+    }
+    if (arg === '-h' || arg === '--help') {
+      process.stdout.write(
+        'Usage: agentworkforce create [--to <cwd|user|dir:n|library|path>] [--save-default] [--install-in-repo]\n'
+      );
+      process.exit(0);
+    }
+    positional.push(arg);
+  }
+
+  const [unexpected] = positional;
+  if (unexpected) {
+    die(
+      `create: unexpected argument "${unexpected}". The create command always runs ${CREATE_SELECTOR}; use "agentworkforce agent <persona>[@<tier>]" to run another persona.`
+    );
+  }
+
+  const target = resolveCreateTarget(flags.to);
+  ensureCreateTargetDir(target);
+  if (flags.saveDefault) saveDefaultCreateTarget(target);
+
+  return {
+    flags,
+    selector: CREATE_SELECTOR,
+    inputValues: buildCreateInputValues(target)
+  };
+}
+
 // Only run main when invoked as the CLI entry, not when imported by tests.
 // Node ESM: import.meta.url is the module URL; argv[1] is the entry script
 // path, which may be relative (e.g. `node ./dist/cli.js`) and pathToFileURL
@@ -1736,6 +1985,10 @@ const isCliEntry = (() => {
 
 if (isCliEntry) {
   main().catch((err) => {
+    if (err instanceof MissingPersonaInputError) {
+      process.stderr.write(`${err.message}\n`);
+      process.exit(1);
+    }
     process.stderr.write(`${(err as Error)?.stack ?? String(err)}\n`);
     process.exit(1);
   });

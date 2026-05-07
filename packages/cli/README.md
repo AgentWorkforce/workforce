@@ -6,6 +6,7 @@ built-in one from `/personas/`, or an installed/local one that extends a lower
 source.
 
 ```
+agentworkforce create [--to <target>] [--save-default]
 agentworkforce agent <persona>[@<tier>]
 agentworkforce list [flags]
 agentworkforce show <persona>[@<tier>]
@@ -15,6 +16,10 @@ agentworkforce harness check
 agentworkforce --version
 ```
 
+- `create` — opens `persona-maker@best` for creating a new persona.
+  It resolves a target persona directory with the same source-cascade
+  constructs used by `list`, `show`, and `agent`, then passes `TARGET_DIR` and
+  `CREATE_MODE` into the persona as prompt-visible inputs.
 - `agent` — drops you into an interactive session with the harness.
 - `list` — print the persona catalog as a table (or JSON). See
   [`## List`](#list) below for every flag.
@@ -60,9 +65,68 @@ agentworkforce agent <persona>[@<tier>]
 
 Unknown persona prints the full catalog with each entry's origin.
 
+## Create
+
+```
+agentworkforce create [--to <target>] [--save-default] [--install-in-repo]
+```
+
+`create` is the persona-authoring entry point. It runs `persona-maker@best`
+through the same interactive launch path as `agent`, including skill
+materialization, sandbox mount behavior, env/MCP resolution, and harness argv
+translation. The only extra work `create` does is resolve a target and pass it as
+persona inputs:
+
+| Input | Meaning |
+| --- | --- |
+| `TARGET_DIR` | Absolute directory where the new `<id>.json` persona file should be written. |
+| `CREATE_MODE` | `local` writes only JSON; `built-in` also updates catalog/routing/test/docs integration. |
+
+Targets:
+
+| Target | Resolves to | Create mode |
+| --- | --- | --- |
+| `cwd` | `<cwd>/.agentworkforce/workforce/personas` | `local` |
+| `user` | `~/.agentworkforce/workforce/personas` (or `AGENT_WORKFORCE_CONFIG_DIR`) | `local` |
+| `dir:n` | the nth configured persona source from `sources list` | `local` |
+| `library` | `<repo>/personas` | `built-in` |
+| path | explicit directory path | `local` |
+
+Default target resolution:
+
+1. `--to <target>` wins.
+2. If `<cwd>/.agentworkforce/workforce` exists, use `cwd`.
+3. Else use `defaultCreateTarget` from `~/.agentworkforce/workforce/config.json`.
+4. Else use `user`.
+
+`--save-default` persists the resolved target as `defaultCreateTarget` in the
+source config. This is only consulted when no cwd-local workforce directory is
+present.
+
+Examples:
+
+```sh
+# Create in the project-local persona directory when present, otherwise user dir
+agentworkforce create
+
+# Force the user persona directory
+agentworkforce create --to user
+
+# Create in a configured persona source
+agentworkforce create --to dir:1
+
+# Create in an explicit checked-out persona directory and make that the default
+agentworkforce create --to ../team-personas/personas --save-default
+
+# Create a built-in persona in this repo's /personas catalog
+agentworkforce create --to library
+```
+
 ### Examples
 
 ```sh
+agentworkforce create
+
 # Interactive code reviewer
 agentworkforce agent review@best-value
 
@@ -285,6 +349,21 @@ defaults to `~/.agentworkforce/workforce/personas`. This makes installed
 personas work as plain JSON files in the default user location, or from any
 checked-out repo you add as a source directory.
 
+The same config may also carry `defaultCreateTarget`, used by `agentworkforce create`
+when no cwd-local workforce directory exists:
+
+```json
+{
+  "personaDirs": ["~/src/company-personas/personas"],
+  "defaultCreateTarget": "dir:1"
+}
+```
+
+Valid `defaultCreateTarget` values are the same values accepted by `create --to`:
+`cwd`, `user`, `dir:n`, `library`, or an explicit path. Use
+`agentworkforce create --to <target> --save-default` to write it without editing
+JSON by hand.
+
 `sources add` appends by default. `--position <n>` inserts at the 1-based
 position among configurable directories, so `--position 1` gives that directory
 the highest priority after the fixed cwd source. `sources remove` accepts either
@@ -427,6 +506,13 @@ library has no `extends`.
   "extends": "posthog",        // optional; implicit same-id if omitted
   "description": "…",          // replaces base description
   "skills": [ … ],             // replaces entire skills array
+  "inputs": {                  // prompt-visible runtime inputs; union by key
+    "TARGET_DIR": {
+      "description": "Where to write output",
+      "default": "./out",
+      "env": "MY_AGENT_TARGET_DIR"
+    }
+  },
   "env": { … },                // union, local wins per key
   "mcpServers": { … },         // union by server name, local wins per key
   "permissions": {             // allow/deny union (dedup), mode replaces
@@ -449,6 +535,162 @@ To define a standalone local persona that does not inherit from a lower layer,
 include `intent` and a complete `tiers` object for `best`, `best-value`, and
 `minimum`. This is the shape persona packs usually ship before `install`
 copies them into the cwd layer.
+
+## Creating Personas
+
+Personas are plain JSON files. Use `agentworkforce create` when you want the
+persona-maker to draft one with the repo's conventions, or write the JSON by
+hand when the shape is simple.
+
+### Local persona
+
+Local personas live in the source cascade and do not require built-in catalog
+integration:
+
+```sh
+agentworkforce create --to user
+agentworkforce create --to cwd
+agentworkforce create --to dir:1
+```
+
+The persona maker receives `TARGET_DIR` and `CREATE_MODE=local`, so it
+should write only:
+
+```
+<target-dir>/<id>.json
+```
+
+Minimal local persona:
+
+```json
+{
+  "id": "my-reviewer",
+  "extends": "review",
+  "description": "Reviews this project with local conventions.",
+  "systemPrompt": "Focus on this repository's API compatibility rules and summarize only blocking issues."
+}
+```
+
+### Built-in persona
+
+Built-in personas live in the repo's `/personas` catalog and require full
+workload-router integration:
+
+```sh
+agentworkforce create --to library
+```
+
+The persona maker receives `CREATE_MODE=built-in`, so it should write
+`personas/<id>.json`, update the intent list/catalog registration/routing
+profile/test fixture/README, regenerate `src/generated/personas.ts`, and run
+the repo check.
+
+### Full persona file
+
+Use this when you are not extending an existing persona:
+
+```jsonc
+{
+  "id": "release-checker",
+  "intent": "release-check",
+  "tags": ["release", "review"],
+  "description": "Checks release readiness and reports blockers.",
+  "skills": [
+    {
+      "id": "prpm/npm-trusted-publishing",
+      "source": "https://prpm.dev/packages/@prpm/npm-trusted-publishing",
+      "description": "Trusted publishing and provenance setup guidance."
+    }
+  ],
+  "inputs": {
+    "PACKAGE_NAME": {
+      "description": "Package to inspect.",
+      "env": "PACKAGE_NAME",
+      "default": "."
+    }
+  },
+  "env": {
+    "NPM_TOKEN": "$NPM_TOKEN"
+  },
+  "permissions": {
+    "allow": ["Bash(npm *)"],
+    "deny": ["Bash(npm publish *)"],
+    "mode": "default"
+  },
+  "tiers": {
+    "best": {
+      "harness": "codex",
+      "model": "openai-codex/gpt-5.3-codex",
+      "systemPrompt": "Check release readiness for $PACKAGE_NAME. Produce blockers first, then evidence.",
+      "harnessSettings": { "reasoning": "high", "timeoutSeconds": 1200 }
+    },
+    "best-value": {
+      "harness": "opencode",
+      "model": "opencode/gpt-5-nano",
+      "systemPrompt": "Check release readiness for $PACKAGE_NAME. Produce blockers first, then evidence.",
+      "harnessSettings": { "reasoning": "medium", "timeoutSeconds": 900 }
+    },
+    "minimum": {
+      "harness": "opencode",
+      "model": "opencode/minimax-m2.5-free",
+      "systemPrompt": "Check release readiness for $PACKAGE_NAME. Produce only blocking issues and exact evidence.",
+      "harnessSettings": { "reasoning": "low", "timeoutSeconds": 600 }
+    }
+  }
+}
+```
+
+### Persona inputs
+
+`inputs` declare non-secret values that a launcher can pass into a persona at
+runtime. They are useful for output paths, package names, modes, and other
+prompt-visible context that should not be hard-coded into the persona.
+
+Input names must be env-style uppercase keys: `TARGET_DIR`, `PACKAGE_NAME`,
+`CREATE_MODE`. In `systemPrompt`, use `$NAME` or `${NAME}`; both forms are
+replaced before the harness starts.
+
+```jsonc
+{
+  "inputs": {
+    "TARGET_DIR": {
+      "description": "Directory where generated files should be written.",
+      "env": "MY_TARGET_DIR",
+      "default": "./out"
+    },
+    "CREATE_MODE": "local"
+  },
+  "tiers": {
+    "best": {
+      "systemPrompt": "Write the persona to $TARGET_DIR. Mode: ${CREATE_MODE}."
+    }
+  }
+}
+```
+
+Each input may be either a string shorthand or an object:
+
+| Shape | Meaning |
+| --- | --- |
+| `"NAME": "value"` | Shorthand for `{ "default": "value" }`. |
+| `description` | Human-readable explanation for `show`, docs, and catalog UIs. |
+| `env` | Env var to read when the caller did not provide an explicit value. Defaults to the input key. |
+| `default` | Literal fallback when no explicit value or env var exists. |
+
+Resolution order is strict:
+
+1. Explicit launcher value, such as the values passed by `agentworkforce create`.
+2. `process.env[env]`, or `process.env[NAME]` when `env` is omitted.
+3. `default`.
+4. If none exist, launch fails before the harness starts.
+
+Resolved inputs are substituted into the system prompt and injected into the
+child process env under the input key. They are not secrets: resolved values
+can appear in prompts, process env, logs, and agent output. Use `env` references
+instead for API keys and tokens.
+
+Local persona overlays merge `inputs` by key, so a user or project override can
+add one input without replacing all inherited inputs.
 
 ## Env references & secrets
 

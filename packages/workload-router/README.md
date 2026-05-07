@@ -28,7 +28,7 @@ import { usePersona } from '@agentworkforce/workload-router';
 const { selection, install } = usePersona('npm-provenance');
 ```
 
-- `selection`: the resolved persona choice for the given intent/profile. Includes `personaId`, `tier`, `runtime`, `skills`, and `rationale`.
+- `selection`: the resolved persona choice for the given intent/profile. Includes `personaId`, `tier`, `runtime`, `skills`, `inputs`, and `rationale`.
 - `install`: grouped install metadata.
 - `install.plan`: a pure description of what skill installs would be needed for that persona on that harness. No processes run when you read this.
 - `install.command`: the full install command as an argv array for `spawn`/`execFile`.
@@ -46,6 +46,42 @@ const { selection, install } = usePersona('npm-provenance');
 spawnSync(install.commandString, { shell: true, stdio: 'inherit' });
 // hand `selection` to your harness launcher of choice.
 ```
+
+## Persona shape
+
+Personas may declare prompt-visible runtime inputs:
+
+```jsonc
+{
+  "id": "release-checker",
+  "intent": "release-check",
+  "tags": ["release"],
+  "description": "Checks release readiness.",
+  "skills": [],
+  "inputs": {
+    "PACKAGE_NAME": {
+      "description": "Package or workspace to inspect.",
+      "env": "PACKAGE_NAME",
+      "default": "."
+    },
+    "REPORT_PATH": "release-report.md"
+  },
+  "tiers": {
+    "best": {
+      "harness": "codex",
+      "model": "openai-codex/gpt-5.3-codex",
+      "systemPrompt": "Check $PACKAGE_NAME and write ${REPORT_PATH}.",
+      "harnessSettings": { "reasoning": "high", "timeoutSeconds": 1200 }
+    }
+    // best-value and minimum omitted in this fragment
+  }
+}
+```
+
+Input keys must be env-style uppercase names. The router validates and carries
+the declarations through `PersonaSpec` and `PersonaSelection`; launchers decide
+how to resolve and render them. The standard harness-kit policy is explicit
+value, env var, default, then fail.
 
 ## Development
 

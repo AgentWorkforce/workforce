@@ -9,6 +9,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- `agentworkforce create` now opens `persona-maker@best`, supports `--to` and
+  `--save-default`, and passes `TARGET_DIR` / `CREATE_MODE` persona inputs.
+- Persona source config supports `defaultCreateTarget` for the implicit create target.
 - `--version`/`-v` now prints the CLI package version.
 
 ## [0.7.0] - 2026-05-07

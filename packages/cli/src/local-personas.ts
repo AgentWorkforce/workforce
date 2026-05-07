@@ -10,6 +10,7 @@ import {
   PERSONA_TIERS,
   type McpServerSpec,
   type PersonaIntent,
+  type PersonaInputSpec,
   type PersonaPermissions,
   type PersonaRuntime,
   type PersonaSpec,
@@ -41,6 +42,7 @@ export interface LocalPersonaOverride {
   tags?: PersonaTag[];
   description?: string;
   skills?: PersonaSpec['skills'];
+  inputs?: Record<string, PersonaInputSpec>;
   env?: Record<string, string>;
   mcpServers?: Record<string, McpServerSpec>;
   /**
@@ -71,6 +73,7 @@ export interface PersonaSourceDirectory {
 export interface PersonaSourceConfig {
   configPath: string;
   personaDirs: string[];
+  defaultCreateTarget?: string;
   userPersonaDir: string;
   warnings: string[];
 }
@@ -95,6 +98,8 @@ export interface LoadOptions {
   configPath?: string;
   /** Full ordered list of configurable persona dirs after cwd and before library. */
   personaDirs?: string[];
+  /** Default target used by `agentworkforce create` when no cwd-local workforce exists. */
+  defaultCreateTarget?: string;
 }
 
 export function defaultWorkforceHomeDir(): string {
@@ -130,7 +135,15 @@ export function normalizePersonaDir(input: string, baseDir = process.cwd()): str
   return isAbsolute(expanded) ? resolvePath(expanded) : resolvePath(baseDir, expanded);
 }
 
-function readConfigPersonaDirs(path: string, warnings: string[]): string[] | undefined {
+interface RawPersonaSourceConfig {
+  personaDirs?: string[];
+  defaultCreateTarget?: string;
+}
+
+function readRawPersonaSourceConfig(
+  path: string,
+  warnings: string[]
+): RawPersonaSourceConfig | undefined {
   if (!existsSync(path)) return undefined;
   try {
     const parsed = JSON.parse(readFileSync(path, 'utf8')) as unknown;
@@ -139,15 +152,28 @@ function readConfigPersonaDirs(path: string, warnings: string[]): string[] | und
       return undefined;
     }
     const dirs = parsed.personaDirs;
-    if (dirs === undefined) return undefined;
+    let personaDirs: string[] | undefined;
     if (
-      !Array.isArray(dirs) ||
-      dirs.some((dir) => typeof dir !== 'string' || !dir.trim())
+      dirs !== undefined &&
+      (!Array.isArray(dirs) ||
+        dirs.some((dir) => typeof dir !== 'string' || !dir.trim()))
     ) {
       warnings.push(`[config] ${path}: personaDirs must be an array of non-empty strings`);
-      return undefined;
+    } else if (dirs !== undefined) {
+      personaDirs = dirs.map((dir) => normalizePersonaDir(dir, dirname(path)));
     }
-    return dirs.map((dir) => normalizePersonaDir(dir, dirname(path)));
+    const defaultCreateTarget = parsed.defaultCreateTarget;
+    if (
+      defaultCreateTarget !== undefined &&
+      (typeof defaultCreateTarget !== 'string' || !defaultCreateTarget.trim())
+    ) {
+      warnings.push(`[config] ${path}: defaultCreateTarget must be a non-empty string if provided`);
+      return personaDirs ? { personaDirs } : {};
+    }
+    return {
+      ...(personaDirs ? { personaDirs } : {}),
+      ...(typeof defaultCreateTarget === 'string' ? { defaultCreateTarget: defaultCreateTarget.trim() } : {})
+    };
   } catch (err) {
     warnings.push(`[config] ${path}: ${(err as Error).message}`);
     return undefined;
@@ -178,12 +204,15 @@ export function loadPersonaSourceConfig(options: LoadOptions = {}): PersonaSourc
     options.configPath ?? defaultPersonaConfigPath(workforceHomeDir)
   );
   const warnings: string[] = [];
+  const rawConfig = readRawPersonaSourceConfig(configPath, warnings);
   const configuredDirs =
-    options.personaDirs ?? readConfigPersonaDirs(configPath, warnings) ?? [userPersonaDir];
+    options.personaDirs ?? rawConfig?.personaDirs ?? [userPersonaDir];
+  const defaultCreateTarget = options.defaultCreateTarget ?? rawConfig?.defaultCreateTarget;
 
   return {
     configPath,
     personaDirs: dedupeDirs(configuredDirs, warnings),
+    ...(defaultCreateTarget ? { defaultCreateTarget } : {}),
     userPersonaDir,
     warnings
   };
@@ -195,9 +224,13 @@ export function savePersonaSourceConfig(
 ): PersonaSourceConfig {
   const config = loadPersonaSourceConfig({ ...options, personaDirs: [...personaDirs] });
   mkdirSync(dirname(config.configPath), { recursive: true });
+  const serialized = {
+    personaDirs: config.personaDirs,
+    ...(config.defaultCreateTarget ? { defaultCreateTarget: config.defaultCreateTarget } : {})
+  };
   writeFileSync(
     config.configPath,
-    JSON.stringify({ personaDirs: config.personaDirs }, null, 2) + '\n',
+    JSON.stringify(serialized, null, 2) + '\n',
     'utf8'
   );
   return config;
@@ -307,6 +340,7 @@ function parseOverride(value: unknown, context: string): LocalPersonaOverride {
   if (raw.skills !== undefined && !Array.isArray(raw.skills)) {
     throw new Error(`${context}.skills must be an array if provided`);
   }
+  const inputs = parseInputsShape(raw.inputs, `${context}.inputs`);
   assertStringMap(raw.env, `${context}.env`);
   assertMcpServersShape(raw.mcpServers, `${context}.mcpServers`);
   assertPermissionsShape(raw.permissions, `${context}.permissions`);
@@ -319,12 +353,62 @@ function parseOverride(value: unknown, context: string): LocalPersonaOverride {
     tags: raw.tags as PersonaTag[] | undefined,
     description: raw.description as string | undefined,
     skills: raw.skills as PersonaSpec['skills'] | undefined,
+    inputs,
     env: raw.env as LocalPersonaOverride['env'],
     mcpServers: raw.mcpServers as LocalPersonaOverride['mcpServers'],
     permissions: raw.permissions as LocalPersonaOverride['permissions'],
     systemPrompt: raw.systemPrompt as string | undefined,
     tiers: raw.tiers as LocalPersonaOverride['tiers']
   };
+}
+
+const INPUT_NAME_RE = /^[A-Z_][A-Z0-9_]*$/;
+
+function assertInputName(name: string, context: string): void {
+  if (!INPUT_NAME_RE.test(name)) {
+    throw new Error(`${context} must be an env-style name matching ${INPUT_NAME_RE.source}`);
+  }
+}
+
+function parseInputsShape(
+  value: unknown,
+  context: string
+): Record<string, PersonaInputSpec> | undefined {
+  if (value === undefined) return undefined;
+  if (!isPlainObject(value)) {
+    throw new Error(`${context} must be an object if provided`);
+  }
+  const out: Record<string, PersonaInputSpec> = {};
+  for (const [name, raw] of Object.entries(value)) {
+    assertInputName(name, `${context}.${name}`);
+    if (typeof raw === 'string') {
+      if (!raw) throw new Error(`${context}.${name} default must be non-empty`);
+      out[name] = { default: raw };
+      continue;
+    }
+    if (!isPlainObject(raw)) {
+      throw new Error(`${context}.${name} must be a string default or an object`);
+    }
+    const spec = raw as Record<string, unknown>;
+    if (spec.description !== undefined && (typeof spec.description !== 'string' || !spec.description.trim())) {
+      throw new Error(`${context}.${name}.description must be a non-empty string if provided`);
+    }
+    if (spec.env !== undefined) {
+      if (typeof spec.env !== 'string' || !spec.env.trim()) {
+        throw new Error(`${context}.${name}.env must be a non-empty string if provided`);
+      }
+      assertInputName(spec.env, `${context}.${name}.env`);
+    }
+    if (spec.default !== undefined && (typeof spec.default !== 'string' || !spec.default)) {
+      throw new Error(`${context}.${name}.default must be a non-empty string if provided`);
+    }
+    out[name] = {
+      ...(typeof spec.description === 'string' ? { description: spec.description } : {}),
+      ...(typeof spec.env === 'string' ? { env: spec.env } : {}),
+      ...(typeof spec.default === 'string' ? { default: spec.default } : {})
+    };
+  }
+  return Object.keys(out).length > 0 ? out : undefined;
 }
 
 function assertStringMap(value: unknown, context: string): void {
@@ -602,6 +686,10 @@ function mergeOverride(base: PersonaSpec, override: LocalPersonaOverride): Perso
     override.env || base.env
       ? { ...(base.env ?? {}), ...(override.env ?? {}) }
       : undefined;
+  const inputs =
+    override.inputs || base.inputs
+      ? { ...(base.inputs ?? {}), ...(override.inputs ?? {}) }
+      : undefined;
   const mcpServers =
     override.mcpServers || base.mcpServers
       ? { ...(base.mcpServers ?? {}), ...(override.mcpServers ?? {}) }
@@ -614,6 +702,7 @@ function mergeOverride(base: PersonaSpec, override: LocalPersonaOverride): Perso
     tags: override.tags ?? base.tags,
     description: override.description ?? base.description,
     skills: override.skills ?? base.skills,
+    ...(inputs ? { inputs } : {}),
     tiers,
     ...(env ? { env } : {}),
     ...(mcpServers ? { mcpServers } : {}),

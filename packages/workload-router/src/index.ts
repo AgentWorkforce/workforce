@@ -74,6 +74,25 @@ export interface PersonaSkill {
   description: string;
 }
 
+/**
+ * Prompt-visible runtime input declared by a persona. Inputs are for
+ * non-secret run configuration such as output paths, target package names, or
+ * mode switches. Launchers resolve each input from explicit values, the
+ * process environment, or `default`, then substitute `$NAME` / `${NAME}` in
+ * the system prompt before spawning the harness.
+ */
+export interface PersonaInputSpec {
+  /** Human-readable explanation shown in docs/catalog UIs. */
+  description?: string;
+  /**
+   * Environment variable to read when the launcher did not provide an
+   * explicit value. Defaults to the input key itself.
+   */
+  env?: string;
+  /** Literal fallback used when neither an explicit value nor env var exists. */
+  default?: string;
+}
+
 export const PERMISSION_MODES = [
   'default',
   'acceptEdits',
@@ -129,6 +148,12 @@ export interface PersonaSpec {
   tags: PersonaTag[];
   description: string;
   skills: PersonaSkill[];
+  /**
+   * Prompt-visible runtime inputs. Keys must be env-style names
+   * (`OUTPUT_PATH`, `TARGET_DIR`, etc.). Never put secrets here; resolved
+   * values are substituted into the persona's system prompt.
+   */
+  inputs?: Record<string, PersonaInputSpec>;
   tiers: Record<PersonaTier, PersonaRuntime>;
   /**
    * Environment variables injected into the harness child process.
@@ -166,6 +191,8 @@ export interface PersonaSelection {
   runtime: PersonaRuntime;
   skills: PersonaSkill[];
   rationale: string;
+  inputs?: Record<string, PersonaInputSpec>;
+  inputValues?: Record<string, string>;
   env?: Record<string, string>;
   mcpServers?: Record<string, McpServerSpec>;
   permissions?: PersonaPermissions;
@@ -787,12 +814,69 @@ function parseSkills(value: unknown, context: string): PersonaSkill[] {
   });
 }
 
+const INPUT_NAME_RE = /^[A-Z_][A-Z0-9_]*$/;
+
+function assertInputName(name: string, context: string): void {
+  if (!INPUT_NAME_RE.test(name)) {
+    throw new Error(`${context} must be an env-style name matching ${INPUT_NAME_RE.source}`);
+  }
+}
+
+function parseInputs(
+  value: unknown,
+  context: string
+): Record<string, PersonaInputSpec> | undefined {
+  if (value === undefined) return undefined;
+  if (!isObject(value)) {
+    throw new Error(`${context} must be an object if provided`);
+  }
+
+  const out: Record<string, PersonaInputSpec> = {};
+  for (const [name, raw] of Object.entries(value)) {
+    assertInputName(name, `${context}.${name}`);
+    if (typeof raw === 'string') {
+      if (!raw) {
+        throw new Error(`${context}.${name} default must be non-empty`);
+      }
+      out[name] = { default: raw };
+      continue;
+    }
+    if (!isObject(raw)) {
+      throw new Error(`${context}.${name} must be a string default or an object`);
+    }
+    const { description, env, default: defaultValue } = raw;
+    const parsed: PersonaInputSpec = {};
+    if (description !== undefined) {
+      if (typeof description !== 'string' || !description.trim()) {
+        throw new Error(`${context}.${name}.description must be a non-empty string if provided`);
+      }
+      parsed.description = description;
+    }
+    if (env !== undefined) {
+      if (typeof env !== 'string' || !env.trim()) {
+        throw new Error(`${context}.${name}.env must be a non-empty string if provided`);
+      }
+      assertInputName(env, `${context}.${name}.env`);
+      parsed.env = env;
+    }
+    if (defaultValue !== undefined) {
+      if (typeof defaultValue !== 'string' || !defaultValue) {
+        throw new Error(`${context}.${name}.default must be a non-empty string if provided`);
+      }
+      parsed.default = defaultValue;
+    }
+    out[name] = parsed;
+  }
+
+  return Object.keys(out).length > 0 ? out : undefined;
+}
+
 function parsePersonaSpec(value: unknown, expectedIntent: PersonaIntent): PersonaSpec {
   if (!isObject(value)) {
     throw new Error(`persona[${expectedIntent}] must be an object`);
   }
 
-  const { id, intent, tags, description, tiers, skills, env, mcpServers, permissions } = value;
+  const { id, intent, tags, description, tiers, skills, inputs, env, mcpServers, permissions } = value;
 
   if (typeof id !== 'string' || !id.trim()) {
     throw new Error(`persona[${expectedIntent}].id must be a non-empty string`);
@@ -817,6 +901,7 @@ function parsePersonaSpec(value: unknown, expectedIntent: PersonaIntent): Person
   }
 
   const parsedSkills = parseSkills(skills, `persona[${expectedIntent}].skills`);
+  const parsedInputs = parseInputs(inputs, `persona[${expectedIntent}].inputs`);
   const parsedEnv = parseStringMap(env, `persona[${expectedIntent}].env`);
   const parsedMcpServers = parseMcpServers(mcpServers, `persona[${expectedIntent}].mcpServers`);
   const parsedPermissions = parsePermissions(
@@ -830,6 +915,7 @@ function parsePersonaSpec(value: unknown, expectedIntent: PersonaIntent): Person
     tags: parsedTags,
     description,
     skills: parsedSkills,
+    ...(parsedInputs ? { inputs: parsedInputs } : {}),
     tiers: parsedTiers,
     ...(parsedEnv ? { env: parsedEnv } : {}),
     ...(parsedMcpServers ? { mcpServers: parsedMcpServers } : {}),
@@ -1027,6 +1113,7 @@ export function resolvePersona(intent: PersonaIntent, profile: RoutingProfile | 
     runtime: spec.tiers[rule.tier],
     skills: spec.skills,
     rationale: `${profileSpec.id}: ${rule.rationale}`,
+    ...(spec.inputs ? { inputs: spec.inputs } : {}),
     ...(spec.env ? { env: spec.env } : {}),
     ...(spec.mcpServers ? { mcpServers: spec.mcpServers } : {}),
     ...(spec.permissions ? { permissions: spec.permissions } : {})
@@ -1045,6 +1132,7 @@ export function resolvePersonaByTier(intent: PersonaIntent, tier: PersonaTier = 
     runtime: spec.tiers[tier],
     skills: spec.skills,
     rationale: `legacy-tier-override: ${tier}`,
+    ...(spec.inputs ? { inputs: spec.inputs } : {}),
     ...(spec.env ? { env: spec.env } : {}),
     ...(spec.mcpServers ? { mcpServers: spec.mcpServers } : {}),
     ...(spec.permissions ? { permissions: spec.permissions } : {})

@@ -1,9 +1,13 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
+import { mkdtempSync, mkdirSync, rmSync, readFileSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 
 import {
   CLI_VERSION,
   CLEAN_IGNORED_PATTERNS,
+  CREATE_SELECTOR,
   SKILL_INSTALL_IGNORED_PATTERNS,
   assertSafeRelativePath,
   buildMountGitExcludeBlock,
@@ -11,6 +15,7 @@ import {
   decideCleanMode,
   parseAgentArgs,
   parseInstallArgs,
+  parseCreateArgs,
   resolveSystemPromptPlaceholders,
   stripAgentFlag
 } from './cli.js';
@@ -112,6 +117,73 @@ test('parseInstallArgs: accepts package specs, repeatable persona flags, and ove
       overwrite: true
     }
   );
+});
+
+test('parseCreateArgs: runs persona-maker and preserves agent flags', () => {
+  const root = mkdtempSync(join(tmpdir(), 'aw-create-args-'));
+  const prev = process.env.AGENT_WORKFORCE_HOME;
+  process.env.AGENT_WORKFORCE_HOME = join(root, 'home', '.agentworkforce', 'workforce');
+  try {
+    const { flags, selector, inputValues } = parseCreateArgs(['--install-in-repo', '--to', 'user']);
+    assert.equal(selector, CREATE_SELECTOR);
+    assert.equal(flags.installInRepo, true);
+    assert.equal(
+      inputValues.TARGET_DIR,
+      join(root, 'home', '.agentworkforce', 'workforce', 'personas')
+    );
+    assert.equal(inputValues.CREATE_MODE, 'local');
+  } finally {
+    if (prev === undefined) delete process.env.AGENT_WORKFORCE_HOME;
+    else process.env.AGENT_WORKFORCE_HOME = prev;
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test('parseCreateArgs: rejects positional selectors because create has a fixed persona', () => {
+  const trap = trapExit();
+  try {
+    assert.throws(() => parseCreateArgs(['posthog']), /__exit_trap__:1/);
+    assert.deepEqual(trap.exits, [1]);
+    assert.match(trap.stderr, /create: unexpected argument "posthog"/);
+    assert.match(trap.stderr, /always runs persona-maker@best/);
+  } finally {
+    trap.restore();
+  }
+});
+
+test('parseCreateArgs: cwd-local workforce wins as the implicit create target', () => {
+  const root = mkdtempSync(join(tmpdir(), 'aw-create-cwd-'));
+  const prevCwd = process.cwd();
+  try {
+    const project = join(root, 'project');
+    mkdirSync(join(project, '.agentworkforce', 'workforce'), { recursive: true });
+    process.chdir(project);
+    const { inputValues } = parseCreateArgs([]);
+    assert.equal(
+      inputValues.TARGET_DIR,
+      join(process.cwd(), '.agentworkforce', 'workforce', 'personas')
+    );
+    assert.equal(inputValues.CREATE_MODE, 'local');
+  } finally {
+    process.chdir(prevCwd);
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test('parseCreateArgs: --save-default persists create target in source config', () => {
+  const root = mkdtempSync(join(tmpdir(), 'aw-create-default-'));
+  const workforceHome = join(root, 'home', '.agentworkforce', 'workforce');
+  const prev = process.env.AGENT_WORKFORCE_HOME;
+  process.env.AGENT_WORKFORCE_HOME = workforceHome;
+  try {
+    parseCreateArgs(['--to', 'user', '--save-default']);
+    const parsed = JSON.parse(readFileSync(join(workforceHome, 'config.json'), 'utf8'));
+    assert.equal(parsed.defaultCreateTarget, 'user');
+  } finally {
+    if (prev === undefined) delete process.env.AGENT_WORKFORCE_HOME;
+    else process.env.AGENT_WORKFORCE_HOME = prev;
+    rmSync(root, { recursive: true, force: true });
+  }
 });
 
 test('decideCleanMode: claude defaults to mount (parity with opencode)', () => {

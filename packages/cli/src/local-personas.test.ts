@@ -280,6 +280,21 @@ test('AGENT_WORKFORCE_CONFIG_DIR does not bypass configured source dirs', () => 
   });
 });
 
+test('source config reads defaultCreateTarget', () => {
+  withLayers(({ home, homeDir }) => {
+    const workforceHomeDir = join(home, '.agentworkforce', 'workforce');
+    const configPath = join(workforceHomeDir, 'config.json');
+    writeJson(configPath, {
+      personaDirs: [homeDir],
+      defaultCreateTarget: 'user'
+    });
+
+    const loaded = loadPersonaSourceConfig({ workforceHomeDir });
+    assert.equal(loaded.defaultCreateTarget, 'user');
+    assert.deepEqual(loaded.personaDirs, [homeDir]);
+  });
+});
+
 test('returns empty result when neither layer exists', () => {
   const loaded = loadLocalPersonas({
     cwd: '/tmp/agentworkforce-nonexistent-pwd-zzz',
@@ -332,6 +347,34 @@ test('permissions allow list dedupes across layers', () => {
     const loaded = loadLocalPersonas({ cwd, homeDir });
     const spec = loaded.byId.get('ph');
     assert.deepEqual(spec?.permissions?.allow, ['mcp__posthog']);
+  });
+});
+
+test('inputs merge across local persona layers', () => {
+  withLayers(({ cwd, homeDir, pwdDir }) => {
+    writeJson(join(homeDir, 'maker-base.json'), {
+      id: 'maker-base',
+      extends: 'persona-maker',
+      inputs: {
+        TARGET_DIR: {
+          default: '/tmp/user-personas'
+        }
+      }
+    });
+    writeJson(join(pwdDir, 'maker-project.json'), {
+      id: 'maker-project',
+      extends: 'maker-base',
+      inputs: {
+        CREATE_MODE: {
+          default: 'local'
+        }
+      }
+    });
+    const loaded = loadLocalPersonas({ cwd, homeDir });
+    assert.deepEqual(loaded.warnings, []);
+    const spec = loaded.byId.get('maker-project');
+    assert.equal(spec?.inputs?.TARGET_DIR.default, '/tmp/user-personas');
+    assert.equal(spec?.inputs?.CREATE_MODE.default, 'local');
   });
 });
 
