@@ -11,6 +11,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - `--version`/`-v` now prints the CLI package version.
 
+## [0.7.0] - 2026-05-07
+
+### Added
+
+- **Add persona pack install command**
+
+### Fixed
+
+- Disable scripts during persona package pack
+- Add agentworkforce version flag
+- Address persona install review feedback
+- Expand Windows home persona install paths
+
 ## [0.6.0] - 2026-05-06
 
 ### Added

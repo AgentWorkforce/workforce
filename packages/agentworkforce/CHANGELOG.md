@@ -11,6 +11,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - `agentworkforce --version` now prints the installed package version.
 
+## [0.7.0] - 2026-05-07
+
+### Fixed
+
+- Add agentworkforce version flag
+
 ## [0.6.0] - 2026-05-06
 
 ### Added

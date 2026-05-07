@@ -1,6 +1,6 @@
 {
   "name": "@agentworkforce/workload-router",
-  "version": "0.6.1",
+  "version": "0.7.0",
   "private": false,
   "type": "module",
   "main": "dist/index.js",
