@@ -17,6 +17,14 @@ export {
 } from './mcp.js';
 
 export {
+  MissingPersonaInputError,
+  renderPersonaInputs,
+  resolvePersonaInputs,
+  type PersonaInputResolution,
+  type PersonaInputValues
+} from './inputs.js';
+
+export {
   buildInteractiveSpec,
   type BuildInteractiveSpecInput,
   type InteractiveConfigFile,

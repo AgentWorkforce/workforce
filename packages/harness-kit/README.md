@@ -98,6 +98,12 @@ if (result.status !== 'completed') {
 console.log(result.output);
 ```
 
+If the selected persona declares `inputs`, `sendMessage(..., { inputs })`
+resolves those values before spawn, substitutes `$NAME` / `${NAME}` in the
+system prompt, and injects the resolved values into the child process env.
+Resolution uses explicit `inputs`, then `process.env[spec.env ?? NAME]`, then
+`default`, and throws when a required input is still unset.
+
 The runner maps harnesses to their non-interactive command shapes:
 `claude --print`, `codex exec`, and `opencode run`. It writes generated
 config files such as `opencode.json` only for the duration of the child
@@ -152,9 +158,44 @@ The CLI uses the lenient path; it drops missing env entries and unset MCP
 headers with a warning, and only aborts if a *structural* field (`url`,
 `command`, any `arg`) can't be resolved.
 
+## Persona input rendering
+
+Persona inputs are distinct from env references. Inputs are prompt-visible
+runtime values declared on a persona, such as `TARGET_DIR`, `PACKAGE_NAME`, or
+`CREATE_MODE`. Use them for non-secret launch context, not API keys.
+
+```ts
+import { renderPersonaInputs, resolvePersonaInputs } from '@agentworkforce/harness-kit';
+
+const { values } = resolvePersonaInputs(
+  {
+    TARGET_DIR: { env: 'MY_TARGET_DIR', default: './out' },
+    CREATE_MODE: { default: 'local' }
+  },
+  { TARGET_DIR: '/tmp/personas' },
+  process.env
+);
+
+const systemPrompt = renderPersonaInputs(
+  'Write to $TARGET_DIR using ${CREATE_MODE} mode.',
+  values
+);
+```
+
+`resolvePersonaInputs` fails hard for missing required inputs. That is
+intentional: unlike secret env refs, an input is usually structural context the
+persona needs to follow its contract.
+
 ## API surface
 
 ```ts
+// Persona inputs
+export class MissingPersonaInputError extends Error { input: string; env: string }
+export function resolvePersonaInputs(inputs, provided, processEnv): PersonaInputResolution
+export function renderPersonaInputs(systemPrompt, values): string
+export interface PersonaInputResolution { values: Record<string,string> }
+export type PersonaInputValues = Record<string, string | number | boolean | null | undefined>
+
 // Env refs
 export class MissingEnvRefError extends Error { ref: string; referencedBy: string }
 export function makeEnvRefResolver(env): (value, field) => string

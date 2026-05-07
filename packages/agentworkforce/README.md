@@ -9,6 +9,7 @@ npm i -g agentworkforce
 Then:
 
 ```sh
+agentworkforce create [--to <target>] [--save-default]
 agentworkforce agent <persona>[@<tier>]
 agentworkforce list [flags]
 agentworkforce show <persona>

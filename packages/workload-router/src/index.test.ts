@@ -197,6 +197,19 @@ test('resolvePersonaByTier also propagates mcpServers / permissions', () => {
   assert.ok(selection.permissions, 'permissions should flow through tier override resolver');
 });
 
+test('resolvePersonaByTier propagates persona input declarations', () => {
+  const selection = resolvePersonaByTier('persona-authoring', 'best');
+  assert.equal(selection.inputs?.TARGET_DIR?.default, 'personas');
+  assert.equal(
+    selection.inputs?.CREATE_MODE?.default,
+    'built-in'
+  );
+  assert.match(
+    selection.runtime.systemPrompt,
+    /\$TARGET_DIR\/<id>\.json/
+  );
+});
+
 test('personas with no optional fields keep them undefined on the selection', () => {
   // code-reviewer has no env/mcpServers/permissions in its JSON.
   const selection = resolvePersona('review');

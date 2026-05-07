@@ -7,6 +7,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- Add persona input resolution/rendering helpers and resolve declared inputs
+  before non-interactive runner launches.
+
 ## [0.6.1] - 2026-05-06
 
 ### Fixed

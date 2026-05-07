@@ -124,6 +124,53 @@ process.stdout.write(JSON.stringify(payload));
   }
 });
 
+test('useRunnableSelection resolves declared persona inputs into the system prompt and env', async () => {
+  const dir = mkdtempSync(join(tmpdir(), 'aw-runner-inputs-'));
+  try {
+    const harness = writeHarness(
+      dir,
+      `#!/usr/bin/env node
+const payload = {
+  prompt: process.argv.at(-1),
+  envValue: process.env.TARGET_DIR
+};
+process.stdout.write(JSON.stringify(payload));
+`
+    );
+    const context = useRunnableSelection(
+      fakeSelection({
+        inputs: {
+          TARGET_DIR: {
+            default: '/default/personas'
+          }
+        },
+        runtime: {
+          harness: 'codex',
+          model: 'openai-codex/gpt-5.3-codex',
+          systemPrompt: 'Write to $TARGET_DIR/<id>.json',
+          harnessSettings: {
+            reasoning: 'high',
+            timeoutSeconds: 30
+          }
+        }
+      }),
+      { commandOverrides: { codex: harness } }
+    );
+
+    const result = await context.sendMessage('task', {
+      workingDirectory: dir,
+      inputs: { TARGET_DIR: '/explicit/personas' }
+    });
+
+    assert.equal(result.status, 'completed');
+    const payload = JSON.parse(result.output);
+    assert.match(payload.prompt, /Write to \/explicit\/personas\/<id>\.json/);
+    assert.equal(payload.envValue, '/explicit/personas');
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
 test('useRunnableSelection reports non-zero harness exits as failed', async () => {
   const dir = mkdtempSync(join(tmpdir(), 'aw-runner-fail-'));
   try {
@@ -192,12 +239,12 @@ setInterval(() => {}, 1000);
     });
     const result = await context.sendMessage('task', {
       workingDirectory: dir,
-      timeoutSeconds: 0.2
+      timeoutSeconds: 1
     });
 
     assert.equal(result.status, 'timeout');
     assert.equal(result.exitCode, null);
-    assert.ok(result.durationMs >= 1_000, 'expected timeout to wait for the forced kill grace period');
+    assert.ok(result.durationMs >= 1_800, 'expected timeout to wait for the forced kill grace period');
   } finally {
     rmSync(dir, { recursive: true, force: true });
   }
