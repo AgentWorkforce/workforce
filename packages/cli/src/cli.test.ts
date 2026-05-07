@@ -2,6 +2,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 
 import {
+  CLI_VERSION,
   CLEAN_IGNORED_PATTERNS,
   SKILL_INSTALL_IGNORED_PATTERNS,
   assertSafeRelativePath,
@@ -313,6 +314,13 @@ test('main: extra positional after the persona selector is rejected', async () =
   ]);
   assert.match(stderr, /unexpected argument "hello"/);
   assert.equal(exitCode, 1);
+});
+
+test('main: --version prints the package version', async () => {
+  const { stderr, stdout, exitCode } = await runCliCapturingStderr(['--version']);
+  assert.equal(exitCode, 0);
+  assert.equal(stderr, '');
+  assert.equal(stdout, `${CLI_VERSION}\n`);
 });
 
 test('main: sources add/list/remove manages persona source dirs', async () => {

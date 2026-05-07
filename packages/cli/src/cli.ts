@@ -1,7 +1,15 @@
 #!/usr/bin/env node
 import { spawn, spawnSync } from 'node:child_process';
 import { randomBytes } from 'node:crypto';
-import { appendFileSync, existsSync, mkdirSync, rmSync, statSync, writeFileSync } from 'node:fs';
+import {
+  appendFileSync,
+  existsSync,
+  mkdirSync,
+  readFileSync,
+  rmSync,
+  statSync,
+  writeFileSync
+} from 'node:fs';
 import { constants, homedir } from 'node:os';
 import { dirname, isAbsolute, join, resolve as resolvePath } from 'node:path';
 import { pathToFileURL } from 'node:url';
@@ -96,6 +104,10 @@ Commands:
   harness check       Probe which harnesses (claude, codex, opencode) are
                       installed and runnable on this machine.
 
+Options:
+  -h, --help          Show this help text.
+  -v, --version       Print the agentworkforce version.
+
 Local personas cascade: <cwd>/.agentworkforce/workforce/personas/*.json → configured persona dirs → repo library.
 Each layer only needs to specify fields it overrides; everything else inherits
 from the next lower layer. "extends" explicitly names a base; omit it and the
@@ -118,6 +130,18 @@ function die(msg: string, withUsage = true): never {
   if (withUsage) process.stderr.write(`\n${USAGE}`);
   process.exit(1);
 }
+
+function readPackageVersion(): string {
+  const pkg = JSON.parse(
+    readFileSync(new URL('../package.json', import.meta.url), 'utf8')
+  ) as { version?: unknown };
+  if (typeof pkg.version !== 'string' || !pkg.version) {
+    throw new Error('Could not read @agentworkforce/cli package version.');
+  }
+  return pkg.version;
+}
+
+export const CLI_VERSION = readPackageVersion();
 
 const local = loadLocalPersonas();
 for (const warning of local.warnings) {
@@ -1502,6 +1526,11 @@ export async function main(): Promise<void> {
   if (!subcommand || subcommand === '-h' || subcommand === '--help') {
     process.stdout.write(USAGE);
     process.exit(subcommand ? 0 : 1);
+  }
+
+  if (subcommand === '-v' || subcommand === '--version') {
+    process.stdout.write(`${CLI_VERSION}\n`);
+    process.exit(0);
   }
 
   if (subcommand === 'list') {

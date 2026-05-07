@@ -11,6 +11,7 @@ agentworkforce list [flags]
 agentworkforce show <persona>[@<tier>]
 agentworkforce sources <list|add|remove>
 agentworkforce harness check
+agentworkforce --version
 ```
 
 - `agent` — drops you into an interactive session with the harness.
@@ -20,6 +21,7 @@ agentworkforce harness check
 - `sources` — list, add, or remove persona source directories.
 - `harness check` — probe which harnesses (`claude`, `codex`, `opencode`)
   are installed. See [`## Harness check`](#harness-check) below.
+- `--version` — print the installed package version.
 
 ## Install
 
