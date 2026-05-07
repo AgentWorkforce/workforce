@@ -18,7 +18,7 @@
     "dev": "chmod +x bin/agentworkforce.js",
     "typecheck": "node --check bin/agentworkforce.js",
     "lint": "node --check bin/agentworkforce.js",
-    "test": "node --check bin/agentworkforce.js"
+    "test": "node --check bin/agentworkforce.js && node --test test/*.test.js"
   },
   "engines": {
     "node": ">=22"

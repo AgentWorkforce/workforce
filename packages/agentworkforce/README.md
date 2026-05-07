@@ -14,6 +14,7 @@ agentworkforce list [flags]
 agentworkforce show <persona>
 agentworkforce sources <list|add|remove>
 agentworkforce harness check
+agentworkforce --version
 ```
 
 This package is a thin wrapper around [`@agentworkforce/cli`](https://www.npmjs.com/package/@agentworkforce/cli).

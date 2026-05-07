@@ -58,6 +58,7 @@ agentworkforce agent <persona>[@<tier>]
 agentworkforce list [flags]
 agentworkforce sources <list|add|remove>
 agentworkforce harness check
+agentworkforce --version
 ```
 
 - `agent` — drops you into an interactive harness session for the persona.

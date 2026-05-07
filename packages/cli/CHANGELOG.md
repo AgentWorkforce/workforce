@@ -7,6 +7,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- `--version`/`-v` now prints the CLI package version.
+
 ## [0.6.0] - 2026-05-06
 
 ### Added
@@ -60,4 +64,3 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - Safe-path validation on persona `configFiles` materialization — rejects empty, absolute, and `..`-traversal paths so a malformed persona can't escape the mount (#23)
 - Exhaustiveness guard in `buildInteractiveSpec` so future `Harness` union additions fail at compile time rather than silently at runtime (#23)
-
