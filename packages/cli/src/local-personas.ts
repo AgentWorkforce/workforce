@@ -279,6 +279,9 @@ function parseOverride(value: unknown, context: string): LocalPersonaOverride {
   if (raw.extends !== undefined && (typeof raw.extends !== 'string' || !raw.extends.trim())) {
     throw new Error(`${context}.extends must be a non-empty string if provided`);
   }
+  if (raw.extends !== undefined && raw.intent !== undefined) {
+    throw new Error(`${context}.intent cannot be combined with .extends; omit extends for standalone personas`);
+  }
   if (raw.intent !== undefined && !PERSONA_INTENTS.includes(raw.intent as PersonaIntent)) {
     throw new Error(`${context}.intent must be one of: ${PERSONA_INTENTS.join(', ')}`);
   }

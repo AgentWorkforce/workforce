@@ -5,7 +5,12 @@ import { homedir, tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
 
 import { loadLocalPersonas } from './local-personas.js';
-import { expandHomePath, installPersonas, isLocalInstallSource } from './persona-install.js';
+import {
+  expandHomePath,
+  installPersonas,
+  isLocalInstallSource,
+  npmExecutable
+} from './persona-install.js';
 
 function withTemp<T>(fn: (root: string) => T): T {
   const root = mkdtempSync(join(tmpdir(), 'aw-persona-install-'));
@@ -52,7 +57,35 @@ test('isLocalInstallSource: npm package specs with versions are not treated as p
   assert.equal(isLocalInstallSource('./local-personas'), true);
   assert.equal(isLocalInstallSource('/tmp/local-personas'), true);
   assert.equal(isLocalInstallSource('~\\local-personas'), true);
+  assert.equal(isLocalInstallSource('C:\\packs\\personas'), true);
+  assert.equal(isLocalInstallSource('\\\\server\\share\\personas'), true);
   assert.equal(expandHomePath('~\\local-personas'), join(homedir(), 'local-personas'));
+});
+
+test('npmExecutable: uses the Windows npm shim when shell is false', () => {
+  assert.equal(npmExecutable('win32'), 'npm.cmd');
+  assert.equal(npmExecutable('darwin'), 'npm');
+});
+
+test('cleans npm temp directory when package resolution throws', () => {
+  withTemp((root) => {
+    let capturedTempDir: string | undefined;
+    assert.throws(
+      () =>
+        installPersonas({
+          source: '@example/personas',
+          cwd: join(root, 'project'),
+          resolveNpmPackage: (_spec, tempDir) => {
+            capturedTempDir = tempDir;
+            assert.ok(existsSync(tempDir));
+            throw new Error('resolver failed');
+          }
+        }),
+      /resolver failed/
+    );
+    assert.ok(capturedTempDir);
+    assert.equal(existsSync(capturedTempDir), false);
+  });
 });
 
 test('installs multiple personas from a local fixture package', () => {

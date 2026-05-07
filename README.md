@@ -137,7 +137,7 @@ its persona directory with `package.json` metadata, or fall back to a top-level
 }
 ```
 
-```
+```text
 @acme/personas/
 ├── package.json
 └── personas/

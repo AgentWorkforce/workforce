@@ -67,12 +67,15 @@ export function projectPersonaInstallDir(cwd = process.cwd()): string {
 }
 
 export function isLocalInstallSource(source: string): boolean {
+  const trimmed = source.trim();
   return (
-    source.startsWith('.') ||
-    source.startsWith('/') ||
-    source.startsWith('~/') ||
-    source.startsWith('~\\') ||
-    source === '~'
+    trimmed.startsWith('.') ||
+    trimmed.startsWith('/') ||
+    trimmed.startsWith('~/') ||
+    trimmed.startsWith('~\\') ||
+    trimmed === '~' ||
+    /^[A-Za-z]:[\\/]/.test(trimmed) ||
+    trimmed.startsWith('\\\\')
   );
 }
 
@@ -276,6 +279,10 @@ function parseNpmPackStdout(stdout: string, packDir: string): string | undefined
   return isAbsolute(lastLine) ? lastLine : join(packDir, lastLine);
 }
 
+export function npmExecutable(platform = process.platform): string {
+  return platform === 'win32' ? 'npm.cmd' : 'npm';
+}
+
 function defaultResolveNpmPackage(spec: string, tempDir: string): string {
   const packDir = join(tempDir, 'pack');
   const unpackDir = join(tempDir, 'unpack');
@@ -283,7 +290,7 @@ function defaultResolveNpmPackage(spec: string, tempDir: string): string {
   mkdirSync(unpackDir, { recursive: true });
 
   const packed = spawnSync(
-    'npm',
+    npmExecutable(),
     ['pack', spec, '--pack-destination', packDir, '--json'],
     { encoding: 'utf8', shell: false }
   );
@@ -330,17 +337,17 @@ export function installPersonas(options: PersonaInstallOptions): PersonaInstallR
   const targetDir = projectPersonaInstallDir(cwd);
   let tempDir: string | undefined;
   let packageRoot: string;
-  if (isLocalInstallSource(source)) {
-    packageRoot = resolveLocalSource(source, cwd);
-    assertDirectory(packageRoot, 'install: local source');
-  } else {
-    tempDir = mkdtempSync(join(tmpdir(), 'agentworkforce-install-'));
-    const resolver = options.resolveNpmPackage ?? defaultResolveNpmPackage;
-    packageRoot = resolver(source, tempDir);
-    assertDirectory(packageRoot, 'install: npm package');
-  }
-
   try {
+    if (isLocalInstallSource(source)) {
+      packageRoot = resolveLocalSource(source, cwd);
+      assertDirectory(packageRoot, 'install: local source');
+    } else {
+      tempDir = mkdtempSync(join(tmpdir(), 'agentworkforce-install-'));
+      const resolver = options.resolveNpmPackage ?? defaultResolveNpmPackage;
+      packageRoot = resolver(source, tempDir);
+      assertDirectory(packageRoot, 'install: npm package');
+    }
+
     const personaDir = resolvePersonaDir(packageRoot);
     const personas = collectPersonas(personaDir, targetDir);
     const selected = resolveRequestedPersonas(personas, options.personaIds ?? []);

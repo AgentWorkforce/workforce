@@ -73,7 +73,7 @@ agentworkforce agent my-posthog@best
 
 ## Install persona packs
 
-```
+```text
 agentworkforce install <pkg|path> [--persona <id> ...] [--overwrite]
 ```
 
@@ -120,7 +120,7 @@ anything.
 
 Target filenames are flattened into the cwd persona directory:
 
-```
+```text
 package/personas/nested/code-reviewer.json
   -> .agentworkforce/workforce/personas/code-reviewer.json
 ```
