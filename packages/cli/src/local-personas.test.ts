@@ -378,6 +378,46 @@ test('inputs merge across local persona layers', () => {
   });
 });
 
+test('inputs are preserved on standalone local personas', () => {
+  withLayers(({ cwd, homeDir }) => {
+    writeJson(join(homeDir, 'standalone-reviewer.json'), {
+      id: 'standalone-reviewer',
+      intent: 'review',
+      tags: ['review'],
+      description: 'Reviews with a standalone local prompt.',
+      inputs: {
+        TARGET_DIR: {
+          default: '/tmp/reviews'
+        }
+      },
+      tiers: {
+        best: {
+          harness: 'codex',
+          model: 'openai-codex/gpt-5.3-codex',
+          systemPrompt: 'Write to $TARGET_DIR.',
+          harnessSettings: { reasoning: 'high', timeoutSeconds: 30 }
+        },
+        'best-value': {
+          harness: 'opencode',
+          model: 'opencode/gpt-5-nano',
+          systemPrompt: 'Write to $TARGET_DIR.',
+          harnessSettings: { reasoning: 'medium', timeoutSeconds: 30 }
+        },
+        minimum: {
+          harness: 'opencode',
+          model: 'opencode/minimax-m2.5-free',
+          systemPrompt: 'Write to $TARGET_DIR.',
+          harnessSettings: { reasoning: 'low', timeoutSeconds: 30 }
+        }
+      }
+    });
+    const loaded = loadLocalPersonas({ cwd, homeDir });
+    assert.deepEqual(loaded.warnings, []);
+    const spec = loaded.byId.get('standalone-reviewer');
+    assert.equal(spec?.inputs?.TARGET_DIR.default, '/tmp/reviews');
+  });
+});
+
 test('surfaces parse errors as per-file warnings without throwing', () => {
   withLayers(({ cwd, homeDir }) => {
     writeFileSync(join(homeDir, 'bad.json'), '{ not valid json');

@@ -578,6 +578,7 @@ function standaloneSpecFromOverride(
     );
   }
 
+  const inputs = override.inputs;
   const env = override.env;
   const mcpServers = override.mcpServers;
   const permissions = override.permissions;
@@ -593,6 +594,7 @@ function standaloneSpecFromOverride(
       `standalone persona "${override.id}".description`
     ),
     skills: override.skills ?? [],
+    ...(inputs ? { inputs } : {}),
     tiers,
     ...(env ? { env } : {}),
     ...(mcpServers ? { mcpServers } : {}),
