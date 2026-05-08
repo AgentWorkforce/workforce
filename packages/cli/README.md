@@ -786,14 +786,46 @@ mount rules (`.agentignore` / `.agentreadonly`) for that.
 - **Tool patterns** are passed through verbatim; use the harness's native
   grammar. For Claude Code: `Bash(<pattern>)`, `mcp__<server>` (all tools
   from that server), `mcp__<server>__<tool>` (specific tool).
-- **Harness support today:** only `claude` is wired (flags: `--allowedTools`,
-  `--disallowedTools`, `--permission-mode`). codex and opencode emit a
-  warning and fall back to their defaults when `permissions` is set.
+- **Harness support today:** only `claude` is wired for `permissions` (flags:
+  `--allowedTools`, `--disallowedTools`, `--permission-mode`). codex and
+  opencode emit a warning and fall back to their defaults when `permissions`
+  is set.
 - **Cascade merge:** `allow` and `deny` are unions across layers (deduped on
   merge); `mode` is replaced by the topmost layer that sets it. So the
   library can declare the minimum-viable allow list, a user or configured
   persona source can layer shared denies, and cwd can add per-project patterns
   — they all compose.
+
+## Codex Sandbox Settings
+
+Codex-backed tiers can set Codex launch policy inside `harnessSettings`:
+
+```jsonc
+{
+  "tiers": {
+    "best": {
+      "harness": "codex",
+      "model": "openai-codex/gpt-5.3-codex",
+      "systemPrompt": "…",
+      "harnessSettings": {
+        "reasoning": "high",
+        "timeoutSeconds": 1200,
+        "sandboxMode": "workspace-write",
+        "approvalPolicy": "on-request",
+        "workspaceWriteNetworkAccess": true,
+        "webSearch": true
+      }
+    }
+  }
+}
+```
+
+`sandboxMode` maps to Codex `--sandbox` (`read-only`, `workspace-write`, or
+`danger-full-access`), `approvalPolicy` maps to `--ask-for-approval`,
+`workspaceWriteNetworkAccess` maps to
+`-c sandbox_workspace_write.network_access=<bool>`, and `webSearch` maps to
+`--search`. Prefer `workspace-write` plus `workspaceWriteNetworkAccess` for
+package or registry discovery so filesystem writes stay sandboxed.
 
 ### Example: PostHog with auto-approve
 

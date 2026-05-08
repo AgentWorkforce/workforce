@@ -24,7 +24,8 @@ pnpm add @agentworkforce/harness-kit @agentworkforce/workload-router
 ### `buildInteractiveSpec(input)` — translate a persona to an interactive argv
 
 Takes the fields off a `PersonaSelection` (harness, model, systemPrompt,
-mcpServers, permissions) and returns `{bin, args, initialPrompt, warnings}`.
+harnessSettings, mcpServers, permissions) and returns
+`{bin, args, initialPrompt, warnings}`.
 Pure — no I/O, no stderr writes. Warnings are returned so your caller routes
 them wherever makes sense.
 
@@ -58,6 +59,7 @@ const spec = buildInteractiveSpec({
   personaId: selection.personaId,
   model: selection.runtime.model,
   systemPrompt: selection.runtime.systemPrompt,
+  harnessSettings: selection.runtime.harnessSettings,
   mcpServers: mcpResolution.servers,
   permissions: selection.permissions
 });
@@ -222,6 +224,7 @@ export interface BuildInteractiveSpecInput {
   personaId: string;
   model: string;
   systemPrompt: string;
+  harnessSettings?: HarnessSettings;
   mcpServers?: Record<string, McpServerSpec>;
   permissions?: PersonaPermissions;
 }

@@ -1,5 +1,6 @@
 import type {
   Harness,
+  HarnessSettings,
   McpServerSpec,
   PersonaPermissions
 } from '@agentworkforce/workload-router';
@@ -58,6 +59,7 @@ export interface BuildInteractiveSpecInput {
   /** Env-resolved MCP servers (pass the output of `resolveMcpServersLenient().servers`). */
   mcpServers?: Record<string, McpServerSpec>;
   permissions?: PersonaPermissions;
+  harnessSettings?: HarnessSettings;
   /**
    * Absolute paths of directories to load as Claude Code plugins for this
    * session (`--plugin-dir <path>` per entry). Used to wire in out-of-repo
@@ -76,6 +78,16 @@ function stripProviderPrefix(model: string): string {
 function hasAnyPermission(p: PersonaPermissions | undefined): boolean {
   if (!p) return false;
   return Boolean(p.allow?.length || p.deny?.length || p.mode);
+}
+
+function hasCodexLaunchSettings(settings: HarnessSettings | undefined): boolean {
+  if (!settings) return false;
+  return Boolean(
+    settings.sandboxMode ||
+      settings.approvalPolicy ||
+      settings.workspaceWriteNetworkAccess !== undefined ||
+      settings.webSearch
+  );
 }
 
 /**
@@ -107,7 +119,16 @@ function hasAnyPermission(p: PersonaPermissions | undefined): boolean {
  * harnesses yet.
  */
 export function buildInteractiveSpec(input: BuildInteractiveSpecInput): InteractiveSpec {
-  const { harness, personaId, model, systemPrompt, mcpServers, permissions, pluginDirs } = input;
+  const {
+    harness,
+    personaId,
+    model,
+    systemPrompt,
+    mcpServers,
+    permissions,
+    harnessSettings,
+    pluginDirs
+  } = input;
   const warnings: string[] = [];
   const hasPluginDirs = pluginDirs !== undefined && pluginDirs.length > 0;
 
@@ -142,6 +163,11 @@ export function buildInteractiveSpec(input: BuildInteractiveSpecInput): Interact
       if (permissions?.mode) {
         args.push('--permission-mode', permissions.mode);
       }
+      if (hasCodexLaunchSettings(harnessSettings)) {
+        warnings.push(
+          'persona declares codex-only harnessSettings but the claude harness ignores sandboxMode, approvalPolicy, workspaceWriteNetworkAccess, and webSearch.'
+        );
+      }
       return { bin: 'claude', args, initialPrompt: null, warnings, configFiles: [] };
     }
     case 'codex': {
@@ -160,9 +186,27 @@ export function buildInteractiveSpec(input: BuildInteractiveSpecInput): Interact
           'pluginDirs is currently claude-only; ignoring under the codex harness. Skills must be staged via codex conventions.'
         );
       }
+      const args = ['-m', stripProviderPrefix(model)];
+      if (harnessSettings?.sandboxMode) {
+        args.push('--sandbox', harnessSettings.sandboxMode);
+      }
+      if (harnessSettings?.approvalPolicy) {
+        args.push('--ask-for-approval', harnessSettings.approvalPolicy);
+      }
+      if (harnessSettings?.workspaceWriteNetworkAccess !== undefined) {
+        args.push(
+          '-c',
+          `sandbox_workspace_write.network_access=${String(
+            harnessSettings.workspaceWriteNetworkAccess
+          )}`
+        );
+      }
+      if (harnessSettings?.webSearch) {
+        args.push('--search');
+      }
       return {
         bin: 'codex',
-        args: ['-m', stripProviderPrefix(model)],
+        args,
         initialPrompt: systemPrompt,
         warnings,
         configFiles: []
@@ -182,6 +226,11 @@ export function buildInteractiveSpec(input: BuildInteractiveSpecInput): Interact
       if (hasPluginDirs) {
         warnings.push(
           'pluginDirs is currently claude-only; ignoring under the opencode harness. Skills must be staged via opencode conventions.'
+        );
+      }
+      if (hasCodexLaunchSettings(harnessSettings)) {
+        warnings.push(
+          'persona declares codex-only harnessSettings but the opencode harness ignores sandboxMode, approvalPolicy, workspaceWriteNetworkAccess, and webSearch.'
         );
       }
       // opencode resolves a persona's system prompt + model through its own

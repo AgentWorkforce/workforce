@@ -156,6 +156,7 @@ export function makeRunnablePersonaContext(
           context.selection.runtime.systemPrompt,
           inputResolution.values
         ),
+        harnessSettings: context.selection.runtime.harnessSettings,
         mcpServers: mcpResolution.servers,
         permissions: context.selection.permissions,
         task: withInputs(task, sendOptions.inputs),

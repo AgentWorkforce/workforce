@@ -929,6 +929,7 @@ async function runInteractive(
     personaId,
     model: runtime.model,
     systemPrompt: runtime.systemPrompt,
+    harnessSettings: runtime.harnessSettings,
     mcpServers: resolvedMcp,
     permissions: effectiveSelection.permissions,
     ...(installRoot !== undefined ? { pluginDirs: [installRoot] } : {})
@@ -1971,6 +1972,18 @@ function formatPersonaShow(
     lines.push(`  model:    ${rt.model}`);
     lines.push(`  reasoning: ${rt.harnessSettings.reasoning}`);
     lines.push(`  timeout:  ${rt.harnessSettings.timeoutSeconds}s`);
+    if (rt.harnessSettings.sandboxMode) {
+      lines.push(`  sandbox:  ${rt.harnessSettings.sandboxMode}`);
+    }
+    if (rt.harnessSettings.approvalPolicy) {
+      lines.push(`  approvals: ${rt.harnessSettings.approvalPolicy}`);
+    }
+    if (rt.harnessSettings.workspaceWriteNetworkAccess !== undefined) {
+      lines.push(`  network:  ${rt.harnessSettings.workspaceWriteNetworkAccess}`);
+    }
+    if (rt.harnessSettings.webSearch !== undefined) {
+      lines.push(`  webSearch: ${rt.harnessSettings.webSearch}`);
+    }
     lines.push('  systemPrompt:');
     lines.push(indent(rt.systemPrompt, '    '));
   }

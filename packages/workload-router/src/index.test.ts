@@ -214,6 +214,9 @@ test('resolvePersonaByTier propagates persona input declarations', () => {
     selection.agentsMdContent ?? '',
     /\$TARGET_DIR\/<id>\.json/
   );
+  assert.equal(selection.runtime.harnessSettings.sandboxMode, 'workspace-write');
+  assert.equal(selection.runtime.harnessSettings.approvalPolicy, 'on-request');
+  assert.equal(selection.runtime.harnessSettings.workspaceWriteNetworkAccess, true);
   assert.match(
     selection.agentsMdContent ?? '',
     /Do not request network escalation only to complete this fallback/
