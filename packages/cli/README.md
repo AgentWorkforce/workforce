@@ -6,8 +6,8 @@ built-in one from `/personas/`, or an installed/local one that extends a lower
 source.
 
 ```
-agentworkforce create [--to <target>] [--save-default]
-agentworkforce agent <persona>[@<tier>]
+agentworkforce create [--to <target>] [--save-default] [--install-in-repo] [--no-launch-metadata]
+agentworkforce agent [--install-in-repo] [--no-launch-metadata] <persona>[@<tier>]
 agentworkforce list [flags]
 agentworkforce show <persona>[@<tier>]
 agentworkforce install [flags] <pkg|path>
@@ -68,7 +68,7 @@ Unknown persona prints the full catalog with each entry's origin.
 ## Create
 
 ```
-agentworkforce create [--to <target>] [--save-default] [--install-in-repo]
+agentworkforce create [--to <target>] [--save-default] [--install-in-repo] [--no-launch-metadata]
 ```
 
 `create` is the persona-authoring entry point. It runs `persona-maker@best`
@@ -860,7 +860,7 @@ persona session, add it to the persona's `mcpServers` block.
 ## Interactive
 
 ```sh
-agentworkforce agent [--install-in-repo] <persona>[@<tier>]
+agentworkforce agent [--install-in-repo] [--no-launch-metadata] <persona>[@<tier>]
 ```
 
 By default, claude and opencode sessions run inside a sandbox mount — see
@@ -887,9 +887,33 @@ By default, claude and opencode sessions run inside a sandbox mount — see
      initial argument.
 5. Runs the skill cleanup command on exit, regardless of exit status. In
    stage-dir mode this is a single `rm -rf <stage-dir>`.
-6. Propagates the harness's exit code.
+6. Records launch metadata for the session and refreshes harness session logs
+   while the child runs, then once more after exit. The harness is still
+   launched directly.
+7. Propagates the harness's exit code.
 
 Signals (SIGINT, SIGTERM) are forwarded to the child.
+
+### Launch Metadata
+
+Persona launches record metadata by default when the installed backend supports
+launcher metadata. AgentWorkforce records:
+`agentworkforce=1`, `persona=<id>`, `personaTier=<tier>`,
+`personaVersion=<sha256>`, and `personaSource=<cwd|user|dir:n|library>`.
+`personaVersion` is the SHA-256 of the fully resolved persona spec after
+cascade/extends merge and before prompt input substitution.
+
+Opt out for one launch:
+
+```sh
+agentworkforce agent --no-launch-metadata code-reviewer@best
+```
+
+Opt out through the environment:
+
+```sh
+AGENTWORKFORCE_LAUNCH_METADATA=0 agentworkforce agent code-reviewer@best
+```
 
 ## Skill staging
 

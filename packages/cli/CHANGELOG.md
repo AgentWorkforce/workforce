@@ -9,6 +9,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- `agentworkforce agent` now records launch metadata for direct harness
+  launches; opt out with `--no-launch-metadata` or
+  `AGENTWORKFORCE_LAUNCH_METADATA=0`.
 - `agentworkforce create` now opens `persona-maker@best`, supports `--to` and
   `--save-default`, and passes `TARGET_DIR` / `CREATE_MODE` persona inputs.
 - Persona source config supports `defaultCreateTarget` for the implicit create target.
