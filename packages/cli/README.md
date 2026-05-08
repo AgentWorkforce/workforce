@@ -6,8 +6,8 @@ built-in one from `/personas/`, or an installed/local one that extends a lower
 source.
 
 ```
-agentworkforce create [--to <target>] [--save-default]
-agentworkforce agent <persona>[@<tier>]
+agentworkforce create [--to <target>] [--save-default] [--install-in-repo] [--no-burn]
+agentworkforce agent [--install-in-repo] [--no-burn] <persona>[@<tier>]
 agentworkforce list [flags]
 agentworkforce show <persona>[@<tier>]
 agentworkforce install [flags] <pkg|path>
@@ -68,7 +68,7 @@ Unknown persona prints the full catalog with each entry's origin.
 ## Create
 
 ```
-agentworkforce create [--to <target>] [--save-default] [--install-in-repo]
+agentworkforce create [--to <target>] [--save-default] [--install-in-repo] [--no-burn]
 ```
 
 `create` is the persona-authoring entry point. It runs `persona-maker@best`
@@ -860,7 +860,7 @@ persona session, add it to the persona's `mcpServers` block.
 ## Interactive
 
 ```sh
-agentworkforce agent [--install-in-repo] <persona>[@<tier>]
+agentworkforce agent [--install-in-repo] [--no-burn] <persona>[@<tier>]
 ```
 
 By default, claude and opencode sessions run inside a sandbox mount — see
@@ -887,9 +887,43 @@ By default, claude and opencode sessions run inside a sandbox mount — see
      initial argument.
 5. Runs the skill cleanup command on exit, regardless of exit status. In
    stage-dir mode this is a single `rm -rf <stage-dir>`.
-6. Propagates the harness's exit code.
+6. Writes generic Burn attribution tags through `@relayburn/sdk`, ingests
+   harness session logs while the child runs, and runs a final ingest after
+   exit. The harness is still launched directly; AgentWorkforce does not call
+   `burn run`.
+7. Propagates the harness's exit code.
 
 Signals (SIGINT, SIGTERM) are forwarded to the child.
+
+### Burn attribution
+
+Persona launches are attributed by default when the installed `@relayburn/sdk`
+supports launcher tagging. AgentWorkforce stamps generic enrichment tags:
+`agentworkforce=1`, `persona=<id>`, `personaTier=<tier>`,
+`personaVersion=<sha256>`, and `personaSource=<cwd|user|dir:n|library>`.
+`personaVersion` is the SHA-256 of the fully resolved persona spec after
+cascade/extends merge and before prompt input substitution.
+
+Opt out for one launch:
+
+```sh
+agentworkforce agent --no-burn code-reviewer@best
+```
+
+Opt out through the environment:
+
+```sh
+AGENTWORKFORCE_BURN=0 agentworkforce agent code-reviewer@best
+```
+
+After Burn's generic tag summary support is available, query the ledger with
+tag filters rather than persona-specific Burn commands:
+
+```sh
+burn summary --tag persona=code-reviewer
+burn summary --group-by-tag persona
+burn summary --tag agentworkforce=1 --group-by-tag personaTier
+```
 
 ## Skill staging
 

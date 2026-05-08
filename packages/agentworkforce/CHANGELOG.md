@@ -9,6 +9,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- `agentworkforce agent` now records default Burn attribution tags through
+  the CLI package; opt out with `--no-burn` or `AGENTWORKFORCE_BURN=0`.
 - `agentworkforce create` now opens `persona-maker@best`, supports target
   selection, and passes `TARGET_DIR` / `CREATE_MODE` persona inputs.
 - `agentworkforce --version` now prints the installed package version.

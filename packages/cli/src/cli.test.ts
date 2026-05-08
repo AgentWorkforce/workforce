@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdtempSync, mkdirSync, rmSync, readFileSync, writeFileSync } from 'node:fs';
+import { chmodSync, mkdtempSync, mkdirSync, rmSync, readFileSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
@@ -75,6 +75,14 @@ function trapExit(): ExitTrap {
 test('parseAgentArgs: --install-in-repo sets flag and preserves positional selector', () => {
   const { flags, positional } = parseAgentArgs(['--install-in-repo', 'posthog@best']);
   assert.equal(flags.installInRepo, true);
+  assert.equal(flags.noBurn, false);
+  assert.deepEqual(positional, ['posthog@best']);
+});
+
+test('parseAgentArgs: --no-burn sets flag and preserves positional selector', () => {
+  const { flags, positional } = parseAgentArgs(['--no-burn', 'posthog@best']);
+  assert.equal(flags.noBurn, true);
+  assert.equal(flags.installInRepo, false);
   assert.deepEqual(positional, ['posthog@best']);
 });
 
@@ -85,12 +93,14 @@ test('parseAgentArgs: preserves trailing positionals after the selector', () => 
     'extra-arg'
   ]);
   assert.equal(flags.installInRepo, true);
+  assert.equal(flags.noBurn, false);
   assert.deepEqual(positional, ['review@best-value', 'extra-arg']);
 });
 
 test('parseAgentArgs: no flags → installInRepo false', () => {
   const { flags, positional } = parseAgentArgs(['posthog']);
   assert.equal(flags.installInRepo, false);
+  assert.equal(flags.noBurn, false);
   assert.deepEqual(positional, ['posthog']);
 });
 
@@ -102,6 +112,7 @@ test('parseAgentArgs: -- stops flag parsing, positional args after are preserved
   ]);
   // --install-in-repo AFTER `--` is positional, not a flag.
   assert.equal(flags.installInRepo, false);
+  assert.equal(flags.noBurn, false);
   assert.deepEqual(positional, ['--install-in-repo', 'posthog']);
 });
 
@@ -128,9 +139,15 @@ test('parseCreateArgs: runs persona-maker and preserves agent flags', () => {
   const prev = process.env.AGENT_WORKFORCE_HOME;
   process.env.AGENT_WORKFORCE_HOME = join(root, 'home', '.agentworkforce', 'workforce');
   try {
-    const { flags, selector, inputValues } = parseCreateArgs(['--install-in-repo', '--to', 'user']);
+    const { flags, selector, inputValues } = parseCreateArgs([
+      '--install-in-repo',
+      '--no-burn',
+      '--to',
+      'user'
+    ]);
     assert.equal(selector, CREATE_SELECTOR);
     assert.equal(flags.installInRepo, true);
+    assert.equal(flags.noBurn, true);
     assert.equal(
       inputValues.TARGET_DIR,
       join(root, 'home', '.agentworkforce', 'workforce', 'personas')
@@ -415,8 +432,8 @@ async function runCliCapturingStderr(
       ...process.env,
       ...extraEnv,
       // Force any harness spawn to ENOENT so the run terminates quickly.
-      PATH: '/nonexistent-path-for-test',
-      POSTHOG_API_KEY: 'dummy'
+      PATH: extraEnv.PATH ?? '/nonexistent-path-for-test',
+      POSTHOG_API_KEY: extraEnv.POSTHOG_API_KEY ?? 'dummy'
     },
     stdio: ['ignore', 'pipe', 'pipe']
   });
@@ -722,4 +739,30 @@ test('main: codex sessions never engage the sandbox mount', async () => {
     !/sandbox mount →/.test(stderr),
     `expected the mount branch to be skipped; saw stderr:\n${stderr}`
   );
+});
+
+test('main: preserves the harness exit code', async () => {
+  const dir = mkdtempSync(join(tmpdir(), 'aw-cli-exit-code-'));
+  try {
+    const codex = join(dir, 'codex');
+    writeFileSync(
+      codex,
+      `#!/usr/bin/env node
+process.stderr.write('fake codex failed\\n');
+process.exit(7);
+`,
+      'utf8'
+    );
+    chmodSync(codex, 0o755);
+
+    const res = await runCliCapturingStderr(['agent', 'code-reviewer@best'], {
+      PATH: `${dir}:${process.env.PATH ?? ''}`,
+      AGENTWORKFORCE_BURN: '0'
+    });
+
+    assert.equal(res.exitCode, 7);
+    assert.match(res.stderr, /fake codex failed/);
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
 });

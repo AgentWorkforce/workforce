@@ -9,6 +9,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- `agentworkforce agent` now wraps direct harness launches with default Burn
+  attribution tags via `@relayburn/sdk`; opt out with `--no-burn` or
+  `AGENTWORKFORCE_BURN=0`.
 - `agentworkforce create` now opens `persona-maker@best`, supports `--to` and
   `--save-default`, and passes `TARGET_DIR` / `CREATE_MODE` persona inputs.
 - Persona source config supports `defaultCreateTarget` for the implicit create target.

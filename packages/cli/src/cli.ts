@@ -45,6 +45,7 @@ import {
 } from '@agentworkforce/harness-kit';
 import { launchOnMount, readAgentDotfiles } from '@relayfile/local-mount';
 import ora, { type Ora } from 'ora';
+import { startBurnAttribution, type BurnAttributionRun } from './burn-attribution.js';
 import {
   buildPersonaSourceDirectories,
   defaultCwdPersonaDir,
@@ -71,6 +72,7 @@ Commands:
                         --save-default      Persist --to as defaultCreateTarget in
                                             ~/.agentworkforce/workforce/config.json.
                         --install-in-repo   Same behavior as agent.
+                        --no-burn           Same behavior as agent.
   agent [flags] <persona>[@<tier>]
                       Run a persona. Tier one of: ${PERSONA_TIERS.join(' | ')}
                       (default: best-value). Drops into an interactive harness
@@ -91,6 +93,9 @@ Commands:
                                             are hidden from the session. Codex
                                             sessions never mount and ignore
                                             this flag.
+                        --no-burn           Disable default Burn attribution
+                                            for this launch. Also disabled by
+                                            AGENTWORKFORCE_BURN=0.
   list [flags]        List available personas from the cascade (cwd →
                       configured persona dirs → library). By default shows
                       one row per persona at the recommended tier for its
@@ -184,8 +189,8 @@ for (const warning of local.warnings) {
 }
 
 type ResolvedTarget =
-  | { kind: 'repo'; spec: PersonaSpec; tier: PersonaTier }
-  | { kind: 'local'; spec: PersonaSpec; tier: PersonaTier };
+  | { kind: 'repo'; source: 'library'; spec: PersonaSpec; tier: PersonaTier }
+  | { kind: 'local'; source: PersonaSource; spec: PersonaSpec; tier: PersonaTier };
 
 function resolveSpec(key: string): ResolvedTarget['spec'] | { error: string } {
   const localSpec = local.byId.get(key);
@@ -218,7 +223,10 @@ function parseSelector(sel: string): ResolvedTarget {
   const result = resolveSpec(key);
   if ('error' in result) die(result.error, false);
   const kind = local.byId.has(key) ? 'local' : 'repo';
-  return { kind, spec: result, tier };
+  if (kind === 'local') {
+    return { kind, source: local.sources.get(result.id) ?? 'cwd', spec: result, tier };
+  }
+  return { kind, source: 'library', spec: result, tier };
 }
 
 /**
@@ -722,7 +730,12 @@ export function decideCleanMode(
 
 async function runInteractive(
   selection: PersonaSelection,
-  options: { installInRepo?: boolean } = {}
+  options: {
+    installInRepo?: boolean;
+    noBurn?: boolean;
+    personaSpec: PersonaSpec;
+    personaSource: PersonaSource;
+  }
 ): Promise<number> {
   const inputResolution = resolvePersonaInputs(
     selection.inputs,
@@ -784,6 +797,16 @@ async function runInteractive(
   );
   const { install } = ctx;
   process.stderr.write(`→ ${personaId} [${tier}] via ${runtime.harness} (${runtime.model})\n`);
+
+  const startBurnForLaunch = (cwd = process.cwd()) =>
+    startBurnAttribution({
+      selection: effectiveSelection,
+      personaSpec: options.personaSpec,
+      personaSource: options.personaSource,
+      cwd,
+      noBurn: options.noBurn,
+      env: process.env
+    });
 
   const inputEnv = inputResolution.values;
   const callerEnv = { ...process.env, ...inputEnv };
@@ -891,6 +914,7 @@ async function runInteractive(
   // copied in from the real repo nor synced back on exit.
   if (useClean && sessionRoot) {
     const mountDir = sessionMountDir(sessionRoot);
+    let burnAttribution: BurnAttributionRun | undefined;
     // Anything we materialize into the mount via onBeforeLaunch must be
     // hidden from the mount-mirror in both directions: without this, any
     // opencode.json already present in the real repo would be copied into
@@ -1011,7 +1035,7 @@ async function runInteractive(
             process.stderr.write(`✓ ${message}\n`);
           }
         },
-        onBeforeLaunch: (dir: string) => {
+        onBeforeLaunch: async (dir: string) => {
           // Run before install / configFile writes so the freshly written
           // files (e.g. `.opencode/`, `opencode.json`) aren't yet present
           // when we run `git ls-files` to pick skip-worktree candidates —
@@ -1034,6 +1058,7 @@ async function runInteractive(
             const body = buildSidecarBody(resolvedSidecar, process.cwd());
             writeFileSync(join(dir, resolvedSidecar.mountFile), body, 'utf8');
           }
+          burnAttribution = await startBurnForLaunch(dir);
         }
       });
       return result.exitCode;
@@ -1068,6 +1093,7 @@ async function runInteractive(
         syncSpinner.stop();
         syncSpinner = undefined;
       }
+      await burnAttribution?.stop();
       process.removeListener('SIGINT', forceExitHandler);
       // When the install ran inside the mount, its cleanup paths are
       // mount-relative (e.g. `.skills/<name>`, `skills/<name>`) and
@@ -1082,6 +1108,7 @@ async function runInteractive(
     }
   }
 
+  const burnAttribution = await startBurnForLaunch();
   return new Promise((resolve) => {
     let settled = false;
     const finish = (code: number) => {
@@ -1089,7 +1116,7 @@ async function runInteractive(
       settled = true;
       runCleanup(install.cleanupCommand, install.cleanupCommandString);
       removeSessionRoot(sessionRoot);
-      resolve(code);
+      void burnAttribution.stop().finally(() => resolve(code));
     };
 
     const child = spawn(spec.bin, finalArgs, {
@@ -1998,7 +2025,10 @@ async function runAgentSelector(
   };
 
   const code = await runInteractive(selection, {
-    installInRepo: flags.installInRepo
+    installInRepo: flags.installInRepo,
+    noBurn: flags.noBurn,
+    personaSpec: target.spec,
+    personaSource: target.source
   });
   process.exit(code);
 }
@@ -2068,6 +2098,7 @@ export async function main(): Promise<void> {
 
 export interface AgentFlags {
   installInRepo: boolean;
+  noBurn: boolean;
 }
 
 export interface CreateFlags extends AgentFlags {
@@ -2079,7 +2110,7 @@ export function parseAgentArgs(args: readonly string[]): {
   flags: AgentFlags;
   positional: string[];
 } {
-  const flags: AgentFlags = { installInRepo: false };
+  const flags: AgentFlags = { installInRepo: false, noBurn: false };
   const positional: string[] = [];
   let seenDoubleDash = false;
   for (const arg of args) {
@@ -2093,6 +2124,10 @@ export function parseAgentArgs(args: readonly string[]): {
     }
     if (arg === '--install-in-repo') {
       flags.installInRepo = true;
+      continue;
+    }
+    if (arg === '--no-burn') {
+      flags.noBurn = true;
       continue;
     }
     if (arg === '-h' || arg === '--help') {
@@ -2109,7 +2144,7 @@ export function parseCreateArgs(args: readonly string[]): {
   selector: string;
   inputValues: Record<string, string>;
 } {
-  const flags: CreateFlags = { installInRepo: false, saveDefault: false };
+  const flags: CreateFlags = { installInRepo: false, noBurn: false, saveDefault: false };
   let seenDoubleDash = false;
   const positional: string[] = [];
   const valueOf = (i: number, flag: string): string => {
@@ -2134,6 +2169,10 @@ export function parseCreateArgs(args: readonly string[]): {
       flags.installInRepo = true;
       continue;
     }
+    if (arg === '--no-burn') {
+      flags.noBurn = true;
+      continue;
+    }
     if (arg === '--to') {
       flags.to = valueOf(i, arg);
       i += 1;
@@ -2145,7 +2184,7 @@ export function parseCreateArgs(args: readonly string[]): {
     }
     if (arg === '-h' || arg === '--help') {
       process.stdout.write(
-        'Usage: agentworkforce create [--to <cwd|user|dir:n|library|path>] [--save-default] [--install-in-repo]\n'
+        'Usage: agentworkforce create [--to <cwd|user|dir:n|library|path>] [--save-default] [--install-in-repo] [--no-burn]\n'
       );
       process.exit(0);
     }
