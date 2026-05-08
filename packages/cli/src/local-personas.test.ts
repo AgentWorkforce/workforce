@@ -33,22 +33,21 @@ function writeJson(path: string, value: unknown): void {
   writeFileSync(path, JSON.stringify(value));
 }
 
-test('user layer extends library and merges env', () => {
+test('user layer extends internal library and merges env', () => {
   withLayers(({ cwd, homeDir }) => {
-    writeJson(join(homeDir, 'my-posthog.json'), {
-      id: 'my-posthog',
-      extends: 'posthog',
-      env: { POSTHOG_API_KEY: '$POSTHOG_API_KEY', EXTRA: 'literal' }
+    writeJson(join(homeDir, 'my-persona.json'), {
+      id: 'my-persona',
+      extends: 'persona-maker',
+      env: { API_TOKEN: '$API_TOKEN', EXTRA: 'literal' }
     });
     const loaded = loadLocalPersonas({ cwd, homeDir });
     assert.deepEqual(loaded.warnings, []);
-    const spec = loaded.byId.get('my-posthog');
+    const spec = loaded.byId.get('my-persona');
     assert.ok(spec);
-    assert.equal(loaded.sources.get('my-posthog'), 'user');
-    assert.equal(spec.intent, 'posthog');
-    assert.equal(spec.env?.POSTHOG_API_KEY, '$POSTHOG_API_KEY');
+    assert.equal(loaded.sources.get('my-persona'), 'user');
+    assert.equal(spec.intent, 'persona-authoring');
+    assert.equal(spec.env?.API_TOKEN, '$API_TOKEN');
     assert.equal(spec.env?.EXTRA, 'literal');
-    assert.ok(spec.mcpServers?.posthog);
   });
 });
 
@@ -56,12 +55,12 @@ test('cwd layer overrides user layer for the same id', () => {
   withLayers(({ cwd, homeDir, pwdDir }) => {
     writeJson(join(homeDir, 'ph.json'), {
       id: 'ph',
-      extends: 'posthog',
+      extends: 'persona-maker',
       env: { POSTHOG_API_KEY: 'home-value', FROM_HOME: 'yes' }
     });
     writeJson(join(pwdDir, 'ph.json'), {
       id: 'ph',
-      extends: 'posthog',
+      extends: 'persona-maker',
       env: { POSTHOG_API_KEY: 'pwd-value' }
     });
     const loaded = loadLocalPersonas({ cwd, homeDir });
@@ -69,26 +68,26 @@ test('cwd layer overrides user layer for the same id', () => {
     const spec = loaded.byId.get('ph');
     assert.equal(loaded.sources.get('ph'), 'cwd');
     // cwd's env wins; note user is NOT layered here (cwd overrides user as a whole,
-    // not merges). Base is library/posthog directly via cwd's own `extends`.
+    // not merges). Base is persona-maker directly via cwd's own `extends`.
     assert.equal(spec?.env?.POSTHOG_API_KEY, 'pwd-value');
     assert.equal(spec?.env?.FROM_HOME, undefined);
   });
 });
 
-test('implicit same-id extends: cwd file with id=posthog inherits from library posthog', () => {
+test('implicit same-id extends: cwd file with id=persona-maker inherits from library persona-maker', () => {
   withLayers(({ cwd, homeDir, pwdDir }) => {
-    writeJson(join(pwdDir, 'posthog.json'), {
-      id: 'posthog',
+    writeJson(join(pwdDir, 'persona-maker.json'), {
+      id: 'persona-maker',
       env: { POSTHOG_API_KEY: '$POSTHOG_API_KEY' }
     });
     const loaded = loadLocalPersonas({ cwd, homeDir });
     assert.deepEqual(loaded.warnings, []);
-    const spec = loaded.byId.get('posthog');
+    const spec = loaded.byId.get('persona-maker');
     assert.ok(spec);
-    assert.equal(loaded.sources.get('posthog'), 'cwd');
-    // Library fields still flow through (mcpServers, tiers, description).
-    assert.ok(spec.mcpServers?.posthog);
-    assert.equal(spec.tiers.best.harness, 'claude');
+    assert.equal(loaded.sources.get('persona-maker'), 'cwd');
+    // Library fields still flow through (tiers, description, inputs).
+    assert.equal(spec.tiers.best.harness, 'codex');
+    assert.equal(spec.inputs?.CREATE_MODE.default, 'local');
     assert.equal(spec.env?.POSTHOG_API_KEY, '$POSTHOG_API_KEY');
   });
 });
@@ -98,7 +97,7 @@ test('cascade chain: cwd extends user extends library', () => {
     // user defines a mid-layer override that adds a default env key.
     writeJson(join(homeDir, 'ph-base.json'), {
       id: 'ph-base',
-      extends: 'posthog',
+      extends: 'persona-maker',
       env: { DEFAULT_ORG: 'acme' }
     });
     // cwd extends the user persona (not the library directly).
@@ -114,8 +113,8 @@ test('cascade chain: cwd extends user extends library', () => {
     // Both env keys flow through the chain.
     assert.equal(prod.env?.DEFAULT_ORG, 'acme');
     assert.equal(prod.env?.POSTHOG_API_KEY, '$PROD_KEY');
-    // MCP from library is preserved.
-    assert.ok(prod.mcpServers?.posthog);
+    // Library inputs are preserved through the chain.
+    assert.equal(prod.inputs?.CREATE_MODE.default, 'local');
   });
 });
 
@@ -125,7 +124,7 @@ test('configured source directories cascade in configured order', () => {
     mkdirSync(extraDir, { recursive: true });
     writeJson(join(homeDir, 'ph.json'), {
       id: 'ph',
-      extends: 'posthog',
+      extends: 'persona-maker',
       env: { DEFAULT_ORG: 'acme', POSTHOG_API_KEY: 'user-key' }
     });
     writeJson(join(extraDir, 'ph.json'), {
@@ -160,7 +159,7 @@ test('cwd workforce config file is not scanned as a persona', () => {
     });
     writeJson(join(pwdDir, 'ph.json'), {
       id: 'ph',
-      extends: 'posthog'
+      extends: 'persona-maker'
     });
     const loaded = loadLocalPersonas({ cwd, homeDir });
     assert.deepEqual(loaded.warnings, []);
@@ -172,7 +171,7 @@ test('per-tier override only replaces the named tier, leaving others untouched',
   withLayers(({ cwd, homeDir }) => {
     writeJson(join(homeDir, 'ph.json'), {
       id: 'ph',
-      extends: 'posthog',
+      extends: 'persona-maker',
       tiers: {
         best: { model: 'claude-sonnet-4-6' }
       }
@@ -181,10 +180,10 @@ test('per-tier override only replaces the named tier, leaving others untouched',
     const spec = loaded.byId.get('ph');
     assert.equal(spec?.tiers.best.model, 'claude-sonnet-4-6');
     // systemPrompt is inherited on the overridden tier too (partial per-tier merge).
-    assert.match(spec?.tiers.best.systemPrompt ?? '', /PostHog/);
+    assert.equal(spec?.tiers.best.systemPrompt, '$TASK_DESCRIPTION');
     // Other tiers untouched.
-    assert.equal(spec?.tiers['best-value'].model, 'claude-sonnet-4-6');
-    assert.equal(spec?.tiers.minimum.model, 'claude-haiku-4-5-20251001');
+    assert.equal(spec?.tiers['best-value'].model, 'opencode/gpt-5-nano');
+    assert.equal(spec?.tiers.minimum.model, 'opencode/minimax-m2.5-free');
   });
 });
 
@@ -192,7 +191,7 @@ test('top-level systemPrompt replaces prompt across all inherited tiers', () => 
   withLayers(({ cwd, homeDir }) => {
     writeJson(join(homeDir, 'ph.json'), {
       id: 'ph',
-      extends: 'posthog',
+      extends: 'persona-maker',
       systemPrompt: 'You answer only yes or no.'
     });
     const loaded = loadLocalPersonas({ cwd, homeDir });
@@ -220,7 +219,7 @@ test('warns when an overlay combines extends with standalone intent', () => {
   withLayers(({ cwd, homeDir }) => {
     writeJson(join(homeDir, 'broken.json'), {
       id: 'broken',
-      extends: 'posthog',
+      extends: 'persona-maker',
       intent: 'review'
     });
     const loaded = loadLocalPersonas({ cwd, homeDir });
@@ -232,8 +231,8 @@ test('warns when an overlay combines extends with standalone intent', () => {
 
 test('warns on duplicate ids within a single layer', () => {
   withLayers(({ cwd, homeDir }) => {
-    writeJson(join(homeDir, 'a.json'), { id: 'dup', extends: 'posthog' });
-    writeJson(join(homeDir, 'b.json'), { id: 'dup', extends: 'posthog' });
+    writeJson(join(homeDir, 'a.json'), { id: 'dup', extends: 'persona-maker' });
+    writeJson(join(homeDir, 'b.json'), { id: 'dup', extends: 'persona-maker' });
     const loaded = loadLocalPersonas({ cwd, homeDir });
     assert.equal(loaded.byId.size, 1);
     assert.equal(loaded.warnings.length, 1);
@@ -243,9 +242,9 @@ test('warns on duplicate ids within a single layer', () => {
 
 test('AGENT_WORKFORCE_CONFIG_DIR is trimmed before use (whitespace tolerated)', () => {
   withLayers(({ cwd, homeDir }) => {
-    writeJson(join(homeDir, 'my-posthog.json'), {
-      id: 'my-posthog',
-      extends: 'posthog'
+    writeJson(join(homeDir, 'my-persona.json'), {
+      id: 'my-persona',
+      extends: 'persona-maker'
     });
     const prev = process.env.AGENT_WORKFORCE_CONFIG_DIR;
     process.env.AGENT_WORKFORCE_CONFIG_DIR = `   ${homeDir}   `;
@@ -254,7 +253,7 @@ test('AGENT_WORKFORCE_CONFIG_DIR is trimmed before use (whitespace tolerated)', 
       // which is the code path that used to return the untrimmed value.
       const loaded = loadLocalPersonas({ cwd });
       assert.ok(
-        loaded.byId.has('my-posthog'),
+        loaded.byId.has('my-persona'),
         'persona should load despite whitespace in AGENT_WORKFORCE_CONFIG_DIR'
       );
     } finally {
@@ -312,12 +311,11 @@ test('returns empty result when neither layer exists', () => {
 
 test('permissions merge: allow/deny union dedup, mode overrides', () => {
   withLayers(({ cwd, homeDir, pwdDir }) => {
-    // Base posthog already has permissions.allow = ["mcp__posthog"] in the
-    // library file. User adds a Bash deny + sets default mode; cwd adds
-    // another allow and overrides the mode.
+    // User adds a Bash deny + sets default mode; cwd adds an allow and
+    // overrides the mode.
     writeJson(join(homeDir, 'ph.json'), {
       id: 'ph',
-      extends: 'posthog',
+      extends: 'persona-maker',
       permissions: {
         deny: ['Bash(rm -rf *)'],
         mode: 'default'
@@ -336,7 +334,7 @@ test('permissions merge: allow/deny union dedup, mode overrides', () => {
     const spec = loaded.byId.get('ph');
     assert.deepEqual(
       spec?.permissions?.allow?.slice().sort(),
-      ['Bash(git *)', 'mcp__posthog'].sort()
+      ['Bash(git *)']
     );
     assert.deepEqual(spec?.permissions?.deny, ['Bash(rm -rf *)']);
     assert.equal(spec?.permissions?.mode, 'acceptEdits');
@@ -347,12 +345,12 @@ test('permissions allow list dedupes across layers', () => {
   withLayers(({ cwd, homeDir }) => {
     writeJson(join(homeDir, 'ph.json'), {
       id: 'ph',
-      extends: 'posthog',
-      permissions: { allow: ['mcp__posthog'] }
+      extends: 'persona-maker',
+      permissions: { allow: ['Bash(git *)', 'Bash(git *)'] }
     });
     const loaded = loadLocalPersonas({ cwd, homeDir });
     const spec = loaded.byId.get('ph');
-    assert.deepEqual(spec?.permissions?.allow, ['mcp__posthog']);
+    assert.deepEqual(spec?.permissions?.allow, ['Bash(git *)']);
   });
 });
 
@@ -388,7 +386,7 @@ test('mount patterns merge across local persona layers', () => {
   withLayers(({ cwd, homeDir, pwdDir }) => {
     writeJson(join(homeDir, 'site-agent.json'), {
       id: 'site-agent',
-      extends: 'frontend-implementer',
+      extends: 'persona-maker',
       mount: {
         ignoredPatterns: ['.env*'],
         readonlyPatterns: ['*']
@@ -465,7 +463,7 @@ test('top-level claudeMd resolves to absolute path anchored to its layer dir', (
     writeFileSync(join(homeDir, 'persona.md'), '# Persona-specific guidance\n');
     writeJson(join(homeDir, 'docs-bot.json'), {
       id: 'docs-bot',
-      extends: 'documentation',
+      extends: 'persona-maker',
       claudeMd: 'persona.md',
       claudeMdMode: 'extend'
     });
@@ -483,7 +481,7 @@ test('per-tier claudeMd overrides top-level path; mode resolves independently', 
     writeFileSync(join(homeDir, 'best.md'), '# best\n');
     writeJson(join(homeDir, 'p.json'), {
       id: 'p',
-      extends: 'documentation',
+      extends: 'persona-maker',
       claudeMd: 'top.md',
       claudeMdMode: 'extend',
       tiers: {
@@ -506,7 +504,7 @@ test('rejects claudeMd with .. segment', () => {
   withLayers(({ cwd, homeDir }) => {
     writeJson(join(homeDir, 'p.json'), {
       id: 'p',
-      extends: 'documentation',
+      extends: 'persona-maker',
       claudeMd: '../escape.md'
     });
     const loaded = loadLocalPersonas({ cwd, homeDir });
@@ -522,7 +520,7 @@ test('rejects Windows-rooted sidecar paths (backslash, UNC, drive-letter)', () =
     withLayers(({ cwd, homeDir }) => {
       writeJson(join(homeDir, 'p.json'), {
         id: 'p',
-        extends: 'documentation',
+        extends: 'persona-maker',
         claudeMd: bad
       });
       const loaded = loadLocalPersonas({ cwd, homeDir });
@@ -536,7 +534,7 @@ test('rejects non-md sidecar path', () => {
   withLayers(({ cwd, homeDir }) => {
     writeJson(join(homeDir, 'p.json'), {
       id: 'p',
-      extends: 'documentation',
+      extends: 'persona-maker',
       claudeMd: 'persona.txt'
     });
     const loaded = loadLocalPersonas({ cwd, homeDir });
@@ -554,7 +552,7 @@ test('mode-only override: tier mode flips while inheriting top-level path', () =
     writeFileSync(join(homeDir, 'top.md'), '# top\n');
     writeJson(join(homeDir, 'sidecar-base.json'), {
       id: 'sidecar-base',
-      extends: 'documentation',
+      extends: 'persona-maker',
       claudeMd: 'top.md',
       claudeMdMode: 'overwrite'
     });
@@ -581,7 +579,7 @@ test('missing sidecar file produces a warning, not a throw', () => {
   withLayers(({ cwd, homeDir }) => {
     writeJson(join(homeDir, 'p.json'), {
       id: 'p',
-      extends: 'documentation',
+      extends: 'persona-maker',
       claudeMd: 'missing.md'
     });
     const loaded = loadLocalPersonas({ cwd, homeDir });

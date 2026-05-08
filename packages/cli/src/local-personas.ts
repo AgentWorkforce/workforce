@@ -5,6 +5,7 @@ import { dirname, isAbsolute, join, resolve as resolvePath } from 'node:path';
 import {
   HARNESS_VALUES,
   PERSONA_INTENTS,
+  listBuiltInPersonas,
   personaCatalog,
   PERSONA_TAGS,
   PERSONA_TIERS,
@@ -585,9 +586,9 @@ function assertTiersShape(value: unknown, context: string): void {
 }
 
 function findInLibrary(key: string): PersonaSpec | undefined {
-  const byIntent = (personaCatalog as Record<string, PersonaSpec>)[key];
+  const byIntent = (personaCatalog as Record<string, PersonaSpec | undefined>)[key];
   if (byIntent) return byIntent;
-  for (const spec of Object.values(personaCatalog)) {
+  for (const spec of listBuiltInPersonas()) {
     if (spec.id === key) return spec;
   }
   return undefined;

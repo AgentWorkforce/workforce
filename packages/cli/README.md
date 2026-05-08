@@ -1,9 +1,9 @@
 # agentworkforce CLI
 
 A thin command-line front end for the workload-router. Spawns the harness CLI
-(`claude`, `codex`, `opencode`) configured by a selected **persona** — either a
-built-in one from `/personas/`, or an installed/local one that extends a lower
-source.
+(`claude`, `codex`, `opencode`) configured by a selected **persona** from the
+project-local layer, configured source directories, or the small internal
+built-in system catalog.
 
 ```
 agentworkforce create [--save-in-directory=<target>] [--save-default] [--install-in-repo] [--no-launch-metadata]
@@ -59,8 +59,9 @@ agentworkforce agent <persona>[@<tier>]
   1. A **cwd-local** id (files in `<cwd>/.agentworkforce/workforce/personas/*.json`)
   2. A configured persona source dir, in order. The default is
      `~/.agentworkforce/workforce/personas/*.json`.
-  3. A **library** persona — by intent first (e.g. `review`), then by id
-     (e.g. `code-reviewer`)
+  3. An internal **library** persona — by intent first, then by id. The built-in
+     library is system-only; optional personas such as `code-reviewer` come from
+     installed persona packs.
 - `<tier>` — `best` | `best-value` | `minimum`. Defaults to `best-value`.
 
 Unknown persona prints the full catalog with each entry's origin.
@@ -80,7 +81,7 @@ persona inputs:
 | Input | Meaning |
 | --- | --- |
 | `TARGET_DIR` | Absolute directory where the new `<id>.json` persona file should be written. |
-| `CREATE_MODE` | `local` writes only JSON; `built-in` also updates catalog/routing/test/docs integration. |
+| `CREATE_MODE` | `local` writes only JSON; `built-in` is reserved for internal/system personas and also updates catalog/routing/test/docs integration. |
 
 Targets:
 
@@ -119,7 +120,7 @@ agentworkforce create --save-in-directory=dir:1
 # Create in an explicit checked-out persona directory and make that the default
 agentworkforce create --save-in-directory=../team-personas/personas --save-default
 
-# Create a built-in persona in this repo's /personas catalog
+# Create an internal/system built-in persona in this repo's /personas catalog
 agentworkforce create --save-in-directory=library
 ```
 
@@ -129,13 +130,11 @@ agentworkforce create --save-in-directory=library
 agentworkforce create
 
 # Interactive code reviewer
-agentworkforce agent review@best-value
-
-# Interactive PostHog session (library persona, needs POSTHOG_API_KEY)
-agentworkforce agent posthog@best
+agentworkforce install @agentworkforce/personas-core --persona code-reviewer
+agentworkforce agent code-reviewer@best-value
 
 # Interactive against a local override
-agentworkforce agent my-posthog@best
+agentworkforce agent my-reviewer@best
 ```
 
 ## Install persona packs
@@ -158,6 +157,8 @@ Npm package specs are resolved with `npm pack`, so npm auth, npm config,
 private packages, tags, and versions work the same way they do for npm:
 
 ```sh
+agentworkforce install @agentworkforce/personas-core
+agentworkforce install @agentworkforce/personas-core@0.8.0 --persona code-reviewer
 agentworkforce install @agentrelay/personas
 agentworkforce install @agentrelay/personas@1.2.3
 agentworkforce install @agentrelay/personas@latest
@@ -176,8 +177,8 @@ By default, every `*.json` file in the pack's persona directory is copied.
 Use repeated `--persona <id>` flags to install a subset by persona `id`:
 
 ```sh
+agentworkforce install @agentworkforce/personas-core --persona code-reviewer
 agentworkforce install @agentrelay/personas --persona relay-orchestrator
-agentworkforce install @agentrelay/personas --persona relay-orchestrator --persona code-reviewer
 ```
 
 If any requested id is missing, the command exits non-zero before copying
@@ -209,19 +210,18 @@ basename if they are expected to be installed together.
 A pack can contain multiple personas:
 
 ```text
-@agentrelay/personas
+@acme/personas
 ├── package.json
 └── personas/
-    ├── relay-orchestrator.json
-    ├── code-reviewer.json
-    └── e2e-validator.json
+    ├── reviewer.json
+    └── release-runner.json
 ```
 
 `package.json` may declare the persona directory:
 
 ```json
 {
-  "name": "@agentrelay/personas",
+  "name": "@acme/personas",
   "version": "1.2.3",
   "files": ["personas"],
   "keywords": ["agentworkforce-personas"],
@@ -427,7 +427,9 @@ MCP servers to attach*. Full library shape:
 }
 ```
 
-See `/personas/*.json` for all built-ins.
+The repo built-in catalog is intentionally system-only and currently contains
+`persona-maker`. Optional reusable personas are installed from packs such as
+`@agentworkforce/personas-core` or `@agentrelay/personas`.
 
 ## Local personas & the cascade
 
@@ -437,7 +439,7 @@ wins):
 1. `<cwd>/.agentworkforce/workforce/personas/*.json` — **cwd**
 2. Configurable persona source dirs, in order. Default:
    `~/.agentworkforce/workforce/personas/*.json` — **user**
-3. Built-in personas in `/personas/` — **library**
+3. Internal built-in system personas in `/personas/` — **library**
 
 Local files are **partial overlays**: only the fields you set replace the
 inherited value. Everything else cascades through from below.
@@ -446,56 +448,62 @@ Set `AGENT_WORKFORCE_HOME` to move the `~/.agentworkforce/workforce` config
 root. The legacy `AGENT_WORKFORCE_CONFIG_DIR` env var is still honored as a
 direct override for the default user persona directory.
 
-### Minimal override: add your API key
+### Minimal override
 
-`~/.agentworkforce/workforce/personas/my-posthog.json`:
+Install the core pack first so `code-reviewer` exists in a lower layer:
+
+```sh
+agentworkforce install @agentworkforce/personas-core --persona code-reviewer
+```
+
+`~/.agentworkforce/workforce/personas/my-reviewer.json`:
 
 ```json
 {
-  "id": "my-posthog",
-  "extends": "posthog",
-  "env": { "POSTHOG_API_KEY": "$POSTHOG_API_KEY" }
+  "id": "my-reviewer",
+  "extends": "code-reviewer",
+  "systemPrompt": "Review this repository's API compatibility and migration risks. Lead with blockers."
 }
 ```
 
-That inherits every field from the library `posthog` persona, then layers your
-`env` on top. `agentworkforce agent my-posthog@best` now works as long as
-`POSTHOG_API_KEY` is exported in your shell.
+That inherits every field from the installed `code-reviewer` persona, then
+layers your local prompt on top.
 
 ### Same-id override (implicit extends)
 
 If your file's `id` matches a persona in a lower layer and you omit `extends`,
 the loader implicitly inherits from that same-id base:
 
-`<cwd>/.agentworkforce/workforce/personas/posthog.json`:
+`<cwd>/.agentworkforce/workforce/personas/code-reviewer.json`:
 
 ```json
 {
-  "id": "posthog",
-  "env": { "POSTHOG_API_KEY": "$POSTHOG_API_KEY" }
+  "id": "code-reviewer",
+  "systemPrompt": "Review with this repository's compatibility checklist first."
 }
 ```
 
-Resolving `posthog` now hits this cwd override first; it inherits the rest
-(MCP, tiers, description, etc.) from the library `posthog`.
+Resolving `code-reviewer` now hits this cwd override first; it inherits the
+rest from the installed lower-layer `code-reviewer`.
 
 ### Cascade chain
 
-A cwd file can extend a user or configured-dir file, which extends the library:
+A cwd file can extend a user or configured-dir file, which can extend an
+installed pack persona or the internal library:
 
 ```
-~/.agentworkforce/workforce/personas/ph-base.json:
-{ "id": "ph-base", "extends": "posthog", "env": { "POSTHOG_ORG": "acme" } }
+~/.agentworkforce/workforce/personas/reviewer-base.json:
+{ "id": "reviewer-base", "extends": "code-reviewer", "systemPrompt": "Review with org-wide API compatibility rules." }
 
-<cwd>/.agentworkforce/workforce/personas/ph-prod.json:
-{ "id": "ph-prod", "extends": "ph-base", "env": { "POSTHOG_API_KEY": "$PROD_KEY" } }
+<cwd>/.agentworkforce/workforce/personas/reviewer-prod.json:
+{ "id": "reviewer-prod", "extends": "reviewer-base", "systemPrompt": "Add this service's migration checklist." }
 ```
 
-Resolving `ph-prod`:
+Resolving `reviewer-prod`:
 
-- Start with library `posthog` (MCP, tiers, prompt, …)
-- Layer user `ph-base` on top (adds `POSTHOG_ORG=acme`)
-- Layer cwd `ph-prod` on top (adds `POSTHOG_API_KEY`)
+- Start with installed `code-reviewer` (tiers, skills, prompt, ...)
+- Layer user `reviewer-base` on top
+- Layer cwd `reviewer-prod` on top
 
 `extends` is resolved **strictly against lower layers** — cwd extends configured
 dirs or library, configured dirs extend lower configured dirs or library, and
@@ -506,7 +514,7 @@ library has no `extends`.
 ```jsonc
 {
   "id": "my-agent",            // required
-  "extends": "posthog",        // optional; implicit same-id if omitted
+  "extends": "code-reviewer",  // optional; implicit same-id if omitted
   "description": "…",          // replaces base description
   "skills": [ … ],             // replaces entire skills array
   "inputs": {                  // prompt-visible runtime inputs; union by key
@@ -572,7 +580,7 @@ Minimal local persona:
 ```json
 {
   "id": "my-reviewer",
-  "extends": "review",
+  "extends": "code-reviewer",
   "description": "Reviews this project with local conventions.",
   "systemPrompt": "Focus on this repository's API compatibility rules and summarize only blocking issues."
 }
@@ -580,17 +588,18 @@ Minimal local persona:
 
 ### Built-in persona
 
-Built-in personas live in the repo's `/personas` catalog and require full
-workload-router integration:
+Built-in personas live in the repo's `/personas` catalog, are reserved for
+required internal/system surface, and require workload-router integration:
 
 ```sh
 agentworkforce create --save-in-directory=library
 ```
 
 The persona maker receives `CREATE_MODE=built-in`, so it should write
-`personas/<id>.json`, update the intent list/catalog registration/routing
-profile/test fixture/README, regenerate `src/generated/personas.ts`, and run
-the repo check.
+`personas/<id>.json`, update the internal catalog registration/routing/tests/docs
+as needed, regenerate `src/generated/personas.ts`, and run the repo check.
+Optional generic or domain personas should be published through persona packs
+instead.
 
 ### Full persona file
 
@@ -795,18 +804,15 @@ mount rules (`.agentignore` / `.agentreadonly`) for that.
   persona source can layer shared denies, and cwd can add per-project patterns
   — they all compose.
 
-### Example: PostHog with auto-approve
+### Example: narrowing inherited auto-approval
 
-The built-in `posthog` persona declares `permissions.allow = ["mcp__posthog"]`
-so that once you've authenticated (either by passing `POSTHOG_API_KEY` up
-front or via Claude's OAuth flow), subsequent analytics tool calls don't
-prompt. To narrow the auto-approval to read-only tools, override in a local
-persona:
+If an installed lower-layer persona declares broad permissions, a local override
+can add narrower tool patterns for project workflows:
 
 ```json
 {
-  "id": "my-posthog",
-  "extends": "posthog",
+  "id": "my-analytics",
+  "extends": "analytics-reader",
   "permissions": {
     "allow": [
       "mcp__posthog__projects-get",
@@ -817,10 +823,10 @@ persona:
 }
 ```
 
-Because `allow` is a union, the base's `"mcp__posthog"` would still be in the
-merged list. If you want to *shrink* the allow list in a local override,
-include a comment explaining why — there's currently no "replace" knob, only
-union. (File an issue if you need one.)
+Because `allow` is a union, any broad allow pattern from the base persona would
+still be in the merged list. If you need to shrink an allow list, create a
+standalone local persona or update the lower-layer pack persona; overlays only
+append.
 
 ## MCP servers
 
@@ -909,12 +915,14 @@ cascade/extends merge and before prompt input substitution.
 Opt out for one launch:
 
 ```sh
+agentworkforce install @agentworkforce/personas-core --persona code-reviewer
 agentworkforce agent --no-launch-metadata code-reviewer@best
 ```
 
 Opt out through the environment:
 
 ```sh
+agentworkforce install @agentworkforce/personas-core --persona code-reviewer
 AGENTWORKFORCE_LAUNCH_METADATA=0 agentworkforce agent code-reviewer@best
 ```
 
@@ -962,6 +970,7 @@ Pass `--install-in-repo` to fall back to the legacy behavior (skills land in
 the repo's `.claude/skills/` directory, cleaned on exit):
 
 ```sh
+agentworkforce install @agentworkforce/personas-core --persona code-reviewer
 agentworkforce agent --install-in-repo code-reviewer@best
 ```
 
@@ -1065,11 +1074,11 @@ agentworkforce CLI just wires the paths and passes the persona's argv.
 ### Example
 
 ```sh
-# Interactive PostHog session with the repo's CLAUDE.md, .claude/, and
+# Interactive persona session with the repo's CLAUDE.md, .claude/, and
 # .mcp.json hidden — session sees the persona's staged skills plus your
 # user-level ~/.claude/CLAUDE.md, nothing else from this repo.
-export POSTHOG_API_KEY=phx_…
-agentworkforce agent posthog@best
+agentworkforce install @agentworkforce/personas-core --persona code-reviewer
+agentworkforce agent code-reviewer@best
 ```
 
 On exit: mount is synced back to the real repo, then torn down; skill
@@ -1077,9 +1086,7 @@ stage dir is cleaned up by the existing `rm -rf` cleanup command.
 
 ## Selecting a harness per tier
 
-A persona's three tiers can use different harnesses. The built-in
-`npm-provenance-publisher` has `best` on codex and `best-value` on opencode,
-for example.
+A persona's three tiers can use different harnesses.
 
 If a persona uses MCP, keep every tier on `claude` — only the claude harness
 wires MCP at spawn time today.

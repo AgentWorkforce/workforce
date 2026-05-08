@@ -18,6 +18,12 @@ resolved persona and grouped install metadata. Nothing is installed,
 spawned, or written to disk — run `install.commandString` yourself when
 you are ready to materialize the persona's skills.
 
+`usePersona` resolves only the internal built-in catalog (`persona-maker` /
+`persona-authoring`). Optional personas such as `code-reviewer` and
+`frontend-implementer` are distributed through installable persona packs and
+should be loaded through the CLI/source cascade, then passed to `useSelection`
+or `materializeSkillsFor`.
+
 ```ts
 import { usePersona } from '@agentworkforce/workload-router';
 ```
@@ -25,7 +31,7 @@ import { usePersona } from '@agentworkforce/workload-router';
 #### Return shape
 
 ```ts
-const { selection, install } = usePersona('npm-provenance');
+const { selection, install } = usePersona('persona-authoring');
 ```
 
 - `selection`: the resolved persona choice for the given intent/profile. Includes `personaId`, `tier`, `runtime`, `skills`, `inputs`, `mount`, and `rationale`.
@@ -41,7 +47,7 @@ const { selection, install } = usePersona('npm-provenance');
 import { spawnSync } from 'node:child_process';
 import { usePersona } from '@agentworkforce/workload-router';
 
-const { selection, install } = usePersona('npm-provenance');
+const { selection, install } = usePersona('persona-authoring');
 
 spawnSync(install.commandString, { shell: true, stdio: 'inherit' });
 // hand `selection` to your harness launcher of choice.

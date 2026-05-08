@@ -19,6 +19,7 @@ import {
   HARNESS_VALUES,
   PERSONA_TAGS,
   PERSONA_TIERS,
+  listBuiltInPersonas,
   personaCatalog,
   resolveSidecar,
   routingProfiles,
@@ -166,11 +167,11 @@ configured persona dir is ~/.agentworkforce/workforce/personas.
 Examples:
   agentworkforce create
   agentworkforce create --save-in-directory=user
-  agentworkforce agent npm-provenance-publisher@best
-  agentworkforce agent my-posthog@best
-  agentworkforce agent review@best-value
+  agentworkforce install @agentworkforce/personas-core --persona code-reviewer
+  agentworkforce agent code-reviewer@best-value
+  agentworkforce agent my-reviewer@best
   agentworkforce list
-  agentworkforce show posthog
+  agentworkforce show code-reviewer
   agentworkforce install @agentrelay/personas --persona relay-orchestrator
   agentworkforce install ./local-personas --overwrite
   agentworkforce sources list
@@ -214,12 +215,12 @@ type ResolvedTarget =
 function resolveSpec(key: string): ResolvedTarget['spec'] | { error: string } {
   const localSpec = local.byId.get(key);
   if (localSpec) return localSpec;
-  const catalogAsIntent = (personaCatalog as Record<string, PersonaSpec>)[key];
+  const catalogAsIntent = (personaCatalog as Record<string, PersonaSpec | undefined>)[key];
   if (catalogAsIntent) return catalogAsIntent;
-  const byId = Object.values(personaCatalog).find((p) => p.id === key);
+  const byId = listBuiltInPersonas().find((p) => p.id === key);
   if (byId) return byId;
 
-  const repoListing = Object.values(personaCatalog)
+  const repoListing = listBuiltInPersonas()
     .slice()
     .sort((a, b) => a.id.localeCompare(b.id))
     .map((p) => `  ${p.id}  (intent: ${p.intent})`);
@@ -227,7 +228,13 @@ function resolveSpec(key: string): ResolvedTarget['spec'] | { error: string } {
     .sort((a, b) => a.id.localeCompare(b.id))
     .map((p) => `  ${p.id}  (${local.sources.get(p.id) ?? 'local'})`);
   const listing = [...repoListing, ...localListing].join('\n');
-  return { error: `Unknown persona "${key}". Known personas:\n${listing}` };
+  const packHint =
+    'Optional first-party personas are installed from packs, for example:\n' +
+    '  agentworkforce install @agentworkforce/personas-core\n' +
+    '  agentworkforce install @agentrelay/personas';
+  return {
+    error: `Unknown persona "${key}". Known personas:\n${listing || '  (none)'}\n\n${packHint}`
+  };
 }
 
 function parseSelector(sel: string): ResolvedTarget {
@@ -861,7 +868,7 @@ async function runInteractive(
 
   // In session mode the install command is never `:` — it at minimum runs
   // the plugin scaffold (mkdir + manifest + symlink) so `--plugin-dir` has a
-  // valid target even for skill-less personas like posthog. Gate on the
+  // valid target even for skill-less local personas. Gate on the
   // command string rather than `installs.length` so we don't skip that.
   const skillIds = install.plan.installs.map((i) => i.skillId).join(', ');
   const installLabel =
@@ -1547,7 +1554,7 @@ function collectPersonaRows(): PersonaListRow[] {
     pushSpec(spec, local.sources.get(id) ?? 'library');
     seen.add(id);
   }
-  for (const spec of Object.values(personaCatalog)) {
+  for (const spec of listBuiltInPersonas()) {
     if (seen.has(spec.id)) continue;
     pushSpec(spec, 'library');
   }
@@ -1788,11 +1795,11 @@ function resolveShowTarget(
     spec = localSpec;
     source = local.sources.get(key) ?? 'cwd';
   } else {
-    const byIntent = (personaCatalog as Record<string, PersonaSpec>)[key];
+    const byIntent = (personaCatalog as Record<string, PersonaSpec | undefined>)[key];
     if (byIntent) {
       spec = byIntent;
     } else {
-      const byId = Object.values(personaCatalog).find((p) => p.id === key);
+      const byId = listBuiltInPersonas().find((p) => p.id === key);
       if (byId) spec = byId;
     }
   }
@@ -2075,7 +2082,7 @@ async function runAgentSelector(
  */
 export function buildPickCandidates(): PickCandidate[] {
   const byId = new Map<string, PickCandidate>();
-  for (const spec of Object.values(personaCatalog)) {
+  for (const spec of listBuiltInPersonas()) {
     byId.set(spec.id, {
       id: spec.id,
       intent: spec.intent,

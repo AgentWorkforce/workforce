@@ -1,4 +1,4 @@
-import { frontendImplementer, codeReviewer, architecturePlanner, requirementsAnalyst, debuggerPersona, securityReviewer, technicalWriter, verifierPersona, testStrategist, tddGuard, flakeHunter, opencodeWorkflowSpecialist, npmProvenancePublisher, cloudSandboxInfra, sageSlackEgressMigrator, sageProactiveRewirer, cloudSlackProxyGuard, agentRelayE2eConductor, capabilityDiscoverer, npmPackageBundlerGuard, posthogAgent, personaMaker, antiSlopAuditor, apiContractReviewer, dockerStackWrangler, e2eValidator, integrationTestAuthor, agentRelayWorkflow, relayOrchestrator } from './generated/personas.js';
+import { personaMaker } from './generated/personas.js';
 import defaultRoutingProfileJson from '../routing-profiles/default.json' with { type: 'json' };
 
 export const HARNESS_VALUES = ['opencode', 'codex', 'claude'] as const;
@@ -45,6 +45,8 @@ export const PERSONA_INTENTS = [
   'write-integration-tests',
   'relay-orchestrator'
 ] as const;
+
+export const BUILT_IN_PERSONA_INTENTS = ['persona-authoring'] as const;
 
 export type Harness = (typeof HARNESS_VALUES)[number];
 export type PersonaTier = (typeof PERSONA_TIERS)[number];
@@ -1308,46 +1310,27 @@ function parseRoutingProfile(value: unknown, context: string): RoutingProfile {
   };
 }
 
-export const personaCatalog: Record<PersonaIntent, PersonaSpec> = {
-  'implement-frontend': parsePersonaSpec(frontendImplementer, 'implement-frontend'),
-  review: parsePersonaSpec(codeReviewer, 'review'),
-  'architecture-plan': parsePersonaSpec(architecturePlanner, 'architecture-plan'),
-  'requirements-analysis': parsePersonaSpec(requirementsAnalyst, 'requirements-analysis'),
-  debugging: parsePersonaSpec(debuggerPersona, 'debugging'),
-  'security-review': parsePersonaSpec(securityReviewer, 'security-review'),
-  documentation: parsePersonaSpec(technicalWriter, 'documentation'),
-  verification: parsePersonaSpec(verifierPersona, 'verification'),
-  'test-strategy': parsePersonaSpec(testStrategist, 'test-strategy'),
-  'tdd-enforcement': parsePersonaSpec(tddGuard, 'tdd-enforcement'),
-  'flake-investigation': parsePersonaSpec(flakeHunter, 'flake-investigation'),
-  'opencode-workflow-correctness': parsePersonaSpec(
-    opencodeWorkflowSpecialist,
-    'opencode-workflow-correctness'
-  ),
-  'npm-provenance': parsePersonaSpec(npmProvenancePublisher, 'npm-provenance'),
-  'cloud-sandbox-infra': parsePersonaSpec(cloudSandboxInfra, 'cloud-sandbox-infra'),
-  'sage-slack-egress-migration': parsePersonaSpec(
-    sageSlackEgressMigrator,
-    'sage-slack-egress-migration'
-  ),
-  'sage-proactive-rewire': parsePersonaSpec(sageProactiveRewirer, 'sage-proactive-rewire'),
-  'cloud-slack-proxy-guard': parsePersonaSpec(cloudSlackProxyGuard, 'cloud-slack-proxy-guard'),
-  'sage-cloud-e2e-conduction': parsePersonaSpec(
-    agentRelayE2eConductor,
-    'sage-cloud-e2e-conduction'
-  ),
-  'capability-discovery': parsePersonaSpec(capabilityDiscoverer, 'capability-discovery'),
-  'npm-package-compat': parsePersonaSpec(npmPackageBundlerGuard, 'npm-package-compat'),
-  posthog: parsePersonaSpec(posthogAgent, 'posthog'),
-  'persona-authoring': parsePersonaSpec(personaMaker, 'persona-authoring'),
-  'agent-relay-workflow': parsePersonaSpec(agentRelayWorkflow, 'agent-relay-workflow'),
-  'slop-audit': parsePersonaSpec(antiSlopAuditor, 'slop-audit'),
-  'api-contract-review': parsePersonaSpec(apiContractReviewer, 'api-contract-review'),
-  'local-stack-orchestration': parsePersonaSpec(dockerStackWrangler, 'local-stack-orchestration'),
-  'e2e-validation': parsePersonaSpec(e2eValidator, 'e2e-validation'),
-  'write-integration-tests': parsePersonaSpec(integrationTestAuthor, 'write-integration-tests'),
-  'relay-orchestrator': parsePersonaSpec(relayOrchestrator, 'relay-orchestrator')
+export const personaCatalog: Partial<Record<PersonaIntent, PersonaSpec>> = {
+  'persona-authoring': parsePersonaSpec(personaMaker, 'persona-authoring')
 };
+
+export function listBuiltInPersonas(): PersonaSpec[] {
+  return Object.values(personaCatalog).filter(
+    (spec): spec is PersonaSpec => spec !== undefined
+  );
+}
+
+function requireBuiltInPersona(intent: PersonaIntent): PersonaSpec {
+  const spec = personaCatalog[intent];
+  if (!spec) {
+    throw new Error(
+      `No built-in persona is registered for intent "${intent}". ` +
+        'Install a persona pack such as @agentworkforce/personas-core or @agentrelay/personas, ' +
+        'or load a project-local persona before selecting this intent.'
+    );
+  }
+  return spec;
+}
 
 export const routingProfiles = {
   default: parseRoutingProfile(defaultRoutingProfileJson, 'routingProfiles.default')
@@ -1426,7 +1409,7 @@ function sidecarSelectionFields(
 export function resolvePersona(intent: PersonaIntent, profile: RoutingProfile | RoutingProfileId = 'default'): PersonaSelection {
   const profileSpec = typeof profile === 'string' ? routingProfiles[profile] : profile;
   const rule = profileSpec.intents[intent];
-  const spec = personaCatalog[intent];
+  const spec = requireBuiltInPersona(intent);
 
   return {
     personaId: spec.id,
@@ -1448,7 +1431,7 @@ export function resolvePersona(intent: PersonaIntent, profile: RoutingProfile | 
  * Prefer resolvePersona(intent, profile) for policy-driven selection.
  */
 export function resolvePersonaByTier(intent: PersonaIntent, tier: PersonaTier = 'best-value'): PersonaSelection {
-  const spec = personaCatalog[intent];
+  const spec = requireBuiltInPersona(intent);
   return {
     personaId: spec.id,
     tier,
@@ -1475,12 +1458,16 @@ export function resolvePersonaByTier(intent: PersonaIntent, tier: PersonaTier = 
  * Nothing is installed, spawned, or written to disk until you run
  * `install.commandString` yourself.
  *
+ * This resolves the internal built-in system catalog only. Optional persona
+ * packs should be loaded through the CLI/source cascade and passed to
+ * `useSelection` or `materializeSkillsFor` as resolved selections.
+ *
  * @example
- * const { selection, install } = usePersona('npm-provenance');
+ * const { selection, install } = usePersona('persona-authoring');
  * spawnSync(install.commandString, { shell: true, stdio: 'inherit' });
  * // hand `selection` to your harness launcher of choice.
  *
- * @param intent   The persona intent to resolve (e.g. `'npm-provenance'`).
+ * @param intent   The internal persona intent to resolve (e.g. `'persona-authoring'`).
  * @param options  Optional overrides. `harness` forces a specific harness
  *                 (otherwise inferred from the selected tier's runtime).
  *                 `tier` bypasses profile-driven routing and selects a tier
