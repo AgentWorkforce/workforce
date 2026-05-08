@@ -420,6 +420,11 @@ function runInstallWithSpinner(
     stdio: ['ignore', 'pipe', 'pipe'],
     shell: false,
     encoding: 'utf8',
+    // Default is 1 MiB; verbose `npx prpm install` / `npx skills add` runs
+    // can blow past it, which would have spawnSync kill the child with
+    // ENOBUFS and report a spurious failure. 100 MiB is well past anything
+    // these installers print in practice.
+    maxBuffer: 100 * 1024 * 1024,
     ...(cwd ? { cwd } : {})
   });
   const output = `${res.stdout ?? ''}${res.stderr ?? ''}`;
@@ -436,11 +441,10 @@ function runInstallWithSpinner(
 function runInstall(command: readonly string[], label: string, cwd?: string): void {
   const [bin] = command;
   if (!bin) return;
+  // runInstallWithSpinner already prints the failure line via spinner.fail;
+  // the previous extra "${label} failed … Aborting." write would duplicate it.
   const { code } = runInstallWithSpinner(command, label, cwd);
-  if (code !== 0) {
-    process.stderr.write(`${label} failed (exit ${code}). Aborting.\n`);
-    process.exit(code);
-  }
+  if (code !== 0) process.exit(code);
 }
 
 /**
@@ -1230,10 +1234,13 @@ async function runInteractive(
     // /exit looked like a hang.
     //
     // SIGINT semantics:
-    //   • While the child is running: Ctrl-C goes to the foreground process
-    //     group via the controlling TTY, so the harness gets it directly.
-    //     Our handler stays a no-op so Node doesn't exit out from under it,
-    //     and we forward defensively in case the child detached.
+    //   • While the child is running: Ctrl-C reaches the harness directly via
+    //     the controlling TTY's foreground process group (the child is
+    //     spawned with `stdio: 'inherit'` and inherits the parent's pgid). We
+    //     register a no-op handler here purely to suppress Node's default
+    //     exit-on-SIGINT — forwarding via child.kill('SIGINT') would deliver
+    //     a *second* SIGINT and break harnesses that escalate on repeated
+    //     interrupts (e.g. claude treats 1st = cancel, 2nd = quit).
     //   • While syncing: 1st press aborts the shutdownSignal (relayfile then
     //     skips autosync's draining reconcile and returns the partial count
     //     from the final syncBack). 2nd press hard-exits and rms the session
@@ -1242,20 +1249,8 @@ async function runInteractive(
     let syncSpinner: Ora | undefined;
     let isSyncing = false;
     let abortPresses = 0;
-    let activeChild: ReturnType<typeof spawn> | undefined;
     const sigintHandler = () => {
-      if (!isSyncing) {
-        // Defensive: forward to child if it somehow didn't get the TTY signal.
-        // No spinner side effects while the harness owns the screen.
-        if (activeChild && !activeChild.killed && activeChild.exitCode === null) {
-          try {
-            activeChild.kill('SIGINT');
-          } catch {
-            /* ignore — child likely exited between checks */
-          }
-        }
-        return;
-      }
+      if (!isSyncing) return;
       abortPresses += 1;
       if (abortPresses === 1) {
         if (syncSpinner) {
@@ -1325,13 +1320,8 @@ async function runInteractive(
           stdio: 'inherit',
           env: childEnv
         });
-        activeChild = child;
-        child.on('error', (err) => {
-          activeChild = undefined;
-          reject(err);
-        });
+        child.on('error', reject);
         child.on('close', (code, signal) => {
-          activeChild = undefined;
           if (typeof code === 'number') resolve(code);
           else if (signal) resolve(signalExitCode(signal));
           else resolve(1);
@@ -1374,9 +1364,10 @@ async function runInteractive(
       }
       // InstallCommandError carries the real install exit code — surfacing
       // it (rather than collapsing onto 127) lets callers distinguish a
-      // failed `npx prpm install` from a missing harness binary.
+      // failed `npx prpm install` from a missing harness binary. The message
+      // itself was already shown via spinner.fail inside runInstallWithSpinner,
+      // so we just return the code here.
       if (err instanceof InstallCommandError) {
-        process.stderr.write(`${err.message}. Aborting.\n`);
         return err.exitCode;
       }
       const e = err as NodeJS.ErrnoException;
