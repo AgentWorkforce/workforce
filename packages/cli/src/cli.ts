@@ -731,25 +731,21 @@ export function buildSidecarBody(
  * Decide whether to run the interactive session inside a
  * `@relayfile/local-mount` sandbox.
  *
- * - Claude / opencode: mount engages by default. Hides CLAUDE.md / .claude
- *   / .mcp.json (claude) and routes `npx prpm install` / `npx skills add`
- *   writes (both) into the sandbox. Disengage with `--install-in-repo`.
- * - Codex: runs against the real cwd by default. Engages a mount only when
- *   the persona declares an AGENTS.md sidecar so we can materialize it
- *   without overwriting the user's real-cwd AGENTS.md.
+ * All three harnesses (claude, codex, opencode) default to the mount.
+ * The mount hides CLAUDE.md / .claude / .mcp.json (claude) or the
+ * skill-install patterns + AGENTS.md (codex / opencode) so persona-supplied
+ * sidecars and any per-session writes stay sandboxed and don't leak into
+ * the user's real repo. `--install-in-repo` is the single opt-out that
+ * disengages the mount across all harnesses.
  *
  * Pure — no side effects, trivially testable.
  */
 export function decideCleanMode(
   harness: Harness,
-  installInRepo = false,
-  hasSidecar = false
+  installInRepo = false
 ): { useClean: boolean } {
-  if (harness === 'claude' || harness === 'opencode') {
+  if (harness === 'claude' || harness === 'opencode' || harness === 'codex') {
     return { useClean: !installInRepo };
-  }
-  if (harness === 'codex') {
-    return { useClean: hasSidecar && !installInRepo };
   }
   return { useClean: false };
 }
@@ -801,20 +797,18 @@ async function runInteractive(
   // running them inside a @relayfile/local-mount sandbox (see `useClean`
   // below). The --install-in-repo flag forces legacy in-repo installs
   // across the board.
+  const useClean = decideCleanMode(
+    runtime.harness,
+    options.installInRepo === true
+  ).useClean;
   // Per-persona CLAUDE.md / AGENTS.md: load the author content if any. The
-  // file is materialized into the mount inside onBeforeLaunch. The lookup
-  // also drives whether codex engages a mount (see decideCleanMode) — codex
-  // otherwise runs against the real cwd, where we can't safely materialize
-  // a sidecar without overwriting the user's AGENTS.md.
+  // file is materialized into the mount inside onBeforeLaunch. Without a
+  // mount (--install-in-repo) we skip-and-warn — writing into the real cwd
+  // would pollute the user's repo and is explicitly out of scope.
   const sidecarLookup = loadSidecarForSelection(effectiveSelection);
   if (sidecarLookup.warning) {
     process.stderr.write(`warning: ${sidecarLookup.warning}\n`);
   }
-  const useClean = decideCleanMode(
-    runtime.harness,
-    options.installInRepo === true,
-    sidecarLookup.sidecar !== undefined
-  ).useClean;
   const resolvedSidecar = useClean ? sidecarLookup.sidecar : undefined;
   if (sidecarLookup.sidecar && !useClean) {
     process.stderr.write(

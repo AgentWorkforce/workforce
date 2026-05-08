@@ -231,21 +231,13 @@ test('decideCleanMode: opencode + --install-in-repo → no mount', () => {
   assert.deepEqual(decideCleanMode('opencode', true), { useClean: false });
 });
 
-test('decideCleanMode: codex stays unmounted by default', () => {
-  // Codex runs against the real cwd unless the persona declares an
-  // AGENTS.md sidecar. Without a sidecar there is nothing for the mount
-  // to materialize, so we stay out of the way.
-  assert.deepEqual(decideCleanMode('codex'), { useClean: false });
+test('decideCleanMode: codex defaults to mount (parity with claude/opencode)', () => {
+  // All three harnesses default to the mount; --install-in-repo is the
+  // single opt-out. Codex needs the mount so persona-supplied AGENTS.md
+  // sidecars can be materialized without overwriting the user's real-cwd
+  // copy, and so any per-session writes stay sandboxed.
+  assert.deepEqual(decideCleanMode('codex'), { useClean: true });
   assert.deepEqual(decideCleanMode('codex', true), { useClean: false });
-  assert.deepEqual(decideCleanMode('codex', false, false), { useClean: false });
-});
-
-test('decideCleanMode: codex engages mount when sidecar is declared', () => {
-  // A persona-supplied AGENTS.md must be materialized somewhere codex can
-  // read it without overwriting the user's real-cwd AGENTS.md. The mount
-  // is that somewhere. --install-in-repo overrides and forces real cwd.
-  assert.deepEqual(decideCleanMode('codex', false, true), { useClean: true });
-  assert.deepEqual(decideCleanMode('codex', true, true), { useClean: false });
 });
 
 test('stripAgentFlag: removes --agent <name> pair preserving surrounding args', () => {
@@ -749,21 +741,35 @@ test('loadSidecarForSelection: opencode picks agentsMd, not claudeMd', () => {
   assert.equal(sidecar?.personaContent, '# agents\n');
 });
 
-test('main: codex sessions skip the sandbox mount when no sidecar is declared', async () => {
-  // npm-provenance-publisher@best runs on codex and declares no sidecar,
-  // so the run continues down the non-mount spawn path (which then fails
-  // to spawn codex because PATH is scrubbed). We should NEVER see a
-  // "sandbox mount → …" line, which the mount branch emits before calling
-  // launchOnMount. (Codex DOES engage the mount when a persona declares
-  // AGENTS.md content — covered by the decideCleanMode/loadSidecar unit
-  // tests above; this test specifically guards the no-sidecar default.)
+test('main: codex sessions engage the sandbox mount by default', async () => {
+  // npm-provenance-publisher@best runs on codex; codex now defaults to a
+  // relayfile mount in parity with claude/opencode so persona-supplied
+  // AGENTS.md sidecars (and any per-session writes) stay sandboxed. The
+  // mount branch emits a "sandbox mount → …" line before calling
+  // launchOnMount, then fails to spawn codex (PATH is scrubbed) — we just
+  // need the marker to confirm the mount path was taken.
   const { stderr } = await runCliCapturingStderr([
     'agent',
     'npm-provenance-publisher@best'
   ]);
+  assert.match(
+    stderr,
+    /sandbox mount →/,
+    `expected the mount branch to engage; saw stderr:\n${stderr}`
+  );
+});
+
+test('main: codex --install-in-repo disengages the sandbox mount', async () => {
+  // The single opt-out: --install-in-repo. Confirms parity with claude/
+  // opencode where the same flag turns the mount off.
+  const { stderr } = await runCliCapturingStderr([
+    'agent',
+    'npm-provenance-publisher@best',
+    '--install-in-repo'
+  ]);
   assert.ok(
     !/sandbox mount →/.test(stderr),
-    `expected the mount branch to be skipped; saw stderr:\n${stderr}`
+    `expected the mount branch to be skipped under --install-in-repo; saw stderr:\n${stderr}`
   );
 });
 
