@@ -24,7 +24,6 @@ import {
   routingProfiles,
   useSelection,
   type Harness,
-  type PersonaIntent,
   type PersonaMount,
   type PersonaSelection,
   type PersonaSpec,
@@ -211,6 +210,59 @@ type ResolvedTarget =
   | { kind: 'repo'; source: 'library'; spec: PersonaSpec; tier: PersonaTier }
   | { kind: 'local'; source: PersonaSource; spec: PersonaSpec; tier: PersonaTier };
 
+interface KnownPersonaRow {
+  name: string;
+  description: string;
+}
+
+function collectKnownPersonas(): KnownPersonaRow[] {
+  const byName = new Map<string, KnownPersonaRow>();
+  for (const spec of local.byId.values()) {
+    byName.set(spec.id, {
+      name: spec.id,
+      description: spec.description
+    });
+  }
+  for (const spec of Object.values(personaCatalog)) {
+    if (byName.has(spec.id)) continue;
+    byName.set(spec.id, {
+      name: spec.id,
+      description: spec.description
+    });
+  }
+  return [...byName.values()].sort((a, b) => a.name.localeCompare(b.name));
+}
+
+function formatNameDescriptionTable(rows: readonly KnownPersonaRow[]): string {
+  const headers: KnownPersonaRow = {
+    name: 'NAME',
+    description: 'DESCRIPTION'
+  };
+  const rendered = rows.map((r) => ({
+    name: r.name,
+    description: r.description.replace(/\s+/g, ' ').trim()
+  }));
+  const nameWidth = Math.max(
+    headers.name.length,
+    ...rendered.map((r) => r.name.length)
+  );
+  const termWidth =
+    process.stderr.isTTY && typeof process.stderr.columns === 'number'
+      ? process.stderr.columns
+      : 120;
+  const descBudget = Math.max(
+    headers.description.length,
+    Math.max(32, termWidth - nameWidth - 3)
+  );
+  const truncate = (text: string) =>
+    text.length <= descBudget
+      ? text
+      : `${text.slice(0, Math.max(1, descBudget - 3)).trimEnd()}...`;
+  const line = (row: KnownPersonaRow) =>
+    `${row.name.padEnd(nameWidth)} | ${truncate(row.description)}`.trimEnd();
+  return [line(headers), ...rendered.map(line)].join('\n');
+}
+
 function resolveSpec(key: string): ResolvedTarget['spec'] | { error: string } {
   const localSpec = local.byId.get(key);
   if (localSpec) return localSpec;
@@ -219,15 +271,9 @@ function resolveSpec(key: string): ResolvedTarget['spec'] | { error: string } {
   const byId = Object.values(personaCatalog).find((p) => p.id === key);
   if (byId) return byId;
 
-  const repoListing = Object.values(personaCatalog)
-    .slice()
-    .sort((a, b) => a.id.localeCompare(b.id))
-    .map((p) => `  ${p.id}  (intent: ${p.intent})`);
-  const localListing = [...local.byId.values()]
-    .sort((a, b) => a.id.localeCompare(b.id))
-    .map((p) => `  ${p.id}  (${local.sources.get(p.id) ?? 'local'})`);
-  const listing = [...repoListing, ...localListing].join('\n');
-  return { error: `Unknown persona "${key}". Known personas:\n${listing}` };
+  return {
+    error: `Unknown persona "${key}". Known personas:\n${formatNameDescriptionTable(collectKnownPersonas())}`
+  };
 }
 
 function parseSelector(sel: string): ResolvedTarget {
@@ -1712,8 +1758,8 @@ function runList(args: readonly string[]): never {
     if (filterHarness && r.harness !== filterHarness) return false;
     if (filterTag && !r.tags.includes(filterTag)) return false;
     if (applyRecommended) {
-      const rule = recommendedByIntent[r.intent as PersonaIntent];
-      if (!rule || r.rating !== rule.tier) return false;
+      const rule = (recommendedByIntent as Partial<Record<string, { tier: PersonaTier }>>)[r.intent];
+      if (r.rating !== (rule?.tier ?? 'best-value')) return false;
     }
     return true;
   });
@@ -1808,7 +1854,7 @@ function resolveShowTarget(
   } else if (explicitTier) {
     tiers = [explicitTier];
   } else {
-    const rule = routingProfiles.default.intents[spec.intent];
+    const rule = (routingProfiles.default.intents as Partial<Record<string, { tier: PersonaTier }>>)[spec.intent];
     tiers = [rule?.tier ?? 'best-value'];
   }
   return { spec, source, tiers, explicitTier };

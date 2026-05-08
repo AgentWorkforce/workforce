@@ -452,6 +452,94 @@ test('materializeSkills emits a skill.sh install for a github#skill source', () 
   assert.ok(!install.cleanupPaths.includes('skills-lock.json'));
 });
 
+test('materializeSkills accepts GitHub tree URLs for skill.sh skill directories', () => {
+  const plan = materializeSkills(
+    [
+      {
+        id: 'nextjs-anti-patterns',
+        source: 'https://github.com/wsimmonds/claude-nextjs-skills/tree/main/nextjs-anti-patterns',
+        description: 'Next.js anti-pattern guidance'
+      },
+      {
+        id: 'lighthouse-ci-integrator',
+        source: 'https://github.com/Dexploarer/hyper-forge/tree/main/.claude/skills/lighthouse-ci-integrator',
+        description: 'Lighthouse CI guidance'
+      }
+    ],
+    'opencode'
+  );
+
+  assert.deepEqual(
+    plan.installs.map((install) => ({
+      packageRef: install.packageRef,
+      installedDir: install.installedDir,
+      command: [...install.installCommand]
+    })),
+    [
+      {
+        packageRef: 'https://github.com/wsimmonds/claude-nextjs-skills/tree/main#nextjs-anti-patterns',
+        installedDir: '.agents/skills/nextjs-anti-patterns',
+        command: [
+          'npx',
+          '-y',
+          'skills',
+          'add',
+          'https://github.com/wsimmonds/claude-nextjs-skills/tree/main',
+          '--skill',
+          'nextjs-anti-patterns',
+          '-y'
+        ]
+      },
+      {
+        packageRef: 'https://github.com/Dexploarer/hyper-forge/tree/main#lighthouse-ci-integrator',
+        installedDir: '.agents/skills/lighthouse-ci-integrator',
+        command: [
+          'npx',
+          '-y',
+          'skills',
+          'add',
+          'https://github.com/Dexploarer/hyper-forge/tree/main',
+          '--skill',
+          'lighthouse-ci-integrator',
+          '-y'
+        ]
+      }
+    ]
+  );
+});
+
+test('materializeSkills rejects unsafe skill.sh skill names', () => {
+  assert.throws(
+    () =>
+      materializeSkills(
+        [
+          {
+            id: 'unsafe',
+            source: 'https://github.com/example/skills#../unsafe',
+            description: 'unsafe fragment'
+          }
+        ],
+        'opencode'
+      ),
+    /Unsupported skill source/
+  );
+
+  assert.throws(
+    () =>
+      materializeSkills(
+        [
+          {
+            id: 'unsafe',
+            source: 'https://github.com/example/skills/tree/main/.hidden',
+            description: 'unsafe tree leaf'
+          }
+        ],
+        'opencode'
+      ),
+    /Unsupported skill source/
+  );
+});
+
 test('prpm installs carry a harness-scoped cleanup path (not the lockfile)', () => {
   const plan = materializeSkills(
     [

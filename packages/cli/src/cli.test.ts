@@ -555,6 +555,77 @@ test('main: --version prints the package version', async () => {
   assert.equal(stdout, `${CLI_VERSION}\n`);
 });
 
+test('main: local personas with custom intents appear in list and unknown-persona help', async () => {
+  const { mkdtempSync, mkdirSync, rmSync, writeFileSync } = await import('node:fs');
+  const { tmpdir } = await import('node:os');
+  const { join } = await import('node:path');
+
+  const root = mkdtempSync(join(tmpdir(), 'aw-custom-intent-cli-'));
+  const workforceHome = join(root, 'home', '.agentworkforce', 'workforce');
+  const userPersonaDir = join(workforceHome, 'personas');
+  mkdirSync(userPersonaDir, { recursive: true });
+  writeFileSync(
+    join(userPersonaDir, 'nextjs-web-steward.json'),
+    JSON.stringify({
+      id: 'nextjs-web-steward',
+      intent: 'nextjs-web-steward',
+      tags: ['implementation'],
+      description: 'Stewards Next.js web surfaces.',
+      tiers: {
+        best: {
+          harness: 'codex',
+          model: 'openai-codex/gpt-5.3-codex',
+          systemPrompt: 'Implement Next.js UI work carefully.',
+          harnessSettings: { reasoning: 'high', timeoutSeconds: 30 }
+        },
+        'best-value': {
+          harness: 'opencode',
+          model: 'opencode/gpt-5-nano',
+          systemPrompt: 'Implement Next.js UI work carefully.',
+          harnessSettings: { reasoning: 'medium', timeoutSeconds: 30 }
+        },
+        minimum: {
+          harness: 'opencode',
+          model: 'opencode/minimax-m2.5-free',
+          systemPrompt: 'Implement Next.js UI work carefully.',
+          harnessSettings: { reasoning: 'low', timeoutSeconds: 30 }
+        }
+      }
+    }),
+    'utf8'
+  );
+
+  try {
+    const env = { AGENT_WORKFORCE_HOME: workforceHome };
+    const list = await runCliCapturingStderr(['list', '--json'], env);
+    assert.equal(list.exitCode, 0);
+    assert.equal(list.stderr, '');
+    const parsed = JSON.parse(list.stdout) as {
+      personas: Array<{ persona: string; intent: string; rating: string }>;
+    };
+    assert.ok(
+      parsed.personas.some(
+        (row) =>
+          row.persona === 'nextjs-web-steward' &&
+          row.intent === 'nextjs-web-steward' &&
+          row.rating === 'best-value'
+      ),
+      'custom-intent local persona should be shown at the default recommended tier'
+    );
+
+    const missing = await runCliCapturingStderr(['agent', 'does-not-exist'], env);
+    assert.equal(missing.exitCode, 1);
+    assert.doesNotMatch(missing.stderr, /intent must be one of/);
+    assert.match(missing.stderr, /NAME\s+\|\s+DESCRIPTION/);
+    assert.match(
+      missing.stderr,
+      /nextjs-web-steward\s+\|\s+Stewards Next\.js web surfaces\./
+    );
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
 test('main: sources add/list/remove manages persona source dirs', async () => {
   const { mkdtempSync, mkdirSync, rmSync } = await import('node:fs');
   const { tmpdir } = await import('node:os');
