@@ -3,17 +3,17 @@ import { homedir } from 'node:os';
 import { join } from 'node:path';
 
 import type { Harness, PersonaSelection } from '@agentworkforce/workload-router';
-import * as relayburnSdk from '@relayburn/sdk';
+import * as launchMetadataBackendSdk from '@relayburn/sdk';
 
-export const PERSONA_TAGGING_INTERVAL_MS = 1_000;
-export const PERSONA_TAGS_OPT_OUT_ENV = 'AGENTWORKFORCE_PERSONA_TAGS';
-const PERSONA_TAG_BACKEND_CALL_TIMEOUT_MS = 5_000;
+export const LAUNCH_METADATA_INTERVAL_MS = 1_000;
+export const LAUNCH_METADATA_OPT_OUT_ENV = 'AGENTWORKFORCE_LAUNCH_METADATA';
+const LAUNCH_METADATA_BACKEND_CALL_TIMEOUT_MS = 5_000;
 
-export type PersonaTagIngestHarness = 'claude-code' | 'codex' | 'opencode';
-export type PersonaTagPendingStampHarness = Harness;
+export type LaunchMetadataIngestHarness = 'claude-code' | 'codex' | 'opencode';
+export type LaunchMetadataPendingStampHarness = Harness;
 
-export interface PersonaTagPendingStampOptions {
-  harness: PersonaTagPendingStampHarness;
+export interface LaunchMetadataPendingStampOptions {
+  harness: LaunchMetadataPendingStampHarness;
   cwd: string;
   enrichment: Record<string, string>;
   sessionDirHint?: string;
@@ -21,49 +21,49 @@ export interface PersonaTagPendingStampOptions {
   spawnerPid?: number;
 }
 
-export interface PersonaTagIngestOptions {
-  harness: PersonaTagIngestHarness;
+export interface LaunchMetadataIngestOptions {
+  harness: LaunchMetadataIngestHarness;
 }
 
-export interface PersonaTagBackendLike {
-  writePendingStamp?: (opts: PersonaTagPendingStampOptions) => unknown | Promise<unknown>;
-  ingest?: (opts?: PersonaTagIngestOptions) => unknown | Promise<unknown>;
+export interface LaunchMetadataBackendLike {
+  writePendingStamp?: (opts: LaunchMetadataPendingStampOptions) => unknown | Promise<unknown>;
+  ingest?: (opts?: LaunchMetadataIngestOptions) => unknown | Promise<unknown>;
 }
 
-export interface PersonaTaggingStartOptions {
+export interface LaunchMetadataStartOptions {
   selection: Pick<PersonaSelection, 'personaId' | 'tier' | 'runtime'>;
   personaSpec: unknown;
   personaSource: string;
   cwd: string;
-  noPersonaTags?: boolean;
+  noLaunchMetadata?: boolean;
   env?: NodeJS.ProcessEnv;
-  sdk?: PersonaTagBackendLike | (() => Promise<PersonaTagBackendLike>);
+  sdk?: LaunchMetadataBackendLike | (() => Promise<LaunchMetadataBackendLike>);
   intervalMs?: number;
   now?: () => Date;
   onWarn?: (message: string) => void;
 }
 
-export interface PersonaTaggingRun {
+export interface LaunchMetadataRun {
   readonly enabled: boolean;
-  readonly tags: Record<string, string>;
+  readonly metadata: Record<string, string>;
   stop(): Promise<void>;
 }
 
-const NOOP_RUN: PersonaTaggingRun = Object.freeze({
+const NOOP_RUN: LaunchMetadataRun = Object.freeze({
   enabled: false,
-  tags: Object.freeze({}) as Record<string, string>,
+  metadata: Object.freeze({}) as Record<string, string>,
   async stop() {
     /* no-op */
   }
 });
 
-export function shouldRecordPersonaTags(input: {
-  noPersonaTags?: boolean;
+export function shouldRecordLaunchMetadata(input: {
+  noLaunchMetadata?: boolean;
   env?: NodeJS.ProcessEnv;
 }): boolean {
-  if (input.noPersonaTags === true) return false;
+  if (input.noLaunchMetadata === true) return false;
   const env = input.env ?? process.env;
-  return env[PERSONA_TAGS_OPT_OUT_ENV] !== '0';
+  return env[LAUNCH_METADATA_OPT_OUT_ENV] !== '0';
 }
 
 export function canonicalJson(value: unknown): string {
@@ -78,7 +78,7 @@ export function personaVersionShort(personaSpec: unknown): string {
   return personaVersionHash(personaSpec).slice(0, 12);
 }
 
-export function buildPersonaTagEnrichment(input: {
+export function buildLaunchMetadata(input: {
   selection: Pick<PersonaSelection, 'personaId' | 'tier'>;
   personaSpec: unknown;
   personaSource: string;
@@ -92,11 +92,11 @@ export function buildPersonaTagEnrichment(input: {
   };
 }
 
-export function personaTagIngestHarness(harness: Harness): PersonaTagIngestHarness {
+export function launchMetadataIngestHarness(harness: Harness): LaunchMetadataIngestHarness {
   return harness === 'claude' ? 'claude-code' : harness;
 }
 
-export function personaTagSessionDirHint(harness: Harness): string | undefined {
+export function launchMetadataSessionDirHint(harness: Harness): string | undefined {
   const home = homedir();
   switch (harness) {
     case 'claude':
@@ -112,35 +112,35 @@ export function personaTagSessionDirHint(harness: Harness): string | undefined {
   }
 }
 
-export async function startPersonaTagging(
-  options: PersonaTaggingStartOptions
-): Promise<PersonaTaggingRun> {
-  if (!shouldRecordPersonaTags(options)) return NOOP_RUN;
+export async function startLaunchMetadataRecording(
+  options: LaunchMetadataStartOptions
+): Promise<LaunchMetadataRun> {
+  if (!shouldRecordLaunchMetadata(options)) return NOOP_RUN;
 
-  const tags = buildPersonaTagEnrichment({
+  const metadata = buildLaunchMetadata({
     selection: options.selection,
     personaSpec: options.personaSpec,
     personaSource: options.personaSource
   });
   const warn = makeOnceWarn(options.onWarn ?? ((msg) => process.stderr.write(`warning: ${msg}\n`)));
 
-  let sdk: PersonaTagBackendLike;
+  let sdk: LaunchMetadataBackendLike;
   try {
-    sdk = await resolvePersonaTagBackend(options.sdk);
+    sdk = await resolveLaunchMetadataBackend(options.sdk);
   } catch (err) {
-    warn(`persona tag recording unavailable: ${errorMessage(err)}`);
-    return disabledRun(tags);
+    warn(`launch metadata recording unavailable: ${errorMessage(err)}`);
+    return disabledRun(metadata);
   }
 
   if (typeof sdk.writePendingStamp !== 'function') {
     warn(
-      'persona tag recording unavailable: installed tag backend does not support launcher tagging yet.'
+      'launch metadata recording unavailable: installed metadata backend does not support launcher metadata yet.'
     );
-    return disabledRun(tags);
+    return disabledRun(metadata);
   }
   if (typeof sdk.ingest !== 'function') {
-    warn('persona tag recording unavailable: installed tag backend does not support ingest.');
-    return disabledRun(tags);
+    warn('launch metadata recording unavailable: installed metadata backend does not support ingest.');
+    return disabledRun(metadata);
   }
   const writePendingStamp = sdk.writePendingStamp.bind(sdk);
   const ingest = sdk.ingest.bind(sdk);
@@ -150,17 +150,17 @@ export async function startPersonaTagging(
       writePendingStamp({
         harness: options.selection.runtime.harness,
         cwd: options.cwd,
-        enrichment: tags,
-        sessionDirHint: personaTagSessionDirHint(options.selection.runtime.harness),
+        enrichment: metadata,
+        sessionDirHint: launchMetadataSessionDirHint(options.selection.runtime.harness),
         spawnStartTs: (options.now?.() ?? new Date()).toISOString(),
         spawnerPid: process.pid
       }),
-      PERSONA_TAG_BACKEND_CALL_TIMEOUT_MS,
+      LAUNCH_METADATA_BACKEND_CALL_TIMEOUT_MS,
       'writePendingStamp'
     );
   } catch (err) {
-    warn(`persona tag stamp failed: ${errorMessage(err)}`);
-    return disabledRun(tags);
+    warn(`launch metadata stamp failed: ${errorMessage(err)}`);
+    return disabledRun(metadata);
   }
 
   let stopped = false;
@@ -169,14 +169,14 @@ export async function startPersonaTagging(
   const runIngest = async () => {
     try {
       await withTimeout(
-        ingest({ harness: personaTagIngestHarness(options.selection.runtime.harness) }),
-        PERSONA_TAG_BACKEND_CALL_TIMEOUT_MS,
+        ingest({ harness: launchMetadataIngestHarness(options.selection.runtime.harness) }),
+        LAUNCH_METADATA_BACKEND_CALL_TIMEOUT_MS,
         'ingest'
       );
     } catch (err) {
       if (!ingestWarned) {
         ingestWarned = true;
-        warn(`persona tag ingest failed: ${errorMessage(err)}`);
+        warn(`launch metadata ingest failed: ${errorMessage(err)}`);
       }
     }
   };
@@ -186,12 +186,12 @@ export async function startPersonaTagging(
       inFlight = undefined;
     });
   };
-  const interval = setInterval(tick, options.intervalMs ?? PERSONA_TAGGING_INTERVAL_MS);
+  const interval = setInterval(tick, options.intervalMs ?? LAUNCH_METADATA_INTERVAL_MS);
   interval.unref?.();
 
   return {
     enabled: true,
-    tags,
+    metadata,
     async stop() {
       if (stopped) return;
       stopped = true;
@@ -202,18 +202,18 @@ export async function startPersonaTagging(
   };
 }
 
-async function resolvePersonaTagBackend(
-  sdk: PersonaTaggingStartOptions['sdk']
-): Promise<PersonaTagBackendLike> {
+async function resolveLaunchMetadataBackend(
+  sdk: LaunchMetadataStartOptions['sdk']
+): Promise<LaunchMetadataBackendLike> {
   if (typeof sdk === 'function') return await sdk();
   if (sdk) return sdk;
-  return relayburnSdk as unknown as PersonaTagBackendLike;
+  return launchMetadataBackendSdk as unknown as LaunchMetadataBackendLike;
 }
 
-function disabledRun(tags: Record<string, string>): PersonaTaggingRun {
+function disabledRun(metadata: Record<string, string>): LaunchMetadataRun {
   return Object.freeze({
     enabled: false,
-    tags,
+    metadata,
     async stop() {
       /* no-op */
     }

@@ -9,9 +9,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
-- `agentworkforce agent` now records default persona tags through the CLI
-  package; opt out with `--no-persona-tags` or
-  `AGENTWORKFORCE_PERSONA_TAGS=0`.
+- `agentworkforce agent` now records launch metadata through the CLI package;
+  opt out with `--no-launch-metadata` or
+  `AGENTWORKFORCE_LAUNCH_METADATA=0`.
 - `agentworkforce create` now opens `persona-maker@best`, supports target
   selection, and passes `TARGET_DIR` / `CREATE_MODE` persona inputs.
 - `agentworkforce --version` now prints the installed package version.

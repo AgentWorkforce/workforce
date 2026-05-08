@@ -3,15 +3,15 @@ import assert from 'node:assert/strict';
 
 import type { PersonaSelection, PersonaSpec } from '@agentworkforce/workload-router';
 import {
-  buildPersonaTagEnrichment,
+  buildLaunchMetadata,
   canonicalJson,
-  personaTagIngestHarness,
+  launchMetadataIngestHarness,
   personaVersionHash,
-  shouldRecordPersonaTags,
-  startPersonaTagging,
-  type PersonaTagIngestOptions,
-  type PersonaTagPendingStampOptions
-} from './persona-tags.js';
+  shouldRecordLaunchMetadata,
+  startLaunchMetadataRecording,
+  type LaunchMetadataIngestOptions,
+  type LaunchMetadataPendingStampOptions
+} from './launch-metadata.js';
 
 function fakeSelection(): Pick<PersonaSelection, 'personaId' | 'tier' | 'runtime'> {
   return {
@@ -82,15 +82,15 @@ test('personaVersionHash canonicalizes object keys and changes with effective co
   assert.notEqual(personaVersionHash(left), personaVersionHash({ ...right, tags: ['testing'] }));
 });
 
-test('buildPersonaTagEnrichment emits the required AgentWorkforce tags', () => {
+test('buildLaunchMetadata emits the required AgentWorkforce metadata', () => {
   const spec = fakeSpec();
-  const tags = buildPersonaTagEnrichment({
+  const metadata = buildLaunchMetadata({
     selection: fakeSelection(),
     personaSpec: spec,
     personaSource: 'dir:1'
   });
 
-  assert.deepEqual(tags, {
+  assert.deepEqual(metadata, {
     agentworkforce: '1',
     persona: 'code-reviewer',
     personaTier: 'best',
@@ -99,11 +99,11 @@ test('buildPersonaTagEnrichment emits the required AgentWorkforce tags', () => {
   });
 });
 
-test('startPersonaTagging writes a pending stamp and runs periodic plus final ingest', async (t) => {
+test('startLaunchMetadataRecording writes a pending stamp and runs periodic plus final ingest', async (t) => {
   t.mock.timers.enable({ apis: ['setInterval'] });
-  const stamps: PersonaTagPendingStampOptions[] = [];
-  const ingests: PersonaTagIngestOptions[] = [];
-  const run = await startPersonaTagging({
+  const stamps: LaunchMetadataPendingStampOptions[] = [];
+  const ingests: LaunchMetadataIngestOptions[] = [];
+  const run = await startLaunchMetadataRecording({
     selection: fakeSelection(),
     personaSpec: fakeSpec(),
     personaSource: 'cwd',
@@ -133,14 +133,14 @@ test('startPersonaTagging writes a pending stamp and runs periodic plus final in
   assert.deepEqual(ingests.at(-1), { harness: 'codex' });
 });
 
-test('startPersonaTagging skips SDK loading and ingest when opted out', async () => {
+test('startLaunchMetadataRecording skips SDK loading and ingest when opted out', async () => {
   let loads = 0;
-  const run = await startPersonaTagging({
+  const run = await startLaunchMetadataRecording({
     selection: fakeSelection(),
     personaSpec: fakeSpec(),
     personaSource: 'library',
     cwd: '/tmp/project',
-    noPersonaTags: true,
+    noLaunchMetadata: true,
     sdk: async () => {
       loads += 1;
       throw new Error('should not load');
@@ -151,25 +151,25 @@ test('startPersonaTagging skips SDK loading and ingest when opted out', async ()
   assert.equal(run.enabled, false);
   assert.equal(loads, 0);
   assert.equal(
-    shouldRecordPersonaTags({ env: { AGENTWORKFORCE_PERSONA_TAGS: '0' } }),
+    shouldRecordLaunchMetadata({ env: { AGENTWORKFORCE_LAUNCH_METADATA: '0' } }),
     false
   );
 
-  const originalEnvValue = process.env.AGENTWORKFORCE_PERSONA_TAGS;
+  const originalEnvValue = process.env.AGENTWORKFORCE_LAUNCH_METADATA;
   try {
-    process.env.AGENTWORKFORCE_PERSONA_TAGS = '0';
-    assert.equal(shouldRecordPersonaTags({}), false);
+    process.env.AGENTWORKFORCE_LAUNCH_METADATA = '0';
+    assert.equal(shouldRecordLaunchMetadata({}), false);
   } finally {
     if (originalEnvValue === undefined) {
-      delete process.env.AGENTWORKFORCE_PERSONA_TAGS;
+      delete process.env.AGENTWORKFORCE_LAUNCH_METADATA;
     } else {
-      process.env.AGENTWORKFORCE_PERSONA_TAGS = originalEnvValue;
+      process.env.AGENTWORKFORCE_LAUNCH_METADATA = originalEnvValue;
     }
   }
 });
 
-test('personaTagIngestHarness maps AgentWorkforce claude to backend claude-code', () => {
-  assert.equal(personaTagIngestHarness('claude'), 'claude-code');
-  assert.equal(personaTagIngestHarness('codex'), 'codex');
-  assert.equal(personaTagIngestHarness('opencode'), 'opencode');
+test('launchMetadataIngestHarness maps AgentWorkforce claude to backend claude-code', () => {
+  assert.equal(launchMetadataIngestHarness('claude'), 'claude-code');
+  assert.equal(launchMetadataIngestHarness('codex'), 'codex');
+  assert.equal(launchMetadataIngestHarness('opencode'), 'opencode');
 });

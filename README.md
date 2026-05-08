@@ -204,8 +204,8 @@ corepack pnpm --filter agentworkforce link --global
 ### Usage
 
 ```
-agentworkforce create [--to <target>] [--save-default] [--install-in-repo] [--no-persona-tags]
-agentworkforce agent [--install-in-repo] [--no-persona-tags] <persona>[@<tier>]
+agentworkforce create [--to <target>] [--save-default] [--install-in-repo] [--no-launch-metadata]
+agentworkforce agent [--install-in-repo] [--no-launch-metadata] <persona>[@<tier>]
 agentworkforce list [flags]
 agentworkforce install [flags] <pkg|path>
 agentworkforce sources <list|add|remove>
@@ -223,8 +223,8 @@ agentworkforce --version
     2. Configured persona source dirs. Default:
        `~/.agentworkforce/workforce/personas/*.json`
     3. Built-in personas in `/personas/`
-  - Persona tags are recorded by default for launched sessions; opt out with
-    `--no-persona-tags` or `AGENTWORKFORCE_PERSONA_TAGS=0`.
+  - Launch metadata is recorded by default for launched sessions; opt out with
+    `--no-launch-metadata` or `AGENTWORKFORCE_LAUNCH_METADATA=0`.
 - `list` — print the catalog of personas from the cascade (cwd →
   configured dirs → library). Columns: persona, source, harness, model,
   rating, description.
@@ -262,12 +262,12 @@ export POSTHOG_API_KEY=phx_…
 agentworkforce agent posthog@best
 ```
 
-Persona launches record tags by default when the installed tag backend supports
-launcher tagging. AgentWorkforce stamps
+Persona launches record metadata by default when the installed backend supports
+launcher metadata. AgentWorkforce records
 `agentworkforce=1`, `persona=<id>`, `personaTier=<tier>`,
 `personaVersion=<sha256>`, and `personaSource=<cwd|user|dir:n|library>`.
-Use `--no-persona-tags` or `AGENTWORKFORCE_PERSONA_TAGS=0` to skip tag writing
-and session-log refresh for that launch.
+Use `--no-launch-metadata` or `AGENTWORKFORCE_LAUNCH_METADATA=0` to skip
+metadata writing and session-log refresh for that launch.
 
 ### Persona pack installs
 

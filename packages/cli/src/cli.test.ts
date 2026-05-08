@@ -75,13 +75,13 @@ function trapExit(): ExitTrap {
 test('parseAgentArgs: --install-in-repo sets flag and preserves positional selector', () => {
   const { flags, positional } = parseAgentArgs(['--install-in-repo', 'posthog@best']);
   assert.equal(flags.installInRepo, true);
-  assert.equal(flags.noPersonaTags, false);
+  assert.equal(flags.noLaunchMetadata, false);
   assert.deepEqual(positional, ['posthog@best']);
 });
 
-test('parseAgentArgs: --no-persona-tags sets flag and preserves positional selector', () => {
-  const { flags, positional } = parseAgentArgs(['--no-persona-tags', 'posthog@best']);
-  assert.equal(flags.noPersonaTags, true);
+test('parseAgentArgs: --no-launch-metadata sets flag and preserves positional selector', () => {
+  const { flags, positional } = parseAgentArgs(['--no-launch-metadata', 'posthog@best']);
+  assert.equal(flags.noLaunchMetadata, true);
   assert.equal(flags.installInRepo, false);
   assert.deepEqual(positional, ['posthog@best']);
 });
@@ -93,14 +93,14 @@ test('parseAgentArgs: preserves trailing positionals after the selector', () => 
     'extra-arg'
   ]);
   assert.equal(flags.installInRepo, true);
-  assert.equal(flags.noPersonaTags, false);
+  assert.equal(flags.noLaunchMetadata, false);
   assert.deepEqual(positional, ['review@best-value', 'extra-arg']);
 });
 
 test('parseAgentArgs: no flags → installInRepo false', () => {
   const { flags, positional } = parseAgentArgs(['posthog']);
   assert.equal(flags.installInRepo, false);
-  assert.equal(flags.noPersonaTags, false);
+  assert.equal(flags.noLaunchMetadata, false);
   assert.deepEqual(positional, ['posthog']);
 });
 
@@ -112,7 +112,7 @@ test('parseAgentArgs: -- stops flag parsing, positional args after are preserved
   ]);
   // --install-in-repo AFTER `--` is positional, not a flag.
   assert.equal(flags.installInRepo, false);
-  assert.equal(flags.noPersonaTags, false);
+  assert.equal(flags.noLaunchMetadata, false);
   assert.deepEqual(positional, ['--install-in-repo', 'posthog']);
 });
 
@@ -141,13 +141,13 @@ test('parseCreateArgs: runs persona-maker and preserves agent flags', () => {
   try {
     const { flags, selector, inputValues } = parseCreateArgs([
       '--install-in-repo',
-      '--no-persona-tags',
+      '--no-launch-metadata',
       '--to',
       'user'
     ]);
     assert.equal(selector, CREATE_SELECTOR);
     assert.equal(flags.installInRepo, true);
-    assert.equal(flags.noPersonaTags, true);
+    assert.equal(flags.noLaunchMetadata, true);
     assert.equal(
       inputValues.TARGET_DIR,
       join(root, 'home', '.agentworkforce', 'workforce', 'personas')
@@ -757,7 +757,7 @@ process.exit(7);
 
     const res = await runCliCapturingStderr(['agent', 'code-reviewer@best'], {
       PATH: `${dir}:${process.env.PATH ?? ''}`,
-      AGENTWORKFORCE_PERSONA_TAGS: '0'
+      AGENTWORKFORCE_LAUNCH_METADATA: '0'
     });
 
     assert.equal(res.exitCode, 7);
