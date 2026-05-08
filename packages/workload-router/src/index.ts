@@ -54,7 +54,37 @@ export type PersonaTag = (typeof PERSONA_TAGS)[number];
 export interface HarnessSettings {
   reasoning: 'low' | 'medium' | 'high';
   timeoutSeconds: number;
+  /**
+   * Codex CLI sandbox mode for model-generated shell commands. Prefer
+   * `workspace-write` with `workspaceWriteNetworkAccess` when network is the only
+   * missing capability; `danger-full-access` is the fully unsandboxed fallback.
+   */
+  sandboxMode?: CodexSandboxMode;
+  /** Codex CLI approval policy (`--ask-for-approval`). */
+  approvalPolicy?: CodexApprovalPolicy;
+  /**
+   * Allow outbound network access inside Codex's workspace-write sandbox
+   * (`sandbox_workspace_write.network_access`).
+   */
+  workspaceWriteNetworkAccess?: boolean;
+  /** Enable the Codex live web-search tool for this runtime. */
+  webSearch?: boolean;
 }
+
+export const CODEX_SANDBOX_MODES = [
+  'read-only',
+  'workspace-write',
+  'danger-full-access'
+] as const;
+export type CodexSandboxMode = (typeof CODEX_SANDBOX_MODES)[number];
+
+export const CODEX_APPROVAL_POLICIES = [
+  'untrusted',
+  'on-failure',
+  'on-request',
+  'never'
+] as const;
+export type CodexApprovalPolicy = (typeof CODEX_APPROVAL_POLICIES)[number];
 
 /**
  * Sidecar markdown delivery mode. `overwrite` writes only the persona's
@@ -860,6 +890,58 @@ function assertSidecarPath(value: unknown, context: string): void {
   }
 }
 
+function parseHarnessSettings(value: unknown, context: string): HarnessSettings {
+  if (!isObject(value)) {
+    throw new Error(`${context} must be an object`);
+  }
+
+  const {
+    reasoning,
+    timeoutSeconds,
+    sandboxMode,
+    approvalPolicy,
+    workspaceWriteNetworkAccess,
+    webSearch
+  } = value;
+  if (!['low', 'medium', 'high'].includes(String(reasoning))) {
+    throw new Error(`${context}.reasoning must be low|medium|high`);
+  }
+  if (typeof timeoutSeconds !== 'number' || !Number.isFinite(timeoutSeconds) || timeoutSeconds <= 0) {
+    throw new Error(`${context}.timeoutSeconds must be a positive number`);
+  }
+
+  const out: HarnessSettings = {
+    reasoning: reasoning as HarnessSettings['reasoning'],
+    timeoutSeconds
+  };
+  if (sandboxMode !== undefined) {
+    if (!CODEX_SANDBOX_MODES.includes(sandboxMode as CodexSandboxMode)) {
+      throw new Error(`${context}.sandboxMode must be one of: ${CODEX_SANDBOX_MODES.join(', ')}`);
+    }
+    out.sandboxMode = sandboxMode as CodexSandboxMode;
+  }
+  if (approvalPolicy !== undefined) {
+    if (!CODEX_APPROVAL_POLICIES.includes(approvalPolicy as CodexApprovalPolicy)) {
+      throw new Error(`${context}.approvalPolicy must be one of: ${CODEX_APPROVAL_POLICIES.join(', ')}`);
+    }
+    out.approvalPolicy = approvalPolicy as CodexApprovalPolicy;
+  }
+  if (workspaceWriteNetworkAccess !== undefined) {
+    if (typeof workspaceWriteNetworkAccess !== 'boolean') {
+      throw new Error(`${context}.workspaceWriteNetworkAccess must be a boolean`);
+    }
+    out.workspaceWriteNetworkAccess = workspaceWriteNetworkAccess;
+  }
+  if (webSearch !== undefined) {
+    if (typeof webSearch !== 'boolean') {
+      throw new Error(`${context}.webSearch must be a boolean`);
+    }
+    out.webSearch = webSearch;
+  }
+
+  return out;
+}
+
 function parseRuntime(value: unknown, context: string): PersonaRuntime {
   if (!isObject(value)) {
     throw new Error(`${context} must be an object`);
@@ -887,17 +969,10 @@ function parseRuntime(value: unknown, context: string): PersonaRuntime {
   if (typeof systemPrompt !== 'string' || !systemPrompt.trim()) {
     throw new Error(`${context}.systemPrompt must be a non-empty string`);
   }
-  if (!isObject(harnessSettings)) {
-    throw new Error(`${context}.harnessSettings must be an object`);
-  }
-
-  const { reasoning, timeoutSeconds } = harnessSettings;
-  if (!['low', 'medium', 'high'].includes(String(reasoning))) {
-    throw new Error(`${context}.harnessSettings.reasoning must be low|medium|high`);
-  }
-  if (typeof timeoutSeconds !== 'number' || !Number.isFinite(timeoutSeconds) || timeoutSeconds <= 0) {
-    throw new Error(`${context}.harnessSettings.timeoutSeconds must be a positive number`);
-  }
+  const parsedHarnessSettings = parseHarnessSettings(
+    harnessSettings,
+    `${context}.harnessSettings`
+  );
 
   if (claudeMd !== undefined) assertSidecarPath(claudeMd, `${context}.claudeMd`);
   if (agentsMd !== undefined) assertSidecarPath(agentsMd, `${context}.agentsMd`);
@@ -922,10 +997,7 @@ function parseRuntime(value: unknown, context: string): PersonaRuntime {
     harness,
     model,
     systemPrompt,
-    harnessSettings: {
-      reasoning: reasoning as HarnessSettings['reasoning'],
-      timeoutSeconds
-    },
+    harnessSettings: parsedHarnessSettings,
     ...(typeof claudeMd === 'string' ? { claudeMd } : {}),
     ...(claudeMdMode ? { claudeMdMode: claudeMdMode as SidecarMdMode } : {}),
     ...(typeof agentsMd === 'string' ? { agentsMd } : {}),

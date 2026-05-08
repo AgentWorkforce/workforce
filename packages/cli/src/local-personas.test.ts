@@ -356,6 +356,33 @@ test('permissions allow list dedupes across layers', () => {
   });
 });
 
+test('codex harness settings merge across local persona layers', () => {
+  withLayers(({ cwd, homeDir }) => {
+    writeJson(join(homeDir, 'planner.json'), {
+      id: 'planner',
+      extends: 'architecture-planner',
+      tiers: {
+        best: {
+          harnessSettings: {
+            sandboxMode: 'workspace-write',
+            approvalPolicy: 'on-request',
+            workspaceWriteNetworkAccess: true,
+            webSearch: true
+          }
+        }
+      }
+    });
+    const loaded = loadLocalPersonas({ cwd, homeDir });
+    assert.deepEqual(loaded.warnings, []);
+    const settings = loaded.byId.get('planner')?.tiers.best.harnessSettings;
+    assert.equal(settings?.reasoning, 'high');
+    assert.equal(settings?.sandboxMode, 'workspace-write');
+    assert.equal(settings?.approvalPolicy, 'on-request');
+    assert.equal(settings?.workspaceWriteNetworkAccess, true);
+    assert.equal(settings?.webSearch, true);
+  });
+});
+
 test('inputs merge across local persona layers', () => {
   withLayers(({ cwd, homeDir, pwdDir }) => {
     writeJson(join(homeDir, 'maker-base.json'), {

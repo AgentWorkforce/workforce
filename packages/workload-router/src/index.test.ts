@@ -214,6 +214,9 @@ test('resolvePersonaByTier propagates persona input declarations', () => {
     selection.agentsMdContent ?? '',
     /\$TARGET_DIR\/<id>\.json/
   );
+  assert.equal(selection.runtime.harnessSettings.sandboxMode, 'workspace-write');
+  assert.equal(selection.runtime.harnessSettings.approvalPolicy, 'on-request');
+  assert.equal(selection.runtime.harnessSettings.workspaceWriteNetworkAccess, true);
 });
 
 test('personas with no optional fields keep them undefined on the selection', () => {

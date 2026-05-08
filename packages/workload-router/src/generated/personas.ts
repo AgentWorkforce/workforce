@@ -580,7 +580,10 @@ export const personaMaker = {
       "systemPrompt": "$TASK_DESCRIPTION",
       "harnessSettings": {
         "reasoning": "high",
-        "timeoutSeconds": 1200
+        "timeoutSeconds": 1200,
+        "sandboxMode": "workspace-write",
+        "approvalPolicy": "on-request",
+        "workspaceWriteNetworkAccess": true
       }
     },
     "best-value": {

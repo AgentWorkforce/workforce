@@ -3,12 +3,17 @@ import { homedir } from 'node:os';
 import { dirname, isAbsolute, join, resolve as resolvePath } from 'node:path';
 
 import {
+  CODEX_APPROVAL_POLICIES,
+  CODEX_SANDBOX_MODES,
   HARNESS_VALUES,
   PERSONA_INTENTS,
   personaCatalog,
   PERSONA_TAGS,
   PERSONA_TIERS,
   SIDECAR_MD_MODES,
+  type CodexApprovalPolicy,
+  type CodexSandboxMode,
+  type HarnessSettings,
   type McpServerSpec,
   type PersonaIntent,
   type PersonaInputSpec,
@@ -575,12 +580,60 @@ function assertTiersShape(value: unknown, context: string): void {
     if (runtime.harnessSettings !== undefined && !isPlainObject(runtime.harnessSettings)) {
       throw new Error(`${path}.harnessSettings must be an object`);
     }
+    if (runtime.harnessSettings !== undefined) {
+      assertPartialHarnessSettingsShape(runtime.harnessSettings, `${path}.harnessSettings`);
+    }
     if (runtime.claudeMd !== undefined) assertSidecarPath(runtime.claudeMd, `${path}.claudeMd`);
     if (runtime.agentsMd !== undefined) assertSidecarPath(runtime.agentsMd, `${path}.agentsMd`);
     // Tier-level mode without a tier-level path is allowed: it overrides
     // top-level mode for this tier while inheriting the inherited path.
     if (runtime.claudeMdMode !== undefined) assertSidecarMode(runtime.claudeMdMode, `${path}.claudeMdMode`);
     if (runtime.agentsMdMode !== undefined) assertSidecarMode(runtime.agentsMdMode, `${path}.agentsMdMode`);
+  }
+}
+
+function assertPartialHarnessSettingsShape(value: Record<string, unknown>, context: string): void {
+  const {
+    reasoning,
+    timeoutSeconds,
+    sandboxMode,
+    approvalPolicy,
+    workspaceWriteNetworkAccess,
+    webSearch
+  } = value;
+  if (
+    reasoning !== undefined &&
+    reasoning !== 'low' &&
+    reasoning !== 'medium' &&
+    reasoning !== 'high'
+  ) {
+    throw new Error(`${context}.reasoning must be one of: low, medium, high`);
+  }
+  if (
+    timeoutSeconds !== undefined &&
+    (typeof timeoutSeconds !== 'number' || !Number.isFinite(timeoutSeconds) || timeoutSeconds <= 0)
+  ) {
+    throw new Error(`${context}.timeoutSeconds must be a positive number`);
+  }
+  if (
+    sandboxMode !== undefined &&
+    !CODEX_SANDBOX_MODES.includes(sandboxMode as CodexSandboxMode)
+  ) {
+    throw new Error(`${context}.sandboxMode must be one of: ${CODEX_SANDBOX_MODES.join(', ')}`);
+  }
+  if (
+    approvalPolicy !== undefined &&
+    !CODEX_APPROVAL_POLICIES.includes(approvalPolicy as CodexApprovalPolicy)
+  ) {
+    throw new Error(
+      `${context}.approvalPolicy must be one of: ${CODEX_APPROVAL_POLICIES.join(', ')}`
+    );
+  }
+  if (workspaceWriteNetworkAccess !== undefined && typeof workspaceWriteNetworkAccess !== 'boolean') {
+    throw new Error(`${context}.workspaceWriteNetworkAccess must be a boolean`);
+  }
+  if (webSearch !== undefined && typeof webSearch !== 'boolean') {
+    throw new Error(`${context}.webSearch must be a boolean`);
   }
 }
 
@@ -629,23 +682,43 @@ function assertStandaloneRuntime(
   if (!isPlainObject(settings)) {
     throw new Error(`${context}.harnessSettings must be an object`);
   }
-  const reasoning = settings.reasoning;
-  if (reasoning !== 'low' && reasoning !== 'medium' && reasoning !== 'high') {
-    throw new Error(`${context}.harnessSettings.reasoning must be one of: low, medium, high`);
-  }
-  const timeoutSeconds = settings.timeoutSeconds;
-  if (typeof timeoutSeconds !== 'number' || !Number.isFinite(timeoutSeconds) || timeoutSeconds <= 0) {
-    throw new Error(`${context}.harnessSettings.timeoutSeconds must be a positive number`);
-  }
+  const harnessSettings = assertStandaloneHarnessSettings(settings, `${context}.harnessSettings`);
   return {
     harness: runtime.harness as PersonaRuntime['harness'],
     model: runtime.model,
     systemPrompt: runtime.systemPrompt,
-    harnessSettings: {
-      reasoning,
-      timeoutSeconds
-    }
+    harnessSettings
   };
+}
+
+function assertStandaloneHarnessSettings(
+  settings: Record<string, unknown>,
+  context: string
+): HarnessSettings {
+  assertPartialHarnessSettingsShape(settings, context);
+  const reasoning = settings.reasoning;
+  if (reasoning !== 'low' && reasoning !== 'medium' && reasoning !== 'high') {
+    throw new Error(`${context}.reasoning must be one of: low, medium, high`);
+  }
+  const timeoutSeconds = settings.timeoutSeconds;
+  if (typeof timeoutSeconds !== 'number' || !Number.isFinite(timeoutSeconds) || timeoutSeconds <= 0) {
+    throw new Error(`${context}.timeoutSeconds must be a positive number`);
+  }
+
+  const out: HarnessSettings = { reasoning, timeoutSeconds };
+  if (settings.sandboxMode !== undefined) {
+    out.sandboxMode = settings.sandboxMode as CodexSandboxMode;
+  }
+  if (settings.approvalPolicy !== undefined) {
+    out.approvalPolicy = settings.approvalPolicy as CodexApprovalPolicy;
+  }
+  if (settings.workspaceWriteNetworkAccess !== undefined) {
+    out.workspaceWriteNetworkAccess = settings.workspaceWriteNetworkAccess as boolean;
+  }
+  if (settings.webSearch !== undefined) {
+    out.webSearch = settings.webSearch as boolean;
+  }
+  return out;
 }
 
 function standaloneSpecFromOverride(
