@@ -3,14 +3,18 @@ import { spawn, spawnSync } from 'node:child_process';
 import { randomBytes } from 'node:crypto';
 import {
   appendFileSync,
+  closeSync,
   existsSync,
   mkdirSync,
   mkdtempSync,
+  openSync,
+  readdirSync,
   readFileSync,
   readSync,
   rmSync,
   statSync,
-  writeFileSync
+  writeFileSync,
+  type Dirent
 } from 'node:fs';
 import { constants, homedir, tmpdir } from 'node:os';
 import { dirname, isAbsolute, join, resolve as resolvePath } from 'node:path';
@@ -43,6 +47,7 @@ import {
   resolvePersonaInputs,
   resolveMcpServersLenient,
   resolveStringMapLenient,
+  useRunnableSelection,
   type HarnessAvailability,
   type InteractiveSpec
 } from '@agentworkforce/harness-kit';
@@ -417,31 +422,46 @@ function subprocessExitCode(res: ReturnType<typeof spawnSync>): number {
  * the buffered output is dumped after spinner.fail so the user sees what
  * actually broke. stdin is ignored — the install commands don't prompt.
  *
+ * Uses async `spawn` (not `spawnSync`) because ora's frame redraw runs on a
+ * setInterval — `spawnSync` blocks the event loop for the duration of the
+ * install, freezing the spinner on its first frame.
+ *
  * The spinner text stays "Installing skills…" while running; the longer
  * `label` (which includes target paths and skill ids) is shown on
  * success/failure so the verbose detail is still discoverable in logs.
  */
-function runInstallWithSpinner(
+async function runInstallWithSpinner(
   command: readonly string[],
   label: string,
   cwd: string | undefined
-): { code: number; output: string } {
+): Promise<{ code: number; output: string }> {
   const [bin, ...args] = command;
   if (!bin) return { code: 0, output: '' };
   const spinner = ora({ text: 'Installing skills…', stream: process.stderr }).start();
-  const res = spawnSync(bin, args, {
-    stdio: ['ignore', 'pipe', 'pipe'],
-    shell: false,
-    encoding: 'utf8',
-    // Default is 1 MiB; verbose `npx prpm install` / `npx skills add` runs
-    // can blow past it, which would have spawnSync kill the child with
-    // ENOBUFS and report a spurious failure. 100 MiB is well past anything
-    // these installers print in practice.
-    maxBuffer: 100 * 1024 * 1024,
-    ...(cwd ? { cwd } : {})
+  const { code, output } = await new Promise<{ code: number; output: string }>((resolve) => {
+    const child = spawn(bin, args, {
+      stdio: ['ignore', 'pipe', 'pipe'],
+      shell: false,
+      ...(cwd ? { cwd } : {})
+    });
+    let buffered = '';
+    child.stdout?.setEncoding('utf8');
+    child.stderr?.setEncoding('utf8');
+    child.stdout?.on('data', (chunk: string) => {
+      buffered += chunk;
+    });
+    child.stderr?.on('data', (chunk: string) => {
+      buffered += chunk;
+    });
+    child.on('error', (err) => {
+      resolve({ code: 1, output: `${buffered}${err.message}\n` });
+    });
+    child.on('close', (status, signal) => {
+      const exit =
+        typeof status === 'number' ? status : signal ? signalExitCode(signal) : 1;
+      resolve({ code: exit, output: buffered });
+    });
   });
-  const output = `${res.stdout ?? ''}${res.stderr ?? ''}`;
-  const code = subprocessExitCode(res);
   if (code === 0) {
     spinner.succeed(label);
   } else {
@@ -451,12 +471,12 @@ function runInstallWithSpinner(
   return { code, output };
 }
 
-function runInstall(command: readonly string[], label: string, cwd?: string): void {
+async function runInstall(command: readonly string[], label: string, cwd?: string): Promise<void> {
   const [bin] = command;
   if (!bin) return;
   // runInstallWithSpinner already prints the failure line via spinner.fail;
   // the previous extra "${label} failed … Aborting." write would duplicate it.
-  const { code } = runInstallWithSpinner(command, label, cwd);
+  const { code } = await runInstallWithSpinner(command, label, cwd);
   if (code !== 0) process.exit(code);
 }
 
@@ -479,10 +499,14 @@ class InstallCommandError extends Error {
  * Used inside the mount branch's onBeforeLaunch step so mount teardown runs
  * before the error surfaces.
  */
-function runInstallOrThrow(command: readonly string[], label: string, cwd: string): void {
+async function runInstallOrThrow(
+  command: readonly string[],
+  label: string,
+  cwd: string
+): Promise<void> {
   const [bin] = command;
   if (!bin) return;
-  const { code } = runInstallWithSpinner(command, label, cwd);
+  const { code } = await runInstallWithSpinner(command, label, cwd);
   if (code !== 0) {
     throw new InstallCommandError(label, code);
   }
@@ -1024,6 +1048,31 @@ function runDryRun(selection: PersonaSelection): number {
   return failures[0]?.exitCode || 1;
 }
 
+/**
+ * Optional out-parameter populated by `runInteractive` so the caller can
+ * locate the just-ended session for follow-up tooling (e.g. the
+ * persona-improver post-session prompt). Populated regardless of exit
+ * status so failure paths are still inspectable.
+ */
+interface RunInteractiveCapture {
+  /** Cwd the harness child saw — mount dir for sandboxed sessions, real cwd otherwise. */
+  sessionCwd?: string;
+  /** Harness binary that was spawned. */
+  harness?: Harness;
+  /** Wallclock (ms) right before the harness child was spawned. Used to filter newer transcript files. */
+  startedAt?: number;
+  /**
+   * Burn-stamp enrichment written by launch-metadata (`agentworkforce`,
+   * `persona`, `personaVersion`, `personaTier`, `personaSource`). Empty
+   * `{}` when launch-metadata is disabled (opt-out via env or backend
+   * doesn't support stamps). Lets the post-session lookup match the
+   * just-ended session to its harness sessionId via `exportStamps`.
+   */
+  stampEnrichment?: Record<string, string>;
+  /** Whether burn stamping was actually wired this run (false → exportStamps lookup is moot). */
+  stampingEnabled?: boolean;
+}
+
 async function runInteractive(
   selection: PersonaSelection,
   options: {
@@ -1031,6 +1080,7 @@ async function runInteractive(
     noLaunchMetadata?: boolean;
     personaSpec: PersonaSpec;
     personaSource: PersonaSource;
+    capture?: RunInteractiveCapture;
   }
 ): Promise<number> {
   const inputResolution = resolvePersonaInputs(
@@ -1146,7 +1196,7 @@ async function runInteractive(
   const deferInstallToMount =
     useClean && runtime.harness !== 'claude' && install.commandString !== ':';
   if (install.commandString !== ':' && !deferInstallToMount) {
-    runInstall(install.command, installLabel);
+    await runInstall(install.command, installLabel);
   }
 
   const spec = buildInteractiveSpec({
@@ -1239,7 +1289,18 @@ async function runInteractive(
       mount: effectiveSelection.mount,
       configFilePaths: spec.configFiles.map((file) => file.path)
     });
-    process.stderr.write(`• sandbox mount → ${mountDir}\n`);
+    // Setup spinner covers createMount + git-config + (optional) in-mount
+    // install + config-file writes + autosync start, so the multi-second pause
+    // before the harness child appears is visibly live.
+    //
+    // Note: createMount's initial mirror runs synchronously and blocks the
+    // event loop, so ora's frame timer doesn't tick during it. The user still
+    // sees the initial spinner frame + label rather than dead silence, and the
+    // animation resumes between sync blocks.
+    let setupSpinner: Ora | undefined = ora({
+      text: `Setting up sandbox mount → ${mountDir}…`,
+      stream: process.stderr
+    }).start();
     // Inline mount lifecycle (formerly delegated to launchOnMount) so we can
     // surface a spinner the moment the child exits — not just when the user
     // presses Ctrl-C. The sync-back walks both trees and can take several
@@ -1290,27 +1351,34 @@ async function runInteractive(
     };
     process.on('SIGINT', sigintHandler);
 
-    const handle = createMount(process.cwd(), mountDir, {
-      ignoredPatterns: [...ignoredPatterns],
-      readonlyPatterns: [...readonlyPatterns],
-      excludeDirs: [],
-      agentName: personaId,
-      // Pull `.git` into the mount so git commands work inside the sandbox.
-      // relayfile treats this as one-way project→mount: host-side `.git`
-      // changes flow in, mount-side commits/refs stay sandboxed and are
-      // discarded on cleanup. The agent must `git push` to persist work.
-      includeGit: true
-    });
+    let handle: ReturnType<typeof createMount> | undefined;
     let autoSync: AutoSyncHandle | undefined;
     let exitCode = 0;
     try {
+      // createMount inside the try so its initial-mirror failures fall into
+      // the catch path and clean up the setup spinner.
+      handle = createMount(process.cwd(), mountDir, {
+        ignoredPatterns: [...ignoredPatterns],
+        readonlyPatterns: [...readonlyPatterns],
+        excludeDirs: [],
+        agentName: personaId,
+        // Pull `.git` into the mount so git commands work inside the sandbox.
+        // relayfile treats this as one-way project→mount: host-side `.git`
+        // changes flow in, mount-side commits/refs stay sandboxed and are
+        // discarded on cleanup. The agent must `git push` to persist work.
+        includeGit: true
+      });
       // Run before install / configFile writes so the freshly written files
       // (e.g. `.opencode/`, `opencode.json`) aren't yet present when we run
       // `git ls-files` to pick skip-worktree candidates — we don't need them
       // flagged in the index, just hidden via the `.git/info/exclude` block.
       configureGitForMount(handle.mountDir, ignoredPatterns);
       if (deferInstallToMount) {
-        runInstallOrThrow(install.command, installLabel, handle.mountDir);
+        // Hand the line off to the install spinner so the two don't fight
+        // for the same stream, then resume the setup spinner afterwards.
+        setupSpinner?.stop();
+        await runInstallOrThrow(install.command, installLabel, handle.mountDir);
+        setupSpinner?.start();
       }
       for (const file of spec.configFiles) {
         assertSafeRelativePath(file.path);
@@ -1323,13 +1391,28 @@ async function runInteractive(
         writeFileSync(join(handle.mountDir, resolvedSidecar.mountFile), body, 'utf8');
       }
       launchMetadata = await startLaunchMetadataForLaunch(handle.mountDir);
+      if (options.capture) {
+        options.capture.stampEnrichment = { ...launchMetadata.metadata };
+        options.capture.stampingEnabled = launchMetadata.enabled;
+      }
 
       autoSync = handle.startAutoSync();
 
+      // Stop the setup spinner before spawning the child — the child inherits
+      // stdio and would otherwise interleave its output with spinner frames.
+      setupSpinner?.succeed(`Sandbox mount ready → ${mountDir}`);
+      setupSpinner = undefined;
+
       const childEnv = resolvedEnv ? { ...process.env, ...resolvedEnv } : process.env;
+      const childCwd = handle.mountDir;
+      if (options.capture) {
+        options.capture.sessionCwd = childCwd;
+        options.capture.harness = runtime.harness;
+        options.capture.startedAt = Date.now();
+      }
       exitCode = await new Promise<number>((resolve, reject) => {
         const child = spawn(spec.bin, finalArgs, {
-          cwd: handle.mountDir,
+          cwd: childCwd,
           stdio: 'inherit',
           env: childEnv
         });
@@ -1371,6 +1454,10 @@ async function runInteractive(
       syncSpinner = undefined;
       return exitCode;
     } catch (err) {
+      if (setupSpinner) {
+        setupSpinner.fail('Sandbox mount setup failed');
+        setupSpinner = undefined;
+      }
       if (syncSpinner) {
         syncSpinner.fail('Sync did not complete');
         syncSpinner = undefined;
@@ -1393,6 +1480,10 @@ async function runInteractive(
       process.stderr.write(`Failed to launch sandbox mount: ${e.message}\n`);
       return 1;
     } finally {
+      if (setupSpinner) {
+        setupSpinner.stop();
+        setupSpinner = undefined;
+      }
       if (syncSpinner) {
         syncSpinner.stop();
         syncSpinner = undefined;
@@ -1406,7 +1497,7 @@ async function runInteractive(
           /* ignore — we're tearing down anyway */
         }
       }
-      handle.cleanup();
+      handle?.cleanup();
       await launchMetadata?.stop();
       process.removeListener('SIGINT', sigintHandler);
       // When the install ran inside the mount, its cleanup paths are
@@ -1423,6 +1514,13 @@ async function runInteractive(
   }
 
   const launchMetadata = await startLaunchMetadataForLaunch();
+  if (options.capture) {
+    options.capture.sessionCwd = process.cwd();
+    options.capture.harness = runtime.harness;
+    options.capture.startedAt = Date.now();
+    options.capture.stampEnrichment = { ...launchMetadata.metadata };
+    options.capture.stampingEnabled = launchMetadata.enabled;
+  }
   return new Promise((resolve) => {
     let settled = false;
     const finish = (code: number) => {
@@ -2357,13 +2455,741 @@ async function runAgentSelector(
     process.exit(code);
   }
 
+  const capture: RunInteractiveCapture = {};
   const code = await runInteractive(selection, {
     installInRepo: flags.installInRepo,
     noLaunchMetadata: flags.noLaunchMetadata,
     personaSpec: target.spec,
-    personaSource: target.source
+    personaSource: target.source,
+    capture
+  });
+  // Post-session learnings prompt: only for local personas (built-in
+  // catalog and pack personas are read-only here), and only when stdin
+  // is a TTY so we can read y/N. Improver failures never affect the
+  // user-facing exit code — the original session's exit is what matters.
+  await maybeOfferLearningsImprover({
+    target,
+    capture,
+    flags
   });
   process.exit(code);
+}
+
+interface LocalPersonaImproverContext {
+  target: ResolvedTarget;
+  capture: RunInteractiveCapture;
+  flags: AgentFlags;
+}
+
+/**
+ * Decide whether to offer post-session auto-improvement, run the improver,
+ * walk the proposals interactively, and apply accepted patches. Silently
+ * skips the prompt when the persona is built-in or stdin is not a TTY.
+ *
+ * Failures (improver crash, malformed proposals JSON, unwriteable persona
+ * file) are surfaced as warnings on stderr; they never throw or change
+ * the original session's exit code. The user already saw their session
+ * complete — a flaky meta-step shouldn't mask that.
+ */
+async function maybeOfferLearningsImprover(ctx: LocalPersonaImproverContext): Promise<void> {
+  if (ctx.target.kind !== 'local') return;
+  if (ctx.target.source === 'library') return;
+  const personaFilePath = local.paths.get(ctx.target.spec.id);
+  if (!personaFilePath) {
+    // No on-disk path means we can't apply patches even if the user agrees.
+    // Skip silently — local-personas would have warned at load time.
+    return;
+  }
+  if (!process.stdin.isTTY || !process.stderr.isTTY) return;
+  const personaId = ctx.target.spec.id;
+  const wantsImprover = promptYesNoSync(
+    `\nAuto-improve "${personaId}" from this session? [y/N] `
+  );
+  if (!wantsImprover) return;
+
+  let transcriptPath = '';
+  try {
+    if (ctx.capture.stampingEnabled && ctx.capture.stampEnrichment) {
+      transcriptPath =
+        (await findSessionTranscriptViaStamps({
+          harness: ctx.capture.harness,
+          sessionCwd: ctx.capture.sessionCwd,
+          enrichment: ctx.capture.stampEnrichment,
+          startedAt: ctx.capture.startedAt
+        })) ?? '';
+    }
+    if (!transcriptPath) {
+      transcriptPath =
+        findSessionTranscriptPath({
+          harness: ctx.capture.harness,
+          sessionCwd: ctx.capture.sessionCwd,
+          startedAt: ctx.capture.startedAt
+        }) ?? '';
+    }
+  } catch (err) {
+    process.stderr.write(
+      `warning: could not locate session transcript: ${(err as Error).message}\n`
+    );
+  }
+  if (!transcriptPath) {
+    process.stderr.write(
+      `note: session transcript not found for harness "${ctx.capture.harness ?? '?'}" — proceeding from persona file alone.\n`
+    );
+  }
+
+  let proposals: ImproverProposalsFile | undefined;
+  const proposalsTempPath = join(
+    tmpdir(),
+    `agentworkforce-proposals-${randomBytes(6).toString('hex')}.json`
+  );
+  const spinner = ora({
+    text: 'Extracting learnings via persona-improver…',
+    stream: process.stderr
+  }).start();
+  try {
+    proposals = await runPersonaImprover({
+      personaFilePath,
+      transcriptPath,
+      proposalsOutputPath: proposalsTempPath
+    });
+    spinner.succeed(
+      proposals.proposals.length === 0
+        ? 'persona-improver: no improvements to propose.'
+        : `persona-improver: found ${proposals.proposals.length} proposed improvement${proposals.proposals.length === 1 ? '' : 's'}.`
+    );
+  } catch (err) {
+    spinner.fail(`persona-improver failed: ${(err as Error).message}`);
+    return;
+  } finally {
+    try {
+      rmSync(proposalsTempPath, { force: true });
+    } catch {
+      /* swallow — temp file in $TMPDIR is harmless */
+    }
+  }
+  if (!proposals || proposals.proposals.length === 0) return;
+
+  const accepted = walkProposalsInteractive(proposals);
+  if (accepted.length === 0) {
+    process.stderr.write('No improvements applied.\n');
+    return;
+  }
+  try {
+    applyAcceptedPatches(personaFilePath, accepted);
+    process.stderr.write(
+      `✓ Applied ${accepted.length} improvement${accepted.length === 1 ? '' : 's'} to ${personaFilePath}\n`
+    );
+  } catch (err) {
+    process.stderr.write(
+      `warning: failed to write updated persona to ${personaFilePath}: ${(err as Error).message}\n`
+    );
+  }
+}
+
+export interface ImproverPatch {
+  path: string;
+  op: 'set' | 'append';
+  value: unknown;
+}
+
+export interface ImproverProposal {
+  id: string;
+  summary: string;
+  rationale: string;
+  patches: ImproverPatch[];
+}
+
+export interface ImproverProposalsFile {
+  personaId: string;
+  personaFilePath: string;
+  transcriptPath: string;
+  proposals: ImproverProposal[];
+}
+
+/**
+ * Locate the just-ended session's transcript via the burn-stamp ledger.
+ * Authoritative when stamping is wired: `launch-metadata.ts` writes a
+ * pending stamp (with our `personaVersion` enrichment hash) before spawn
+ * and runs `ingest` on a 1s tick + once at stop, so by the time we get
+ * here the ledger already has a row whose `selector.sessionId` is the
+ * harness's own session id. We filter by `persona` + `personaVersion`
+ * (unique per persona spec hash) and `ts` near `startedAt` to avoid
+ * picking up a sibling launch of the same persona, then resolve the
+ * sessionId to a transcript file path per harness.
+ *
+ * Returns undefined when:
+ *   - the SDK call fails
+ *   - no row matches (ingest hasn't reconciled yet, or stamping is off)
+ *   - the resolved sessionId can't be located on disk
+ * Caller falls back to `findSessionTranscriptPath` (cwd-content match).
+ */
+async function findSessionTranscriptViaStamps(input: {
+  harness?: Harness;
+  sessionCwd?: string;
+  enrichment: Record<string, string>;
+  startedAt?: number;
+}): Promise<string | undefined> {
+  if (!input.harness || !input.sessionCwd) return undefined;
+  const persona = input.enrichment.persona;
+  const personaVersion = input.enrichment.personaVersion;
+  if (!persona || !personaVersion) return undefined;
+  let sdk: typeof import('@relayburn/sdk');
+  try {
+    sdk = await import('@relayburn/sdk');
+  } catch {
+    return undefined;
+  }
+  if (typeof sdk.exportStamps !== 'function') return undefined;
+  let rows: unknown[];
+  try {
+    rows = await sdk.exportStamps();
+  } catch {
+    return undefined;
+  }
+  const startedAt = input.startedAt ?? 0;
+  const TOLERANCE_MS = 5000;
+  let bestSessionId: string | undefined;
+  let bestTs = -1;
+  for (const row of rows) {
+    if (!row || typeof row !== 'object') continue;
+    const r = row as {
+      ts?: unknown;
+      selector?: { sessionId?: unknown };
+      enrichment?: Record<string, unknown>;
+    };
+    const sessionId = r.selector?.sessionId;
+    const enrichment = r.enrichment;
+    const ts = r.ts;
+    if (typeof sessionId !== 'string' || !enrichment || typeof ts !== 'string') continue;
+    if (enrichment.persona !== persona) continue;
+    if (enrichment.personaVersion !== personaVersion) continue;
+    const tsMs = Date.parse(ts);
+    if (!Number.isFinite(tsMs)) continue;
+    if (tsMs < startedAt - TOLERANCE_MS) continue;
+    if (tsMs <= bestTs) continue;
+    bestTs = tsMs;
+    bestSessionId = sessionId;
+  }
+  if (!bestSessionId) return undefined;
+  return resolveTranscriptForSessionId(input.harness, input.sessionCwd, bestSessionId);
+}
+
+/**
+ * Map a harness session id to its on-disk transcript file. The directory
+ * is harness-conventional, but the filename pattern varies:
+ *   • claude    → `<sessionId>.jsonl` directly under the cwd-encoded subdir
+ *   • codex     → `rollout-<ts>-<sessionId>.jsonl` under a date-grouped subdir
+ *   • opencode  → file or filename containing the sessionId under `<projectHash>/`
+ *
+ * For codex/opencode we scan once and match by filename substring (cheap;
+ * the substring is a UUID-ish so collisions don't happen in practice).
+ */
+function resolveTranscriptForSessionId(
+  harness: Harness,
+  sessionCwd: string,
+  sessionId: string
+): string | undefined {
+  const home = homedir();
+  if (harness === 'claude') {
+    const encoded = sessionCwd.replace(/[\\/]+/g, '-');
+    const candidate = join(home, '.claude', 'projects', encoded, `${sessionId}.jsonl`);
+    return existsSync(candidate) ? candidate : undefined;
+  }
+  if (harness === 'codex') {
+    return findFileByNameSubstring(join(home, '.codex', 'sessions'), sessionId, ['.jsonl']);
+  }
+  if (harness === 'opencode') {
+    return findFileByNameSubstring(
+      join(home, '.local', 'share', 'opencode', 'storage', 'session'),
+      sessionId,
+      ['.json']
+    );
+  }
+  return undefined;
+}
+
+function findFileByNameSubstring(
+  dir: string,
+  needle: string,
+  extensions: readonly string[]
+): string | undefined {
+  const wantsExt = (name: string) => extensions.some((ext) => name.endsWith(ext));
+  const visit = (cur: string, depth: number): string | undefined => {
+    let entries: Dirent[];
+    try {
+      entries = readdirSync(cur, { withFileTypes: true });
+    } catch {
+      return undefined;
+    }
+    for (const entry of entries) {
+      const full = join(cur, entry.name);
+      if (entry.isDirectory()) {
+        if (depth < 3) {
+          const found = visit(full, depth + 1);
+          if (found) return found;
+        }
+        continue;
+      }
+      if (!entry.isFile()) continue;
+      if (!wantsExt(entry.name)) continue;
+      if (entry.name.includes(needle)) return full;
+    }
+    return undefined;
+  };
+  return visit(dir, 0);
+}
+
+/**
+ * Fallback locator when the burn-stamp ledger is unavailable or the
+ * just-ended session hasn't reconciled yet. Walks the harness's
+ * transcript dir and verifies each candidate's embedded cwd matches the
+ * captured session cwd. Every harness embeds the session cwd:
+ *   • claude    → `~/.claude/projects/<cwd-encoded>/<sessionId>.jsonl` —
+ *                 each entry carries `"cwd"`. The dir-name encoding
+ *                 replaces `/` with `-` and is itself a strong filter.
+ *   • codex     → `~/.codex/sessions/YYYY/MM/DD/rollout-*.jsonl` — first
+ *                 line is a `session_meta` event with `payload.cwd`.
+ *   • opencode  → `~/.local/share/opencode/storage/session/<projectHash>/<sessionId>.json`
+ *                 — top-level `directory` field on the session object.
+ *
+ * For each harness we walk the candidate dir, filter to files with
+ * mtime ≥ sessionStart, and confirm the embedded cwd matches the captured
+ * session cwd. Among matches we pick the most recently mtime'd. The cwd
+ * confirmation makes this robust to concurrent harness sessions — the
+ * caveat that previously applied to codex/opencode (most-recent-mtime
+ * could pick a sibling) goes away when we read the file's own cwd.
+ *
+ * Returns undefined when nothing matches; callers handle gracefully (the
+ * persona-improver accepts an empty transcript path).
+ */
+function findSessionTranscriptPath(input: {
+  harness?: Harness;
+  sessionCwd?: string;
+  startedAt?: number;
+}): string | undefined {
+  if (!input.harness || !input.sessionCwd) return undefined;
+  const startedAt = input.startedAt ?? 0;
+  const cwd = input.sessionCwd;
+  const home = homedir();
+  if (input.harness === 'claude') {
+    const encoded = cwd.replace(/[\\/]+/g, '-');
+    const projectDir = join(home, '.claude', 'projects', encoded);
+    // Within the cwd-encoded dir, all candidates already share the cwd —
+    // mtime is enough. We still verify the first-line `cwd` so a stale
+    // dir-name match can't smuggle in a wrong file.
+    return findFreshestMatchingTranscript({
+      dir: projectDir,
+      recursive: false,
+      extensions: ['.jsonl'],
+      sinceMs: startedAt,
+      sessionCwd: cwd,
+      readCwd: readCwdFromClaudeJsonl
+    });
+  }
+  if (input.harness === 'codex') {
+    return findFreshestMatchingTranscript({
+      dir: join(home, '.codex', 'sessions'),
+      recursive: true,
+      extensions: ['.jsonl'],
+      sinceMs: startedAt,
+      sessionCwd: cwd,
+      readCwd: readCwdFromCodexJsonl
+    });
+  }
+  if (input.harness === 'opencode') {
+    return findFreshestMatchingTranscript({
+      dir: join(home, '.local', 'share', 'opencode', 'storage', 'session'),
+      recursive: true,
+      extensions: ['.json'],
+      sinceMs: startedAt,
+      sessionCwd: cwd,
+      readCwd: readCwdFromOpencodeSession
+    });
+  }
+  return undefined;
+}
+
+interface FindMatchingOptions {
+  dir: string;
+  /** Whether to walk subdirectories (codex date-grouped, opencode project-hash-grouped). */
+  recursive: boolean;
+  extensions: readonly string[];
+  sinceMs: number;
+  sessionCwd: string;
+  /**
+   * Extract the embedded cwd from the candidate file. Returns undefined
+   * when the file has no parseable cwd (skip rather than match).
+   */
+  readCwd: (path: string) => string | undefined;
+}
+
+/**
+ * Walk a candidate directory and pick the most recently modified file
+ * whose embedded cwd matches `sessionCwd`. Capped at depth 3 in
+ * recursive mode — codex/opencode group by date or project hash, never
+ * deeper. mtime gate eliminates files written before the session and
+ * keeps the scan cheap on large session stores.
+ */
+function findFreshestMatchingTranscript(opts: FindMatchingOptions): string | undefined {
+  const wantsExt = (name: string) => opts.extensions.some((ext) => name.endsWith(ext));
+  let bestPath: string | undefined;
+  let bestMtime = -1;
+  const visit = (cur: string, depth: number) => {
+    let entries: Dirent[];
+    try {
+      entries = readdirSync(cur, { withFileTypes: true });
+    } catch {
+      return;
+    }
+    for (const entry of entries) {
+      const full = join(cur, entry.name);
+      if (entry.isDirectory()) {
+        if (opts.recursive && depth < 3) visit(full, depth + 1);
+        continue;
+      }
+      if (!entry.isFile()) continue;
+      if (!wantsExt(entry.name)) continue;
+      let s;
+      try {
+        s = statSync(full);
+      } catch {
+        continue;
+      }
+      const mtime = s.mtimeMs;
+      if (mtime < opts.sinceMs) continue;
+      if (mtime <= bestMtime) continue;
+      const cwd = opts.readCwd(full);
+      if (cwd !== opts.sessionCwd) continue;
+      bestMtime = mtime;
+      bestPath = full;
+    }
+  };
+  visit(opts.dir, 0);
+  return bestPath;
+}
+
+/**
+ * Read up to ~64KB from `path` (enough for a JSONL header line plus
+ * margin) and return it as a string. Used by the per-harness cwd
+ * extractors so we don't slurp multi-megabyte transcripts to find a
+ * field on line 1.
+ */
+function readTranscriptHeader(path: string, maxBytes = 65536): string | undefined {
+  let fd: number | undefined;
+  try {
+    fd = openSync(path, 'r');
+    const buf = Buffer.alloc(maxBytes);
+    const n = readSync(fd, buf, 0, maxBytes, 0);
+    return buf.subarray(0, n).toString('utf8');
+  } catch {
+    return undefined;
+  } finally {
+    if (fd !== undefined) {
+      try {
+        closeSync(fd);
+      } catch {
+        /* swallow — fd already invalid */
+      }
+    }
+  }
+}
+
+/** Claude JSONL: `cwd` appears on most entries; the first line that has it wins. */
+function readCwdFromClaudeJsonl(path: string): string | undefined {
+  const header = readTranscriptHeader(path);
+  if (!header) return undefined;
+  for (const line of header.split('\n')) {
+    if (!line.includes('"cwd"')) continue;
+    try {
+      const obj = JSON.parse(line) as { cwd?: unknown };
+      if (typeof obj.cwd === 'string') return obj.cwd;
+    } catch {
+      // partial last line — skip
+    }
+  }
+  return undefined;
+}
+
+/** Codex JSONL: line 1 is `session_meta` with `payload.cwd`. */
+function readCwdFromCodexJsonl(path: string): string | undefined {
+  const header = readTranscriptHeader(path);
+  if (!header) return undefined;
+  const firstNewline = header.indexOf('\n');
+  const firstLine = firstNewline === -1 ? header : header.slice(0, firstNewline);
+  try {
+    const obj = JSON.parse(firstLine) as { payload?: { cwd?: unknown } };
+    const cwd = obj.payload?.cwd;
+    return typeof cwd === 'string' ? cwd : undefined;
+  } catch {
+    return undefined;
+  }
+}
+
+/** Opencode session JSON: top-level `directory` field. */
+function readCwdFromOpencodeSession(path: string): string | undefined {
+  const header = readTranscriptHeader(path);
+  if (!header) return undefined;
+  try {
+    const obj = JSON.parse(header) as { directory?: unknown };
+    return typeof obj.directory === 'string' ? obj.directory : undefined;
+  } catch {
+    return undefined;
+  }
+}
+
+/**
+ * Run the persona-improver in headless one-shot mode against the given
+ * persona + transcript. Returns the parsed proposals file on success.
+ *
+ * Throws on: missing improver in catalog, harness binary not on PATH,
+ * non-zero harness exit, or unparseable proposals JSON. Caller is expected
+ * to surface the message and skip the apply step.
+ */
+async function runPersonaImprover(args: {
+  personaFilePath: string;
+  transcriptPath: string;
+  proposalsOutputPath: string;
+}): Promise<ImproverProposalsFile> {
+  const improverSpec = personaCatalog['persona-improvement' as const];
+  if (!improverSpec) {
+    throw new Error('built-in persona "persona-improver" is not registered in the catalog');
+  }
+  const tier: PersonaTier = 'best-value';
+  const selection = buildSelection(improverSpec, tier, 'repo');
+  const ctx = useRunnableSelection(selection);
+  const taskLines = [
+    'Improve this local persona from one finished session. The CLI will read your proposals JSON and walk the user through accept/deny.',
+    `PERSONA_FILE_PATH=${args.personaFilePath}`,
+    `SESSION_TRANSCRIPT_PATH=${args.transcriptPath}`,
+    `PROPOSALS_OUTPUT_PATH=${args.proposalsOutputPath}`
+  ];
+  const result = await ctx.sendMessage(taskLines.join('\n'), {
+    inputs: {
+      PERSONA_FILE_PATH: args.personaFilePath,
+      SESSION_TRANSCRIPT_PATH: args.transcriptPath,
+      PROPOSALS_OUTPUT_PATH: args.proposalsOutputPath
+    },
+    timeoutSeconds: selection.runtime.harnessSettings.timeoutSeconds
+  });
+  if (result.status !== 'completed' || (result.exitCode !== null && result.exitCode !== 0)) {
+    throw new Error(
+      `improver exited with status=${result.status}, code=${result.exitCode ?? 'null'}.${result.stderr ? ` stderr: ${result.stderr.slice(0, 400)}` : ''}`
+    );
+  }
+  let raw: string;
+  try {
+    raw = readFileSync(args.proposalsOutputPath, 'utf8');
+  } catch (err) {
+    throw new Error(
+      `improver did not write proposals file at ${args.proposalsOutputPath}: ${(err as Error).message}`
+    );
+  }
+  return parseProposals(raw);
+}
+
+export function parseProposals(raw: string): ImproverProposalsFile {
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(raw);
+  } catch (err) {
+    throw new Error(`proposals file is not valid JSON: ${(err as Error).message}`);
+  }
+  if (!parsed || typeof parsed !== 'object') {
+    throw new Error('proposals file must be a JSON object');
+  }
+  const obj = parsed as Record<string, unknown>;
+  const proposalsArr = Array.isArray(obj.proposals) ? obj.proposals : [];
+  const proposals: ImproverProposal[] = [];
+  for (const [idx, item] of proposalsArr.entries()) {
+    if (!item || typeof item !== 'object') {
+      throw new Error(`proposals[${idx}] must be an object`);
+    }
+    const p = item as Record<string, unknown>;
+    if (typeof p.id !== 'string' || !p.id.trim()) {
+      throw new Error(`proposals[${idx}].id must be a non-empty string`);
+    }
+    if (typeof p.summary !== 'string' || !p.summary.trim()) {
+      throw new Error(`proposals[${idx}].summary must be a non-empty string`);
+    }
+    if (typeof p.rationale !== 'string') {
+      throw new Error(`proposals[${idx}].rationale must be a string`);
+    }
+    if (!Array.isArray(p.patches) || p.patches.length === 0) {
+      throw new Error(`proposals[${idx}].patches must be a non-empty array`);
+    }
+    const patches: ImproverPatch[] = [];
+    for (const [pidx, rawPatch] of p.patches.entries()) {
+      if (!rawPatch || typeof rawPatch !== 'object') {
+        throw new Error(`proposals[${idx}].patches[${pidx}] must be an object`);
+      }
+      const rp = rawPatch as Record<string, unknown>;
+      if (typeof rp.path !== 'string' || !rp.path.trim()) {
+        throw new Error(`proposals[${idx}].patches[${pidx}].path must be a non-empty string`);
+      }
+      if (rp.op !== 'set' && rp.op !== 'append') {
+        throw new Error(
+          `proposals[${idx}].patches[${pidx}].op must be "set" or "append"`
+        );
+      }
+      patches.push({ path: rp.path, op: rp.op, value: rp.value });
+    }
+    proposals.push({
+      id: p.id,
+      summary: p.summary,
+      rationale: p.rationale,
+      patches
+    });
+  }
+  return {
+    personaId: typeof obj.personaId === 'string' ? obj.personaId : '',
+    personaFilePath: typeof obj.personaFilePath === 'string' ? obj.personaFilePath : '',
+    transcriptPath: typeof obj.transcriptPath === 'string' ? obj.transcriptPath : '',
+    proposals
+  };
+}
+
+/**
+ * Walk improver proposals one-by-one over the TTY. Returns only the
+ * accepted proposals; the caller applies the patches. Supports:
+ *   y / n — accept or skip the current proposal
+ *   a     — accept this and all remaining proposals
+ *   q     — quit without accepting any further proposals (already-accepted ones stay)
+ *
+ * On a non-TTY we shouldn't have reached this point (caller checks),
+ * but if we do, return an empty list so nothing is auto-applied.
+ */
+function walkProposalsInteractive(file: ImproverProposalsFile): ImproverProposal[] {
+  if (!process.stdin.isTTY) return [];
+  const accepted: ImproverProposal[] = [];
+  const total = file.proposals.length;
+  let acceptAll = false;
+  for (let i = 0; i < total; i++) {
+    const proposal = file.proposals[i];
+    process.stderr.write(`\n[${i + 1}/${total}] ${proposal.summary}\n`);
+    if (proposal.rationale) {
+      process.stderr.write(`  why: ${proposal.rationale}\n`);
+    }
+    for (const patch of proposal.patches) {
+      const preview = formatPatchPreview(patch);
+      process.stderr.write(`  ${preview}\n`);
+    }
+    if (acceptAll) {
+      accepted.push(proposal);
+      process.stderr.write('  → accepted (accept-all)\n');
+      continue;
+    }
+    const choice = readSingleCharChoice('  accept? [y/n/a/q] ', ['y', 'n', 'a', 'q']);
+    if (choice === 'y') {
+      accepted.push(proposal);
+    } else if (choice === 'a') {
+      accepted.push(proposal);
+      acceptAll = true;
+    } else if (choice === 'q') {
+      process.stderr.write('  → quit; no further proposals will be reviewed.\n');
+      break;
+    }
+    // 'n' falls through with no accept.
+  }
+  return accepted;
+}
+
+/**
+ * Render a one-line patch preview. Truncates long string values so a
+ * multi-paragraph systemPrompt rewrite doesn't dominate the screen.
+ */
+function formatPatchPreview(patch: ImproverPatch): string {
+  const op = patch.op === 'append' ? '+= ' : '= ';
+  const valueStr = formatPatchValue(patch.value);
+  return `${patch.path} ${op}${valueStr}`;
+}
+
+function formatPatchValue(value: unknown): string {
+  if (typeof value === 'string') {
+    const condensed = value.replace(/\s+/g, ' ').trim();
+    return condensed.length > 100 ? `"${condensed.slice(0, 97)}..."` : `"${condensed}"`;
+  }
+  try {
+    const json = JSON.stringify(value);
+    if (json === undefined) return '<undefined>';
+    return json.length > 120 ? `${json.slice(0, 117)}...` : json;
+  } catch {
+    return '<unserializable>';
+  }
+}
+
+/**
+ * Read a single-character choice from stdin synchronously, looping on
+ * invalid input. Empty enter (no character) is treated as the first
+ * option in `valid` (matches the y/N default-no convention used elsewhere
+ * in the CLI).
+ */
+function readSingleCharChoice(prompt: string, valid: readonly string[]): string {
+  for (;;) {
+    process.stderr.write(prompt);
+    const line = readLineFromStdinSync();
+    const trimmed = (line ?? '').trim().toLowerCase();
+    if (trimmed.length === 0) return valid[0];
+    const ch = trimmed[0];
+    if (valid.includes(ch)) return ch;
+    process.stderr.write(`  invalid choice; expected one of: ${valid.join(', ')}\n`);
+  }
+}
+
+/**
+ * Apply accepted patches to the persona JSON on disk. Reads, mutates the
+ * parsed object, writes back with two-space indent + trailing newline
+ * (matches existing /personas style). Throws on unwriteable file or
+ * unsupported patch op/path resolution.
+ */
+export function applyAcceptedPatches(
+  personaFilePath: string,
+  accepted: readonly ImproverProposal[]
+): void {
+  const raw = readFileSync(personaFilePath, 'utf8');
+  const json = JSON.parse(raw) as Record<string, unknown>;
+  for (const proposal of accepted) {
+    for (const patch of proposal.patches) {
+      applyPatchInPlace(json, patch);
+    }
+  }
+  writeFileSync(personaFilePath, JSON.stringify(json, null, 2) + '\n', 'utf8');
+}
+
+function applyPatchInPlace(root: Record<string, unknown>, patch: ImproverPatch): void {
+  const segments = patch.path.split('.').filter((s) => s.length > 0);
+  if (segments.length === 0) {
+    throw new Error(`patch path is empty`);
+  }
+  let cursor: Record<string, unknown> = root;
+  for (let i = 0; i < segments.length - 1; i++) {
+    const seg = segments[i];
+    const next = cursor[seg];
+    if (next === undefined || next === null) {
+      const created: Record<string, unknown> = {};
+      cursor[seg] = created;
+      cursor = created;
+      continue;
+    }
+    if (typeof next !== 'object' || Array.isArray(next)) {
+      throw new Error(`patch path "${patch.path}": "${seg}" is not an object`);
+    }
+    cursor = next as Record<string, unknown>;
+  }
+  const finalSeg = segments[segments.length - 1];
+  if (patch.op === 'append') {
+    const existing = cursor[finalSeg];
+    if (existing === undefined) {
+      cursor[finalSeg] = [patch.value];
+      return;
+    }
+    if (!Array.isArray(existing)) {
+      throw new Error(`patch path "${patch.path}": cannot append to non-array`);
+    }
+    existing.push(patch.value);
+    return;
+  }
+  // op === 'set'
+  cursor[finalSeg] = patch.value;
 }
 
 /**

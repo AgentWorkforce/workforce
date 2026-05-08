@@ -9,6 +9,7 @@ import {
   CLEAN_IGNORED_PATTERNS,
   CREATE_SELECTOR,
   SKILL_INSTALL_IGNORED_PATTERNS,
+  applyAcceptedPatches,
   assertSafeRelativePath,
   buildPickCandidates,
   buildRelayfileMountPatterns,
@@ -20,9 +21,11 @@ import {
   parseAgentArgs,
   parseInstallArgs,
   parseCreateArgs,
+  parseProposals,
   promptYesNoSync,
   resolveSystemPromptPlaceholders,
   stripAgentFlag,
+  type ImproverProposal,
   type ResolvedSidecar
 } from './cli.js';
 
@@ -1071,5 +1074,168 @@ test('promptYesNoSync: TTY + empty/non-y answer → false (default no)', () => {
       read: () => answer
     });
     assert.equal(result, false, `answer ${JSON.stringify(answer)} should yield false`);
+  }
+});
+
+test('parseProposals: validates schema and returns typed proposals', () => {
+  const raw = JSON.stringify({
+    personaId: 'foo',
+    personaFilePath: '/tmp/foo.json',
+    transcriptPath: '',
+    proposals: [
+      {
+        id: 'tighten-description',
+        summary: 'Sharpen description',
+        rationale: 'Old description listed unrelated capabilities',
+        patches: [
+          { path: 'description', op: 'set', value: 'New description' }
+        ]
+      }
+    ]
+  });
+  const parsed = parseProposals(raw);
+  assert.equal(parsed.personaId, 'foo');
+  assert.equal(parsed.proposals.length, 1);
+  assert.equal(parsed.proposals[0].id, 'tighten-description');
+  assert.equal(parsed.proposals[0].patches[0].op, 'set');
+});
+
+test('parseProposals: rejects malformed JSON with a descriptive error', () => {
+  assert.throws(() => parseProposals('not-json'), /not valid JSON/);
+});
+
+test('parseProposals: rejects bad patch op', () => {
+  const raw = JSON.stringify({
+    personaId: 'foo',
+    personaFilePath: '/tmp/foo.json',
+    transcriptPath: '',
+    proposals: [
+      {
+        id: 'p1',
+        summary: 's',
+        rationale: 'r',
+        patches: [{ path: 'description', op: 'delete', value: '' }]
+      }
+    ]
+  });
+  assert.throws(() => parseProposals(raw), /op must be "set" or "append"/);
+});
+
+test('parseProposals: empty proposals array is valid', () => {
+  const raw = JSON.stringify({
+    personaId: 'foo',
+    personaFilePath: '/tmp/foo.json',
+    transcriptPath: '',
+    proposals: []
+  });
+  const parsed = parseProposals(raw);
+  assert.equal(parsed.proposals.length, 0);
+});
+
+test('applyAcceptedPatches: set replaces top-level field', () => {
+  const tmp = mkdtempSync(join(tmpdir(), 'aw-improver-'));
+  try {
+    const path = join(tmp, 'persona.json');
+    writeFileSync(
+      path,
+      JSON.stringify({ id: 'foo', description: 'old', tiers: { best: { systemPrompt: 'p' } } }),
+      'utf8'
+    );
+    const proposals: ImproverProposal[] = [
+      {
+        id: 'p1',
+        summary: 's',
+        rationale: 'r',
+        patches: [{ path: 'description', op: 'set', value: 'new description' }]
+      }
+    ];
+    applyAcceptedPatches(path, proposals);
+    const after = JSON.parse(readFileSync(path, 'utf8'));
+    assert.equal(after.description, 'new description');
+    assert.equal(after.tiers.best.systemPrompt, 'p', 'unrelated fields untouched');
+  } finally {
+    rmSync(tmp, { recursive: true, force: true });
+  }
+});
+
+test('applyAcceptedPatches: set into nested tier path', () => {
+  const tmp = mkdtempSync(join(tmpdir(), 'aw-improver-'));
+  try {
+    const path = join(tmp, 'persona.json');
+    writeFileSync(
+      path,
+      JSON.stringify({
+        id: 'foo',
+        tiers: {
+          best: { systemPrompt: 'old prompt' },
+          'best-value': { systemPrompt: 'old bv prompt' }
+        }
+      }),
+      'utf8'
+    );
+    applyAcceptedPatches(path, [
+      {
+        id: 'p1',
+        summary: 's',
+        rationale: 'r',
+        patches: [
+          { path: 'tiers.best.systemPrompt', op: 'set', value: 'new prompt' },
+          { path: 'tiers.best-value.systemPrompt', op: 'set', value: 'new bv prompt' }
+        ]
+      }
+    ]);
+    const after = JSON.parse(readFileSync(path, 'utf8'));
+    assert.equal(after.tiers.best.systemPrompt, 'new prompt');
+    assert.equal(after.tiers['best-value'].systemPrompt, 'new bv prompt');
+  } finally {
+    rmSync(tmp, { recursive: true, force: true });
+  }
+});
+
+test('applyAcceptedPatches: append adds to skills array (and creates it if missing)', () => {
+  const tmp = mkdtempSync(join(tmpdir(), 'aw-improver-'));
+  try {
+    const path = join(tmp, 'persona.json');
+    writeFileSync(path, JSON.stringify({ id: 'foo' }), 'utf8');
+    applyAcceptedPatches(path, [
+      {
+        id: 'p1',
+        summary: 's',
+        rationale: 'r',
+        patches: [
+          {
+            path: 'skills',
+            op: 'append',
+            value: { id: 'a/b', source: 'http://x', description: 'd' }
+          }
+        ]
+      }
+    ]);
+    const after = JSON.parse(readFileSync(path, 'utf8'));
+    assert.deepEqual(after.skills, [{ id: 'a/b', source: 'http://x', description: 'd' }]);
+  } finally {
+    rmSync(tmp, { recursive: true, force: true });
+  }
+});
+
+test('applyAcceptedPatches: throws when appending to a non-array', () => {
+  const tmp = mkdtempSync(join(tmpdir(), 'aw-improver-'));
+  try {
+    const path = join(tmp, 'persona.json');
+    writeFileSync(path, JSON.stringify({ id: 'foo', description: 'a string' }), 'utf8');
+    assert.throws(
+      () =>
+        applyAcceptedPatches(path, [
+          {
+            id: 'p1',
+            summary: 's',
+            rationale: 'r',
+            patches: [{ path: 'description', op: 'append', value: 'x' }]
+          }
+        ]),
+      /cannot append to non-array/
+    );
+  } finally {
+    rmSync(tmp, { recursive: true, force: true });
   }
 });

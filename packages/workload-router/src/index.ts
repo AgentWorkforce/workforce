@@ -1,4 +1,4 @@
-import { personaMaker } from './generated/personas.js';
+import { personaImprover, personaMaker } from './generated/personas.js';
 import defaultRoutingProfileJson from '../routing-profiles/default.json' with { type: 'json' };
 
 export const HARNESS_VALUES = ['opencode', 'codex', 'claude'] as const;
@@ -37,6 +37,7 @@ export const PERSONA_INTENTS = [
   'npm-package-compat',
   'posthog',
   'persona-authoring',
+  'persona-improvement',
   'agent-relay-workflow',
   'slop-audit',
   'api-contract-review',
@@ -46,7 +47,7 @@ export const PERSONA_INTENTS = [
   'relay-orchestrator'
 ] as const;
 
-export const BUILT_IN_PERSONA_INTENTS = ['persona-authoring'] as const;
+export const BUILT_IN_PERSONA_INTENTS = ['persona-authoring', 'persona-improvement'] as const;
 
 export type Harness = (typeof HARNESS_VALUES)[number];
 export type PersonaTier = (typeof PERSONA_TIERS)[number];
@@ -1428,7 +1429,8 @@ function parseRoutingProfile(value: unknown, context: string): RoutingProfile {
 }
 
 export const personaCatalog: Partial<Record<PersonaIntent, PersonaSpec>> = {
-  'persona-authoring': parsePersonaSpec(personaMaker, 'persona-authoring')
+  'persona-authoring': parsePersonaSpec(personaMaker, 'persona-authoring'),
+  'persona-improvement': parsePersonaSpec(personaImprover, 'persona-improvement')
 };
 
 export function listBuiltInPersonas(): PersonaSpec[] {

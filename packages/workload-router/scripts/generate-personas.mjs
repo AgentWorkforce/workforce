@@ -10,7 +10,8 @@ const personasDir = path.join(repoRoot, 'personas');
 const outputFile = path.join(repoRoot, 'packages/workload-router/src/generated/personas.ts');
 
 const exportNameMap = new Map([
-  ['persona-maker', 'personaMaker']
+  ['persona-maker', 'personaMaker'],
+  ['persona-improver', 'personaImprover']
 ]);
 
 /**
