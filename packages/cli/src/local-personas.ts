@@ -814,10 +814,20 @@ function resolveSidecarPath(
     return { warning: `${label}: cannot resolve "${relPath}" without a source directory` };
   }
   const abs = resolvePath(sourceDir, relPath);
+  let stat;
   try {
-    statSync(abs);
-  } catch {
-    return { warning: `${label}: sidecar file not found at ${abs}` };
+    stat = statSync(abs);
+  } catch (err) {
+    const e = err as NodeJS.ErrnoException;
+    if (e.code === 'ENOENT' || e.code === 'ENOTDIR') {
+      return { warning: `${label}: sidecar file not found at ${abs}` };
+    }
+    // Surface real I/O failures (permissions, etc.) — silently treating
+    // an EACCES as "missing" hides config bugs from developers.
+    return { warning: `${label}: sidecar at ${abs} is not readable: ${e.message}` };
+  }
+  if (!stat.isFile()) {
+    return { warning: `${label}: sidecar at ${abs} is not a file` };
   }
   return { abs };
 }
