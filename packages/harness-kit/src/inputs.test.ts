@@ -48,6 +48,32 @@ test('resolvePersonaInputs fails hard when a declared input is unset', () => {
   );
 });
 
+test('resolvePersonaInputs substitutes optional inputs with empty when unset', () => {
+  // optional inputs are how a persona signals "this value may or may not
+  // be forwarded; render to empty when it isn't" — used by sentinel-style
+  // systemPrompts like "$TASK_DESCRIPTION" that should kick off the
+  // harness only when the launcher provided the value.
+  assert.deepEqual(
+    resolvePersonaInputs(
+      { TASK_DESCRIPTION: { optional: true } },
+      undefined,
+      {}
+    ).values,
+    { TASK_DESCRIPTION: '' }
+  );
+});
+
+test('resolvePersonaInputs uses provided value over optional empty fallback', () => {
+  assert.deepEqual(
+    resolvePersonaInputs(
+      { TASK_DESCRIPTION: { optional: true } },
+      { TASK_DESCRIPTION: 'build a thing' },
+      {}
+    ).values,
+    { TASK_DESCRIPTION: 'build a thing' }
+  );
+});
+
 test('renderPersonaInputs substitutes $NAME and ${NAME} without touching longer names', () => {
   const rendered = renderPersonaInputs(
     'Write to $TARGET_DIR and ${CREATE_MODE}; leave $TARGET_DIR_SUFFIX alone.',

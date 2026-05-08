@@ -12,6 +12,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Personas can declare prompt-visible runtime `inputs`, which are parsed,
   validated, and propagated through resolved selections.
 
+## [0.13.0] - 2026-05-08
+
+### Released
+
+- v0.13.0
+
 ## [0.12.0] - 2026-05-08
 
 ### Released

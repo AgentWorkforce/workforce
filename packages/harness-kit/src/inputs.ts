@@ -39,6 +39,13 @@ export function resolvePersonaInputs(
       stringifyProvidedValue(processEnv[envName]) ??
       spec.default;
     if (resolved === undefined || resolved === '') {
+      // Optional inputs substitute as empty so personas can write
+      // sentinel-driven prompts (e.g. systemPrompt: "$TASK_DESCRIPTION")
+      // that produce an empty rendered output when nothing is supplied.
+      if (spec.optional) {
+        values[name] = '';
+        continue;
+      }
       throw new MissingPersonaInputError(name, envName);
     }
     values[name] = resolved;

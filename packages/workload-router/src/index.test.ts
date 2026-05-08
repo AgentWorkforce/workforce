@@ -206,8 +206,12 @@ test('resolvePersonaByTier propagates persona input declarations', () => {
     selection.inputs?.CREATE_MODE?.default,
     'built-in'
   );
+  // Persona-maker carries its full authoring spec in agentsMdContent; the
+  // CLI renders input placeholders into the sidecar before materialization,
+  // so the unrendered selection here still contains the literal `$TARGET_DIR`
+  // reference.
   assert.match(
-    selection.runtime.systemPrompt,
+    selection.agentsMdContent ?? '',
     /\$TARGET_DIR\/<id>\.json/
   );
 });
