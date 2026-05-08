@@ -30,6 +30,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `--save-in-directory=<target>` (also accepted as
   `--save-in-directory <target>`). The old name is no longer recognized.
 
+## [0.15.0] - 2026-05-08
+
+### Released
+
+- v0.15.0
+
 ## [0.14.0] - 2026-05-08
 
 ### Released
