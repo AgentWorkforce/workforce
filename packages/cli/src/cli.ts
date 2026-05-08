@@ -497,10 +497,10 @@ function runCleanup(command: readonly string[], commandString: string): void {
 
 /**
  * Remove the whole per-session directory after the run, including the
- * enclosing `<homedir>/.agent-workforce/sessions/<id>/` that the CLI
+ * enclosing `<homedir>/.agentworkforce/workforce/sessions/<id>/` that the CLI
  * created. The workload-router cleanup only covers the install subtree
  * (`<root>/claude/plugin`), so without this step empty parent dirs
- * would accumulate under `~/.agent-workforce/sessions/`.
+ * would accumulate under `~/.agentworkforce/workforce/sessions/`.
  *
  * Uses `fs.rmSync` rather than `spawnSync('rm', …)` so the teardown works
  * on Windows where `rm` isn't on PATH.
@@ -510,7 +510,7 @@ function removeSessionRoot(sessionRoot: string | undefined): void {
   try {
     rmSync(sessionRoot, { recursive: true, force: true });
   } catch {
-    /* best-effort — if teardown fails the dir is harmless under ~/.agent-workforce/sessions */
+    /* best-effort — if teardown fails the dir is harmless under ~/.agentworkforce/workforce/sessions */
   }
 }
 
@@ -518,7 +518,7 @@ function removeSessionRoot(sessionRoot: string | undefined): void {
  * Compute the absolute root directory for an interactive claude session.
  * Layout (under `root`):
  *
- *   ~/.agent-workforce/sessions/<personaId>-<timestamp>-<rand>/
+ *   ~/.agentworkforce/workforce/sessions/<personaId>-<timestamp>-<rand>/
  *     ├── claude/plugin/     ← skill install target + --plugin-dir
  *     └── mount/             ← @relayfile/local-mount mount
  *
@@ -528,7 +528,7 @@ function removeSessionRoot(sessionRoot: string | undefined): void {
  */
 function generateSessionRoot(personaId: string): string {
   const sessionId = `${Date.now().toString(36)}-${randomBytes(4).toString('hex')}`;
-  return join(homedir(), '.agent-workforce', 'sessions', `${personaId}-${sessionId}`);
+  return join(homedir(), '.agentworkforce', 'workforce', 'sessions', `${personaId}-${sessionId}`);
 }
 
 function sessionInstallRoot(sessionRoot: string): string {

@@ -968,7 +968,7 @@ the working tree, and the session only sees the skills the persona declares
 **Layout:**
 
 ```
-~/.agent-workforce/
+~/.agentworkforce/workforce/
 └── sessions/<personaId>-<timestamp>-<rand>/
     └── claude/
         └── plugin/                                ← passed as --plugin-dir
@@ -977,7 +977,7 @@ the working tree, and the session only sees the skills the persona declares
             └── .claude/skills/<name>/SKILL.md     ← prpm install output
 ```
 
-- **Stage dir** — `~/.agent-workforce/sessions/<id>/claude/plugin/`.
+- **Stage dir** — `~/.agentworkforce/workforce/sessions/<id>/claude/plugin/`.
   `<id>` is `<personaId>-<base36-timestamp>-<hex-random>` so parallel
   sessions never collide.
 - **Plugin wrapper** — the CLI writes a minimal `.claude-plugin/plugin.json`
@@ -992,7 +992,7 @@ the working tree, and the session only sees the skills the persona declares
   `<stage-dir>` (e.g. `.../sessions/<id>/claude/plugin/`) via its generated
   `rm -rf` command. The CLI additionally removes the enclosing session root
   (`.../sessions/<id>/`) so the mount dir and any empty parents don't
-  accumulate under `~/.agent-workforce/sessions/`. The provider lockfile
+  accumulate under `~/.agentworkforce/workforce/sessions/`. The provider lockfile
   (`prpm.lock`) is inside the stage dir and goes with it — no repeat-run
   resolution cache today. Restart cost is one prpm install per session.
 
@@ -1016,7 +1016,7 @@ stage dir conflicts with something else (network filesystem, read-only
   conventional repo-relative directories. The SDK throws if `installRoot` is
   passed with a non-claude harness.
 - **No cache layer yet.** Every interactive session runs a fresh prpm install
-  into a new stage dir. A `~/.agent-workforce/cache/` content-addressed cache
+  into a new stage dir. A `~/.agentworkforce/workforce/cache/` content-addressed cache
   is planned but not wired up.
 
 ## Sandbox mount
@@ -1067,7 +1067,7 @@ the repo):
   user-level context too, launch under a scratch `$HOME`.
 - **Persona skills.** For claude, the `--plugin-dir` passed to the harness
   resolves to an absolute path *outside* the mount, so staged skills from
-  `~/.agent-workforce/sessions/<id>/claude/plugin/` load normally. For
+  `~/.agentworkforce/workforce/sessions/<id>/claude/plugin/` load normally. For
   opencode, the install runs inside the mount so the writes land in the
   sandbox.
 - **Keychain auth.** The mount does not pass `--bare`; it only hides
@@ -1088,7 +1088,7 @@ session directory. The session id (`<personaId>-<base36-timestamp>-<hex>`)
 is generated once and both paths are derived from it:
 
 ```
-~/.agent-workforce/
+~/.agentworkforce/workforce/
 └── sessions/<personaId>-<timestamp>-<rand>/
     ├── claude/
     │   └── plugin/                                ← passed as --plugin-dir
