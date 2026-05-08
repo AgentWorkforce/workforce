@@ -14,12 +14,12 @@
   ],
   "inputs": {
     "TARGET_DIR": {
-      "description": "Absolute directory where the new persona JSON should be written. The CLI defaults this to `<cwd>/.agentworkforce/workforce/personas` (created if missing); only overridden when `agentworkforce create --save-in-directory=<target>` selects a different target.",
+      "description": "Absolute directory where the new persona JSON should be written. The CLI defaults this to `<cwd>/.agentworkforce/workforce/personas` (created if missing); override with `agentworkforce create --save-in-directory=<target>` or a saved `defaultCreateTarget` in `~/.agentworkforce/workforce/config.json`.",
       "default": ".agentworkforce/workforce/personas"
     },
     "CREATE_MODE": {
-      "description": "local|built-in: local writes JSON only; built-in also updates repo catalog/routing/test/docs.",
-      "default": "built-in"
+      "description": "local|built-in: local writes JSON only; built-in also updates repo catalog/routing/test/docs. The CLI sets this to `built-in` only when the resolved target is the AgentWorkforce repo's `/personas` library (i.e. `--save-in-directory=library`); every other target is `local`.",
+      "default": "local"
     },
     "TASK_DESCRIPTION": {
       "description": "The task or capability the new persona should cover. Auto-populated when launched from `agentworkforce pick` after no existing persona matched the user's request; otherwise omitted, in which case the agent reads its operating spec from AGENTS.md and waits for the user to describe a task in the TUI.",

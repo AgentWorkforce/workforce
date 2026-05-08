@@ -244,6 +244,19 @@ test('parseCreateArgs: --save-in-directory accepts a space-separated value', () 
   }
 });
 
+test('parseCreateArgs: --save-in-directory rejects blank values instead of falling back to cwd', () => {
+  const trap = trapExit();
+  try {
+    assert.throws(() => parseCreateArgs(['--save-in-directory=']), /__exit_trap__:1/);
+    assert.throws(() => parseCreateArgs(['--save-in-directory=   ']), /__exit_trap__:1/);
+    assert.throws(() => parseCreateArgs(['--save-in-directory', '']), /__exit_trap__:1/);
+    assert.throws(() => parseCreateArgs(['--save-in-directory', '   ']), /__exit_trap__:1/);
+    assert.match(trap.stderr, /requires a non-empty value/);
+  } finally {
+    trap.restore();
+  }
+});
+
 test('parseCreateArgs: --save-default persists create target in source config', () => {
   const root = mkdtempSync(join(tmpdir(), 'aw-create-default-'));
   const workforceHome = join(root, 'home', '.agentworkforce', 'workforce');

@@ -2362,13 +2362,15 @@ export function parseCreateArgs(args: readonly string[]): {
       continue;
     }
     if (arg === '--save-in-directory') {
-      flags.saveInDirectory = valueOf(i, arg);
+      const value = valueOf(i, arg).trim();
+      if (!value) die('create: --save-in-directory requires a non-empty value.');
+      flags.saveInDirectory = value;
       i += 1;
       continue;
     }
     if (arg.startsWith('--save-in-directory=')) {
-      const value = arg.slice('--save-in-directory='.length);
-      if (!value) die(`create: --save-in-directory requires a value.`);
+      const value = arg.slice('--save-in-directory='.length).trim();
+      if (!value) die('create: --save-in-directory requires a non-empty value.');
       flags.saveInDirectory = value;
       continue;
     }
