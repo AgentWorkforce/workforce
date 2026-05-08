@@ -7,6 +7,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.17.0] - 2026-05-08
+
+### Added
+
+- **Add optional defaultTier to PersonaSpec**
+
+### Changed
+
+- Agent: consult routingProfiles before defaultTier on no-@<tier>
+
 ## [0.16.0] - 2026-05-08
 
 ### Added
