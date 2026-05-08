@@ -7,6 +7,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.19.0] - 2026-05-08
+
+### Changed
+
+- Address PR feedback on auto-improve flow
+- Handle Ctrl-C during sandbox mount setup
+- Make CLI launch spinners actually animate (#104)
+- Offer auto-improve persona prompt at session end
+
 ## [0.18.0] - 2026-05-08
 
 ### Changed
