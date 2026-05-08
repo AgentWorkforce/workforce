@@ -450,6 +450,82 @@ test('inputs are preserved on standalone local personas', () => {
   });
 });
 
+test('standalone local personas accept arbitrary intent names', () => {
+  withLayers(({ cwd, homeDir }) => {
+    writeJson(join(homeDir, 'nextjs-web-steward.json'), {
+      id: 'nextjs-web-steward',
+      intent: 'nextjs-web-steward',
+      tags: ['implementation'],
+      description: 'Stewards Next.js web surfaces.',
+      tiers: {
+        best: {
+          harness: 'codex',
+          model: 'openai-codex/gpt-5.3-codex',
+          systemPrompt: 'Implement Next.js UI work carefully.',
+          harnessSettings: { reasoning: 'high', timeoutSeconds: 30 }
+        },
+        'best-value': {
+          harness: 'opencode',
+          model: 'opencode/gpt-5-nano',
+          systemPrompt: 'Implement Next.js UI work carefully.',
+          harnessSettings: { reasoning: 'medium', timeoutSeconds: 30 }
+        },
+        minimum: {
+          harness: 'opencode',
+          model: 'opencode/minimax-m2.5-free',
+          systemPrompt: 'Implement Next.js UI work carefully.',
+          harnessSettings: { reasoning: 'low', timeoutSeconds: 30 }
+        }
+      }
+    });
+
+    const loaded = loadLocalPersonas({ cwd, homeDir });
+    assert.deepEqual(loaded.warnings, []);
+    const spec = loaded.byId.get('nextjs-web-steward');
+    assert.equal(spec?.intent, 'nextjs-web-steward');
+  });
+});
+
+test('standalone local personas can use inlined AGENTS content as prompt fallback', () => {
+  withLayers(({ cwd, homeDir }) => {
+    writeJson(join(homeDir, 'nextjs-web-steward.json'), {
+      id: 'nextjs-web-steward',
+      intent: 'nextjs-web-stewardship',
+      tags: ['implementation'],
+      description: 'Stewards Next.js web surfaces.',
+      agentsMd: 'AGENTS.md',
+      agentsMdContent: '# Next.js Web Steward\n\nOwn implementation work in web/.\n',
+      tiers: {
+        best: {
+          harness: 'codex',
+          model: 'openai-codex/gpt-5.3-codex',
+          systemPrompt: '',
+          harnessSettings: { reasoning: 'high', timeoutSeconds: 30 }
+        },
+        'best-value': {
+          harness: 'opencode',
+          model: 'opencode/gpt-5-nano',
+          systemPrompt: '',
+          harnessSettings: { reasoning: 'medium', timeoutSeconds: 30 }
+        },
+        minimum: {
+          harness: 'opencode',
+          model: 'opencode/minimax-m2.5-free',
+          systemPrompt: '',
+          harnessSettings: { reasoning: 'low', timeoutSeconds: 30 }
+        }
+      }
+    });
+
+    const loaded = loadLocalPersonas({ cwd, homeDir });
+    assert.deepEqual(loaded.warnings, []);
+    const spec = loaded.byId.get('nextjs-web-steward');
+    assert.match(spec?.tiers.best.systemPrompt ?? '', /Next\.js Web Steward/);
+    assert.match(spec?.agentsMdContent ?? '', /implementation work/);
+    assert.equal(spec?.agentsMd, undefined);
+  });
+});
+
 test('surfaces parse errors as per-file warnings without throwing', () => {
   withLayers(({ cwd, homeDir }) => {
     writeFileSync(join(homeDir, 'bad.json'), '{ not valid json');
