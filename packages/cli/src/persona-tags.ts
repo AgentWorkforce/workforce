@@ -3,6 +3,7 @@ import { homedir } from 'node:os';
 import { join } from 'node:path';
 
 import type { Harness, PersonaSelection } from '@agentworkforce/workload-router';
+import * as relayburnSdk from '@relayburn/sdk';
 
 export const PERSONA_TAGGING_INTERVAL_MS = 1_000;
 export const PERSONA_TAGS_OPT_OUT_ENV = 'AGENTWORKFORCE_PERSONA_TAGS';
@@ -206,7 +207,7 @@ async function resolvePersonaTagBackend(
 ): Promise<PersonaTagBackendLike> {
   if (typeof sdk === 'function') return await sdk();
   if (sdk) return sdk;
-  return (await import('@relayburn/sdk')) as unknown as PersonaTagBackendLike;
+  return relayburnSdk as unknown as PersonaTagBackendLike;
 }
 
 function disabledRun(tags: Record<string, string>): PersonaTaggingRun {
