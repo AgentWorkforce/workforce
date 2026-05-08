@@ -7,10 +7,12 @@ import {
   readdirSync,
   readFileSync,
   rmSync,
-  statSync
+  statSync,
+  writeFileSync
 } from 'node:fs';
 import {
   basename,
+  dirname,
   isAbsolute,
   join,
   normalize,
@@ -55,11 +57,29 @@ interface PackageJsonShape {
   };
 }
 
+/**
+ * Sibling markdown sidecar referenced by a persona JSON. Tracked at
+ * collection time so we can fail loud if the file is missing and copy it
+ * into the install target with a stable name. `assetKey` is unique within
+ * the persona — a stable POSIX-style relative path used as the on-disk
+ * filename under `__assets/<personaId>/`.
+ */
+interface PersonaAsset {
+  /** Where the field appears in the JSON (for path-rewriting). */
+  field: 'claudeMd' | 'agentsMd';
+  /** Optional tier (`undefined` for top-level). */
+  tier?: string;
+  sourcePath: string;
+  /** Stable relative target inside `<targetDir>/__assets/<personaId>/`. */
+  assetKey: string;
+}
+
 interface PersonaFile {
   id: string;
   sourcePath: string;
   fileName: string;
   targetPath: string;
+  assets: PersonaAsset[];
 }
 
 export function projectPersonaInstallDir(cwd = process.cwd()): string {
@@ -181,7 +201,7 @@ function collectJsonFiles(dir: string): string[] {
   return out;
 }
 
-function readPersonaId(path: string): string {
+function readPersonaJson(path: string): Record<string, unknown> {
   let parsed: unknown;
   try {
     parsed = JSON.parse(readFileSync(path, 'utf8'));
@@ -195,7 +215,114 @@ function readPersonaId(path: string): string {
   if (typeof id !== 'string' || !id.trim()) {
     throw new Error(`install: persona ${path} must declare a non-empty string id`);
   }
-  return id;
+  return parsed;
+}
+
+function readPersonaId(path: string): string {
+  return readPersonaJson(path).id as string;
+}
+
+function assertPackagedSidecarPath(
+  relPath: unknown,
+  context: string,
+  jsonPath: string
+): string {
+  if (typeof relPath !== 'string' || !relPath.trim()) {
+    throw new Error(`install: ${jsonPath}: ${context} must be a non-empty string`);
+  }
+  if (isAbsolute(relPath)) {
+    throw new Error(
+      `install: ${jsonPath}: ${context} must be a relative path; got "${relPath}"`
+    );
+  }
+  const segments = relPath.split(/[\\/]+/);
+  if (segments.some((s) => s === '..')) {
+    throw new Error(`install: ${jsonPath}: ${context} must not contain ".." segments`);
+  }
+  if (!relPath.toLowerCase().endsWith('.md')) {
+    throw new Error(`install: ${jsonPath}: ${context} must end with .md`);
+  }
+  return normalize(relPath);
+}
+
+function collectPersonaAssets(personaJsonPath: string, json: Record<string, unknown>): PersonaAsset[] {
+  const assets: PersonaAsset[] = [];
+  const assetKeys = new Set<string>();
+  const sourceDir = dirname(personaJsonPath);
+  const sidecarFields: Array<'claudeMd' | 'agentsMd'> = ['claudeMd', 'agentsMd'];
+
+  const addAsset = (
+    field: 'claudeMd' | 'agentsMd',
+    relPath: string,
+    tier?: string
+  ): void => {
+    const sourcePath = resolvePath(sourceDir, relPath);
+    const fromRoot = relative(sourceDir, sourcePath);
+    if (fromRoot.startsWith('..') || isAbsolute(fromRoot)) {
+      throw new Error(
+        `install: ${personaJsonPath}: sidecar "${relPath}" resolves outside the persona dir`
+      );
+    }
+    if (!existsSync(sourcePath)) {
+      throw new Error(
+        `install: ${personaJsonPath}: referenced ${field} sidecar not found at ${sourcePath}`
+      );
+    }
+    // Stable, collision-free key inside `__assets/<personaId>/`. Tier-
+    // scoped fields go under `<tier>/` so a persona with the same path
+    // declared at top-level and per-tier still produces unique targets.
+    const baseKey = tier ? `${tier}/${basename(relPath)}` : basename(relPath);
+    let assetKey = baseKey;
+    let suffix = 1;
+    while (assetKeys.has(assetKey)) {
+      const dot = baseKey.lastIndexOf('.');
+      assetKey = `${baseKey.slice(0, dot)}-${++suffix}${baseKey.slice(dot)}`;
+    }
+    assetKeys.add(assetKey);
+    assets.push({ field, tier, sourcePath, assetKey });
+  };
+
+  for (const field of sidecarFields) {
+    if (json[field] !== undefined) {
+      const rel = assertPackagedSidecarPath(json[field], field, personaJsonPath);
+      addAsset(field, rel);
+    }
+  }
+  if (isPlainObject(json.tiers)) {
+    for (const [tier, runtime] of Object.entries(json.tiers)) {
+      if (!isPlainObject(runtime)) continue;
+      for (const field of sidecarFields) {
+        if (runtime[field] !== undefined) {
+          const rel = assertPackagedSidecarPath(
+            runtime[field],
+            `tiers.${tier}.${field}`,
+            personaJsonPath
+          );
+          addAsset(field, rel, tier);
+        }
+      }
+    }
+  }
+  return assets;
+}
+
+function rewriteJsonAssetPaths(
+  json: Record<string, unknown>,
+  assets: readonly PersonaAsset[],
+  personaId: string
+): Record<string, unknown> {
+  if (assets.length === 0) return json;
+  const cloned = JSON.parse(JSON.stringify(json)) as Record<string, unknown>;
+  const newPath = (assetKey: string): string => `__assets/${personaId}/${assetKey}`;
+  for (const asset of assets) {
+    if (asset.tier === undefined) {
+      cloned[asset.field] = newPath(asset.assetKey);
+    } else {
+      const tiers = cloned.tiers as Record<string, Record<string, unknown>>;
+      tiers[asset.tier][asset.field] = newPath(asset.assetKey);
+    }
+  }
+  return cloned;
 }
 
 function dedupe(values: readonly string[]): string[] {
@@ -219,7 +346,8 @@ function collectPersonas(personaDir: string, targetDir: string): PersonaFile[] {
   const byFileName = new Map<string, string>();
   const personas: PersonaFile[] = [];
   for (const sourcePath of jsonFiles) {
-    const id = readPersonaId(sourcePath);
+    const json = readPersonaJson(sourcePath);
+    const id = json.id as string;
     const existingIdPath = byId.get(id);
     if (existingIdPath) {
       throw new Error(
@@ -236,11 +364,13 @@ function collectPersonas(personaDir: string, targetDir: string): PersonaFile[] {
       );
     }
     byFileName.set(fileName, sourcePath);
+    const assets = collectPersonaAssets(sourcePath, json);
     personas.push({
       id,
       sourcePath,
       fileName,
-      targetPath: join(targetDir, fileName)
+      targetPath: join(targetDir, fileName),
+      assets
     });
   }
   return personas;
@@ -364,7 +494,23 @@ export function installPersonas(options: PersonaInstallOptions): PersonaInstallR
         });
         continue;
       }
-      copyFileSync(persona.sourcePath, persona.targetPath);
+      if (persona.assets.length === 0) {
+        copyFileSync(persona.sourcePath, persona.targetPath);
+      } else {
+        const assetDir = join(targetDir, '__assets', persona.id);
+        for (const asset of persona.assets) {
+          const dest = join(assetDir, asset.assetKey);
+          mkdirSync(dirname(dest), { recursive: true });
+          copyFileSync(asset.sourcePath, dest);
+        }
+        const json = readPersonaJson(persona.sourcePath);
+        const rewritten = rewriteJsonAssetPaths(json, persona.assets, persona.id);
+        writeFileSync(
+          persona.targetPath,
+          JSON.stringify(rewritten, null, 2) + '\n',
+          'utf8'
+        );
+      }
       installed.push(persona);
     }
 

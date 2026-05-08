@@ -56,11 +56,43 @@ export interface HarnessSettings {
   timeoutSeconds: number;
 }
 
+/**
+ * Sidecar markdown delivery mode. `overwrite` writes only the persona's
+ * resolved markdown into the harness's mount file. `extend` reads the
+ * caller's real-cwd file (if any) and prepends it to the persona content,
+ * separated by `\n\n---\n\n`. With no real-cwd file `extend` degrades to
+ * `overwrite` semantics — the persona content lands alone.
+ */
+export const SIDECAR_MD_MODES = ['overwrite', 'extend'] as const;
+export type SidecarMdMode = (typeof SIDECAR_MD_MODES)[number];
+
 export interface PersonaRuntime {
   harness: Harness;
   model: string;
   systemPrompt: string;
   harnessSettings: HarnessSettings;
+  /**
+   * Per-tier override of the persona's `claudeMd` path. Resolves to an
+   * absolute filesystem path on the parsed spec — for built-ins, the value
+   * comes from `claudeMdContent` instead of a path. Materialized into the
+   * sandbox mount as `/CLAUDE.md` when running under the claude harness.
+   */
+  claudeMd?: string;
+  /** Per-tier override of {@link PersonaSpec.claudeMdMode}. */
+  claudeMdMode?: SidecarMdMode;
+  /** Per-tier override of the persona's `agentsMd` path. */
+  agentsMd?: string;
+  /** Per-tier override of {@link PersonaSpec.agentsMdMode}. */
+  agentsMdMode?: SidecarMdMode;
+  /**
+   * Inlined sidecar content for built-in personas. The catalog generator
+   * reads the sibling `.md` at build time and emits its body here so the
+   * installed package does not need to ship the file separately. Runtime
+   * code prefers this over `claudeMd` when both are set.
+   */
+  claudeMdContent?: string;
+  /** Inlined `AGENTS.md` content for built-in personas (see {@link claudeMdContent}). */
+  agentsMdContent?: string;
 }
 
 /**
@@ -189,6 +221,28 @@ export interface PersonaSpec {
    * launchers that run the harness inside `@relayfile/local-mount`.
    */
   mount?: PersonaMount;
+  /**
+   * Author-supplied path to a `CLAUDE.md` sidecar that should be applied
+   * when the persona runs under the claude harness. The path is relative
+   * to the JSON file that declared the field; the loader resolves it to
+   * an already-absolute path on the parsed spec. Built-in personas inline
+   * the content into {@link PersonaRuntime.claudeMdContent} at build time.
+   */
+  claudeMd?: string;
+  /** Defaults to `overwrite`. See {@link SidecarMdMode}. */
+  claudeMdMode?: SidecarMdMode;
+  /**
+   * Author-supplied path to an `AGENTS.md` sidecar that should be applied
+   * when the persona runs under the opencode harness. Same resolution
+   * rules as {@link claudeMd}.
+   */
+  agentsMd?: string;
+  /** Defaults to `overwrite`. See {@link SidecarMdMode}. */
+  agentsMdMode?: SidecarMdMode;
+  /** Inlined `CLAUDE.md` content for built-in personas (see {@link PersonaRuntime.claudeMdContent}). */
+  claudeMdContent?: string;
+  /** Inlined `AGENTS.md` content for built-in personas. */
+  agentsMdContent?: string;
 }
 
 export interface RoutingProfileRule {
@@ -214,6 +268,17 @@ export interface PersonaSelection {
   mcpServers?: Record<string, McpServerSpec>;
   permissions?: PersonaPermissions;
   mount?: PersonaMount;
+  /**
+   * Effective sidecar config for the selected (tier, harness). Already-
+   * cascaded across top-level/per-tier so launchers don't have to re-walk
+   * the spec. Modes default to `overwrite`.
+   */
+  claudeMd?: string;
+  claudeMdContent?: string;
+  claudeMdMode?: SidecarMdMode;
+  agentsMd?: string;
+  agentsMdContent?: string;
+  agentsMdMode?: SidecarMdMode;
 }
 
 // ---------------------------------------------------------------------------
@@ -766,12 +831,43 @@ function parseTags(value: unknown, context: string): PersonaTag[] {
   return out;
 }
 
+function isSidecarMode(value: unknown): value is SidecarMdMode {
+  return typeof value === 'string' && SIDECAR_MD_MODES.includes(value as SidecarMdMode);
+}
+
+function assertSidecarPath(value: unknown, context: string): void {
+  if (typeof value !== 'string' || !value.trim()) {
+    throw new Error(`${context} must be a non-empty string`);
+  }
+  if (value.startsWith('/')) {
+    throw new Error(`${context} must be a relative POSIX path; got absolute "${value}"`);
+  }
+  const segments = value.split(/[\\/]+/);
+  if (segments.some((s) => s === '..')) {
+    throw new Error(`${context} must not contain ".." segments`);
+  }
+  if (!value.toLowerCase().endsWith('.md')) {
+    throw new Error(`${context} must end with .md`);
+  }
+}
+
 function parseRuntime(value: unknown, context: string): PersonaRuntime {
   if (!isObject(value)) {
     throw new Error(`${context} must be an object`);
   }
 
-  const { harness, model, systemPrompt, harnessSettings } = value;
+  const {
+    harness,
+    model,
+    systemPrompt,
+    harnessSettings,
+    claudeMd,
+    claudeMdMode,
+    agentsMd,
+    agentsMdMode,
+    claudeMdContent,
+    agentsMdContent
+  } = value;
 
   if (!isHarness(harness)) {
     throw new Error(`${context}.harness must be one of: ${HARNESS_VALUES.join(', ')}`);
@@ -794,6 +890,27 @@ function parseRuntime(value: unknown, context: string): PersonaRuntime {
     throw new Error(`${context}.harnessSettings.timeoutSeconds must be a positive number`);
   }
 
+  if (claudeMd !== undefined) assertSidecarPath(claudeMd, `${context}.claudeMd`);
+  if (agentsMd !== undefined) assertSidecarPath(agentsMd, `${context}.agentsMd`);
+  if (claudeMdMode !== undefined && !isSidecarMode(claudeMdMode)) {
+    throw new Error(`${context}.claudeMdMode must be one of: ${SIDECAR_MD_MODES.join(', ')}`);
+  }
+  if (agentsMdMode !== undefined && !isSidecarMode(agentsMdMode)) {
+    throw new Error(`${context}.agentsMdMode must be one of: ${SIDECAR_MD_MODES.join(', ')}`);
+  }
+  if (claudeMdMode !== undefined && claudeMd === undefined && claudeMdContent === undefined) {
+    throw new Error(`${context}.claudeMdMode requires .claudeMd to be set`);
+  }
+  if (agentsMdMode !== undefined && agentsMd === undefined && agentsMdContent === undefined) {
+    throw new Error(`${context}.agentsMdMode requires .agentsMd to be set`);
+  }
+  if (claudeMdContent !== undefined && (typeof claudeMdContent !== 'string' || !claudeMdContent.length)) {
+    throw new Error(`${context}.claudeMdContent must be a non-empty string`);
+  }
+  if (agentsMdContent !== undefined && (typeof agentsMdContent !== 'string' || !agentsMdContent.length)) {
+    throw new Error(`${context}.agentsMdContent must be a non-empty string`);
+  }
+
   return {
     harness,
     model,
@@ -801,7 +918,13 @@ function parseRuntime(value: unknown, context: string): PersonaRuntime {
     harnessSettings: {
       reasoning: reasoning as HarnessSettings['reasoning'],
       timeoutSeconds
-    }
+    },
+    ...(typeof claudeMd === 'string' ? { claudeMd } : {}),
+    ...(claudeMdMode ? { claudeMdMode: claudeMdMode as SidecarMdMode } : {}),
+    ...(typeof agentsMd === 'string' ? { agentsMd } : {}),
+    ...(agentsMdMode ? { agentsMdMode: agentsMdMode as SidecarMdMode } : {}),
+    ...(typeof claudeMdContent === 'string' ? { claudeMdContent } : {}),
+    ...(typeof agentsMdContent === 'string' ? { agentsMdContent } : {})
   };
 }
 
@@ -935,7 +1058,25 @@ function parsePersonaSpec(value: unknown, expectedIntent: PersonaIntent): Person
     throw new Error(`persona[${expectedIntent}] must be an object`);
   }
 
-  const { id, intent, tags, description, tiers, skills, inputs, env, mcpServers, permissions, mount } = value;
+  const {
+    id,
+    intent,
+    tags,
+    description,
+    tiers,
+    skills,
+    inputs,
+    env,
+    mcpServers,
+    permissions,
+    mount,
+    claudeMd,
+    claudeMdMode,
+    agentsMd,
+    agentsMdMode,
+    claudeMdContent,
+    agentsMdContent
+  } = value;
 
   if (typeof id !== 'string' || !id.trim()) {
     throw new Error(`persona[${expectedIntent}].id must be a non-empty string`);
@@ -969,6 +1110,37 @@ function parsePersonaSpec(value: unknown, expectedIntent: PersonaIntent): Person
   );
   const parsedMount = parseMount(mount, `persona[${expectedIntent}].mount`);
 
+  if (claudeMd !== undefined) assertSidecarPath(claudeMd, `persona[${expectedIntent}].claudeMd`);
+  if (agentsMd !== undefined) assertSidecarPath(agentsMd, `persona[${expectedIntent}].agentsMd`);
+  if (claudeMdMode !== undefined && !isSidecarMode(claudeMdMode)) {
+    throw new Error(
+      `persona[${expectedIntent}].claudeMdMode must be one of: ${SIDECAR_MD_MODES.join(', ')}`
+    );
+  }
+  if (agentsMdMode !== undefined && !isSidecarMode(agentsMdMode)) {
+    throw new Error(
+      `persona[${expectedIntent}].agentsMdMode must be one of: ${SIDECAR_MD_MODES.join(', ')}`
+    );
+  }
+  if (claudeMdMode !== undefined && claudeMd === undefined && claudeMdContent === undefined) {
+    throw new Error(`persona[${expectedIntent}].claudeMdMode requires .claudeMd to be set`);
+  }
+  if (agentsMdMode !== undefined && agentsMd === undefined && agentsMdContent === undefined) {
+    throw new Error(`persona[${expectedIntent}].agentsMdMode requires .agentsMd to be set`);
+  }
+  if (
+    claudeMdContent !== undefined &&
+    (typeof claudeMdContent !== 'string' || !claudeMdContent.length)
+  ) {
+    throw new Error(`persona[${expectedIntent}].claudeMdContent must be a non-empty string`);
+  }
+  if (
+    agentsMdContent !== undefined &&
+    (typeof agentsMdContent !== 'string' || !agentsMdContent.length)
+  ) {
+    throw new Error(`persona[${expectedIntent}].agentsMdContent must be a non-empty string`);
+  }
+
   return {
     id,
     intent,
@@ -980,7 +1152,13 @@ function parsePersonaSpec(value: unknown, expectedIntent: PersonaIntent): Person
     ...(parsedEnv ? { env: parsedEnv } : {}),
     ...(parsedMcpServers ? { mcpServers: parsedMcpServers } : {}),
     ...(parsedPermissions ? { permissions: parsedPermissions } : {}),
-    ...(parsedMount ? { mount: parsedMount } : {})
+    ...(parsedMount ? { mount: parsedMount } : {}),
+    ...(typeof claudeMd === 'string' ? { claudeMd } : {}),
+    ...(claudeMdMode ? { claudeMdMode: claudeMdMode as SidecarMdMode } : {}),
+    ...(typeof agentsMd === 'string' ? { agentsMd } : {}),
+    ...(agentsMdMode ? { agentsMdMode: agentsMdMode as SidecarMdMode } : {}),
+    ...(typeof claudeMdContent === 'string' ? { claudeMdContent } : {}),
+    ...(typeof agentsMdContent === 'string' ? { agentsMdContent } : {})
   };
 }
 
@@ -1162,6 +1340,48 @@ export const routingProfiles = {
 } as const;
 
 export type RoutingProfileId = keyof typeof routingProfiles;
+
+/**
+ * Resolve the effective sidecar config for a (spec, tier) pair. Tier-level
+ * fields beat top-level, modes resolve independently from paths/contents.
+ */
+export function resolveSidecar(
+  spec: PersonaSpec,
+  tier: PersonaTier
+): {
+  claudeMd?: string;
+  claudeMdContent?: string;
+  claudeMdMode: SidecarMdMode;
+  agentsMd?: string;
+  agentsMdContent?: string;
+  agentsMdMode: SidecarMdMode;
+} {
+  const runtime = spec.tiers[tier];
+  return {
+    ...(runtime.claudeMd
+      ? { claudeMd: runtime.claudeMd }
+      : spec.claudeMd
+        ? { claudeMd: spec.claudeMd }
+        : {}),
+    ...(runtime.claudeMdContent
+      ? { claudeMdContent: runtime.claudeMdContent }
+      : spec.claudeMdContent
+        ? { claudeMdContent: spec.claudeMdContent }
+        : {}),
+    claudeMdMode: runtime.claudeMdMode ?? spec.claudeMdMode ?? 'overwrite',
+    ...(runtime.agentsMd
+      ? { agentsMd: runtime.agentsMd }
+      : spec.agentsMd
+        ? { agentsMd: spec.agentsMd }
+        : {}),
+    ...(runtime.agentsMdContent
+      ? { agentsMdContent: runtime.agentsMdContent }
+      : spec.agentsMdContent
+        ? { agentsMdContent: spec.agentsMdContent }
+        : {}),
+    agentsMdMode: runtime.agentsMdMode ?? spec.agentsMdMode ?? 'overwrite'
+  };
+}
 
 export function resolvePersona(intent: PersonaIntent, profile: RoutingProfile | RoutingProfileId = 'default'): PersonaSelection {
   const profileSpec = typeof profile === 'string' ? routingProfiles[profile] : profile;

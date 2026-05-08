@@ -273,3 +273,68 @@ test('installed standalone personas are loaded through the cwd cascade', () => {
     assert.equal(loaded.sources.get('pack-reviewer'), 'cwd');
   });
 });
+
+test('installs sidecar markdown files into __assets/<id>/ and rewrites JSON paths', () => {
+  withTemp((root) => {
+    const project = join(root, 'project');
+    const pack = join(root, 'pack');
+    const persona = fullPersona('docs-bot') as Record<string, unknown>;
+    persona.claudeMd = 'persona.md';
+    persona.claudeMdMode = 'extend';
+    writeJson(join(pack, 'personas', 'docs-bot.json'), persona);
+    writeFileSync(join(pack, 'personas', 'persona.md'), '# Docs guidance\n');
+    // Unreferenced .md files should NOT get copied — only files explicitly
+    // declared by a persona JSON travel with the install.
+    writeFileSync(join(pack, 'personas', 'unrelated.md'), '# Unused\n');
+
+    const result = installPersonas({ source: pack, cwd: project });
+    assert.equal(result.installed.length, 1);
+    const installedJson = readJson(
+      join(project, '.agentworkforce', 'workforce', 'personas', 'docs-bot.json')
+    ) as { claudeMd: string; claudeMdMode: string };
+    assert.equal(installedJson.claudeMd, '__assets/docs-bot/persona.md');
+    assert.equal(installedJson.claudeMdMode, 'extend');
+
+    const installedMd = readFileSync(
+      join(project, '.agentworkforce', 'workforce', 'personas', '__assets', 'docs-bot', 'persona.md'),
+      'utf8'
+    );
+    assert.equal(installedMd, '# Docs guidance\n');
+
+    // Unreferenced .md must not be copied.
+    assert.equal(
+      existsSync(
+        join(project, '.agentworkforce', 'workforce', 'personas', '__assets', 'docs-bot', 'unrelated.md')
+      ),
+      false
+    );
+  });
+});
+
+test('rejects sidecar paths that escape the persona dir', () => {
+  withTemp((root) => {
+    const project = join(root, 'project');
+    const pack = join(root, 'pack');
+    const persona = fullPersona('docs-bot') as Record<string, unknown>;
+    persona.claudeMd = '../escape.md';
+    writeJson(join(pack, 'personas', 'docs-bot.json'), persona);
+    assert.throws(
+      () => installPersonas({ source: pack, cwd: project }),
+      /\.\./
+    );
+  });
+});
+
+test('hard-fails on missing referenced .md sidecar', () => {
+  withTemp((root) => {
+    const project = join(root, 'project');
+    const pack = join(root, 'pack');
+    const persona = fullPersona('docs-bot') as Record<string, unknown>;
+    persona.claudeMd = 'persona.md';
+    writeJson(join(pack, 'personas', 'docs-bot.json'), persona);
+    assert.throws(
+      () => installPersonas({ source: pack, cwd: project }),
+      /not found/
+    );
+  });
+});

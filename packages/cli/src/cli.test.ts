@@ -12,13 +12,16 @@ import {
   assertSafeRelativePath,
   buildRelayfileMountPatterns,
   buildMountGitExcludeBlock,
+  buildSidecarBody,
   configureGitForMount,
   decideCleanMode,
+  loadSidecarForSelection,
   parseAgentArgs,
   parseInstallArgs,
   parseCreateArgs,
   resolveSystemPromptPlaceholders,
-  stripAgentFlag
+  stripAgentFlag,
+  type ResolvedSidecar
 } from './cli.js';
 
 // The conflict-detection path inside parseAgentArgs uses the module-local
@@ -279,7 +282,10 @@ test('CLEAN_IGNORED_PATTERNS: covers the declared repo-level claude config files
     'CLAUDE.md',
     'CLAUDE.local.md',
     '.claude',
-    '.mcp.json'
+    '.mcp.json',
+    // AGENTS.md hidden so per-persona sidecar materialization into the
+    // mount doesn't leak the user's real-cwd file in or sync back out.
+    'AGENTS.md'
   ]);
 });
 
@@ -319,7 +325,11 @@ test('SKILL_INSTALL_IGNORED_PATTERNS: keeps skill-install artifacts out of the r
     '.opencode',
     '.skills',
     'prpm.lock',
-    'skills-lock.json'
+    'skills-lock.json',
+    // AGENTS.md (opencode sidecar) materialized into the mount; hide so
+    // the user's real-cwd file doesn't copy in and the persona-written
+    // file doesn't sync back.
+    'AGENTS.md'
   ]);
 });
 
@@ -600,6 +610,102 @@ test('configureGitForMount: empty patterns is a no-op', () => {
   // Defensive: callers that compute patterns dynamically may end up with
   // an empty list; we should not touch the index in that case.
   assert.doesNotThrow(() => configureGitForMount('/nonexistent-path', []));
+});
+
+test('buildSidecarBody: overwrite mode returns persona content as-is', () => {
+  const sidecar: ResolvedSidecar = {
+    mountFile: 'CLAUDE.md',
+    personaContent: '# Persona\n',
+    mode: 'overwrite'
+  };
+  // Even if a real-cwd file exists, overwrite must ignore it.
+  const dir = mkdtempSync(join(tmpdir(), 'aw-sidecar-'));
+  try {
+    writeFileSync(join(dir, 'CLAUDE.md'), '# Real\n', 'utf8');
+    assert.equal(buildSidecarBody(sidecar, dir), '# Persona\n');
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test('buildSidecarBody: extend mode prepends real-cwd content with separator', () => {
+  const sidecar: ResolvedSidecar = {
+    mountFile: 'CLAUDE.md',
+    personaContent: '# Persona\n',
+    mode: 'extend'
+  };
+  const dir = mkdtempSync(join(tmpdir(), 'aw-sidecar-'));
+  try {
+    writeFileSync(join(dir, 'CLAUDE.md'), '# Real\n', 'utf8');
+    assert.equal(buildSidecarBody(sidecar, dir), '# Real\n\n\n---\n\n# Persona\n');
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test('buildSidecarBody: extend mode degrades to overwrite when real file is missing', () => {
+  const sidecar: ResolvedSidecar = {
+    mountFile: 'AGENTS.md',
+    personaContent: '# Only persona\n',
+    mode: 'extend'
+  };
+  const dir = mkdtempSync(join(tmpdir(), 'aw-sidecar-'));
+  try {
+    assert.equal(buildSidecarBody(sidecar, dir), '# Only persona\n');
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test('loadSidecarForSelection: prefers inlined Content over path; selects by harness', () => {
+  const baseRuntime = {
+    harness: 'claude' as const,
+    model: 'claude-3-5-sonnet',
+    systemPrompt: 'You are a test persona.',
+    harnessSettings: { reasoning: 'medium' as const, timeoutSeconds: 300 }
+  };
+  const selection = {
+    personaId: 'p',
+    tier: 'best' as const,
+    runtime: baseRuntime,
+    skills: [],
+    rationale: 'test',
+    claudeMdContent: '# Inlined\n',
+    claudeMdMode: 'overwrite' as const
+  };
+  const { sidecar } = loadSidecarForSelection(selection);
+  assert.ok(sidecar);
+  assert.equal(sidecar.mountFile, 'CLAUDE.md');
+  assert.equal(sidecar.personaContent, '# Inlined\n');
+  assert.equal(sidecar.mode, 'overwrite');
+
+  // codex harness gets nothing
+  const codexSelection = {
+    ...selection,
+    runtime: { ...baseRuntime, harness: 'codex' as const }
+  };
+  const out = loadSidecarForSelection(codexSelection);
+  assert.equal(out.sidecar, undefined);
+});
+
+test('loadSidecarForSelection: opencode picks agentsMd, not claudeMd', () => {
+  const selection = {
+    personaId: 'p',
+    tier: 'best' as const,
+    runtime: {
+      harness: 'opencode' as const,
+      model: 'gpt-5.2',
+      systemPrompt: 'X',
+      harnessSettings: { reasoning: 'medium' as const, timeoutSeconds: 300 }
+    },
+    skills: [],
+    rationale: 'test',
+    claudeMdContent: '# claude\n',
+    agentsMdContent: '# agents\n'
+  };
+  const { sidecar } = loadSidecarForSelection(selection);
+  assert.equal(sidecar?.mountFile, 'AGENTS.md');
+  assert.equal(sidecar?.personaContent, '# agents\n');
 });
 
 test('main: codex sessions never engage the sandbox mount', async () => {

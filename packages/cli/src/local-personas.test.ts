@@ -453,3 +453,99 @@ test('surfaces parse errors as per-file warnings without throwing', () => {
     assert.match(loaded.warnings[0], /bad\.json/);
   });
 });
+
+test('top-level claudeMd resolves to absolute path anchored to its layer dir', () => {
+  withLayers(({ cwd, homeDir }) => {
+    writeFileSync(join(homeDir, 'persona.md'), '# Persona-specific guidance\n');
+    writeJson(join(homeDir, 'docs-bot.json'), {
+      id: 'docs-bot',
+      extends: 'documentation',
+      claudeMd: 'persona.md',
+      claudeMdMode: 'extend'
+    });
+    const loaded = loadLocalPersonas({ cwd, homeDir });
+    assert.deepEqual(loaded.warnings, []);
+    const spec = loaded.byId.get('docs-bot');
+    assert.equal(spec?.claudeMd, join(homeDir, 'persona.md'));
+    assert.equal(spec?.claudeMdMode, 'extend');
+  });
+});
+
+test('per-tier claudeMd overrides top-level path; mode resolves independently', () => {
+  withLayers(({ cwd, homeDir }) => {
+    writeFileSync(join(homeDir, 'top.md'), '# top\n');
+    writeFileSync(join(homeDir, 'best.md'), '# best\n');
+    writeJson(join(homeDir, 'p.json'), {
+      id: 'p',
+      extends: 'documentation',
+      claudeMd: 'top.md',
+      claudeMdMode: 'extend',
+      tiers: {
+        best: { claudeMd: 'best.md' }
+      }
+    });
+    const loaded = loadLocalPersonas({ cwd, homeDir });
+    assert.deepEqual(loaded.warnings, []);
+    const spec = loaded.byId.get('p');
+    // top-level resolves to top.md
+    assert.equal(spec?.claudeMd, join(homeDir, 'top.md'));
+    // per-tier `best` resolves to best.md
+    assert.equal(spec?.tiers.best.claudeMd, join(homeDir, 'best.md'));
+    // mode is independent of path — top-level mode applies, tier inherits.
+    assert.equal(spec?.claudeMdMode, 'extend');
+  });
+});
+
+test('rejects claudeMd with .. segment', () => {
+  withLayers(({ cwd, homeDir }) => {
+    writeJson(join(homeDir, 'p.json'), {
+      id: 'p',
+      extends: 'documentation',
+      claudeMd: '../escape.md'
+    });
+    const loaded = loadLocalPersonas({ cwd, homeDir });
+    assert.equal(loaded.byId.has('p'), false);
+    assert.match(loaded.warnings.join('\n'), /\.\./);
+  });
+});
+
+test('rejects non-md sidecar path', () => {
+  withLayers(({ cwd, homeDir }) => {
+    writeJson(join(homeDir, 'p.json'), {
+      id: 'p',
+      extends: 'documentation',
+      claudeMd: 'persona.txt'
+    });
+    const loaded = loadLocalPersonas({ cwd, homeDir });
+    assert.equal(loaded.byId.has('p'), false);
+    assert.match(loaded.warnings.join('\n'), /\.md/);
+  });
+});
+
+test('rejects claudeMdMode without claudeMd path', () => {
+  withLayers(({ cwd, homeDir }) => {
+    writeJson(join(homeDir, 'p.json'), {
+      id: 'p',
+      extends: 'documentation',
+      claudeMdMode: 'extend'
+    });
+    const loaded = loadLocalPersonas({ cwd, homeDir });
+    assert.equal(loaded.byId.has('p'), false);
+    assert.match(loaded.warnings.join('\n'), /requires \.claudeMd/);
+  });
+});
+
+test('missing sidecar file produces a warning, not a throw', () => {
+  withLayers(({ cwd, homeDir }) => {
+    writeJson(join(homeDir, 'p.json'), {
+      id: 'p',
+      extends: 'documentation',
+      claudeMd: 'missing.md'
+    });
+    const loaded = loadLocalPersonas({ cwd, homeDir });
+    const spec = loaded.byId.get('p');
+    assert.ok(spec, 'persona still loads');
+    assert.equal(spec?.claudeMd, undefined, 'missing path is dropped from spec');
+    assert.match(loaded.warnings.join('\n'), /sidecar file not found/);
+  });
+});
