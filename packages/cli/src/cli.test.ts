@@ -10,6 +10,7 @@ import {
   CREATE_SELECTOR,
   SKILL_INSTALL_IGNORED_PATTERNS,
   assertSafeRelativePath,
+  buildPickCandidates,
   buildRelayfileMountPatterns,
   buildMountGitExcludeBlock,
   buildSidecarBody,
@@ -19,6 +20,7 @@ import {
   parseAgentArgs,
   parseInstallArgs,
   parseCreateArgs,
+  promptYesNoSync,
   resolveSystemPromptPlaceholders,
   stripAgentFlag,
   type ResolvedSidecar
@@ -764,5 +766,63 @@ process.exit(7);
     assert.match(res.stderr, /fake codex failed/);
   } finally {
     rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test('buildPickCandidates: includes built-in personas with required projection fields', () => {
+  const candidates = buildPickCandidates();
+  assert.ok(candidates.length > 0, 'expected at least one candidate');
+  const personaMaker = candidates.find((c) => c.id === 'persona-maker');
+  assert.ok(personaMaker, 'persona-maker should be present in candidates');
+  assert.equal(personaMaker?.intent, 'persona-authoring');
+  assert.ok(Array.isArray(personaMaker?.tags));
+  assert.ok(personaMaker && personaMaker.description.length > 0);
+  // Sorted by id so the picker prompt is stable.
+  const ids = candidates.map((c) => c.id);
+  const sorted = [...ids].sort((a, b) => a.localeCompare(b));
+  assert.deepEqual(ids, sorted);
+});
+
+test('promptYesNoSync: returns false when not a TTY (skips prompt)', () => {
+  const writes: string[] = [];
+  const result = promptYesNoSync('proceed? ', {
+    isTTY: false,
+    write: (chunk) => writes.push(chunk),
+    read: () => 'y'
+  });
+  assert.equal(result, false);
+  assert.deepEqual(writes, [], 'should not write when non-TTY');
+});
+
+test('promptYesNoSync: TTY + "y" → true', () => {
+  const writes: string[] = [];
+  const result = promptYesNoSync('proceed? ', {
+    isTTY: true,
+    write: (chunk) => writes.push(chunk),
+    read: () => 'y'
+  });
+  assert.equal(result, true);
+  assert.deepEqual(writes, ['proceed? ']);
+});
+
+test('promptYesNoSync: TTY + "yes" (any case, with whitespace) → true', () => {
+  for (const answer of ['Y', 'YES', '  yes  ', 'Yes\r']) {
+    const result = promptYesNoSync('?', {
+      isTTY: true,
+      write: () => {},
+      read: () => answer
+    });
+    assert.equal(result, true, `answer ${JSON.stringify(answer)} should yield true`);
+  }
+});
+
+test('promptYesNoSync: TTY + empty/non-y answer → false (default no)', () => {
+  for (const answer of ['', 'n', 'no', undefined, 'maybe']) {
+    const result = promptYesNoSync('?', {
+      isTTY: true,
+      write: () => {},
+      read: () => answer
+    });
+    assert.equal(result, false, `answer ${JSON.stringify(answer)} should yield false`);
   }
 });
