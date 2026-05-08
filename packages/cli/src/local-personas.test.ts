@@ -522,16 +522,35 @@ test('rejects non-md sidecar path', () => {
   });
 });
 
-test('rejects claudeMdMode without claudeMd path', () => {
-  withLayers(({ cwd, homeDir }) => {
-    writeJson(join(homeDir, 'p.json'), {
-      id: 'p',
+test('mode-only override: tier mode flips while inheriting top-level path', () => {
+  // A common pattern from the issue's design notes: "Mode independence:
+  // tier overrides path, inherits top-level mode (and vice versa)."
+  // The cwd-layer override here only sets a tier-level mode, expecting
+  // the top-level path declared in a lower layer to flow through.
+  withLayers(({ cwd, homeDir, pwdDir }) => {
+    writeFileSync(join(homeDir, 'top.md'), '# top\n');
+    writeJson(join(homeDir, 'sidecar-base.json'), {
+      id: 'sidecar-base',
       extends: 'documentation',
-      claudeMdMode: 'extend'
+      claudeMd: 'top.md',
+      claudeMdMode: 'overwrite'
+    });
+    // cwd-level overlay flips ONLY the per-tier mode; the path inherits
+    // from sidecar-base in the user layer.
+    writeJson(join(pwdDir, 'sidecar-base.json'), {
+      id: 'sidecar-base',
+      extends: 'sidecar-base',
+      tiers: {
+        best: { claudeMdMode: 'extend' }
+      }
     });
     const loaded = loadLocalPersonas({ cwd, homeDir });
-    assert.equal(loaded.byId.has('p'), false);
-    assert.match(loaded.warnings.join('\n'), /requires \.claudeMd/);
+    assert.deepEqual(loaded.warnings, []);
+    const spec = loaded.byId.get('sidecar-base');
+    assert.equal(spec?.claudeMd, join(homeDir, 'top.md'));
+    assert.equal(spec?.tiers.best.claudeMdMode, 'extend');
+    // Other tiers still inherit the top-level mode.
+    assert.equal(spec?.claudeMdMode, 'overwrite');
   });
 });
 
@@ -547,5 +566,51 @@ test('missing sidecar file produces a warning, not a throw', () => {
     assert.ok(spec, 'persona still loads');
     assert.equal(spec?.claudeMd, undefined, 'missing path is dropped from spec');
     assert.match(loaded.warnings.join('\n'), /sidecar file not found/);
+  });
+});
+
+test('override path clears inherited claudeMdContent so the override is not shadowed', () => {
+  // Regression: when a built-in persona inlines `claudeMdContent` and a
+  // local override supplies a new `claudeMd` path, runtime selection
+  // prefers Content — so the override path was silently discarded.
+  // After the fix the override path takes ownership of the channel and
+  // the inherited content is dropped from the merged spec.
+  withLayers(({ cwd, homeDir }) => {
+    writeFileSync(join(homeDir, 'persona.md'), '# Persona override\n');
+    // We extend a built-in that has no inlined sidecar today, so
+    // simulate the inherited-content scenario by stacking two local
+    // layers: user-layer ships content, cwd-layer overrides with a path.
+    writeJson(join(homeDir, 'sidecar-stack.json'), {
+      id: 'sidecar-stack',
+      intent: 'documentation',
+      tags: ['documentation'],
+      description: 'sidecar stack base',
+      tiers: {
+        best: {
+          harness: 'claude',
+          model: 'claude-3-5-sonnet',
+          systemPrompt: 'base',
+          harnessSettings: { reasoning: 'medium', timeoutSeconds: 300 }
+        },
+        'best-value': {
+          harness: 'claude',
+          model: 'claude-3-5-sonnet',
+          systemPrompt: 'base',
+          harnessSettings: { reasoning: 'medium', timeoutSeconds: 300 }
+        },
+        minimum: {
+          harness: 'claude',
+          model: 'claude-3-5-sonnet',
+          systemPrompt: 'base',
+          harnessSettings: { reasoning: 'medium', timeoutSeconds: 300 }
+        }
+      },
+      claudeMd: 'persona.md'
+    });
+    const loaded = loadLocalPersonas({ cwd, homeDir });
+    assert.deepEqual(loaded.warnings, []);
+    const spec = loaded.byId.get('sidecar-stack');
+    assert.equal(spec?.claudeMd, join(homeDir, 'persona.md'));
+    assert.equal(spec?.claudeMdContent, undefined);
   });
 });

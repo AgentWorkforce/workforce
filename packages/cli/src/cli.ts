@@ -682,14 +682,19 @@ export function buildSidecarBody(
 ): string {
   if (sidecar.mode === 'extend') {
     const realPath = join(realCwdDir, sidecar.mountFile);
-    let realContent = '';
     try {
-      realContent = readFileSync(realPath, 'utf8');
-    } catch {
-      // Missing real file: graceful degradation — behave as overwrite.
-      return sidecar.personaContent;
+      const realContent = readFileSync(realPath, 'utf8');
+      return `${realContent}\n\n---\n\n${sidecar.personaContent}`;
+    } catch (err) {
+      // Only "missing path" errors degrade to overwrite. Real I/O
+      // problems (EACCES, EISDIR, …) propagate so callers see them
+      // instead of silently dropping the user's CLAUDE.md/AGENTS.md.
+      const code = (err as NodeJS.ErrnoException).code;
+      if (code === 'ENOENT' || code === 'ENOTDIR') {
+        return sidecar.personaContent;
+      }
+      throw err;
     }
-    return `${realContent}\n\n---\n\n${sidecar.personaContent}`;
   }
   return sidecar.personaContent;
 }

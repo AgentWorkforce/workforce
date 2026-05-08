@@ -898,12 +898,10 @@ function parseRuntime(value: unknown, context: string): PersonaRuntime {
   if (agentsMdMode !== undefined && !isSidecarMode(agentsMdMode)) {
     throw new Error(`${context}.agentsMdMode must be one of: ${SIDECAR_MD_MODES.join(', ')}`);
   }
-  if (claudeMdMode !== undefined && claudeMd === undefined && claudeMdContent === undefined) {
-    throw new Error(`${context}.claudeMdMode requires .claudeMd to be set`);
-  }
-  if (agentsMdMode !== undefined && agentsMd === undefined && agentsMdContent === undefined) {
-    throw new Error(`${context}.agentsMdMode requires .agentsMd to be set`);
-  }
+  // Mode is allowed without a same-level path: a tier may declare just
+  // `claudeMdMode` and inherit the path from the spec top-level (or vice
+  // versa). The cascade validates that a path/content actually exists at
+  // runtime — a stranded mode with no path anywhere becomes a no-op.
   if (claudeMdContent !== undefined && (typeof claudeMdContent !== 'string' || !claudeMdContent.length)) {
     throw new Error(`${context}.claudeMdContent must be a non-empty string`);
   }
@@ -1122,12 +1120,8 @@ function parsePersonaSpec(value: unknown, expectedIntent: PersonaIntent): Person
       `persona[${expectedIntent}].agentsMdMode must be one of: ${SIDECAR_MD_MODES.join(', ')}`
     );
   }
-  if (claudeMdMode !== undefined && claudeMd === undefined && claudeMdContent === undefined) {
-    throw new Error(`persona[${expectedIntent}].claudeMdMode requires .claudeMd to be set`);
-  }
-  if (agentsMdMode !== undefined && agentsMd === undefined && agentsMdContent === undefined) {
-    throw new Error(`persona[${expectedIntent}].agentsMdMode requires .agentsMd to be set`);
-  }
+  // Spec-level mode without a spec-level path is allowed — a tier may
+  // supply the path while inheriting the mode here. See parseRuntime.
   if (
     claudeMdContent !== undefined &&
     (typeof claudeMdContent !== 'string' || !claudeMdContent.length)
@@ -1342,8 +1336,19 @@ export const routingProfiles = {
 export type RoutingProfileId = keyof typeof routingProfiles;
 
 /**
- * Resolve the effective sidecar config for a (spec, tier) pair. Tier-level
- * fields beat top-level, modes resolve independently from paths/contents.
+ * Resolve the effective sidecar config for a (spec, tier) pair.
+ *
+ * Path-or-content resolution: each sidecar (`claude*`, `agents*`) is a
+ * single "channel" — its `*Md` and `*MdContent` fields are tied together
+ * and travel as a unit through the cascade. If the tier-level runtime
+ * declares EITHER `claudeMd` or `claudeMdContent`, the tier owns the
+ * channel and the top-level path/content is ignored (otherwise a tier
+ * path override would silently lose to inherited inlined content, since
+ * downstream consumers prefer Content over a path).
+ *
+ * Mode resolution: independent — a tier can set just `claudeMdMode` and
+ * inherit the top-level path. Defaults to `overwrite` if neither layer
+ * sets a mode. Modes are only meaningful when a path/content is present.
  */
 export function resolveSidecar(
   spec: PersonaSpec,
@@ -1357,29 +1362,44 @@ export function resolveSidecar(
   agentsMdMode: SidecarMdMode;
 } {
   const runtime = spec.tiers[tier];
+  const tierOwnsClaude = runtime.claudeMd !== undefined || runtime.claudeMdContent !== undefined;
+  const tierOwnsAgents = runtime.agentsMd !== undefined || runtime.agentsMdContent !== undefined;
+  const claudePath = tierOwnsClaude ? runtime.claudeMd : spec.claudeMd;
+  const claudeContent = tierOwnsClaude ? runtime.claudeMdContent : spec.claudeMdContent;
+  const agentsPath = tierOwnsAgents ? runtime.agentsMd : spec.agentsMd;
+  const agentsContent = tierOwnsAgents ? runtime.agentsMdContent : spec.agentsMdContent;
   return {
-    ...(runtime.claudeMd
-      ? { claudeMd: runtime.claudeMd }
-      : spec.claudeMd
-        ? { claudeMd: spec.claudeMd }
-        : {}),
-    ...(runtime.claudeMdContent
-      ? { claudeMdContent: runtime.claudeMdContent }
-      : spec.claudeMdContent
-        ? { claudeMdContent: spec.claudeMdContent }
-        : {}),
+    ...(claudePath ? { claudeMd: claudePath } : {}),
+    ...(claudeContent ? { claudeMdContent: claudeContent } : {}),
     claudeMdMode: runtime.claudeMdMode ?? spec.claudeMdMode ?? 'overwrite',
-    ...(runtime.agentsMd
-      ? { agentsMd: runtime.agentsMd }
-      : spec.agentsMd
-        ? { agentsMd: spec.agentsMd }
-        : {}),
-    ...(runtime.agentsMdContent
-      ? { agentsMdContent: runtime.agentsMdContent }
-      : spec.agentsMdContent
-        ? { agentsMdContent: spec.agentsMdContent }
-        : {}),
+    ...(agentsPath ? { agentsMd: agentsPath } : {}),
+    ...(agentsContent ? { agentsMdContent: agentsContent } : {}),
     agentsMdMode: runtime.agentsMdMode ?? spec.agentsMdMode ?? 'overwrite'
+  };
+}
+
+function sidecarSelectionFields(
+  sidecar: ReturnType<typeof resolveSidecar>
+): Pick<
+  PersonaSelection,
+  | 'claudeMd'
+  | 'claudeMdContent'
+  | 'claudeMdMode'
+  | 'agentsMd'
+  | 'agentsMdContent'
+  | 'agentsMdMode'
+> {
+  return {
+    ...(sidecar.claudeMd ? { claudeMd: sidecar.claudeMd } : {}),
+    ...(sidecar.claudeMdContent ? { claudeMdContent: sidecar.claudeMdContent } : {}),
+    ...(sidecar.claudeMd || sidecar.claudeMdContent
+      ? { claudeMdMode: sidecar.claudeMdMode }
+      : {}),
+    ...(sidecar.agentsMd ? { agentsMd: sidecar.agentsMd } : {}),
+    ...(sidecar.agentsMdContent ? { agentsMdContent: sidecar.agentsMdContent } : {}),
+    ...(sidecar.agentsMd || sidecar.agentsMdContent
+      ? { agentsMdMode: sidecar.agentsMdMode }
+      : {})
   };
 }
 
@@ -1398,7 +1418,8 @@ export function resolvePersona(intent: PersonaIntent, profile: RoutingProfile | 
     ...(spec.env ? { env: spec.env } : {}),
     ...(spec.mcpServers ? { mcpServers: spec.mcpServers } : {}),
     ...(spec.permissions ? { permissions: spec.permissions } : {}),
-    ...(spec.mount ? { mount: spec.mount } : {})
+    ...(spec.mount ? { mount: spec.mount } : {}),
+    ...sidecarSelectionFields(resolveSidecar(spec, rule.tier))
   };
 }
 
@@ -1418,7 +1439,8 @@ export function resolvePersonaByTier(intent: PersonaIntent, tier: PersonaTier = 
     ...(spec.env ? { env: spec.env } : {}),
     ...(spec.mcpServers ? { mcpServers: spec.mcpServers } : {}),
     ...(spec.permissions ? { permissions: spec.permissions } : {}),
-    ...(spec.mount ? { mount: spec.mount } : {})
+    ...(spec.mount ? { mount: spec.mount } : {}),
+    ...sidecarSelectionFields(resolveSidecar(spec, tier))
   };
 }
 

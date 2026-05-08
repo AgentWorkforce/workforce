@@ -397,18 +397,10 @@ function parseOverride(value: unknown, context: string): LocalPersonaOverride {
 
   if (raw.claudeMd !== undefined) assertSidecarPath(raw.claudeMd, `${context}.claudeMd`);
   if (raw.agentsMd !== undefined) assertSidecarPath(raw.agentsMd, `${context}.agentsMd`);
-  if (raw.claudeMdMode !== undefined) {
-    assertSidecarMode(raw.claudeMdMode, `${context}.claudeMdMode`);
-    if (raw.claudeMd === undefined) {
-      throw new Error(`${context}.claudeMdMode requires .claudeMd to be set`);
-    }
-  }
-  if (raw.agentsMdMode !== undefined) {
-    assertSidecarMode(raw.agentsMdMode, `${context}.agentsMdMode`);
-    if (raw.agentsMd === undefined) {
-      throw new Error(`${context}.agentsMdMode requires .agentsMd to be set`);
-    }
-  }
+  // Mode is allowed without a same-layer path so an overlay can flip
+  // `extend` ↔ `overwrite` while inheriting the path from a lower layer.
+  if (raw.claudeMdMode !== undefined) assertSidecarMode(raw.claudeMdMode, `${context}.claudeMdMode`);
+  if (raw.agentsMdMode !== undefined) assertSidecarMode(raw.agentsMdMode, `${context}.agentsMdMode`);
 
   return {
     id: raw.id,
@@ -581,18 +573,10 @@ function assertTiersShape(value: unknown, context: string): void {
     }
     if (runtime.claudeMd !== undefined) assertSidecarPath(runtime.claudeMd, `${path}.claudeMd`);
     if (runtime.agentsMd !== undefined) assertSidecarPath(runtime.agentsMd, `${path}.agentsMd`);
-    if (runtime.claudeMdMode !== undefined) {
-      assertSidecarMode(runtime.claudeMdMode, `${path}.claudeMdMode`);
-      if (runtime.claudeMd === undefined) {
-        throw new Error(`${path}.claudeMdMode requires .claudeMd to be set`);
-      }
-    }
-    if (runtime.agentsMdMode !== undefined) {
-      assertSidecarMode(runtime.agentsMdMode, `${path}.agentsMdMode`);
-      if (runtime.agentsMd === undefined) {
-        throw new Error(`${path}.agentsMdMode requires .agentsMd to be set`);
-      }
-    }
+    // Tier-level mode without a tier-level path is allowed: it overrides
+    // top-level mode for this tier while inheriting the inherited path.
+    if (runtime.claudeMdMode !== undefined) assertSidecarMode(runtime.claudeMdMode, `${path}.claudeMdMode`);
+    if (runtime.agentsMdMode !== undefined) assertSidecarMode(runtime.agentsMdMode, `${path}.agentsMdMode`);
   }
 }
 
@@ -864,7 +848,10 @@ function mergeOverride(
         `[${override.id}].tiers.${tier}.claudeMd`
       );
       if (warning) sidecarWarnings.push(warning);
+      // Override owns the channel — clear inherited content so the override
+      // path isn't masked by base.claudeMdContent in downstream selection.
       merged = { ...merged };
+      delete merged.claudeMdContent;
       if (abs) merged.claudeMd = abs;
       else delete merged.claudeMd;
     }
@@ -876,6 +863,7 @@ function mergeOverride(
       );
       if (warning) sidecarWarnings.push(warning);
       merged = { ...merged };
+      delete merged.agentsMdContent;
       if (abs) merged.agentsMd = abs;
       else delete merged.agentsMd;
     }
@@ -900,7 +888,12 @@ function mergeOverride(
   const mount = mergeMount(base.mount, override.mount);
   const permissions = mergePermissions(base.permissions, override.permissions);
 
+  // When the override sets a new path, the override owns the channel —
+  // drop inherited `*Content` so the override path isn't shadowed by an
+  // inlined built-in body. When the override leaves the path alone, the
+  // inherited content (if any) stays.
   let claudeMd: string | undefined = base.claudeMd;
+  let claudeMdContent: string | undefined = base.claudeMdContent;
   if (override.claudeMd !== undefined) {
     const { abs, warning } = resolveSidecarPath(
       override.claudeMd,
@@ -909,8 +902,10 @@ function mergeOverride(
     );
     if (warning) sidecarWarnings.push(warning);
     claudeMd = abs;
+    claudeMdContent = undefined;
   }
   let agentsMd: string | undefined = base.agentsMd;
+  let agentsMdContent: string | undefined = base.agentsMdContent;
   if (override.agentsMd !== undefined) {
     const { abs, warning } = resolveSidecarPath(
       override.agentsMd,
@@ -919,6 +914,7 @@ function mergeOverride(
     );
     if (warning) sidecarWarnings.push(warning);
     agentsMd = abs;
+    agentsMdContent = undefined;
   }
   const claudeMdMode = override.claudeMdMode ?? base.claudeMdMode;
   const agentsMdMode = override.agentsMdMode ?? base.agentsMdMode;
@@ -939,8 +935,8 @@ function mergeOverride(
     ...(claudeMdMode ? { claudeMdMode } : {}),
     ...(agentsMd ? { agentsMd } : {}),
     ...(agentsMdMode ? { agentsMdMode } : {}),
-    ...(base.claudeMdContent ? { claudeMdContent: base.claudeMdContent } : {}),
-    ...(base.agentsMdContent ? { agentsMdContent: base.agentsMdContent } : {})
+    ...(claudeMdContent ? { claudeMdContent } : {}),
+    ...(agentsMdContent ? { agentsMdContent } : {})
   };
 }
 

@@ -78,6 +78,11 @@ async function inlineSidecarContent(raw, file) {
         `[generate-personas] ${file}: ${label} must be relative and stay inside /personas (got "${relPath}")`
       );
     }
+    if (!relPath.toLowerCase().endsWith('.md')) {
+      // Mirror the runtime/install schema check so bundled personas
+      // can't bypass the `.md` rule by inlining a non-markdown file.
+      throw new Error(`[generate-personas] ${file}: ${label} must end with .md (got "${relPath}")`);
+    }
     const abs = path.resolve(personasDir, relPath);
     try {
       return await fs.readFile(abs, 'utf8');
