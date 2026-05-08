@@ -606,10 +606,23 @@ test('main: extra positional after the persona selector is rejected', async () =
 });
 
 test('main: --version prints the package version', async () => {
-  const { stderr, stdout, exitCode } = await runCliCapturingStderr(['--version']);
-  assert.equal(exitCode, 0);
-  assert.equal(stderr, '');
-  assert.equal(stdout, `${CLI_VERSION}\n`);
+  // Point AGENT_WORKFORCE_HOME at an empty tmpdir so the load-time
+  // local-persona scan can't surface warnings from whatever the developer has
+  // installed under ~/.agentworkforce.
+  const root = mkdtempSync(join(tmpdir(), 'aw-version-cli-'));
+  const workforceHome = join(root, 'home', '.agentworkforce', 'workforce');
+  mkdirSync(join(workforceHome, 'personas'), { recursive: true });
+  try {
+    const { stderr, stdout, exitCode } = await runCliCapturingStderr(
+      ['--version'],
+      { AGENT_WORKFORCE_HOME: workforceHome }
+    );
+    assert.equal(exitCode, 0);
+    assert.equal(stderr, '');
+    assert.equal(stdout, `${CLI_VERSION}\n`);
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
 });
 
 test('main: local personas with custom intents appear in list and unknown-persona help', async () => {

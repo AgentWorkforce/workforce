@@ -46,7 +46,11 @@ import {
   type HarnessAvailability,
   type InteractiveSpec
 } from '@agentworkforce/harness-kit';
-import { launchOnMount, readAgentDotfiles } from '@relayfile/local-mount';
+import {
+  createMount,
+  readAgentDotfiles,
+  type AutoSyncHandle
+} from '@relayfile/local-mount';
 import ora, { type Ora } from 'ora';
 import {
   startLaunchMetadataRecording,
@@ -407,16 +411,53 @@ function subprocessExitCode(res: ReturnType<typeof spawnSync>): number {
   return 1;
 }
 
-function runInstall(command: readonly string[], label: string, cwd?: string): void {
+/**
+ * Run a skill-install subprocess behind an ora spinner. stdout and stderr are
+ * captured so a successful install collapses to a single ✓ line; on failure,
+ * the buffered output is dumped after spinner.fail so the user sees what
+ * actually broke. stdin is ignored — the install commands don't prompt.
+ *
+ * The spinner text stays "Installing skills…" while running; the longer
+ * `label` (which includes target paths and skill ids) is shown on
+ * success/failure so the verbose detail is still discoverable in logs.
+ */
+function runInstallWithSpinner(
+  command: readonly string[],
+  label: string,
+  cwd: string | undefined
+): { code: number; output: string } {
   const [bin, ...args] = command;
-  if (!bin) return;
-  process.stderr.write(`• ${label}\n`);
-  const res = spawnSync(bin, args, { stdio: 'inherit', shell: false, ...(cwd ? { cwd } : {}) });
+  if (!bin) return { code: 0, output: '' };
+  const spinner = ora({ text: 'Installing skills…', stream: process.stderr }).start();
+  const res = spawnSync(bin, args, {
+    stdio: ['ignore', 'pipe', 'pipe'],
+    shell: false,
+    encoding: 'utf8',
+    // Default is 1 MiB; verbose `npx prpm install` / `npx skills add` runs
+    // can blow past it, which would have spawnSync kill the child with
+    // ENOBUFS and report a spurious failure. 100 MiB is well past anything
+    // these installers print in practice.
+    maxBuffer: 100 * 1024 * 1024,
+    ...(cwd ? { cwd } : {})
+  });
+  const output = `${res.stdout ?? ''}${res.stderr ?? ''}`;
   const code = subprocessExitCode(res);
-  if (code !== 0) {
-    process.stderr.write(`${label} failed (exit ${code}). Aborting.\n`);
-    process.exit(code);
+  if (code === 0) {
+    spinner.succeed(label);
+  } else {
+    spinner.fail(`${label} failed (exit ${code})`);
+    if (output.trim()) process.stderr.write(output.endsWith('\n') ? output : `${output}\n`);
   }
+  return { code, output };
+}
+
+function runInstall(command: readonly string[], label: string, cwd?: string): void {
+  const [bin] = command;
+  if (!bin) return;
+  // runInstallWithSpinner already prints the failure line via spinner.fail;
+  // the previous extra "${label} failed … Aborting." write would duplicate it.
+  const { code } = runInstallWithSpinner(command, label, cwd);
+  if (code !== 0) process.exit(code);
 }
 
 /**
@@ -435,15 +476,13 @@ class InstallCommandError extends Error {
 
 /**
  * Install variant that throws instead of calling `process.exit` on failure.
- * Used inside `launchOnMount`'s `onBeforeLaunch`, so mount teardown runs
+ * Used inside the mount branch's onBeforeLaunch step so mount teardown runs
  * before the error surfaces.
  */
 function runInstallOrThrow(command: readonly string[], label: string, cwd: string): void {
-  const [bin, ...args] = command;
+  const [bin] = command;
   if (!bin) return;
-  process.stderr.write(`• ${label}\n`);
-  const res = spawnSync(bin, args, { stdio: 'inherit', shell: false, cwd });
-  const code = subprocessExitCode(res);
+  const { code } = runInstallWithSpinner(command, label, cwd);
   if (code !== 0) {
     throw new InstallCommandError(label, code);
   }
@@ -1201,36 +1240,32 @@ async function runInteractive(
       configFilePaths: spec.configFiles.map((file) => file.path)
     });
     process.stderr.write(`• sandbox mount → ${mountDir}\n`);
-    // Three-stage SIGINT handler layered on top of launchOnMount's own signal
-    // forwarding. launchOnMount catches the first SIGINT to kill the child
-    // and run its finalize() (autoSync.stop + final syncBack), which walks
-    // both trees and can take several seconds on a large repo — during
-    // which the terminal otherwise looks frozen.
+    // Inline mount lifecycle (formerly delegated to launchOnMount) so we can
+    // surface a spinner the moment the child exits — not just when the user
+    // presses Ctrl-C. The sync-back walks both trees and can take several
+    // seconds on a large repo; without an indicator, exiting the persona via
+    // /exit looked like a hang.
     //
-    //   1st press  → start an ora spinner so the pause is visibly live
-    //                (replaces the prior static print). onAfterSync below
-    //                transitions the spinner into a succeed/fail state once
-    //                relayfile reports the sync result.
-    //   2nd press  → update the spinner text to the "aborting" warning and
-    //                abort `shutdownSignal`, which local-mount 0.5+ respects
-    //                by skipping autosync's draining reconcile and returning
-    //                the partial count from the final syncBack. Cleanup
-    //                still runs, so no leaked mount dir.
-    //   3rd press  → hard escape: synchronously rm the mount root and
-    //                process.exit(130) in case the abort never resolves.
+    // SIGINT semantics:
+    //   • While the child is running: Ctrl-C reaches the harness directly via
+    //     the controlling TTY's foreground process group (the child is
+    //     spawned with `stdio: 'inherit'` and inherits the parent's pgid). We
+    //     register a no-op handler here purely to suppress Node's default
+    //     exit-on-SIGINT — forwarding via child.kill('SIGINT') would deliver
+    //     a *second* SIGINT and break harnesses that escalate on repeated
+    //     interrupts (e.g. claude treats 1st = cancel, 2nd = quit).
+    //   • While syncing: 1st press aborts the shutdownSignal (relayfile then
+    //     skips autosync's draining reconcile and returns the partial count
+    //     from the final syncBack). 2nd press hard-exits and rms the session
+    //     dir so no mount is left behind.
     const shutdownController = new AbortController();
-    let sigintCount = 0;
     let syncSpinner: Ora | undefined;
-    const forceExitHandler = () => {
-      sigintCount += 1;
-      if (sigintCount === 1) {
-        syncSpinner = ora({
-          text: 'Syncing session changes back to the repo… (Ctrl-C again to skip)',
-          stream: process.stderr
-        }).start();
-        return;
-      }
-      if (sigintCount === 2) {
+    let isSyncing = false;
+    let abortPresses = 0;
+    const sigintHandler = () => {
+      if (!isSyncing) return;
+      abortPresses += 1;
+      if (abortPresses === 1) {
         if (syncSpinner) {
           syncSpinner.text =
             'Aborting sync — partial changes will be propagated. (Ctrl-C again to force quit)';
@@ -1246,8 +1281,6 @@ async function runInteractive(
           '\n✗ Force-quit: mount teardown skipped. Session dir may be left behind.\n'
         );
       }
-      // Node-native removal rather than `rm -rf` so the emergency path
-      // works on Windows too.
       try {
         rmSync(sessionRoot, { recursive: true, force: true });
       } catch {
@@ -1255,96 +1288,99 @@ async function runInteractive(
       }
       process.exit(130);
     };
-    process.on('SIGINT', forceExitHandler);
+    process.on('SIGINT', sigintHandler);
+
+    const handle = createMount(process.cwd(), mountDir, {
+      ignoredPatterns: [...ignoredPatterns],
+      readonlyPatterns: [...readonlyPatterns],
+      excludeDirs: [],
+      agentName: personaId,
+      // Pull `.git` into the mount so git commands work inside the sandbox.
+      // relayfile treats this as one-way project→mount: host-side `.git`
+      // changes flow in, mount-side commits/refs stay sandboxed and are
+      // discarded on cleanup. The agent must `git push` to persist work.
+      includeGit: true
+    });
+    let autoSync: AutoSyncHandle | undefined;
+    let exitCode = 0;
     try {
-      const result = await launchOnMount({
-        cli: spec.bin,
-        projectDir: process.cwd(),
-        mountDir,
-        args: finalArgs,
-        ignoredPatterns,
-        // launchOnMount passes `env` straight to the child spawn, so without
-        // merging process.env we'd strip PATH/HOME/etc. Match the non-clean
-        // branch: persona env overlays the inherited environment.
-        env: resolvedEnv ? { ...process.env, ...resolvedEnv } : process.env,
-        agentName: personaId,
-        // Pull `.git` into the mount so git commands work inside the
-        // sandbox. relayfile 0.6+ treats this as a one-way project→mount
-        // sync: host-side `.git` changes propagate in, mount-side commits/
-        // refs stay sandboxed and are discarded on cleanup. The agent must
-        // `git push` to persist work — local-only commits evaporate with
-        // the session.
-        includeGit: true,
-        readonlyPatterns,
-        // Second Ctrl-C aborts this signal → local-mount skips autosync's
-        // draining reconcile and returns the partial syncBack count. Cleanup
-        // still runs, so there's no leaked mount dir.
-        shutdownSignal: shutdownController.signal,
-        // Report sync stats so the user sees confirmation rather than a
-        // silent pause between the child exiting and the CLI returning.
-        //
-        // NOTE: `count` is bidirectional per relayfile's onAfterSync
-        // contract (see @relayfile/local-mount launch.d.ts) — it sums
-        // autosync activity in *both* directions (inbound project→mount
-        // and outbound mount→project, including deletes) plus the final
-        // mount→project syncBack. Phrasing this as "synced back to the
-        // repo" earlier misled sessions where inbound events dominated:
-        // a user who did no edits still saw "Synced 15 changes back"
-        // because ambient initial-mirror traffic counted. Phrase as "file
-        // events during session" so we don't overclaim direction.
-        onAfterSync: (count) => {
-          const aborted = shutdownController.signal.aborted;
-          const qualifier = aborted ? ' (partial)' : '';
-          const message =
-            count > 0
-              ? `Session complete — ${count} file event${count === 1 ? '' : 's'} during session${qualifier}.`
-              : 'Session complete — no file events.';
-          if (syncSpinner) {
-            syncSpinner.succeed(message);
-            syncSpinner = undefined;
-          } else {
-            process.stderr.write(`✓ ${message}\n`);
-          }
-        },
-        onBeforeLaunch: async (dir: string) => {
-          // Run before install / configFile writes so the freshly written
-          // files (e.g. `.opencode/`, `opencode.json`) aren't yet present
-          // when we run `git ls-files` to pick skip-worktree candidates —
-          // we don't need them flagged in the index, just hidden via the
-          // `.git/info/exclude` block.
-          configureGitForMount(dir, ignoredPatterns);
-          if (deferInstallToMount) {
-            runInstallOrThrow(install.command, installLabel, dir);
-          }
-          for (const file of spec.configFiles) {
-            assertSafeRelativePath(file.path);
-            const target = join(dir, file.path);
-            // mkdir -p for any subdirs in file.path — the
-            // InteractiveConfigFile contract allows nested relative
-            // paths, and writeFileSync would otherwise throw ENOENT.
-            mkdirSync(dirname(target), { recursive: true });
-            writeFileSync(target, file.contents, 'utf8');
-          }
-          if (resolvedSidecar) {
-            const body = buildSidecarBody(resolvedSidecar, process.cwd());
-            writeFileSync(join(dir, resolvedSidecar.mountFile), body, 'utf8');
-          }
-          launchMetadata = await startLaunchMetadataForLaunch(dir);
-        }
+      // Run before install / configFile writes so the freshly written files
+      // (e.g. `.opencode/`, `opencode.json`) aren't yet present when we run
+      // `git ls-files` to pick skip-worktree candidates — we don't need them
+      // flagged in the index, just hidden via the `.git/info/exclude` block.
+      configureGitForMount(handle.mountDir, ignoredPatterns);
+      if (deferInstallToMount) {
+        runInstallOrThrow(install.command, installLabel, handle.mountDir);
+      }
+      for (const file of spec.configFiles) {
+        assertSafeRelativePath(file.path);
+        const target = join(handle.mountDir, file.path);
+        mkdirSync(dirname(target), { recursive: true });
+        writeFileSync(target, file.contents, 'utf8');
+      }
+      if (resolvedSidecar) {
+        const body = buildSidecarBody(resolvedSidecar, process.cwd());
+        writeFileSync(join(handle.mountDir, resolvedSidecar.mountFile), body, 'utf8');
+      }
+      launchMetadata = await startLaunchMetadataForLaunch(handle.mountDir);
+
+      autoSync = handle.startAutoSync();
+
+      const childEnv = resolvedEnv ? { ...process.env, ...resolvedEnv } : process.env;
+      exitCode = await new Promise<number>((resolve, reject) => {
+        const child = spawn(spec.bin, finalArgs, {
+          cwd: handle.mountDir,
+          stdio: 'inherit',
+          env: childEnv
+        });
+        child.on('error', reject);
+        child.on('close', (code, signal) => {
+          if (typeof code === 'number') resolve(code);
+          else if (signal) resolve(signalExitCode(signal));
+          else resolve(1);
+        });
       });
-      return result.exitCode;
+
+      // Child exited — start the spinner immediately so the sync-back is
+      // visibly live rather than a silent pause.
+      isSyncing = true;
+      syncSpinner = ora({
+        text: 'Syncing session changes back to the repo… (Ctrl-C to skip)',
+        stream: process.stderr
+      }).start();
+
+      let count = 0;
+      if (autoSync) {
+        await autoSync.stop({ signal: shutdownController.signal });
+        count += autoSync.totalChanges();
+        autoSync = undefined;
+      }
+      // NOTE: `count` is bidirectional — it sums autosync activity in both
+      // directions (inbound project→mount and outbound mount→project,
+      // including deletes) plus the final mount→project syncBack. Phrase as
+      // "file events during session" so we don't overclaim direction.
+      count += await handle.syncBack({ signal: shutdownController.signal });
+
+      const aborted = shutdownController.signal.aborted;
+      const qualifier = aborted ? ' (partial)' : '';
+      const message =
+        count > 0
+          ? `Session complete — ${count} file event${count === 1 ? '' : 's'} during session${qualifier}.`
+          : 'Session complete — no file events.';
+      syncSpinner.succeed(message);
+      syncSpinner = undefined;
+      return exitCode;
     } catch (err) {
-      // If the spinner is still live when we error out, mark it failed so
-      // the pending animation doesn't hang around under the error message.
       if (syncSpinner) {
         syncSpinner.fail('Sync did not complete');
         syncSpinner = undefined;
       }
       // InstallCommandError carries the real install exit code — surfacing
       // it (rather than collapsing onto 127) lets callers distinguish a
-      // failed `npx prpm install` from a missing harness binary.
+      // failed `npx prpm install` from a missing harness binary. The message
+      // itself was already shown via spinner.fail inside runInstallWithSpinner,
+      // so we just return the code here.
       if (err instanceof InstallCommandError) {
-        process.stderr.write(`${err.message}. Aborting.\n`);
         return err.exitCode;
       }
       const e = err as NodeJS.ErrnoException;
@@ -1357,21 +1393,28 @@ async function runInteractive(
       process.stderr.write(`Failed to launch sandbox mount: ${e.message}\n`);
       return 1;
     } finally {
-      // Defensive: if neither onAfterSync nor the catch branch stopped the
-      // spinner (e.g. unexpected exit path), stop it cleanly here so the
-      // terminal is not left in spinner state.
       if (syncSpinner) {
         syncSpinner.stop();
         syncSpinner = undefined;
       }
+      // Best-effort: stop autosync if we errored out before the success path
+      // already cleared it.
+      if (autoSync) {
+        try {
+          await autoSync.stop({ signal: shutdownController.signal });
+        } catch {
+          /* ignore — we're tearing down anyway */
+        }
+      }
+      handle.cleanup();
       await launchMetadata?.stop();
-      process.removeListener('SIGINT', forceExitHandler);
+      process.removeListener('SIGINT', sigintHandler);
       // When the install ran inside the mount, its cleanup paths are
-      // mount-relative (e.g. `.skills/<name>`, `skills/<name>`) and
-      // running cleanup here would resolve them against the real repo
-      // cwd — potentially `rm -rf`ing pre-existing user content. The
-      // mount dir is removed wholesale by `removeSessionRoot` below, so
-      // the install's cleanup is redundant anyway in that case.
+      // mount-relative (e.g. `.skills/<name>`, `skills/<name>`) and running
+      // cleanup here would resolve them against the real repo cwd —
+      // potentially `rm -rf`ing pre-existing user content. The mount dir is
+      // removed wholesale by `removeSessionRoot` below, so the install's
+      // cleanup is redundant anyway in that case.
       if (!deferInstallToMount) {
         runCleanup(install.cleanupCommand, install.cleanupCommandString);
       }
