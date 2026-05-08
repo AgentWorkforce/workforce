@@ -1,9 +1,17 @@
 ![AgentWorkforce banner](./workforce-readme-banner.png)
-Single-purpose AI agent configs, versioned and shared like code. 
+<center>Single-purpose AI agent configs, versioned and shared like code. </center>
+<br />
 
-Personas are based on taking a harness like **Claude Code**, **OpenCode** or **Codex** and defining its **job**, **skills**, and **mcp servers**. File visibility and writability are enforced by Relayfile mount rules in persona JSON or `.agentignore` / `.agentreadonly` files. Control your agent's context per instance and commit it to your repository for the rest of your team to use.
+Workforce personas are just **a super easy to instantiate** pre-configured harness:
+ - choose your coding agent like **Claude Code**, **OpenCode** or **Codex**
+ - pick the best **model** and **reasoning** settings
+ - define the **skills**, **mcp servers** and **CLAUDE.md** or **AGENTS.MD** prompts
+ - pick which files the agent can see and edit
+ - save it and share it with your team
 
-The great token squeeze:tm: is coming and you're probably still using opus for everything. Instead of using a sledgehammer to knock in some screws, use an agentworkforce persona to design a screwdriver.
+ Success with agents relies on making sure they get the right context. With personas, you control the context per instance. As you learn what works in practice you can improve your persona and codify the learnings by committing them to your repository for the rest of the team to use.
+
+The great token squeeze :tm: is coming and you're probably still using opus for everything. Instead of using a sledgehammer to knock in some screws, use an agentworkforce persona to design a screwdriver.
 
 ## Quick start
 It's super easy to define a persona.
@@ -36,15 +44,10 @@ A persona is a JSON file. Top-level fields apply to every tier; the `tiers` bloc
 Tiering controls depth, latency, and cost — **not** the quality bar. A **routing profile** layers on top: policy-only, selects which persona tier to use per intent.
 
 ## Examples
-Sometimes the quickest way to understand the value of personas is to see real
-examples. These are intentionally verbose; useful personas tend to grow as teams
-capture local conventions.
+Sometimes the quickest way to understand the value of personas is to see real examples. These are intentionally verbose; useful personas tend to grow as teams capture local conventions.
 
 ### Next.js marketing website agent
-A persona specifically for a Next.js marketing surface. This local
-overlay inherits the generic frontend implementer, switches tiers to Claude so
-MCP and tool permissions are enforced today, and attaches a browser MCP for
-visual checks. File scope is handled by the Relayfile `mount` block.
+A persona specifically for a Next.js marketing surface. This local overlay inherits the generic frontend implementer, switches tiers to Claude so MCP and tool permissions are enforced today, and attaches a browser MCP for visual checks. File scope is handled by the Relayfile `mount` block.
 
 ```json
 {
@@ -107,7 +110,7 @@ visual checks. File scope is handled by the Relayfile `mount` block.
 ```
 
 ```bash
-agentworkforce agent nextjs-marketing@best-value
+npx agentworkforce agent nextjs-marketing@best-value
 ```
 
 ### Code Reviewer
@@ -169,82 +172,15 @@ binds the docs target through a prompt-visible input.
 ```
 
 ```bash
-DOCS_PATH=docs/api.md agentworkforce agent docs-writer@best-value
-```
-
-### NPM release guard
-Extend the release persona for a package that should use trusted publishing and
-provenance. This one also switches tiers to Claude so the publish deny list is
-enforced by the current CLI. The mount rule keeps source files read-only while
-release checks run.
-
-```json
-{
-  "id": "npm-release-guard",
-  "extends": "npm-provenance",
-  "description": "Checks npm release readiness for one package and blocks unsafe publish paths.",
-  "inputs": {
-    "PACKAGE_DIR": {
-      "description": "Package directory to inspect.",
-      "env": "PACKAGE_DIR",
-      "default": "."
-    }
-  },
-  "permissions": {
-    "allow": [
-      "Bash(npm view *)",
-      "Bash(npm pack --dry-run)",
-      "Bash(npm run build)",
-      "Bash(npm run test)"
-    ],
-    "deny": [
-      "Bash(npm publish *)",
-      "Bash(git push *)"
-    ],
-    "mode": "default"
-  },
-  "mount": {
-    "readonlyPatterns": ["*"]
-  },
-  "systemPrompt": "Check release readiness for $PACKAGE_DIR. Verify package metadata, repository URL, files included by npm pack, build/test status, OIDC trusted publishing, id-token workflow permissions, and provenance. Do not publish or push. Output contract: blockers first, evidence checked, exact commands run, and remaining manual release steps.",
-  "tiers": {
-    "best": {
-      "harness": "claude",
-      "model": "claude-opus-4-6",
-      "harnessSettings": { "reasoning": "high", "timeoutSeconds": 1200 }
-    },
-    "best-value": {
-      "harness": "claude",
-      "model": "claude-sonnet-4-6",
-      "harnessSettings": { "reasoning": "medium", "timeoutSeconds": 900 }
-    },
-    "minimum": {
-      "harness": "claude",
-      "model": "claude-haiku-4-5-20251001",
-      "harnessSettings": { "reasoning": "low", "timeoutSeconds": 600 }
-    }
-  }
-}
-```
-
-```bash
-PACKAGE_DIR=packages/cli agentworkforce agent npm-release-guard@best-value
+DOCS_PATH=docs/api.md agentworkforce npx agent docs-writer@best-value
 ```
 
 > [!note]
-> Put each persona JSON file at
-> `./.agentworkforce/workforce/personas/<id>.json` or create it with
-> `agentworkforce create`. You can keep Relayfile mount rules in the persona
-> JSON `mount` block, or in project-root `.agentignore` / `.agentreadonly`
-> dotfiles. Launch with `agentworkforce agent <id>@<tier>`.
+> Put each persona JSON file at `./.agentworkforce/workforce/personas/<id>.json` or create it with `agentworkforce create`. You can keep Relayfile mount rules in the persona JSON `mount` block, or in project-root `.agentignore` / `.agentreadonly` dotfiles. Launch with `agentworkforce agent <id>@<tier>`.
 
 ## CLI
 
-The `agentworkforce` command is the
-fastest way to actually *run* a persona. It resolves the persona from the
-built-in catalog or your local overrides, installs any declared skills,
-and execs the harness CLI (`claude`, `codex`, or `opencode`) with the right
-model, system prompt, env vars, MCP servers, and permissions wired up.
+The `agentworkforce` command is the fastest way to actually *run* a persona. It resolves the persona from the built-in catalog or your local overrides, installs any declared skills, and execs the harness CLI (`claude`, `codex`, or `opencode`) with the right model, system prompt, env vars, MCP servers, and permissions wired up.
 
 ### Install
 
