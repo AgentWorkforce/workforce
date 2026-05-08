@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { chmodSync, mkdtempSync, mkdirSync, rmSync, readFileSync, writeFileSync } from 'node:fs';
+import { chmodSync, existsSync, mkdtempSync, mkdirSync, rmSync, readFileSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
@@ -144,8 +144,7 @@ test('parseCreateArgs: runs persona-maker and preserves agent flags', () => {
     const { flags, selector, inputValues } = parseCreateArgs([
       '--install-in-repo',
       '--no-launch-metadata',
-      '--to',
-      'user'
+      '--save-in-directory=user'
     ]);
     assert.equal(selector, CREATE_SELECTOR);
     assert.equal(flags.installInRepo, true);
@@ -174,22 +173,87 @@ test('parseCreateArgs: rejects positional selectors because create has a fixed p
   }
 });
 
-test('parseCreateArgs: cwd-local workforce wins as the implicit create target', () => {
+test('parseCreateArgs: defaults to cwd target and creates the persona dir if missing', () => {
   const root = mkdtempSync(join(tmpdir(), 'aw-create-cwd-'));
   const prevCwd = process.cwd();
+  const prevHome = process.env.AGENT_WORKFORCE_HOME;
+  process.env.AGENT_WORKFORCE_HOME = join(root, 'home', '.agentworkforce', 'workforce');
   try {
     const project = join(root, 'project');
-    mkdirSync(join(project, '.agentworkforce', 'workforce'), { recursive: true });
+    mkdirSync(project, { recursive: true });
     process.chdir(project);
+    // process.chdir resolves symlinks (e.g. /var → /private/var on macOS), so
+    // anchor the expected path to the post-chdir cwd rather than `project`.
+    const expected = join(process.cwd(), '.agentworkforce', 'workforce', 'personas');
     const { inputValues } = parseCreateArgs([]);
-    assert.equal(
-      inputValues.TARGET_DIR,
-      join(process.cwd(), '.agentworkforce', 'workforce', 'personas')
-    );
+    assert.equal(inputValues.TARGET_DIR, expected);
     assert.equal(inputValues.CREATE_MODE, 'local');
+    assert.ok(
+      existsSync(expected),
+      'create should mkdir -p the cwd-local persona directory when it is missing'
+    );
   } finally {
+    if (prevHome === undefined) delete process.env.AGENT_WORKFORCE_HOME;
+    else process.env.AGENT_WORKFORCE_HOME = prevHome;
     process.chdir(prevCwd);
     rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test('parseCreateArgs: saved defaultCreateTarget overrides the cwd default', () => {
+  const root = mkdtempSync(join(tmpdir(), 'aw-create-saved-'));
+  const prevCwd = process.cwd();
+  const prevHome = process.env.AGENT_WORKFORCE_HOME;
+  const workforceHome = join(root, 'home', '.agentworkforce', 'workforce');
+  process.env.AGENT_WORKFORCE_HOME = workforceHome;
+  try {
+    mkdirSync(workforceHome, { recursive: true });
+    writeFileSync(
+      join(workforceHome, 'config.json'),
+      JSON.stringify({ personaDirs: [join(workforceHome, 'personas')], defaultCreateTarget: 'user' }),
+      'utf8'
+    );
+    const project = join(root, 'project');
+    mkdirSync(project, { recursive: true });
+    process.chdir(project);
+    const { inputValues } = parseCreateArgs([]);
+    assert.equal(inputValues.TARGET_DIR, join(workforceHome, 'personas'));
+    assert.equal(inputValues.CREATE_MODE, 'local');
+  } finally {
+    if (prevHome === undefined) delete process.env.AGENT_WORKFORCE_HOME;
+    else process.env.AGENT_WORKFORCE_HOME = prevHome;
+    process.chdir(prevCwd);
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test('parseCreateArgs: --save-in-directory accepts a space-separated value', () => {
+  const root = mkdtempSync(join(tmpdir(), 'aw-create-space-'));
+  const prev = process.env.AGENT_WORKFORCE_HOME;
+  process.env.AGENT_WORKFORCE_HOME = join(root, 'home', '.agentworkforce', 'workforce');
+  try {
+    const { inputValues } = parseCreateArgs(['--save-in-directory', 'user']);
+    assert.equal(
+      inputValues.TARGET_DIR,
+      join(root, 'home', '.agentworkforce', 'workforce', 'personas')
+    );
+  } finally {
+    if (prev === undefined) delete process.env.AGENT_WORKFORCE_HOME;
+    else process.env.AGENT_WORKFORCE_HOME = prev;
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test('parseCreateArgs: --save-in-directory rejects blank values instead of falling back to cwd', () => {
+  const trap = trapExit();
+  try {
+    assert.throws(() => parseCreateArgs(['--save-in-directory=']), /__exit_trap__:1/);
+    assert.throws(() => parseCreateArgs(['--save-in-directory=   ']), /__exit_trap__:1/);
+    assert.throws(() => parseCreateArgs(['--save-in-directory', '']), /__exit_trap__:1/);
+    assert.throws(() => parseCreateArgs(['--save-in-directory', '   ']), /__exit_trap__:1/);
+    assert.match(trap.stderr, /requires a non-empty value/);
+  } finally {
+    trap.restore();
   }
 });
 
@@ -199,7 +263,7 @@ test('parseCreateArgs: --save-default persists create target in source config', 
   const prev = process.env.AGENT_WORKFORCE_HOME;
   process.env.AGENT_WORKFORCE_HOME = workforceHome;
   try {
-    parseCreateArgs(['--to', 'user', '--save-default']);
+    parseCreateArgs(['--save-in-directory=user', '--save-default']);
     const parsed = JSON.parse(readFileSync(join(workforceHome, 'config.json'), 'utf8'));
     assert.equal(parsed.defaultCreateTarget, 'user');
   } finally {

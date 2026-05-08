@@ -201,10 +201,10 @@ test('resolvePersonaByTier also propagates mcpServers / permissions', () => {
 
 test('resolvePersonaByTier propagates persona input declarations', () => {
   const selection = resolvePersonaByTier('persona-authoring', 'best');
-  assert.equal(selection.inputs?.TARGET_DIR?.default, 'personas');
+  assert.equal(selection.inputs?.TARGET_DIR?.default, '.agentworkforce/workforce/personas');
   assert.equal(
     selection.inputs?.CREATE_MODE?.default,
-    'built-in'
+    'local'
   );
   // Persona-maker carries its full authoring spec in agentsMdContent; the
   // CLI renders input placeholders into the sidecar before materialization,

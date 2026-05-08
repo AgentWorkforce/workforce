@@ -6,7 +6,7 @@ built-in one from `/personas/`, or an installed/local one that extends a lower
 source.
 
 ```
-agentworkforce create [--to <target>] [--save-default] [--install-in-repo] [--no-launch-metadata]
+agentworkforce create [--save-in-directory=<target>] [--save-default] [--install-in-repo] [--no-launch-metadata]
 agentworkforce agent [--install-in-repo] [--no-launch-metadata] <persona>[@<tier>]
 agentworkforce list [flags]
 agentworkforce show <persona>[@<tier>]
@@ -68,7 +68,7 @@ Unknown persona prints the full catalog with each entry's origin.
 ## Create
 
 ```
-agentworkforce create [--to <target>] [--save-default] [--install-in-repo] [--no-launch-metadata]
+agentworkforce create [--save-in-directory=<target>] [--save-default] [--install-in-repo] [--no-launch-metadata]
 ```
 
 `create` is the persona-authoring entry point. It runs `persona-maker@best`
@@ -94,32 +94,33 @@ Targets:
 
 Default target resolution:
 
-1. `--to <target>` wins.
-2. If `<cwd>/.agentworkforce/workforce` exists, use `cwd`.
-3. Else use `defaultCreateTarget` from `~/.agentworkforce/workforce/config.json`.
-4. Else use `user`.
+1. `--save-in-directory=<target>` wins.
+2. Else use `defaultCreateTarget` from `~/.agentworkforce/workforce/config.json`.
+3. Else use `cwd` (`<cwd>/.agentworkforce/workforce/personas`).
 
-`--save-default` persists the resolved target as `defaultCreateTarget` in the
-source config. This is only consulted when no cwd-local workforce directory is
-present.
+The cwd persona directory is created (`mkdir -p`) when it does not exist, so a
+fresh project can run `agentworkforce create` without any setup. To author
+personas anywhere else, pass `--save-in-directory=<target>` on the command line
+(the value can also be passed as `--save-in-directory <target>`), or use
+`--save-default` once to persist a different default in the source config.
 
 Examples:
 
 ```sh
-# Create in the project-local persona directory when present, otherwise user dir
+# Create in <cwd>/.agentworkforce/workforce/personas (created if missing)
 agentworkforce create
 
 # Force the user persona directory
-agentworkforce create --to user
+agentworkforce create --save-in-directory=user
 
 # Create in a configured persona source
-agentworkforce create --to dir:1
+agentworkforce create --save-in-directory=dir:1
 
 # Create in an explicit checked-out persona directory and make that the default
-agentworkforce create --to ../team-personas/personas --save-default
+agentworkforce create --save-in-directory=../team-personas/personas --save-default
 
 # Create a built-in persona in this repo's /personas catalog
-agentworkforce create --to library
+agentworkforce create --save-in-directory=library
 ```
 
 ### Examples
@@ -350,7 +351,7 @@ personas work as plain JSON files in the default user location, or from any
 checked-out repo you add as a source directory.
 
 The same config may also carry `defaultCreateTarget`, used by `agentworkforce create`
-when no cwd-local workforce directory exists:
+to override its default of `cwd`:
 
 ```json
 {
@@ -359,10 +360,12 @@ when no cwd-local workforce directory exists:
 }
 ```
 
-Valid `defaultCreateTarget` values are the same values accepted by `create --to`:
-`cwd`, `user`, `dir:n`, `library`, or an explicit path. Use
-`agentworkforce create --to <target> --save-default` to write it without editing
-JSON by hand.
+Valid `defaultCreateTarget` values are the same values accepted by
+`create --save-in-directory=<target>`: `cwd`, `user`, `dir:n`, `library`, or an
+explicit path. When this key is unset, `agentworkforce create` writes to
+`<cwd>/.agentworkforce/workforce/personas` (creating it if missing). Use
+`agentworkforce create --save-in-directory=<target> --save-default` to write
+the override without editing JSON by hand.
 
 `sources add` appends by default. `--position <n>` inserts at the 1-based
 position among configurable directories, so `--position 1` gives that directory
@@ -552,9 +555,9 @@ Local personas live in the source cascade and do not require built-in catalog
 integration:
 
 ```sh
-agentworkforce create --to user
-agentworkforce create --to cwd
-agentworkforce create --to dir:1
+agentworkforce create --save-in-directory=user
+agentworkforce create --save-in-directory=cwd
+agentworkforce create --save-in-directory=dir:1
 ```
 
 The persona maker receives `TARGET_DIR` and `CREATE_MODE=local`, so it
@@ -581,7 +584,7 @@ Built-in personas live in the repo's `/personas` catalog and require full
 workload-router integration:
 
 ```sh
-agentworkforce create --to library
+agentworkforce create --save-in-directory=library
 ```
 
 The persona maker receives `CREATE_MODE=built-in`, so it should write

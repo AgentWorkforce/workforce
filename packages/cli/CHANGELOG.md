@@ -12,10 +12,23 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - `agentworkforce agent` now records launch metadata for direct harness
   launches; opt out with `--no-launch-metadata` or
   `AGENTWORKFORCE_LAUNCH_METADATA=0`.
-- `agentworkforce create` now opens `persona-maker@best`, supports `--to` and
-  `--save-default`, and passes `TARGET_DIR` / `CREATE_MODE` persona inputs.
+- `agentworkforce create` now opens `persona-maker@best`, supports
+  `--save-in-directory=<target>` and `--save-default`, and passes
+  `TARGET_DIR` / `CREATE_MODE` persona inputs.
 - Persona source config supports `defaultCreateTarget` for the implicit create target.
 - `--version`/`-v` now prints the CLI package version.
+
+### Changed
+
+- `agentworkforce create` now defaults to writing into
+  `<cwd>/.agentworkforce/workforce/personas` unconditionally, creating the
+  directory if it does not already exist. The previous behavior fell back to
+  the user persona dir when no cwd-local workforce existed; pass
+  `--save-in-directory=<target>` (or set `defaultCreateTarget` in the source
+  config) to author somewhere else.
+- The previous `--to <target>` flag has been renamed to
+  `--save-in-directory=<target>` (also accepted as
+  `--save-in-directory <target>`). The old name is no longer recognized.
 
 ## [0.13.0] - 2026-05-08
 
