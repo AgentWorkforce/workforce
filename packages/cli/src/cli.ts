@@ -2592,6 +2592,90 @@ export interface ImproverPatch {
   value: unknown;
 }
 
+/**
+ * Allowlist of dot-paths the improver may rewrite via `op: "set"`. Mirrors
+ * the patch grammar advertised in the persona's AGENTS.md — anything else
+ * is a defense-in-depth reject (the persona's anti-goals already say "no
+ * changes to id/intent/harness/model/permissions", but we don't trust the
+ * model alone for a flow that mutates the user's persona file in place).
+ */
+const ALLOWED_SET_PATHS: readonly string[] = [
+  'description',
+  'agentsMdContent',
+  'claudeMdContent',
+  'tags',
+  'tiers.best.systemPrompt',
+  'tiers.best-value.systemPrompt',
+  'tiers.minimum.systemPrompt'
+];
+
+/**
+ * Allowlist of dot-paths the improver may rewrite via `op: "append"`.
+ * Currently just `skills` — the only array the AGENTS.md grammar exposes
+ * for append-style mutation.
+ */
+const ALLOWED_APPEND_PATHS: readonly string[] = ['skills'];
+
+/**
+ * Reserved JSON-object keys that must never appear as a path segment —
+ * setting them would either pollute the prototype chain (`__proto__`,
+ * `constructor`, `prototype`) for the running process or rewrite a
+ * built-in property that downstream code relies on. Belt-and-braces
+ * alongside the path allowlist; even an `inputs.<NAME>` segment can't
+ * smuggle one of these in.
+ */
+const FORBIDDEN_PATH_SEGMENTS = new Set(['__proto__', 'constructor', 'prototype']);
+
+function assertSafePathSegments(path: string, context: string): readonly string[] {
+  const segments = path.split('.').filter((s) => s.length > 0);
+  if (segments.length === 0) {
+    throw new Error(`${context}: path is empty`);
+  }
+  for (const seg of segments) {
+    if (FORBIDDEN_PATH_SEGMENTS.has(seg)) {
+      throw new Error(
+        `${context}: path "${path}" contains forbidden segment "${seg}"`
+      );
+    }
+  }
+  return segments;
+}
+
+/**
+ * Validate one improver patch against the path/op allowlist + the
+ * prototype-segment guard. Throws a descriptive error rejected at parse
+ * time so the CLI never offers a disallowed proposal to the user.
+ *
+ * Allowed set paths: see ALLOWED_SET_PATHS, plus any `inputs.<NAME>`
+ * (NAME must be env-style, matching the persona-input naming rule).
+ * Allowed append paths: see ALLOWED_APPEND_PATHS.
+ */
+function assertAllowedImproverPatch(patch: ImproverPatch, context: string): void {
+  assertSafePathSegments(patch.path, context);
+  if (patch.op === 'set') {
+    if (ALLOWED_SET_PATHS.includes(patch.path)) return;
+    if (patch.path.startsWith('inputs.')) {
+      const after = patch.path.slice('inputs.'.length);
+      if (!/^[A-Z_][A-Z0-9_]*$/.test(after)) {
+        throw new Error(
+          `${context}: inputs path "${patch.path}" must use an env-style NAME (got "${after}")`
+        );
+      }
+      return;
+    }
+    throw new Error(`${context}: set path "${patch.path}" is not in the allowlist`);
+  }
+  if (patch.op === 'append') {
+    if (!ALLOWED_APPEND_PATHS.includes(patch.path)) {
+      throw new Error(
+        `${context}: append path "${patch.path}" is not in the allowlist`
+      );
+    }
+    return;
+  }
+  throw new Error(`${context}: unknown patch op "${(patch as { op: string }).op}"`);
+}
+
 export interface ImproverProposal {
   id: string;
   summary: string;
@@ -2647,9 +2731,22 @@ async function findSessionTranscriptViaStamps(input: {
     return undefined;
   }
   const startedAt = input.startedAt ?? 0;
-  const TOLERANCE_MS = 5000;
+  const spawnerPid = input.enrichment.spawnerPid;
+  // Tight window around our session: stamps written before our spawn
+  // (minus tolerance for clock skew) or after the prompt fires (plus
+  // tolerance for ingest latency) can't be ours. The upper bound matters
+  // when a sibling launch of the same persona starts AFTER ours but
+  // before we get here — without it, max-ts wins picks the wrong row.
+  const LOWER_TOLERANCE_MS = 5000;
+  const UPPER_TOLERANCE_MS = 1000;
+  const lowerMs = startedAt - LOWER_TOLERANCE_MS;
+  const upperMs = Date.now() + UPPER_TOLERANCE_MS;
   let bestSessionId: string | undefined;
-  let bestTs = -1;
+  // Prefer the stamp closest to our spawn time (smallest |ts - startedAt|),
+  // not the most recent. Same-persona concurrent launches can both fall
+  // inside the window; the one launched at our PID/time is the right one.
+  let bestDelta = Number.POSITIVE_INFINITY;
+  let pidMatched = false;
   for (const row of rows) {
     if (!row || typeof row !== 'object') continue;
     const r = row as {
@@ -2665,9 +2762,27 @@ async function findSessionTranscriptViaStamps(input: {
     if (enrichment.personaVersion !== personaVersion) continue;
     const tsMs = Date.parse(ts);
     if (!Number.isFinite(tsMs)) continue;
-    if (tsMs < startedAt - TOLERANCE_MS) continue;
-    if (tsMs <= bestTs) continue;
-    bestTs = tsMs;
+    if (tsMs < lowerMs || tsMs > upperMs) continue;
+    // spawnerPid is the strongest discriminator — folded into enrichment
+    // by `buildLaunchMetadata` so it survives stamp ingest. When present
+    // on both sides, treat a mismatch as a hard reject and a match as
+    // sticky: once we've seen a pid-matched row, ignore unmatched ones
+    // even if they're closer in time.
+    const rowPid = enrichment.spawnerPid;
+    if (spawnerPid && typeof rowPid === 'string') {
+      if (rowPid !== spawnerPid) continue;
+      if (!pidMatched) {
+        pidMatched = true;
+        bestDelta = Number.POSITIVE_INFINITY;
+        bestSessionId = undefined;
+      }
+    } else if (pidMatched) {
+      // We already locked onto pid-matched candidates — skip non-pid rows.
+      continue;
+    }
+    const delta = Math.abs(tsMs - startedAt);
+    if (delta >= bestDelta) continue;
+    bestDelta = delta;
     bestSessionId = sessionId;
   }
   if (!bestSessionId) return undefined;
@@ -2874,13 +2989,31 @@ function findFreshestMatchingTranscript(opts: FindMatchingOptions): string | und
  * extractors so we don't slurp multi-megabyte transcripts to find a
  * field on line 1.
  */
-function readTranscriptHeader(path: string, maxBytes = 65536): string | undefined {
+interface TranscriptHeader {
+  text: string;
+  /** True if the file was longer than `maxBytes` and we only read the prefix. */
+  truncated: boolean;
+}
+
+/**
+ * Read up to `maxBytes` from `path` and report whether the file was
+ * larger. Callers that need to JSON.parse the whole file (opencode's
+ * single-object session record) gate on `truncated === false`; callers
+ * that scan line-by-line (claude/codex JSONL) ignore it.
+ */
+function readTranscriptHeader(
+  path: string,
+  maxBytes = 65536
+): TranscriptHeader | undefined {
   let fd: number | undefined;
   try {
     fd = openSync(path, 'r');
     const buf = Buffer.alloc(maxBytes);
     const n = readSync(fd, buf, 0, maxBytes, 0);
-    return buf.subarray(0, n).toString('utf8');
+    return {
+      text: buf.subarray(0, n).toString('utf8'),
+      truncated: n >= maxBytes
+    };
   } catch {
     return undefined;
   } finally {
@@ -2898,7 +3031,7 @@ function readTranscriptHeader(path: string, maxBytes = 65536): string | undefine
 function readCwdFromClaudeJsonl(path: string): string | undefined {
   const header = readTranscriptHeader(path);
   if (!header) return undefined;
-  for (const line of header.split('\n')) {
+  for (const line of header.text.split('\n')) {
     if (!line.includes('"cwd"')) continue;
     try {
       const obj = JSON.parse(line) as { cwd?: unknown };
@@ -2914,8 +3047,8 @@ function readCwdFromClaudeJsonl(path: string): string | undefined {
 function readCwdFromCodexJsonl(path: string): string | undefined {
   const header = readTranscriptHeader(path);
   if (!header) return undefined;
-  const firstNewline = header.indexOf('\n');
-  const firstLine = firstNewline === -1 ? header : header.slice(0, firstNewline);
+  const firstNewline = header.text.indexOf('\n');
+  const firstLine = firstNewline === -1 ? header.text : header.text.slice(0, firstNewline);
   try {
     const obj = JSON.parse(firstLine) as { payload?: { cwd?: unknown } };
     const cwd = obj.payload?.cwd;
@@ -2925,12 +3058,27 @@ function readCwdFromCodexJsonl(path: string): string | undefined {
   }
 }
 
-/** Opencode session JSON: top-level `directory` field. */
+/**
+ * Opencode session JSON: top-level `directory` field. Opencode writes
+ * the whole session as a single JSON object, so a truncated read can't
+ * be parsed — the closing brace is missing. Re-read the full file when
+ * `truncated` flips, since real opencode session records are typically
+ * a few hundred bytes (summary, directory, ids) but we don't want to
+ * silently miss a larger one.
+ */
 function readCwdFromOpencodeSession(path: string): string | undefined {
   const header = readTranscriptHeader(path);
   if (!header) return undefined;
+  let body = header.text;
+  if (header.truncated) {
+    try {
+      body = readFileSync(path, 'utf8');
+    } catch {
+      return undefined;
+    }
+  }
   try {
-    const obj = JSON.parse(header) as { directory?: unknown };
+    const obj = JSON.parse(body) as { directory?: unknown };
     return typeof obj.directory === 'string' ? obj.directory : undefined;
   } catch {
     return undefined;
@@ -3031,7 +3179,9 @@ export function parseProposals(raw: string): ImproverProposalsFile {
           `proposals[${idx}].patches[${pidx}].op must be "set" or "append"`
         );
       }
-      patches.push({ path: rp.path, op: rp.op, value: rp.value });
+      const patch: ImproverPatch = { path: rp.path, op: rp.op, value: rp.value };
+      assertAllowedImproverPatch(patch, `proposals[${idx}].patches[${pidx}]`);
+      patches.push(patch);
     }
     proposals.push({
       id: p.id,
@@ -3078,7 +3228,12 @@ function walkProposalsInteractive(file: ImproverProposalsFile): ImproverProposal
       process.stderr.write('  → accepted (accept-all)\n');
       continue;
     }
-    const choice = readSingleCharChoice('  accept? [y/n/a/q] ', ['y', 'n', 'a', 'q']);
+    // 'n' is first so empty Enter defaults to skip (matches the
+    // [y/N] default-no convention used by promptYesNoSync at the
+    // session-end "auto-improve?" prompt). If the user hammers Enter
+    // through a stack of proposals they get a no-op outcome, not an
+    // unintended file mutation.
+    const choice = readSingleCharChoice('  accept? [y/N/a/q] ', ['n', 'y', 'a', 'q']);
     if (choice === 'y') {
       accepted.push(proposal);
     } else if (choice === 'a') {
@@ -3088,7 +3243,7 @@ function walkProposalsInteractive(file: ImproverProposalsFile): ImproverProposal
       process.stderr.write('  → quit; no further proposals will be reviewed.\n');
       break;
     }
-    // 'n' falls through with no accept.
+    // 'n' (and bare Enter) falls through with no accept.
   }
   return accepted;
 }
@@ -3119,19 +3274,31 @@ function formatPatchValue(value: unknown): string {
 
 /**
  * Read a single-character choice from stdin synchronously, looping on
- * invalid input. Empty enter (no character) is treated as the first
- * option in `valid` (matches the y/N default-no convention used elsewhere
- * in the CLI).
+ * invalid input. Empty Enter (no character) returns the first option in
+ * `valid` — callers should put the safe / default-no answer first.
+ *
+ * Test seam: callers can inject `read` so the prompt is exercisable
+ * without a real TTY (mirrors `promptYesNoSync`).
  */
-function readSingleCharChoice(prompt: string, valid: readonly string[]): string {
+export function readSingleCharChoice(
+  prompt: string,
+  valid: readonly string[],
+  opts: {
+    write?: (chunk: string) => void;
+    read?: () => string | undefined;
+  } = {}
+): string {
+  const write = opts.write ?? ((chunk: string) => {
+    process.stderr.write(chunk);
+  });
   for (;;) {
-    process.stderr.write(prompt);
-    const line = readLineFromStdinSync();
+    write(prompt);
+    const line = opts.read ? opts.read() : readLineFromStdinSync();
     const trimmed = (line ?? '').trim().toLowerCase();
     if (trimmed.length === 0) return valid[0];
     const ch = trimmed[0];
     if (valid.includes(ch)) return ch;
-    process.stderr.write(`  invalid choice; expected one of: ${valid.join(', ')}\n`);
+    write(`  invalid choice; expected one of: ${valid.join(', ')}\n`);
   }
 }
 
@@ -3156,10 +3323,12 @@ export function applyAcceptedPatches(
 }
 
 function applyPatchInPlace(root: Record<string, unknown>, patch: ImproverPatch): void {
+  // Re-run the allowlist + prototype-segment guard at apply time, not
+  // just at parse time. Belt-and-braces: a patch list constructed by a
+  // future caller that bypasses parseProposals can't smuggle a
+  // disallowed path past this point either.
+  assertAllowedImproverPatch(patch, `applyPatchInPlace`);
   const segments = patch.path.split('.').filter((s) => s.length > 0);
-  if (segments.length === 0) {
-    throw new Error(`patch path is empty`);
-  }
   let cursor: Record<string, unknown> = root;
   for (let i = 0; i < segments.length - 1; i++) {
     const seg = segments[i];

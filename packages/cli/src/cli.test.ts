@@ -23,6 +23,7 @@ import {
   parseCreateArgs,
   parseProposals,
   promptYesNoSync,
+  readSingleCharChoice,
   resolveSystemPromptPlaceholders,
   stripAgentFlag,
   type ImproverProposal,
@@ -1222,7 +1223,9 @@ test('applyAcceptedPatches: throws when appending to a non-array', () => {
   const tmp = mkdtempSync(join(tmpdir(), 'aw-improver-'));
   try {
     const path = join(tmp, 'persona.json');
-    writeFileSync(path, JSON.stringify({ id: 'foo', description: 'a string' }), 'utf8');
+    // `skills` is in the append allowlist but the existing value is not an array,
+    // so the runtime non-array guard fires (not the allowlist guard).
+    writeFileSync(path, JSON.stringify({ id: 'foo', skills: 'oops not array' }), 'utf8');
     assert.throws(
       () =>
         applyAcceptedPatches(path, [
@@ -1230,7 +1233,7 @@ test('applyAcceptedPatches: throws when appending to a non-array', () => {
             id: 'p1',
             summary: 's',
             rationale: 'r',
-            patches: [{ path: 'description', op: 'append', value: 'x' }]
+            patches: [{ path: 'skills', op: 'append', value: { id: 'x', source: 'y', description: 'z' } }]
           }
         ]),
       /cannot append to non-array/
@@ -1238,4 +1241,170 @@ test('applyAcceptedPatches: throws when appending to a non-array', () => {
   } finally {
     rmSync(tmp, { recursive: true, force: true });
   }
+});
+
+test('parseProposals: rejects set on a non-allowlisted path (e.g. id)', () => {
+  const raw = JSON.stringify({
+    personaId: 'foo',
+    personaFilePath: '/tmp/foo.json',
+    transcriptPath: '',
+    proposals: [
+      {
+        id: 'p1',
+        summary: 's',
+        rationale: 'r',
+        patches: [{ path: 'id', op: 'set', value: 'rebrand' }]
+      }
+    ]
+  });
+  assert.throws(() => parseProposals(raw), /set path "id" is not in the allowlist/);
+});
+
+test('parseProposals: rejects set on tier model/harness (locked)', () => {
+  for (const path of ['tiers.best.model', 'tiers.best.harness', 'tiers.best.harnessSettings.reasoning']) {
+    const raw = JSON.stringify({
+      personaId: 'foo',
+      personaFilePath: '/tmp/foo.json',
+      transcriptPath: '',
+      proposals: [
+        {
+          id: 'p1',
+          summary: 's',
+          rationale: 'r',
+          patches: [{ path, op: 'set', value: 'whatever' }]
+        }
+      ]
+    });
+    assert.throws(() => parseProposals(raw), /is not in the allowlist/, `path "${path}" should be rejected`);
+  }
+});
+
+test('parseProposals: rejects append on a non-allowlisted path', () => {
+  const raw = JSON.stringify({
+    personaId: 'foo',
+    personaFilePath: '/tmp/foo.json',
+    transcriptPath: '',
+    proposals: [
+      {
+        id: 'p1',
+        summary: 's',
+        rationale: 'r',
+        patches: [{ path: 'tags', op: 'append', value: 'extra' }]
+      }
+    ]
+  });
+  assert.throws(() => parseProposals(raw), /append path "tags" is not in the allowlist/);
+});
+
+test('parseProposals: rejects prototype-pollution path segments', () => {
+  for (const path of ['__proto__.polluted', 'constructor.prototype.x', 'tiers.__proto__.x']) {
+    const raw = JSON.stringify({
+      personaId: 'foo',
+      personaFilePath: '/tmp/foo.json',
+      transcriptPath: '',
+      proposals: [
+        {
+          id: 'p1',
+          summary: 's',
+          rationale: 'r',
+          patches: [{ path, op: 'set', value: 'x' }]
+        }
+      ]
+    });
+    assert.throws(() => parseProposals(raw), /forbidden segment/, `path "${path}" should be rejected`);
+  }
+});
+
+test('parseProposals: accepts inputs.<NAME> set with env-style key', () => {
+  const raw = JSON.stringify({
+    personaId: 'foo',
+    personaFilePath: '/tmp/foo.json',
+    transcriptPath: '',
+    proposals: [
+      {
+        id: 'p1',
+        summary: 's',
+        rationale: 'r',
+        patches: [
+          { path: 'inputs.NEW_INPUT', op: 'set', value: { description: 'a new input' } }
+        ]
+      }
+    ]
+  });
+  const parsed = parseProposals(raw);
+  assert.equal(parsed.proposals[0].patches[0].path, 'inputs.NEW_INPUT');
+});
+
+test('parseProposals: rejects inputs.<bad-name> with non-env-style key', () => {
+  const raw = JSON.stringify({
+    personaId: 'foo',
+    personaFilePath: '/tmp/foo.json',
+    transcriptPath: '',
+    proposals: [
+      {
+        id: 'p1',
+        summary: 's',
+        rationale: 'r',
+        patches: [{ path: 'inputs.lowercase', op: 'set', value: { description: 'x' } }]
+      }
+    ]
+  });
+  assert.throws(() => parseProposals(raw), /env-style NAME/);
+});
+
+test('applyAcceptedPatches: prototype-pollution attempt does not escape and Object.prototype stays clean', () => {
+  const tmp = mkdtempSync(join(tmpdir(), 'aw-improver-'));
+  try {
+    const path = join(tmp, 'persona.json');
+    writeFileSync(path, JSON.stringify({ id: 'foo' }), 'utf8');
+    assert.throws(
+      () =>
+        applyAcceptedPatches(path, [
+          {
+            id: 'p1',
+            summary: 's',
+            rationale: 'r',
+            patches: [{ path: '__proto__.polluted', op: 'set', value: true }]
+          }
+        ]),
+      /forbidden segment/
+    );
+    // Belt-and-braces: confirm prototype really wasn't touched.
+    assert.equal(({} as { polluted?: boolean }).polluted, undefined);
+    // File is untouched (write-back never happens on throw).
+    const after = JSON.parse(readFileSync(path, 'utf8'));
+    assert.deepEqual(after, { id: 'foo' });
+  } finally {
+    rmSync(tmp, { recursive: true, force: true });
+  }
+});
+
+test('readSingleCharChoice: empty Enter returns first valid (default)', () => {
+  const writes: string[] = [];
+  const choice = readSingleCharChoice('? ', ['n', 'y', 'a', 'q'], {
+    write: (chunk) => writes.push(chunk),
+    read: () => ''
+  });
+  assert.equal(choice, 'n');
+});
+
+test('readSingleCharChoice: explicit y returns y even with n-first valid', () => {
+  const choice = readSingleCharChoice('? ', ['n', 'y', 'a', 'q'], {
+    write: () => {},
+    read: () => 'y'
+  });
+  assert.equal(choice, 'y');
+});
+
+test('readSingleCharChoice: invalid input loops until valid arrives', () => {
+  const reads = ['z', 'huh', 'q'];
+  const writes: string[] = [];
+  const choice = readSingleCharChoice('? ', ['n', 'y', 'a', 'q'], {
+    write: (chunk) => writes.push(chunk),
+    read: () => reads.shift()
+  });
+  assert.equal(choice, 'q');
+  // Saw two "invalid choice" reprompts before the valid 'q'.
+  const invalidLines = writes.filter((w) => w.includes('invalid choice'));
+  assert.equal(invalidLines.length, 2);
 });

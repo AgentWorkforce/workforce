@@ -10,7 +10,8 @@
       "description": "Absolute path to the local persona JSON file under review."
     },
     "SESSION_TRANSCRIPT_PATH": {
-      "description": "Absolute path to the just-ended harness session transcript (typically a JSONL file). May be empty if the CLI could not locate one for the harness; in that case proceed from the persona file alone and note the limitation in the proposals."
+      "description": "Absolute path to the just-ended harness session transcript (typically a JSONL file). May be empty if the CLI could not locate one for the harness; in that case proceed from the persona file alone and note the limitation in the proposals.",
+      "optional": true
     },
     "PROPOSALS_OUTPUT_PATH": {
       "description": "Absolute path to write the structured JSON proposals file. The CLI parses this file after this agent exits."

@@ -82,13 +82,23 @@ export function buildLaunchMetadata(input: {
   selection: Pick<PersonaSelection, 'personaId' | 'tier'>;
   personaSpec: unknown;
   personaSource: string;
+  /**
+   * PID of the launching CLI process. Folded into the enrichment so
+   * `exportStamps` consumers can disambiguate concurrent launches of
+   * the same persona — `writePendingStamp`'s top-level `spawnerPid`
+   * field doesn't survive ingest reconciliation, but enrichment does.
+   */
+  spawnerPid?: number;
 }): Record<string, string> {
   return {
     agentworkforce: '1',
     persona: input.selection.personaId,
     personaTier: input.selection.tier,
     personaVersion: personaVersionHash(input.personaSpec),
-    personaSource: input.personaSource
+    personaSource: input.personaSource,
+    ...(typeof input.spawnerPid === 'number'
+      ? { spawnerPid: String(input.spawnerPid) }
+      : {})
   };
 }
 
@@ -120,7 +130,8 @@ export async function startLaunchMetadataRecording(
   const metadata = buildLaunchMetadata({
     selection: options.selection,
     personaSpec: options.personaSpec,
-    personaSource: options.personaSource
+    personaSource: options.personaSource,
+    spawnerPid: process.pid
   });
   const warn = makeOnceWarn(options.onWarn ?? ((msg) => process.stderr.write(`warning: ${msg}\n`)));
 
