@@ -526,6 +526,154 @@ test('standalone local personas can use inlined AGENTS content as prompt fallbac
   });
 });
 
+test('standalone local personas can use tier-level inlined AGENTS content as prompt fallback', () => {
+  withLayers(({ cwd, homeDir }) => {
+    writeJson(join(homeDir, 'nextjs-web-steward.json'), {
+      id: 'nextjs-web-steward',
+      intent: 'nextjs-web-stewardship',
+      tags: ['implementation'],
+      description: 'Stewards Next.js web surfaces.',
+      agentsMdContent: '# Default steward prompt\n',
+      tiers: {
+        best: {
+          harness: 'codex',
+          model: 'openai-codex/gpt-5.3-codex',
+          systemPrompt: '',
+          agentsMdContent: '# Best steward prompt\n',
+          harnessSettings: { reasoning: 'high', timeoutSeconds: 30 }
+        },
+        'best-value': {
+          harness: 'opencode',
+          model: 'opencode/gpt-5-nano',
+          systemPrompt: '',
+          harnessSettings: { reasoning: 'medium', timeoutSeconds: 30 }
+        },
+        minimum: {
+          harness: 'opencode',
+          model: 'opencode/minimax-m2.5-free',
+          systemPrompt: '',
+          harnessSettings: { reasoning: 'low', timeoutSeconds: 30 }
+        }
+      }
+    });
+
+    const loaded = loadLocalPersonas({ cwd, homeDir });
+    assert.deepEqual(loaded.warnings, []);
+    const spec = loaded.byId.get('nextjs-web-steward');
+    assert.match(spec?.tiers.best.systemPrompt ?? '', /Best steward prompt/);
+    assert.match(spec?.tiers.best.agentsMdContent ?? '', /Best steward prompt/);
+    assert.match(spec?.tiers.minimum.systemPrompt ?? '', /Default steward prompt/);
+  });
+});
+
+test('rejects whitespace-only inlined sidecar content', () => {
+  withLayers(({ cwd, homeDir }) => {
+    writeJson(join(homeDir, 'blank-top-level.json'), {
+      id: 'blank-top-level',
+      intent: 'blank-top-level',
+      tags: ['implementation'],
+      description: 'Invalid blank sidecar content.',
+      agentsMdContent: '   ',
+      tiers: {
+        best: {
+          harness: 'codex',
+          model: 'openai-codex/gpt-5.3-codex',
+          systemPrompt: 'Prompt.',
+          harnessSettings: { reasoning: 'high', timeoutSeconds: 30 }
+        },
+        'best-value': {
+          harness: 'opencode',
+          model: 'opencode/gpt-5-nano',
+          systemPrompt: 'Prompt.',
+          harnessSettings: { reasoning: 'medium', timeoutSeconds: 30 }
+        },
+        minimum: {
+          harness: 'opencode',
+          model: 'opencode/minimax-m2.5-free',
+          systemPrompt: 'Prompt.',
+          harnessSettings: { reasoning: 'low', timeoutSeconds: 30 }
+        }
+      }
+    });
+    writeJson(join(homeDir, 'blank-tier.json'), {
+      id: 'blank-tier',
+      intent: 'blank-tier',
+      tags: ['implementation'],
+      description: 'Invalid blank tier sidecar content.',
+      tiers: {
+        best: {
+          harness: 'codex',
+          model: 'openai-codex/gpt-5.3-codex',
+          systemPrompt: 'Prompt.',
+          agentsMdContent: '   ',
+          harnessSettings: { reasoning: 'high', timeoutSeconds: 30 }
+        },
+        'best-value': {
+          harness: 'opencode',
+          model: 'opencode/gpt-5-nano',
+          systemPrompt: 'Prompt.',
+          harnessSettings: { reasoning: 'medium', timeoutSeconds: 30 }
+        },
+        minimum: {
+          harness: 'opencode',
+          model: 'opencode/minimax-m2.5-free',
+          systemPrompt: 'Prompt.',
+          harnessSettings: { reasoning: 'low', timeoutSeconds: 30 }
+        }
+      }
+    });
+
+    const loaded = loadLocalPersonas({ cwd, homeDir });
+    assert.equal(loaded.byId.has('blank-top-level'), false);
+    assert.equal(loaded.byId.has('blank-tier'), false);
+    assert.match(loaded.warnings.join('\n'), /blank-top-level\.json.*agentsMdContent must be a non-empty string/);
+    assert.match(loaded.warnings.join('\n'), /blank-tier\.json.*agentsMdContent must be a non-empty string/);
+  });
+});
+
+test('extends can resolve a lower-layer standalone persona by intent', () => {
+  withLayers(({ cwd, homeDir, pwdDir }) => {
+    writeJson(join(homeDir, 'steward-base.json'), {
+      id: 'steward-base',
+      intent: 'nextjs-web-stewardship',
+      tags: ['implementation'],
+      description: 'Base steward persona.',
+      tiers: {
+        best: {
+          harness: 'codex',
+          model: 'openai-codex/gpt-5.3-codex',
+          systemPrompt: 'Base prompt.',
+          harnessSettings: { reasoning: 'high', timeoutSeconds: 30 }
+        },
+        'best-value': {
+          harness: 'opencode',
+          model: 'opencode/gpt-5-nano',
+          systemPrompt: 'Base prompt.',
+          harnessSettings: { reasoning: 'medium', timeoutSeconds: 30 }
+        },
+        minimum: {
+          harness: 'opencode',
+          model: 'opencode/minimax-m2.5-free',
+          systemPrompt: 'Base prompt.',
+          harnessSettings: { reasoning: 'low', timeoutSeconds: 30 }
+        }
+      }
+    });
+    writeJson(join(pwdDir, 'project-steward.json'), {
+      id: 'project-steward',
+      extends: 'nextjs-web-stewardship',
+      env: { PROJECT: 'web' }
+    });
+
+    const loaded = loadLocalPersonas({ cwd, homeDir });
+    assert.deepEqual(loaded.warnings, []);
+    const spec = loaded.byId.get('project-steward');
+    assert.equal(spec?.description, 'Base steward persona.');
+    assert.equal(spec?.intent, 'nextjs-web-stewardship');
+    assert.equal(spec?.env?.PROJECT, 'web');
+  });
+});
+
 test('surfaces parse errors as per-file warnings without throwing', () => {
   withLayers(({ cwd, homeDir }) => {
     writeFileSync(join(homeDir, 'bad.json'), '{ not valid json');

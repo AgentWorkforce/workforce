@@ -353,6 +353,12 @@ function assertSidecarMode(value: unknown, context: string): void {
   }
 }
 
+function assertInlineSidecarContent(value: unknown, context: string): void {
+  if (typeof value !== 'string' || !value.trim()) {
+    throw new Error(`${context} must be a non-empty string`);
+  }
+}
+
 function parseOverride(value: unknown, context: string): LocalPersonaOverride {
   if (!isPlainObject(value)) {
     throw new Error(`${context} must be a JSON object`);
@@ -401,17 +407,11 @@ function parseOverride(value: unknown, context: string): LocalPersonaOverride {
 
   if (raw.claudeMd !== undefined) assertSidecarPath(raw.claudeMd, `${context}.claudeMd`);
   if (raw.agentsMd !== undefined) assertSidecarPath(raw.agentsMd, `${context}.agentsMd`);
-  if (
-    raw.claudeMdContent !== undefined &&
-    (typeof raw.claudeMdContent !== 'string' || !raw.claudeMdContent.length)
-  ) {
-    throw new Error(`${context}.claudeMdContent must be a non-empty string`);
+  if (raw.claudeMdContent !== undefined) {
+    assertInlineSidecarContent(raw.claudeMdContent, `${context}.claudeMdContent`);
   }
-  if (
-    raw.agentsMdContent !== undefined &&
-    (typeof raw.agentsMdContent !== 'string' || !raw.agentsMdContent.length)
-  ) {
-    throw new Error(`${context}.agentsMdContent must be a non-empty string`);
+  if (raw.agentsMdContent !== undefined) {
+    assertInlineSidecarContent(raw.agentsMdContent, `${context}.agentsMdContent`);
   }
   // Mode is allowed without a same-layer path so an overlay can flip
   // `extend` ↔ `overwrite` while inheriting the path from a lower layer.
@@ -591,17 +591,11 @@ function assertTiersShape(value: unknown, context: string): void {
     }
     if (runtime.claudeMd !== undefined) assertSidecarPath(runtime.claudeMd, `${path}.claudeMd`);
     if (runtime.agentsMd !== undefined) assertSidecarPath(runtime.agentsMd, `${path}.agentsMd`);
-    if (
-      runtime.claudeMdContent !== undefined &&
-      (typeof runtime.claudeMdContent !== 'string' || !runtime.claudeMdContent.length)
-    ) {
-      throw new Error(`${path}.claudeMdContent must be a non-empty string`);
+    if (runtime.claudeMdContent !== undefined) {
+      assertInlineSidecarContent(runtime.claudeMdContent, `${path}.claudeMdContent`);
     }
-    if (
-      runtime.agentsMdContent !== undefined &&
-      (typeof runtime.agentsMdContent !== 'string' || !runtime.agentsMdContent.length)
-    ) {
-      throw new Error(`${path}.agentsMdContent must be a non-empty string`);
+    if (runtime.agentsMdContent !== undefined) {
+      assertInlineSidecarContent(runtime.agentsMdContent, `${path}.agentsMdContent`);
     }
     // Tier-level mode without a tier-level path is allowed: it overrides
     // top-level mode for this tier while inheriting the inherited path.
@@ -690,13 +684,19 @@ function standaloneSpecFromOverride(
     override.tiers,
     `standalone persona "${override.id}".tiers`
   );
-  const fallbackSystemPrompt =
-    override.systemPrompt || override.claudeMdContent || override.agentsMdContent;
+  const topLevelFallbackSystemPrompt =
+    typeof override.systemPrompt === 'string' && override.systemPrompt.trim()
+      ? override.systemPrompt
+      : override.claudeMdContent ?? override.agentsMdContent;
   for (const tier of PERSONA_TIERS) {
+    const tierFallbackSystemPrompt =
+      rawTiers[tier]?.claudeMdContent ??
+      rawTiers[tier]?.agentsMdContent ??
+      topLevelFallbackSystemPrompt;
     const runtime = assertStandaloneRuntime(
       rawTiers[tier],
       `standalone persona "${override.id}".tiers.${tier}`,
-      fallbackSystemPrompt
+      tierFallbackSystemPrompt
     );
     const tierOverride = rawTiers[tier];
     if (tierOverride?.claudeMd !== undefined) {
@@ -794,11 +794,32 @@ function findInLowerLayers(
   for (let i = startLayerIdx; i < layers.length; i++) {
     const layer = layers[i];
     const layerOverrides = overrides.get(layer.key);
-    if (layerOverrides?.has(key)) {
-      return resolveInLayer(key, i, layers, overrides, resolving, sidecarWarnings);
+    if (!layerOverrides) continue;
+    const overrideId = findOverrideIdInLayer(key, layerOverrides, layer.source);
+    if (overrideId) {
+      return resolveInLayer(overrideId, i, layers, overrides, resolving, sidecarWarnings);
     }
   }
   return findInLibrary(key);
+}
+
+function findOverrideIdInLayer(
+  key: string,
+  layerOverrides: Map<string, LocalPersonaOverride>,
+  source: PersonaSource
+): string | undefined {
+  if (layerOverrides.has(key)) return key;
+
+  const matches: string[] = [];
+  for (const [id, override] of layerOverrides) {
+    if (override.intent === key) matches.push(id);
+  }
+  if (matches.length > 1) {
+    throw new Error(
+      `extends "${key}" is ambiguous in ${source}; matched local persona intents on ids: ${matches.join(', ')}`
+    );
+  }
+  return matches[0];
 }
 
 function resolveInLayer(

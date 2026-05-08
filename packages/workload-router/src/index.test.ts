@@ -465,34 +465,66 @@ test('materializeSkills accepts GitHub tree URLs for skill.sh skill directories'
     })),
     [
       {
-        packageRef: 'https://github.com/wsimmonds/claude-nextjs-skills#nextjs-anti-patterns',
+        packageRef: 'https://github.com/wsimmonds/claude-nextjs-skills/tree/main#nextjs-anti-patterns',
         installedDir: '.agents/skills/nextjs-anti-patterns',
         command: [
           'npx',
           '-y',
           'skills',
           'add',
-          'https://github.com/wsimmonds/claude-nextjs-skills',
+          'https://github.com/wsimmonds/claude-nextjs-skills/tree/main',
           '--skill',
           'nextjs-anti-patterns',
           '-y'
         ]
       },
       {
-        packageRef: 'https://github.com/Dexploarer/hyper-forge#lighthouse-ci-integrator',
+        packageRef: 'https://github.com/Dexploarer/hyper-forge/tree/main#lighthouse-ci-integrator',
         installedDir: '.agents/skills/lighthouse-ci-integrator',
         command: [
           'npx',
           '-y',
           'skills',
           'add',
-          'https://github.com/Dexploarer/hyper-forge',
+          'https://github.com/Dexploarer/hyper-forge/tree/main',
           '--skill',
           'lighthouse-ci-integrator',
           '-y'
         ]
       }
     ]
+  );
+});
+
+test('materializeSkills rejects unsafe skill.sh skill names', () => {
+  assert.throws(
+    () =>
+      materializeSkills(
+        [
+          {
+            id: 'unsafe',
+            source: 'https://github.com/example/skills#../unsafe',
+            description: 'unsafe fragment'
+          }
+        ],
+        'opencode'
+      ),
+    /Unsupported skill source/
+  );
+
+  assert.throws(
+    () =>
+      materializeSkills(
+        [
+          {
+            id: 'unsafe',
+            source: 'https://github.com/example/skills/tree/main/.hidden',
+            description: 'unsafe tree leaf'
+          }
+        ],
+        'opencode'
+      ),
+    /Unsupported skill source/
   );
 });
 

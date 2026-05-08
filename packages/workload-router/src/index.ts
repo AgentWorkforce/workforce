@@ -487,7 +487,13 @@ const prpmProvider: SkillProvider = {
 const SKILL_SH_URL_RE =
   /^(https?:\/\/github\.com\/[^/\s?#]+\/[^/\s?#]+?)(?:\.git)?#([^\s?#]+)$/i;
 const SKILL_SH_TREE_URL_RE =
-  /^(https?:\/\/github\.com\/[^/\s?#]+\/[^/\s?#]+?)(?:\.git)?\/tree\/[^/\s?#]+\/([^?#]+?)(?:[?#].*)?$/i;
+  /^(https?:\/\/github\.com\/[^/\s?#]+\/[^/\s?#]+?)(?:\.git)?\/tree\/([^/\s?#]+)\/([^?#]+?)(?:[?#].*)?$/i;
+const SKILL_NAME_RE = /^(?!\.{1,2}$)[A-Za-z0-9][A-Za-z0-9._-]*$/;
+
+function toSafeSkillName(raw: string): string | null {
+  const name = raw.trim();
+  return SKILL_NAME_RE.test(name) ? name : null;
+}
 
 /**
  * Paths `npx skills add` writes per install. Mirrors the on-disk layout from
@@ -510,7 +516,9 @@ const skillShProvider: SkillProvider = {
   parse(source) {
     const match = source.match(SKILL_SH_URL_RE);
     if (match) {
-      const [, repoUrl, skillName] = match;
+      const [, repoUrl, rawSkillName] = match;
+      const skillName = toSafeSkillName(rawSkillName);
+      if (!skillName) return null;
       return {
         kind: 'skill.sh',
         // packageRef preserves the full `<repo>#<skill>` shape so the command builder
@@ -522,12 +530,12 @@ const skillShProvider: SkillProvider = {
 
     const treeMatch = source.match(SKILL_SH_TREE_URL_RE);
     if (!treeMatch) return null;
-    const [, repoUrl, skillPath] = treeMatch;
-    const skillName = skillPath.split('/').filter(Boolean).at(-1);
+    const [, repoUrl, ref, skillPath] = treeMatch;
+    const skillName = toSafeSkillName(skillPath.split('/').filter(Boolean).at(-1) ?? '');
     if (!skillName) return null;
     return {
       kind: 'skill.sh',
-      packageRef: `${repoUrl}#${skillName}`,
+      packageRef: `${repoUrl}/tree/${ref}#${skillName}`,
       installedName: skillName
     };
   },
