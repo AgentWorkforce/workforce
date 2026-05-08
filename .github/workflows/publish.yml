@@ -53,6 +53,7 @@ jobs:
     runs-on: ubuntu-latest
     outputs:
       versions: ${{ steps.bump.outputs.versions }}
+      release_version: ${{ steps.bump.outputs.release_version }}
     steps:
       - name: Checkout
         uses: actions/checkout@v6
@@ -182,6 +183,7 @@ jobs:
         id: bump
         run: |
           VERSIONS=""
+          RELEASE_VERSION=""
           CUSTOM='${{ github.event.inputs.custom_version }}'
           BUMP='${{ github.event.inputs.version }}'
           PREID='${{ github.event.inputs.prerelease_id }}'
@@ -198,9 +200,17 @@ jobs:
             fi
             NEW=$(node -p "require('./package.json').version")
             VERSIONS+=" $pkg:$NEW"
+            # `agentworkforce` is the umbrella; every package ships in lockstep
+            # at the same version, so the umbrella's stamp is the canonical
+            # release version anchored on the GitHub Release tag and on the
+            # root CHANGELOG promotion.
+            if [ "$pkg" = "agentworkforce" ]; then
+              RELEASE_VERSION="$NEW"
+            fi
             popd > /dev/null
           done
           echo "versions=${VERSIONS# }" >> "$GITHUB_OUTPUT"
+          echo "release_version=$RELEASE_VERSION" >> "$GITHUB_OUTPUT"
 
       # Belt-and-suspenders alongside the baseline heal above: even if the
       # local and npm baselines are aligned, the computed bump might still
@@ -222,11 +232,19 @@ jobs:
             echo "$NPM_NAME@$ver: unpublished — OK"
           done
 
-      # Per-package CHANGELOG.md generation. For each package being published,
-      # finds the last `<pkg>-v*` tag, collects Conventional Commits since then
-      # that touched `packages/<pkg>/**`, buckets them, and prepends a new
-      # versioned block. Skips silently for prereleases (version contains `-`)
-      # and for first publishes (no prior tag).
+      # Per-package CHANGELOG.md generation. For each package being published:
+      #
+      #   1. If `## [Unreleased]` contains hand-curated content, promote it
+      #      verbatim into the new `## [x.y.z] - DATE` block, then reset
+      #      `## [Unreleased]` to empty. This is the authoritative path —
+      #      curated narrative beats anything inferred from commits.
+      #   2. Otherwise, fall back to inferring a block from `git log` since
+      #      the last `<pkg>-v*` tag. Bucketing prefers Conventional Commits
+      #      prefixes (feat:/fix:/refactor:) and falls back to imperative-verb
+      #      inference. Unclassified commits land in `Changed` so nothing
+      #      gets silently dropped.
+      #   3. Skips silently for prereleases (version contains `-`) and for
+      #      first publishes where neither Unreleased nor a prior tag exists.
       - name: Generate changelogs
         if: ${{ github.event.inputs.version != 'none' || github.event.inputs.custom_version != '' }}
         run: |
@@ -244,113 +262,169 @@ jobs:
             process.exit(0);
           }
 
-          const tagPrefix = `${pkg}-v`;
-          const tags = execSync(`git tag -l '${tagPrefix}*' --sort=-v:refname`, { encoding: 'utf-8' })
-            .trim().split('\n').filter(Boolean);
-          const semverRe = new RegExp(`^${tagPrefix.replace(/\./g, '\\.')}\\d+\\.\\d+\\.\\d+$`);
-          const lastTag = tags.find(t => semverRe.test(t));
-
-          if (!lastTag) {
-            console.log(`${pkg}: no prior stable tag, skipping`);
-            process.exit(0);
-          }
-
           const existing = existsSync(path) ? readFileSync(path, 'utf-8') : '';
           if (existing.includes(`## [${newVersion}]`)) {
             console.log(`${path} already has ${newVersion}, skipping`);
             process.exit(0);
           }
 
-          const log = execSync(
-            `git log ${lastTag}..HEAD --pretty=format:"%H|%s|%b%x00" --no-merges -- packages/${pkg}`,
-            { encoding: 'utf-8' }
-          ).trim();
+          const tagPrefix = `${pkg}-v`;
+          const tags = execSync(`git tag -l '${tagPrefix}*' --sort=-v:refname`, { encoding: 'utf-8' })
+            .trim().split('\n').filter(Boolean);
+          const semverRe = new RegExp(`^${tagPrefix.replace(/\./g, '\\.')}\\d+\\.\\d+\\.\\d+$`);
+          const lastTag = tags.find((t) => semverRe.test(t));
 
-          if (!log) {
-            console.log(`${pkg}: no commits since ${lastTag}, skipping`);
-            process.exit(0);
-          }
-
-          const commits = log.split('\0').filter(Boolean).map(record => {
-            const idx = record.indexOf('|');
-            const idx2 = record.indexOf('|', idx + 1);
+          // --- Step 1: extract any hand-curated [Unreleased] content. ---
+          // Slice from the header line to the next `## [` (or EOF) so the
+          // whole contiguous block is a single span we can reset.
+          function splitAtUnreleased(raw) {
+            const headerRe = /^## \[Unreleased\][^\n]*\n/m;
+            const headerMatch = raw.match(headerRe);
+            if (!headerMatch) return null;
+            const headerStart = headerMatch.index;
+            const afterHeader = headerStart + headerMatch[0].length;
+            const tail = raw.slice(afterHeader);
+            const nextMatch = tail.match(/^## \[/m);
+            const bodyEnd = nextMatch ? afterHeader + nextMatch.index : raw.length;
             return {
-              subject: record.slice(idx + 1, idx2).trim(),
-              body: record.slice(idx2 + 1).trim(),
+              before: raw.slice(0, headerStart),
+              headerLine: headerMatch[0],
+              body: raw.slice(afterHeader, bodyEnd),
+              after: raw.slice(bodyEnd),
             };
-          });
-
-          const extractPR = (subject, body) => {
-            const m = (subject + ' ' + body).match(/#(\d+)/);
-            return m ? `(#${m[1]})` : '';
-          };
-
-          const formatTitle = (subject) => {
-            const cleaned = subject
-              .replace(/^(feat|fix|refactor|perf|chore|test|ci|docs|build|style)(\([^)]+\))?!?:\s*/i, '')
-              .replace(/\s*\(#\d+\)\s*$/, '');
-            return cleaned.charAt(0).toUpperCase() + cleaned.slice(1);
-          };
-
-          const getType = (subject) => {
-            const m = subject.match(/^(feat|fix|refactor|perf|chore|test|ci|docs|build|style)(\([^)]+\))?(!)?:/i);
-            if (!m) return 'other';
-            const type = m[1].toLowerCase();
-            const scope = (m[2] || '').replace(/[()]/g, '');
-            if (m[3] === '!') return 'breaking';
-            if (type === 'feat') return 'feat';
-            if (type === 'fix') return 'fix';
-            if (type === 'refactor' || type === 'perf' || type === 'build') return 'changed';
-            if (type === 'test' || type === 'ci') return 'reliability';
-            if (type === 'chore' && scope === 'release') return 'release';
-            if (type === 'chore') return 'deps';
-            return 'other';
-          };
-
-          const cats = { breaking: [], feat: [], fix: [], changed: [], reliability: [], deps: [], release: [], other: [] };
-          for (const c of commits) {
-            const type = getType(c.subject);
-            cats[type].push({ title: formatTitle(c.subject), pr: extractPR(c.subject, c.body) });
           }
 
-          const sections = [
-            ['Breaking Changes', cats.breaking, true],
-            ['Added', cats.feat, true],
-            ['Fixed', cats.fix, false],
-            ['Changed', cats.changed, false],
-            ['Reliability', cats.reliability, false],
-            ['Dependencies', cats.deps, false],
-          ];
+          const parts = splitAtUnreleased(existing);
+          const unreleasedBody = parts ? parts.body.trim() : '';
 
-          const lines = [`## [${newVersion}] - ${today}`, ''];
-          let anyContent = false;
-          for (const [header, bucket, bold] of sections) {
-            if (bucket.length === 0) continue;
-            anyContent = true;
-            lines.push(`### ${header}`, '');
-            for (const c of bucket) {
-              const title = bold ? `**${c.title}**` : c.title;
-              lines.push(`- ${title}${c.pr ? ' ' + c.pr : ''}`);
+          // --- Step 2: build the new version block body. ---
+          let newEntryBody = '';
+          if (unreleasedBody.length > 0) {
+            // Promote Unreleased verbatim. Curated text wins over commit log.
+            newEntryBody = unreleasedBody + '\n';
+            console.log(`${pkg}: promoting [Unreleased] content into ${newVersion}`);
+          } else if (!lastTag) {
+            console.log(`${pkg}: empty [Unreleased] and no prior stable tag, skipping`);
+            process.exit(0);
+          } else {
+            const log = execSync(
+              `git log ${lastTag}..HEAD --pretty=format:"%H|%s|%b%x00" --no-merges -- packages/${pkg}`,
+              { encoding: 'utf-8' }
+            ).trim();
+            if (!log) {
+              console.log(`${pkg}: empty [Unreleased] and no commits since ${lastTag}, skipping`);
+              process.exit(0);
             }
-            lines.push('');
-          }
-          if (!anyContent) {
-            lines.push('### Released', '', `- v${newVersion}`, '');
+
+            const commits = log.split('\0').filter(Boolean).map((record) => {
+              const idx = record.indexOf('|');
+              const idx2 = record.indexOf('|', idx + 1);
+              return {
+                subject: record.slice(idx + 1, idx2).trim(),
+                body: record.slice(idx2 + 1).trim(),
+              };
+            });
+
+            const extractPR = (subject, body) => {
+              const m = (subject + ' ' + body).match(/#(\d+)/);
+              return m ? `(#${m[1]})` : '';
+            };
+            const formatTitle = (subject) => {
+              const cleaned = subject
+                .replace(/^(feat|fix|refactor|perf|chore|test|ci|docs|build|style)(\([^)]+\))?!?:\s*/i, '')
+                .replace(/\s*\(#\d+\)\s*$/, '');
+              return cleaned.charAt(0).toUpperCase() + cleaned.slice(1);
+            };
+            const getType = (subject) => {
+              const m = subject.match(/^(feat|fix|refactor|perf|chore|test|ci|docs|build|style)(\([^)]+\))?(!)?:/i);
+              if (m) {
+                const type = m[1].toLowerCase();
+                const scope = (m[2] || '').replace(/[()]/g, '');
+                if (m[3] === '!') return 'breaking';
+                if (type === 'feat') return 'feat';
+                if (type === 'fix') return 'fix';
+                if (type === 'refactor' || type === 'perf' || type === 'build') return 'changed';
+                if (type === 'test' || type === 'ci') return 'reliability';
+                if (type === 'chore' && scope === 'release') return 'release';
+                if (type === 'chore') return 'deps';
+                if (type === 'docs') return 'docs';
+                return 'other';
+              }
+              const trimmed = subject.trim();
+              if (/^(add|implement|introduce|create|support|enable|expose|wire|allow)\b/i.test(trimmed)) return 'feat';
+              if (/^(fix|resolve|correct|patch|prevent|guard|stop)\b/i.test(trimmed)) return 'fix';
+              if (
+                /^(refactor|rename|extract|reorganize|restructure|simplify|move|split|consolidate|rewrite|replace)\b/i.test(trimmed) ||
+                /^(update|bump|upgrade|migrate|switch|tighten|loosen|tweak|adjust|improve|clarify|polish|cleanup|clean\s+up|harden)\b/i.test(trimmed)
+              ) return 'changed';
+              if (/^(test|cover|verify)\b/i.test(trimmed)) return 'reliability';
+              if (/^(document|docs?\b|readme)\b/i.test(trimmed)) return 'docs';
+              return 'other';
+            };
+
+            const cats = { breaking: [], feat: [], fix: [], changed: [], reliability: [], deps: [], release: [], docs: [], other: [] };
+            for (const c of commits) {
+              const type = getType(c.subject);
+              cats[type].push({ title: formatTitle(c.subject), pr: extractPR(c.subject, c.body) });
+            }
+
+            const sections = [
+              ['Breaking Changes', cats.breaking, true],
+              ['Added', cats.feat, true],
+              ['Fixed', cats.fix, false],
+              ['Changed', [...cats.changed, ...cats.other], false],
+              ['Reliability', cats.reliability, false],
+              ['Documentation', cats.docs, false],
+              ['Dependencies', cats.deps, false],
+            ];
+
+            const bodyLines = [];
+            let anyContent = false;
+            for (const [header, bucket, bold] of sections) {
+              if (bucket.length === 0) continue;
+              anyContent = true;
+              bodyLines.push(`### ${header}`, '');
+              for (const c of bucket) {
+                const title = bold ? `**${c.title}**` : c.title;
+                bodyLines.push(`- ${title}${c.pr ? ' ' + c.pr : ''}`);
+              }
+              bodyLines.push('');
+            }
+            if (!anyContent) {
+              bodyLines.push('### Released', '', `- v${newVersion}`, '');
+            }
+            newEntryBody = bodyLines.join('\n');
+            console.log(`${pkg}: inferred ${newVersion} body from git log`);
           }
 
-          const newEntry = lines.join('\n');
+          const newEntry = `## [${newVersion}] - ${today}\n\n${newEntryBody}`;
 
+          // --- Step 3: write the file with Unreleased reset + new block. ---
           if (!existing) {
             const header = `# Changelog\n\nAll notable changes to \`${npmName}\` will be documented in this file.\n\nThe format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),\nand this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).\n\n## [Unreleased]\n\n`;
             writeFileSync(path, header + newEntry + '\n');
+          } else if (parts) {
+            // Reset Unreleased body to empty (single blank line after header)
+            // and insert the new version block directly after.
+            const rebuilt =
+              parts.before +
+              parts.headerLine +
+              '\n' +
+              newEntry +
+              (parts.after.startsWith('\n') ? '' : '\n') +
+              parts.after;
+            writeFileSync(path, rebuilt);
           } else {
-            // Insert after the [Unreleased] block, before the first versioned entry.
-            const match = existing.match(/\n## \[\d/);
-            const insertAt = match ? match.index : -1;
-            if (insertAt === -1) {
-              writeFileSync(path, existing.trimEnd() + '\n\n' + newEntry + '\n');
+            // No [Unreleased] section in existing file — insert before first
+            // versioned entry, or append if none.
+            const firstVer = existing.match(/\n## \[\d/);
+            if (firstVer && firstVer.index !== undefined) {
+              writeFileSync(
+                path,
+                existing.slice(0, firstVer.index + 1) + newEntry + '\n' + existing.slice(firstVer.index + 1),
+              );
             } else {
-              writeFileSync(path, existing.slice(0, insertAt + 1) + newEntry + '\n' + existing.slice(insertAt + 1));
+              writeFileSync(path, existing.trimEnd() + '\n\n' + newEntry + '\n');
             }
           }
           console.log(`${path} updated with ${newVersion}`);
@@ -362,12 +436,93 @@ jobs:
             node /tmp/gen-changelog.mjs "$pkg" "$version" "$TODAY"
           done
 
+      # Root CHANGELOG.md gets the same Unreleased→[x.y.z] promotion the
+      # per-package files just got, anchored on the umbrella version (every
+      # package ships at the same version, so the umbrella is the canonical
+      # release stamp). No git-log fallback — the root file is a hand-
+      # curated cross-package narrative, so an empty [Unreleased] means
+      # "no narrative-worthy changes this release" and we leave the file
+      # alone rather than inventing bullets.
+      - name: Generate root changelog
+        if: ${{ github.event.inputs.version != 'none' || github.event.inputs.custom_version != '' }}
+        env:
+          RELEASE_VERSION: ${{ steps.bump.outputs.release_version }}
+        run: |
+          TODAY=$(date -u +%Y-%m-%d)
+          cat > /tmp/gen-root-changelog.mjs << 'GENEOF'
+          import { readFileSync, writeFileSync, existsSync } from 'node:fs';
+
+          const [,, newVersion, today] = process.argv;
+          const path = 'CHANGELOG.md';
+
+          if (!newVersion) {
+            console.log('root changelog: no release version supplied, skipping');
+            process.exit(0);
+          }
+          if (newVersion.includes('-')) {
+            console.log('root changelog: prerelease bump, skipping');
+            process.exit(0);
+          }
+          if (!existsSync(path)) {
+            console.log(`root changelog: ${path} not found, skipping`);
+            process.exit(0);
+          }
+
+          const existing = readFileSync(path, 'utf-8');
+          if (existing.includes(`## [${newVersion}]`)) {
+            console.log(`root changelog: already has ${newVersion}, skipping`);
+            process.exit(0);
+          }
+
+          // Same slicer as the per-package generator.
+          function splitAtUnreleased(raw) {
+            const headerRe = /^## \[Unreleased\][^\n]*\n/m;
+            const headerMatch = raw.match(headerRe);
+            if (!headerMatch) return null;
+            const headerStart = headerMatch.index;
+            const afterHeader = headerStart + headerMatch[0].length;
+            const tail = raw.slice(afterHeader);
+            const nextMatch = tail.match(/^## \[/m);
+            const bodyEnd = nextMatch ? afterHeader + nextMatch.index : raw.length;
+            return {
+              before: raw.slice(0, headerStart),
+              headerLine: headerMatch[0],
+              body: raw.slice(afterHeader, bodyEnd),
+              after: raw.slice(bodyEnd),
+            };
+          }
+
+          const parts = splitAtUnreleased(existing);
+          if (!parts) {
+            console.log('root changelog: no [Unreleased] header, skipping');
+            process.exit(0);
+          }
+          const body = parts.body.trim();
+          if (body.length === 0) {
+            console.log(`root changelog: [Unreleased] is empty, skipping ${newVersion} stamp`);
+            process.exit(0);
+          }
+
+          const newEntry = `## [${newVersion}] - ${today}\n\n${body}\n`;
+          const rebuilt =
+            parts.before +
+            parts.headerLine +
+            '\n' +
+            newEntry +
+            (parts.after.startsWith('\n') ? '' : '\n') +
+            parts.after;
+          writeFileSync(path, rebuilt);
+          console.log(`root changelog: promoted [Unreleased] into ${newVersion}`);
+          GENEOF
+
+          node /tmp/gen-root-changelog.mjs "$RELEASE_VERSION" "$TODAY"
+
       - name: Commit version bumps
         if: ${{ github.event.inputs.dry_run != 'true' && (github.event.inputs.version != 'none' || github.event.inputs.custom_version != '') }}
         run: |
           git config user.name "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
-          git add packages/*/package.json packages/*/CHANGELOG.md
+          git add packages/*/package.json packages/*/CHANGELOG.md CHANGELOG.md
           if git diff --cached --quiet; then
             echo "No version changes to commit."
           else
@@ -517,6 +672,11 @@ jobs:
 
       - name: Build combined release notes
         id: notes
+        env:
+          VERSIONS: ${{ needs.publish.outputs.versions }}
+          CANONICAL_PKG: ${{ steps.release.outputs.canonical_pkg }}
+          CANONICAL_VERSION: ${{ steps.release.outputs.version }}
+          RELEASE_VERSION: ${{ needs.publish.outputs.release_version }}
         run: |
           cat > /tmp/build-release-notes.mjs << 'GENEOF'
           import { appendFileSync, existsSync, readFileSync, writeFileSync } from 'node:fs';
@@ -524,6 +684,9 @@ jobs:
           const versionsRaw = process.env.VERSIONS || '';
           const canonicalPkg = process.env.CANONICAL_PKG;
           const canonicalVersion = process.env.CANONICAL_VERSION;
+          // Falls back to the canonical package version when the bump step
+          // didn't publish an umbrella stamp (e.g. version: none re-runs).
+          const releaseVersion = process.env.RELEASE_VERSION || canonicalVersion;
 
           const packageOrder = ['workload-router', 'harness-kit', 'cli', 'agentworkforce'];
           const entries = versionsRaw.trim().split(/\s+/).filter(Boolean).map((entry) => {
@@ -577,6 +740,7 @@ jobs:
             lines.push(`- \`${entry.npmName}@${entry.ver}\` (tag: \`${entry.tag}\`)`);
           }
 
+          const rootNotes = releaseVersion ? extractChangelogBody('CHANGELOG.md', releaseVersion) : '';
           const packageNotes = packageInfo
             .map((entry) => ({
               ...entry,
@@ -584,12 +748,18 @@ jobs:
             }))
             .filter((entry) => entry.notes.length > 0);
 
+          if (rootNotes.length > 0) {
+            lines.push('', '## Release Notes', '', rootNotes);
+          }
+
           if (packageNotes.length > 0) {
             lines.push('', '## Package Changelogs', '');
             for (const entry of packageNotes) {
               lines.push(`### ${entry.npmName}`, '', nestChangelogHeadings(entry.notes), '');
             }
-          } else {
+          }
+
+          if (rootNotes.length === 0 && packageNotes.length === 0) {
             lines.push('', '## Release Notes', '', '_No changelog entries were generated for this release._');
           }
 
@@ -602,9 +772,6 @@ jobs:
           appendFileSync(process.env.GITHUB_OUTPUT, `release_name=${releaseName}\n`);
           GENEOF
 
-          VERSIONS='${{ needs.publish.outputs.versions }}' \
-          CANONICAL_PKG='${{ steps.release.outputs.canonical_pkg }}' \
-          CANONICAL_VERSION='${{ steps.release.outputs.version }}' \
           node /tmp/build-release-notes.mjs
 
       - name: Create GitHub Release
