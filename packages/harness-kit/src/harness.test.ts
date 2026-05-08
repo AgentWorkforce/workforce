@@ -181,6 +181,49 @@ test('claude and codex emit an empty configFiles array', () => {
   assert.deepEqual(codex.configFiles, []);
 });
 
+test('claude branch omits --append-system-prompt when systemPrompt is empty', () => {
+  // Empty systemPrompt is the persona's signal that no kickoff message is
+  // intended (e.g. an optional task input that wasn't forwarded). The
+  // harness still auto-loads CLAUDE.md from cwd, so the agent has its
+  // operating spec; we just don't want a stray `--append-system-prompt ''`
+  // flag steering behavior on every turn.
+  const result = buildInteractiveSpec({
+    harness: 'claude',
+    personaId: 'test-persona',
+    model: 'claude-opus-4-6',
+    systemPrompt: ''
+  });
+  assert.ok(!result.args.includes('--append-system-prompt'));
+  // strict-mcp still emitted — that's about isolation, not the prompt.
+  assert.ok(result.args.includes('--strict-mcp-config'));
+});
+
+test('opencode omits agent.prompt when systemPrompt is empty', () => {
+  const result = buildInteractiveSpec({
+    harness: 'opencode',
+    personaId: 'test-persona',
+    model: 'opencode/minimax-m2.5',
+    systemPrompt: ''
+  });
+  const [file] = result.configFiles;
+  const parsed = JSON.parse(file.contents);
+  assert.equal(parsed.agent['test-persona'].prompt, undefined);
+  assert.equal(parsed.agent['test-persona'].model, 'opencode/minimax-m2.5');
+  assert.equal(parsed.agent['test-persona'].mode, 'primary');
+});
+
+test('codex passes empty systemPrompt through as a falsy initialPrompt', () => {
+  // Caller appends initialPrompt only when truthy, so an empty
+  // systemPrompt produces a TUI-only launch with no kickoff message.
+  const result = buildInteractiveSpec({
+    harness: 'codex',
+    personaId: 'test-persona',
+    model: 'openai-codex/gpt-5.3-codex',
+    systemPrompt: ''
+  });
+  assert.equal(result.initialPrompt, '');
+});
+
 test('claude branch appends --plugin-dir per entry in pluginDirs', () => {
   const result = buildInteractiveSpec({
     harness: 'claude',

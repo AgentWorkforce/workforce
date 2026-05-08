@@ -123,6 +123,15 @@ export interface PersonaInputSpec {
   env?: string;
   /** Literal fallback used when neither an explicit value nor env var exists. */
   default?: string;
+  /**
+   * When true, the input is allowed to resolve to an empty string. The
+   * launcher substitutes `$NAME` with `''` rather than throwing
+   * `MissingPersonaInputError`. Use for inputs whose absence is meaningful
+   * — e.g. an upstream task description that may or may not be forwarded —
+   * and prefer non-optional inputs with a `default` for everything else so
+   * misconfigured launches surface loudly.
+   */
+  optional?: boolean;
 }
 
 export const PERMISSION_MODES = [
@@ -1024,7 +1033,7 @@ function parseInputs(
     if (!isObject(raw)) {
       throw new Error(`${context}.${name} must be a string default or an object`);
     }
-    const { description, env, default: defaultValue } = raw;
+    const { description, env, default: defaultValue, optional } = raw;
     const parsed: PersonaInputSpec = {};
     if (description !== undefined) {
       if (typeof description !== 'string' || !description.trim()) {
@@ -1044,6 +1053,17 @@ function parseInputs(
         throw new Error(`${context}.${name}.default must be a non-empty string if provided`);
       }
       parsed.default = defaultValue;
+    }
+    if (optional !== undefined) {
+      if (typeof optional !== 'boolean') {
+        throw new Error(`${context}.${name}.optional must be a boolean if provided`);
+      }
+      if (optional && parsed.default !== undefined) {
+        throw new Error(
+          `${context}.${name} cannot set both 'optional: true' and 'default' — pick one (defaults already make an input always-resolved)`
+        );
+      }
+      parsed.optional = optional;
     }
     out[name] = parsed;
   }
