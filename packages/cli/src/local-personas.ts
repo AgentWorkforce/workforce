@@ -331,7 +331,11 @@ function assertSidecarPath(value: unknown, context: string): void {
   if (typeof value !== 'string' || !value.trim()) {
     throw new Error(`${context} must be a non-empty string`);
   }
-  if (value.startsWith('/') || /^[A-Za-z]:[\\/]/.test(value)) {
+  if (
+    value.startsWith('/') ||
+    value.startsWith('\\') || // covers `\persona.md` and `\\server\share\…` UNC
+    /^[A-Za-z]:/.test(value) // covers `C:\persona.md` and drive-relative `C:persona.md`
+  ) {
     throw new Error(`${context} must be a relative path; got absolute "${value}"`);
   }
   const segments = value.split(/[\\/]+/);
@@ -949,6 +953,18 @@ function mergeOverride(
     ...(agentsMdContent ? { agentsMdContent } : {})
   };
 }
+
+/**
+ * Test-only seam. Built-in personas are the only specs that can carry
+ * `claudeMdContent` / `agentsMdContent` (the catalog generator inlines
+ * sibling `.md` files at build time), and none ship sidecars today —
+ * so the file-based loader path can't be used to produce a `base` with
+ * inherited content. This export lets regression tests construct that
+ * scenario directly.
+ *
+ * @internal
+ */
+export const __mergeOverrideForTests = mergeOverride;
 
 function mergeMount(
   base: PersonaMount | undefined,

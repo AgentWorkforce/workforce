@@ -4,7 +4,13 @@ import { mkdtempSync, mkdirSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
-import { loadLocalPersonas, loadPersonaSourceConfig } from './local-personas.js';
+import {
+  __mergeOverrideForTests,
+  loadLocalPersonas,
+  loadPersonaSourceConfig,
+  type LocalPersonaOverride
+} from './local-personas.js';
+import type { PersonaSpec } from '@agentworkforce/workload-router';
 
 type Dirs = { cwd: string; home: string; pwdDir: string; homeDir: string };
 
@@ -509,6 +515,23 @@ test('rejects claudeMd with .. segment', () => {
   });
 });
 
+test('rejects Windows-rooted sidecar paths (backslash, UNC, drive-letter)', () => {
+  // path.isAbsolute on POSIX doesn't catch these, but they're rooted on
+  // Windows and would resolve outside the source dir.
+  for (const bad of ['\\persona.md', '\\\\server\\share\\persona.md', 'C:persona.md', 'C:\\persona.md']) {
+    withLayers(({ cwd, homeDir }) => {
+      writeJson(join(homeDir, 'p.json'), {
+        id: 'p',
+        extends: 'documentation',
+        claudeMd: bad
+      });
+      const loaded = loadLocalPersonas({ cwd, homeDir });
+      assert.equal(loaded.byId.has('p'), false, `expected "${bad}" to be rejected`);
+      assert.match(loaded.warnings.join('\n'), /must be a relative path/);
+    });
+  }
+});
+
 test('rejects non-md sidecar path', () => {
   withLayers(({ cwd, homeDir }) => {
     writeJson(join(homeDir, 'p.json'), {
@@ -570,47 +593,81 @@ test('missing sidecar file produces a warning, not a throw', () => {
 });
 
 test('override path clears inherited claudeMdContent so the override is not shadowed', () => {
-  // Regression: when a built-in persona inlines `claudeMdContent` and a
-  // local override supplies a new `claudeMd` path, runtime selection
-  // prefers Content — so the override path was silently discarded.
-  // After the fix the override path takes ownership of the channel and
-  // the inherited content is dropped from the merged spec.
-  withLayers(({ cwd, homeDir }) => {
-    writeFileSync(join(homeDir, 'persona.md'), '# Persona override\n');
-    // We extend a built-in that has no inlined sidecar today, so
-    // simulate the inherited-content scenario by stacking two local
-    // layers: user-layer ships content, cwd-layer overrides with a path.
-    writeJson(join(homeDir, 'sidecar-stack.json'), {
-      id: 'sidecar-stack',
-      intent: 'documentation',
-      tags: ['documentation'],
-      description: 'sidecar stack base',
-      tiers: {
-        best: {
-          harness: 'claude',
-          model: 'claude-3-5-sonnet',
-          systemPrompt: 'base',
-          harnessSettings: { reasoning: 'medium', timeoutSeconds: 300 }
-        },
-        'best-value': {
-          harness: 'claude',
-          model: 'claude-3-5-sonnet',
-          systemPrompt: 'base',
-          harnessSettings: { reasoning: 'medium', timeoutSeconds: 300 }
-        },
-        minimum: {
-          harness: 'claude',
-          model: 'claude-3-5-sonnet',
-          systemPrompt: 'base',
-          harnessSettings: { reasoning: 'medium', timeoutSeconds: 300 }
-        }
-      },
-      claudeMd: 'persona.md'
-    });
-    const loaded = loadLocalPersonas({ cwd, homeDir });
-    assert.deepEqual(loaded.warnings, []);
-    const spec = loaded.byId.get('sidecar-stack');
-    assert.equal(spec?.claudeMd, join(homeDir, 'persona.md'));
-    assert.equal(spec?.claudeMdContent, undefined);
-  });
+  // Regression: when a base persona ships inlined `claudeMdContent` (only
+  // built-ins do, via the catalog generator) and a local override sets a
+  // new `claudeMd` path, runtime selection prefers Content over path —
+  // so without the fix the override file is silently discarded.
+  //
+  // The file-based loader can't produce inherited content (the JSON
+  // schema accepts only `claudeMd` paths), so this exercises the merge
+  // directly via the test seam to construct a base with content and an
+  // override with a path. Same for agentsMdContent.
+  const baseRuntime = {
+    harness: 'claude' as const,
+    model: 'claude-3-5-sonnet',
+    systemPrompt: 'base',
+    harnessSettings: { reasoning: 'medium' as const, timeoutSeconds: 300 }
+  };
+  const base: PersonaSpec = {
+    id: 'documentation',
+    intent: 'documentation',
+    tags: ['documentation'],
+    description: 'd',
+    skills: [],
+    tiers: { best: baseRuntime, 'best-value': baseRuntime, minimum: baseRuntime },
+    claudeMdContent: '# inlined from build-time\n',
+    agentsMdContent: '# agents inlined from build-time\n'
+  };
+
+  // Set up a real .md file the override can resolve against.
+  const tmp = mkdtempSync(join(tmpdir(), 'agentworkforce-merge-'));
+  try {
+    writeFileSync(join(tmp, 'override.md'), '# override\n');
+    writeFileSync(join(tmp, 'agents-override.md'), '# agents override\n');
+    const override: LocalPersonaOverride = {
+      id: 'documentation',
+      claudeMd: 'override.md',
+      agentsMd: 'agents-override.md',
+      __sourceDir: tmp
+    };
+    const warnings: string[] = [];
+    const merged = __mergeOverrideForTests(base, override, warnings);
+    assert.deepEqual(warnings, []);
+    assert.equal(merged.claudeMd, join(tmp, 'override.md'));
+    assert.equal(merged.claudeMdContent, undefined,
+      'inherited claudeMdContent must be cleared when override sets a new path');
+    assert.equal(merged.agentsMd, join(tmp, 'agents-override.md'));
+    assert.equal(merged.agentsMdContent, undefined);
+  } finally {
+    rmSync(tmp, { recursive: true, force: true });
+  }
+});
+
+test('override leaves channel alone: inherited claudeMdContent flows through', () => {
+  // Sanity counterpart: when the override does NOT set a new path, the
+  // inherited content must NOT be cleared. Otherwise we'd over-correct
+  // and drop legitimate built-in sidecars.
+  const baseRuntime = {
+    harness: 'claude' as const,
+    model: 'claude-3-5-sonnet',
+    systemPrompt: 'base',
+    harnessSettings: { reasoning: 'medium' as const, timeoutSeconds: 300 }
+  };
+  const base: PersonaSpec = {
+    id: 'documentation',
+    intent: 'documentation',
+    tags: ['documentation'],
+    description: 'd',
+    skills: [],
+    tiers: { best: baseRuntime, 'best-value': baseRuntime, minimum: baseRuntime },
+    claudeMdContent: '# keep me\n'
+  };
+  const override: LocalPersonaOverride = {
+    id: 'documentation',
+    description: 'override description only',
+    __sourceDir: '/dev/null'
+  };
+  const merged = __mergeOverrideForTests(base, override, []);
+  assert.equal(merged.claudeMdContent, '# keep me\n');
+  assert.equal(merged.claudeMd, undefined);
 });
