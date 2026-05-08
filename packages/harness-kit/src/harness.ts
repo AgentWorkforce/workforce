@@ -114,11 +114,16 @@ export function buildInteractiveSpec(input: BuildInteractiveSpecInput): Interact
   switch (harness) {
     case 'claude': {
       const mcpPayload = JSON.stringify({ mcpServers: mcpServers ?? {} });
+      // Skip --append-system-prompt entirely when the persona's prompt is
+      // empty (e.g. an optional task-description input that wasn't
+      // forwarded). Personas should keep systemPrompt sparse — the harness
+      // already auto-loads CLAUDE.md / AGENTS.md from cwd, so the heavy
+      // operating spec lives in the sidecar and the systemPrompt is only
+      // worth setting when there's a concrete task to kick off with.
       const args: string[] = [
         '--model',
         model,
-        '--append-system-prompt',
-        systemPrompt,
+        ...(systemPrompt ? ['--append-system-prompt', systemPrompt] : []),
         '--mcp-config',
         mcpPayload,
         '--strict-mcp-config'
@@ -215,11 +220,15 @@ export function buildInteractiveSpec(input: BuildInteractiveSpecInput): Interact
       // `'ask' | 'allow' | 'deny'` ("Expected PermissionActionConfig, got
       // 'a' / 'l' / 'l' / 'o' / 'w'"). Emitting the object form directly
       // avoids that pre-decode step.
+      // Omit `prompt` when the persona's systemPrompt is empty so opencode
+      // falls back to the AGENTS.md that the harness auto-loads from cwd.
+      // Personas should keep systemPrompt sparse — see the claude branch
+      // above for the rationale.
       const agentConfig = {
         agent: {
           [personaId]: {
             model,
-            prompt: systemPrompt,
+            ...(systemPrompt ? { prompt: systemPrompt } : {}),
             mode: 'primary',
             permission: { '*': 'allow' }
           }
