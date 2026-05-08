@@ -214,6 +214,14 @@ test('resolvePersonaByTier propagates persona input declarations', () => {
     selection.agentsMdContent ?? '',
     /\$TARGET_DIR\/<id>\.json/
   );
+  assert.match(
+    selection.agentsMdContent ?? '',
+    /Do not request network escalation only to complete this fallback/
+  );
+  assert.doesNotMatch(
+    selection.agentsMdContent ?? '',
+    /Check prpm\.dev as a secondary registry when skills\.sh has nothing relevant/
+  );
 });
 
 test('personas with no optional fields keep them undefined on the selection', () => {
