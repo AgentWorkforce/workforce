@@ -41,6 +41,84 @@ const exportNameMap = new Map([
   ['relay-orchestrator', 'relayOrchestrator']
 ]);
 
+/**
+ * Inline sidecar markdown content into the generated TS so installed
+ * packages don't need to ship the .md files alongside the persona JSON.
+ *
+ * For each `claudeMd` / `agentsMd` path declared (top-level or per-tier),
+ * read the file at `personasDir/<path>`, swap the path field for a
+ * matching `*Content` field, and bake the body into the generated module.
+ *
+ * Paths are validated to stay inside `personasDir` (no `..`, no absolute
+ * paths). A missing referenced `.md` is a hard fail at generation time.
+ */
+/**
+ * Inline sidecar markdown content into the generated TS so installed
+ * packages don't need to ship .md files alongside the persona JSON.
+ *
+ * Returns either the original raw JSON text (no sidecar fields) or a
+ * re-serialized string with `claudeMd`/`agentsMd` paths replaced by
+ * `*Content` fields. Preserving the raw text in the no-sidecar path
+ * keeps the generated module's diff stable across runs.
+ *
+ * Hard-fails on missing referenced `.md` files at generation time.
+ */
+async function inlineSidecarContent(raw, file) {
+  const spec = JSON.parse(raw);
+  const sidecarTargets = [
+    { pathField: 'claudeMd', contentField: 'claudeMdContent' },
+    { pathField: 'agentsMd', contentField: 'agentsMdContent' }
+  ];
+  const readSidecar = async (relPath, label) => {
+    if (typeof relPath !== 'string' || !relPath.length) {
+      throw new Error(`[generate-personas] ${file}: ${label} must be a non-empty string`);
+    }
+    if (path.isAbsolute(relPath) || relPath.split(/[\\/]+/).includes('..')) {
+      throw new Error(
+        `[generate-personas] ${file}: ${label} must be relative and stay inside /personas (got "${relPath}")`
+      );
+    }
+    if (!relPath.toLowerCase().endsWith('.md')) {
+      // Mirror the runtime/install schema check so bundled personas
+      // can't bypass the `.md` rule by inlining a non-markdown file.
+      throw new Error(`[generate-personas] ${file}: ${label} must end with .md (got "${relPath}")`);
+    }
+    const abs = path.resolve(personasDir, relPath);
+    try {
+      return await fs.readFile(abs, 'utf8');
+    } catch (err) {
+      throw new Error(
+        `[generate-personas] ${file}: missing sidecar ${label} at ${abs}: ${err.message}`
+      );
+    }
+  };
+
+  let touched = false;
+  for (const { pathField, contentField } of sidecarTargets) {
+    if (typeof spec[pathField] === 'string') {
+      spec[contentField] = await readSidecar(spec[pathField], pathField);
+      delete spec[pathField];
+      touched = true;
+    }
+  }
+  if (spec.tiers && typeof spec.tiers === 'object') {
+    for (const [tier, runtime] of Object.entries(spec.tiers)) {
+      if (!runtime || typeof runtime !== 'object') continue;
+      for (const { pathField, contentField } of sidecarTargets) {
+        if (typeof runtime[pathField] === 'string') {
+          runtime[contentField] = await readSidecar(
+            runtime[pathField],
+            `tiers.${tier}.${pathField}`
+          );
+          delete runtime[pathField];
+          touched = true;
+        }
+      }
+    }
+  }
+  return touched ? JSON.stringify(spec, null, 2) : raw.trim();
+}
+
 async function generate() {
   const files = (await fs.readdir(personasDir)).filter((n) => n.endsWith('.json')).sort();
   const lines = [
@@ -55,8 +133,9 @@ async function generate() {
       console.warn(`[generate-personas] skipping unwired persona: ${basename} (no export name mapping)`);
       continue;
     }
-    const json = await fs.readFile(path.join(personasDir, file), 'utf8');
-    lines.push(`export const ${exportName} = ${json.trim()} as const;`);
+    const raw = await fs.readFile(path.join(personasDir, file), 'utf8');
+    const body = await inlineSidecarContent(raw, file);
+    lines.push(`export const ${exportName} = ${body} as const;`);
     lines.push('');
   }
   await fs.writeFile(outputFile, lines.join('\n'));
@@ -71,7 +150,7 @@ if (process.argv.includes('--watch')) {
   let pending;
   const DEBOUNCE_MS = 100;
   const trigger = (filename) => {
-    if (filename && !filename.endsWith('.json')) return;
+    if (filename && !filename.endsWith('.json') && !filename.endsWith('.md')) return;
     clearTimeout(pending);
     pending = setTimeout(async () => {
       const label = filename ? `personas/${filename}` : 'personas/';

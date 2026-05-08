@@ -8,8 +8,10 @@ import {
   personaCatalog,
   resolvePersona,
   resolvePersonaByTier,
+  resolveSidecar,
   usePersona,
-  useSelection
+  useSelection,
+  type PersonaSpec
 } from './index.js';
 
 test('resolves frontend implementer from default routing profile', () => {
@@ -686,4 +688,69 @@ test('usePersona combines selection and grouped install metadata into a frozen c
   assert.ok(Object.isFrozen(context.install));
   assert.ok(Object.isFrozen(context.install.plan));
   assert.ok(Object.isFrozen(context.install.command));
+});
+
+function syntheticSpec(over: Partial<PersonaSpec> = {}): PersonaSpec {
+  const baseRuntime = {
+    harness: 'claude' as const,
+    model: 'claude-3-5-sonnet',
+    systemPrompt: 'base',
+    harnessSettings: { reasoning: 'medium' as const, timeoutSeconds: 300 }
+  };
+  return {
+    id: 's',
+    intent: 'documentation',
+    tags: ['documentation'],
+    description: 'd',
+    skills: [],
+    tiers: { best: baseRuntime, 'best-value': baseRuntime, minimum: baseRuntime },
+    ...over
+  };
+}
+
+test('resolveSidecar: tier path override drops top-level inlined content for the same channel', () => {
+  // Regression for channel mixing: a tier-level claudeMd MUST own the
+  // channel and exclude top-level claudeMdContent, otherwise downstream
+  // selection (which prefers Content) silently discards the override.
+  const spec = syntheticSpec({
+    claudeMdContent: '# top-level inlined\n',
+    claudeMdMode: 'overwrite',
+    tiers: {
+      best: {
+        ...syntheticSpec().tiers.best,
+        claudeMd: '/abs/persona.md'
+      },
+      'best-value': syntheticSpec().tiers['best-value'],
+      minimum: syntheticSpec().tiers.minimum
+    }
+  });
+  const resolved = resolveSidecar(spec, 'best');
+  assert.equal(resolved.claudeMd, '/abs/persona.md');
+  assert.equal(resolved.claudeMdContent, undefined);
+  // Mode still falls back to top-level even though path/content didn't.
+  assert.equal(resolved.claudeMdMode, 'overwrite');
+});
+
+test('resolveSidecar: mode cascades independently of path', () => {
+  // Top-level claudeMdMode overrides default, tier inherits the path.
+  const spec = syntheticSpec({
+    claudeMd: '/abs/top.md',
+    claudeMdMode: 'extend'
+  });
+  const resolved = resolveSidecar(spec, 'best');
+  assert.equal(resolved.claudeMd, '/abs/top.md');
+  assert.equal(resolved.claudeMdMode, 'extend');
+});
+
+test('resolvePersona populates sidecar selection fields from the catalog', () => {
+  // Built-in personas don't ship sidecars today, so the resolved selection
+  // has no sidecar fields — but the helper must at least never throw and
+  // must omit the optional fields cleanly. This is the contract that lets
+  // a future built-in with claudeMd flow through usePersona without a
+  // separate resolveSidecar call.
+  const sel = resolvePersona('documentation');
+  assert.equal(sel.claudeMd, undefined);
+  assert.equal(sel.claudeMdContent, undefined);
+  assert.equal(sel.claudeMdMode, undefined);
+  assert.equal(sel.agentsMd, undefined);
 });

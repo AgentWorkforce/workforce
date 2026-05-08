@@ -19,6 +19,7 @@ import {
   PERSONA_TAGS,
   PERSONA_TIERS,
   personaCatalog,
+  resolveSidecar,
   routingProfiles,
   useSelection,
   type Harness,
@@ -27,7 +28,8 @@ import {
   type PersonaSelection,
   type PersonaSpec,
   type PersonaTag,
-  type PersonaTier
+  type PersonaTier,
+  type SidecarMdMode
 } from '@agentworkforce/workload-router';
 import {
   buildInteractiveSpec,
@@ -240,6 +242,7 @@ function buildSelection(spec: PersonaSpec, tier: PersonaTier, kind: 'repo' | 'lo
     ...rawRuntime,
     systemPrompt: resolveSystemPromptPlaceholders(rawRuntime.systemPrompt, rawRuntime.harness)
   };
+  const sidecar = resolveSidecar(spec, tier);
   return {
     personaId: spec.id,
     tier,
@@ -250,7 +253,17 @@ function buildSelection(spec: PersonaSpec, tier: PersonaTier, kind: 'repo' | 'lo
     ...(spec.env ? { env: spec.env } : {}),
     ...(spec.mcpServers ? { mcpServers: spec.mcpServers } : {}),
     ...(spec.permissions ? { permissions: spec.permissions } : {}),
-    ...(spec.mount ? { mount: spec.mount } : {})
+    ...(spec.mount ? { mount: spec.mount } : {}),
+    ...(sidecar.claudeMd ? { claudeMd: sidecar.claudeMd } : {}),
+    ...(sidecar.claudeMdContent ? { claudeMdContent: sidecar.claudeMdContent } : {}),
+    ...(sidecar.claudeMd || sidecar.claudeMdContent
+      ? { claudeMdMode: sidecar.claudeMdMode }
+      : {}),
+    ...(sidecar.agentsMd ? { agentsMd: sidecar.agentsMd } : {}),
+    ...(sidecar.agentsMdContent ? { agentsMdContent: sidecar.agentsMdContent } : {}),
+    ...(sidecar.agentsMd || sidecar.agentsMdContent
+      ? { agentsMdMode: sidecar.agentsMdMode }
+      : {})
   };
 }
 
@@ -431,7 +444,12 @@ export const CLEAN_IGNORED_PATTERNS = [
   'CLAUDE.md',
   'CLAUDE.local.md',
   '.claude',
-  '.mcp.json'
+  '.mcp.json',
+  // Per-persona AGENTS.md sidecars get materialized into the mount when
+  // running under opencode; without this the user's real-cwd AGENTS.md
+  // would copy in (masking the persona content) and writes from
+  // onBeforeLaunch would sync back out.
+  'AGENTS.md'
 ] as const;
 
 /**
@@ -456,7 +474,11 @@ export const SKILL_INSTALL_IGNORED_PATTERNS = [
   '.skills',
   // provider lockfiles written at the repo root
   'prpm.lock',
-  'skills-lock.json'
+  'skills-lock.json',
+  // Per-persona AGENTS.md sidecars (opencode harness) get materialized
+  // into the mount; hide so the real-cwd AGENTS.md isn't copied in and
+  // the persona-written copy doesn't sync back out.
+  'AGENTS.md'
 ] as const;
 
 export interface RelayfileMountPatterns {
@@ -571,6 +593,113 @@ export function configureGitForMount(mountDir: string, patterns: readonly string
 }
 
 /**
+ * Persona-supplied sidecar markdown materialized into a sandbox mount.
+ * Pure data carrier — `runInteractive` translates it into the on-disk
+ * write inside `onBeforeLaunch` (mount path) and warns/skips when the
+ * harness has no mount (codex / `--install-in-repo`).
+ */
+export interface ResolvedSidecar {
+  /** Filename inside the mount: `CLAUDE.md` (claude) or `AGENTS.md` (opencode). */
+  mountFile: 'CLAUDE.md' | 'AGENTS.md';
+  /** Persona-author content. Already inlined for built-ins; read from disk for local. */
+  personaContent: string;
+  mode: SidecarMdMode;
+}
+
+/**
+ * Resolve the sidecar for a given selection + harness, returning the
+ * persona-author content the runtime should materialize into the mount.
+ * Returns `{}` when no sidecar applies (no path/content set, or harness
+ * doesn't support sidecar files at all). Read errors surface as a warning
+ * string so the caller can drop the sidecar gracefully rather than
+ * failing the whole session.
+ */
+export function loadSidecarForSelection(
+  selection: PersonaSelection
+): { sidecar?: ResolvedSidecar; warning?: string } {
+  const harness = selection.runtime.harness;
+  if (harness !== 'claude' && harness !== 'opencode') return {};
+  if (harness === 'claude') {
+    if (selection.claudeMdContent) {
+      return {
+        sidecar: {
+          mountFile: 'CLAUDE.md',
+          personaContent: selection.claudeMdContent,
+          mode: selection.claudeMdMode ?? 'overwrite'
+        }
+      };
+    }
+    if (selection.claudeMd) {
+      try {
+        const content = readFileSync(selection.claudeMd, 'utf8');
+        return {
+          sidecar: {
+            mountFile: 'CLAUDE.md',
+            personaContent: content,
+            mode: selection.claudeMdMode ?? 'overwrite'
+          }
+        };
+      } catch (err) {
+        return { warning: `claudeMd: could not read ${selection.claudeMd}: ${(err as Error).message}` };
+      }
+    }
+    return {};
+  }
+  if (selection.agentsMdContent) {
+    return {
+      sidecar: {
+        mountFile: 'AGENTS.md',
+        personaContent: selection.agentsMdContent,
+        mode: selection.agentsMdMode ?? 'overwrite'
+      }
+    };
+  }
+  if (selection.agentsMd) {
+    try {
+      const content = readFileSync(selection.agentsMd, 'utf8');
+      return {
+        sidecar: {
+          mountFile: 'AGENTS.md',
+          personaContent: content,
+          mode: selection.agentsMdMode ?? 'overwrite'
+        }
+      };
+    } catch (err) {
+      return { warning: `agentsMd: could not read ${selection.agentsMd}: ${(err as Error).message}` };
+    }
+  }
+  return {};
+}
+
+/**
+ * Compute the bytes to write into the mount for a sidecar. In `extend`
+ * mode, prepends the user's real-cwd file (if any) joined to the persona
+ * content with `\n\n---\n\n`. Pure — exposed for unit tests.
+ */
+export function buildSidecarBody(
+  sidecar: ResolvedSidecar,
+  realCwdDir: string
+): string {
+  if (sidecar.mode === 'extend') {
+    const realPath = join(realCwdDir, sidecar.mountFile);
+    try {
+      const realContent = readFileSync(realPath, 'utf8');
+      return `${realContent}\n\n---\n\n${sidecar.personaContent}`;
+    } catch (err) {
+      // Only "missing path" errors degrade to overwrite. Real I/O
+      // problems (EACCES, EISDIR, …) propagate so callers see them
+      // instead of silently dropping the user's CLAUDE.md/AGENTS.md.
+      const code = (err as NodeJS.ErrnoException).code;
+      if (code === 'ENOENT' || code === 'ENOTDIR') {
+        return sidecar.personaContent;
+      }
+      throw err;
+    }
+  }
+  return sidecar.personaContent;
+}
+
+/**
  * Decide whether to run the interactive session inside a
  * `@relayfile/local-mount` sandbox.
  *
@@ -622,6 +751,23 @@ async function runInteractive(
     runtime.harness,
     options.installInRepo === true
   ).useClean;
+  // Per-persona CLAUDE.md / AGENTS.md: load the author content if any. The
+  // file is materialized into the mount inside onBeforeLaunch (claude/
+  // opencode default). Without a mount (codex, --install-in-repo) we
+  // skip-and-warn — writing into the real cwd would pollute the user's
+  // repo and is explicitly out of scope.
+  const sidecarLookup = loadSidecarForSelection(effectiveSelection);
+  if (sidecarLookup.warning) {
+    process.stderr.write(`warning: ${sidecarLookup.warning}\n`);
+  }
+  const resolvedSidecar = useClean ? sidecarLookup.sidecar : undefined;
+  if (sidecarLookup.sidecar && !useClean) {
+    process.stderr.write(
+      `warning: persona declares ${sidecarLookup.sidecar.mountFile} but no sandbox mount is available (` +
+        `${runtime.harness === 'codex' ? 'codex harness has no mount' : '--install-in-repo disengages the mount'})` +
+        `; skipping sidecar materialization to avoid writing into your repo.\n`
+    );
+  }
   // A session dir is needed whenever we either (a) stage skills out-of-repo
   // via claude's installRoot, or (b) open a mount. Both engage for claude/
   // opencode by default; --install-in-repo disengages both.
@@ -883,6 +1029,10 @@ async function runInteractive(
             // paths, and writeFileSync would otherwise throw ENOENT.
             mkdirSync(dirname(target), { recursive: true });
             writeFileSync(target, file.contents, 'utf8');
+          }
+          if (resolvedSidecar) {
+            const body = buildSidecarBody(resolvedSidecar, process.cwd());
+            writeFileSync(join(dir, resolvedSidecar.mountFile), body, 'utf8');
           }
         }
       });

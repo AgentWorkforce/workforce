@@ -1,4 +1,4 @@
-import { existsSync, mkdirSync, readFileSync, readdirSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, readFileSync, readdirSync, statSync, writeFileSync } from 'node:fs';
 import { homedir } from 'node:os';
 import { dirname, isAbsolute, join, resolve as resolvePath } from 'node:path';
 
@@ -8,6 +8,7 @@ import {
   personaCatalog,
   PERSONA_TAGS,
   PERSONA_TIERS,
+  SIDECAR_MD_MODES,
   type McpServerSpec,
   type PersonaIntent,
   type PersonaInputSpec,
@@ -16,7 +17,8 @@ import {
   type PersonaRuntime,
   type PersonaSpec,
   type PersonaTag,
-  type PersonaTier
+  type PersonaTier,
+  type SidecarMdMode
 } from '@agentworkforce/workload-router';
 
 /**
@@ -60,6 +62,17 @@ export interface LocalPersonaOverride {
   systemPrompt?: string;
   /** Per-tier overrides. If a tier is set here, it replaces the inherited tier wholesale. */
   tiers?: Partial<Record<PersonaTier, Partial<PersonaRuntime>>>;
+  /**
+   * Path to a `CLAUDE.md` sidecar, relative to this JSON file's directory.
+   * The loader stats the file and resolves it to an absolute path on the
+   * merged spec; missing files surface as load warnings rather than throws.
+   */
+  claudeMd?: string;
+  claudeMdMode?: SidecarMdMode;
+  agentsMd?: string;
+  agentsMdMode?: SidecarMdMode;
+  /** @internal — directory of the JSON file that declared this override. */
+  __sourceDir?: string;
 }
 
 export type PersonaSource = string;
@@ -291,6 +304,7 @@ function readLayerDir(
     try {
       const raw = readFileSync(path, 'utf8');
       const parsed = parseOverride(JSON.parse(raw), `[${layer.source}] ${file}`);
+      parsed.__sourceDir = dir;
       if (out.has(parsed.id)) {
         warnings.push(`[${layer.source}] ${file}: duplicate id "${parsed.id}" within layer; skipping.`);
         continue;
@@ -305,6 +319,38 @@ function readLayerDir(
 
 function isPlainObject(value: unknown): value is Record<string, unknown> {
   return typeof value === 'object' && value !== null && !Array.isArray(value);
+}
+
+/**
+ * Sidecar path validation shared by local overrides and standalone specs.
+ * Mirrors {@link assertSafeRelativePath} but adds the `.md` suffix
+ * requirement called out in the schema. Throws on absolute paths,
+ * `..` segments, empty strings, or non-`.md` extensions.
+ */
+function assertSidecarPath(value: unknown, context: string): void {
+  if (typeof value !== 'string' || !value.trim()) {
+    throw new Error(`${context} must be a non-empty string`);
+  }
+  if (
+    value.startsWith('/') ||
+    value.startsWith('\\') || // covers `\persona.md` and `\\server\share\…` UNC
+    /^[A-Za-z]:/.test(value) // covers `C:\persona.md` and drive-relative `C:persona.md`
+  ) {
+    throw new Error(`${context} must be a relative path; got absolute "${value}"`);
+  }
+  const segments = value.split(/[\\/]+/);
+  if (segments.some((s) => s === '..')) {
+    throw new Error(`${context} must not contain ".." segments`);
+  }
+  if (!value.toLowerCase().endsWith('.md')) {
+    throw new Error(`${context} must end with .md`);
+  }
+}
+
+function assertSidecarMode(value: unknown, context: string): void {
+  if (!SIDECAR_MD_MODES.includes(value as SidecarMdMode)) {
+    throw new Error(`${context} must be one of: ${SIDECAR_MD_MODES.join(', ')}`);
+  }
 }
 
 function parseOverride(value: unknown, context: string): LocalPersonaOverride {
@@ -353,6 +399,13 @@ function parseOverride(value: unknown, context: string): LocalPersonaOverride {
   assertPermissionsShape(raw.permissions, `${context}.permissions`);
   assertTiersShape(raw.tiers, `${context}.tiers`);
 
+  if (raw.claudeMd !== undefined) assertSidecarPath(raw.claudeMd, `${context}.claudeMd`);
+  if (raw.agentsMd !== undefined) assertSidecarPath(raw.agentsMd, `${context}.agentsMd`);
+  // Mode is allowed without a same-layer path so an overlay can flip
+  // `extend` ↔ `overwrite` while inheriting the path from a lower layer.
+  if (raw.claudeMdMode !== undefined) assertSidecarMode(raw.claudeMdMode, `${context}.claudeMdMode`);
+  if (raw.agentsMdMode !== undefined) assertSidecarMode(raw.agentsMdMode, `${context}.agentsMdMode`);
+
   return {
     id: raw.id,
     extends: raw.extends as string | undefined,
@@ -366,7 +419,11 @@ function parseOverride(value: unknown, context: string): LocalPersonaOverride {
     mount: raw.mount as LocalPersonaOverride['mount'],
     permissions: raw.permissions as LocalPersonaOverride['permissions'],
     systemPrompt: raw.systemPrompt as string | undefined,
-    tiers: raw.tiers as LocalPersonaOverride['tiers']
+    tiers: raw.tiers as LocalPersonaOverride['tiers'],
+    ...(typeof raw.claudeMd === 'string' ? { claudeMd: raw.claudeMd } : {}),
+    ...(raw.claudeMdMode ? { claudeMdMode: raw.claudeMdMode as SidecarMdMode } : {}),
+    ...(typeof raw.agentsMd === 'string' ? { agentsMd: raw.agentsMd } : {}),
+    ...(raw.agentsMdMode ? { agentsMdMode: raw.agentsMdMode as SidecarMdMode } : {})
   };
 }
 
@@ -518,6 +575,12 @@ function assertTiersShape(value: unknown, context: string): void {
     if (runtime.harnessSettings !== undefined && !isPlainObject(runtime.harnessSettings)) {
       throw new Error(`${path}.harnessSettings must be an object`);
     }
+    if (runtime.claudeMd !== undefined) assertSidecarPath(runtime.claudeMd, `${path}.claudeMd`);
+    if (runtime.agentsMd !== undefined) assertSidecarPath(runtime.agentsMd, `${path}.agentsMd`);
+    // Tier-level mode without a tier-level path is allowed: it overrides
+    // top-level mode for this tier while inheriting the inherited path.
+    if (runtime.claudeMdMode !== undefined) assertSidecarMode(runtime.claudeMdMode, `${path}.claudeMdMode`);
+    if (runtime.agentsMdMode !== undefined) assertSidecarMode(runtime.agentsMdMode, `${path}.agentsMdMode`);
   }
 }
 
@@ -586,7 +649,8 @@ function assertStandaloneRuntime(
 }
 
 function standaloneSpecFromOverride(
-  override: LocalPersonaOverride & { intent: PersonaIntent }
+  override: LocalPersonaOverride & { intent: PersonaIntent },
+  sidecarWarnings: string[] = []
 ): PersonaSpec {
   const tiers = {} as Record<PersonaTier, PersonaRuntime>;
   const rawTiers = requireStandaloneField(
@@ -594,10 +658,32 @@ function standaloneSpecFromOverride(
     `standalone persona "${override.id}".tiers`
   );
   for (const tier of PERSONA_TIERS) {
-    tiers[tier] = assertStandaloneRuntime(
+    const runtime = assertStandaloneRuntime(
       rawTiers[tier],
       `standalone persona "${override.id}".tiers.${tier}`
     );
+    const tierOverride = rawTiers[tier];
+    if (tierOverride?.claudeMd !== undefined) {
+      const { abs, warning } = resolveSidecarPath(
+        tierOverride.claudeMd,
+        override.__sourceDir,
+        `[${override.id}].tiers.${tier}.claudeMd`
+      );
+      if (warning) sidecarWarnings.push(warning);
+      if (abs) runtime.claudeMd = abs;
+    }
+    if (tierOverride?.agentsMd !== undefined) {
+      const { abs, warning } = resolveSidecarPath(
+        tierOverride.agentsMd,
+        override.__sourceDir,
+        `[${override.id}].tiers.${tier}.agentsMd`
+      );
+      if (warning) sidecarWarnings.push(warning);
+      if (abs) runtime.agentsMd = abs;
+    }
+    if (tierOverride?.claudeMdMode) runtime.claudeMdMode = tierOverride.claudeMdMode;
+    if (tierOverride?.agentsMdMode) runtime.agentsMdMode = tierOverride.agentsMdMode;
+    tiers[tier] = runtime;
   }
 
   const inputs = override.inputs;
@@ -605,6 +691,28 @@ function standaloneSpecFromOverride(
   const mcpServers = override.mcpServers;
   const mount = override.mount;
   const permissions = override.permissions;
+
+  let claudeMd: string | undefined;
+  if (override.claudeMd !== undefined) {
+    const { abs, warning } = resolveSidecarPath(
+      override.claudeMd,
+      override.__sourceDir,
+      `[${override.id}].claudeMd`
+    );
+    if (warning) sidecarWarnings.push(warning);
+    claudeMd = abs;
+  }
+  let agentsMd: string | undefined;
+  if (override.agentsMd !== undefined) {
+    const { abs, warning } = resolveSidecarPath(
+      override.agentsMd,
+      override.__sourceDir,
+      `[${override.id}].agentsMd`
+    );
+    if (warning) sidecarWarnings.push(warning);
+    agentsMd = abs;
+  }
+
   return {
     id: override.id,
     intent: override.intent,
@@ -622,7 +730,11 @@ function standaloneSpecFromOverride(
     ...(env ? { env } : {}),
     ...(mcpServers ? { mcpServers } : {}),
     ...(mount ? { mount } : {}),
-    ...(permissions ? { permissions } : {})
+    ...(permissions ? { permissions } : {}),
+    ...(claudeMd ? { claudeMd } : {}),
+    ...(override.claudeMdMode ? { claudeMdMode: override.claudeMdMode } : {}),
+    ...(agentsMd ? { agentsMd } : {}),
+    ...(override.agentsMdMode ? { agentsMdMode: override.agentsMdMode } : {})
   };
 }
 
@@ -636,13 +748,14 @@ function findInLowerLayers(
   startLayerIdx: number,
   layers: readonly SourceLayer[],
   overrides: Map<string, Map<string, LocalPersonaOverride>>,
-  resolving: Set<string>
+  resolving: Set<string>,
+  sidecarWarnings: string[]
 ): PersonaSpec | undefined {
   for (let i = startLayerIdx; i < layers.length; i++) {
     const layer = layers[i];
     const layerOverrides = overrides.get(layer.key);
     if (layerOverrides?.has(key)) {
-      return resolveInLayer(key, i, layers, overrides, resolving);
+      return resolveInLayer(key, i, layers, overrides, resolving, sidecarWarnings);
     }
   }
   return findInLibrary(key);
@@ -653,7 +766,8 @@ function resolveInLayer(
   layerIdx: number,
   layers: readonly SourceLayer[],
   overrides: Map<string, Map<string, LocalPersonaOverride>>,
-  resolving: Set<string>
+  resolving: Set<string>,
+  sidecarWarnings: string[]
 ): PersonaSpec {
   const layer = layers[layerIdx];
   const key = `${layer.key}:${id}`;
@@ -667,10 +781,10 @@ function resolveInLayer(
       throw new Error(`internal: resolveInLayer called for missing ${key}`);
     }
     if (isStandaloneOverride(override)) {
-      return standaloneSpecFromOverride(override);
+      return standaloneSpecFromOverride(override, sidecarWarnings);
     }
     const baseKey = override.extends ?? override.id;
-    const base = findInLowerLayers(baseKey, layerIdx + 1, layers, overrides, resolving);
+    const base = findInLowerLayers(baseKey, layerIdx + 1, layers, overrides, resolving, sidecarWarnings);
     if (!base) {
       const lowerLayers = [
         ...layers.slice(layerIdx + 1).map((lower) => lower.source),
@@ -681,13 +795,52 @@ function resolveInLayer(
         : `no lower-layer persona with id "${override.id}" to implicitly inherit from; add extends or define the persona in a lower layer`;
       throw new Error(hint);
     }
-    return mergeOverride(base, override);
+    return mergeOverride(base, override, sidecarWarnings);
   } finally {
     resolving.delete(key);
   }
 }
 
-function mergeOverride(base: PersonaSpec, override: LocalPersonaOverride): PersonaSpec {
+/**
+ * Resolve a sidecar markdown path declared on `override` against the
+ * directory of the JSON file that declared it. Returns the absolute path
+ * along with any warnings about missing files; missing-file is non-fatal
+ * (the field is dropped from the resolved spec) so a developer iterating
+ * locally doesn't get blocked by a typo.
+ */
+function resolveSidecarPath(
+  relPath: string | undefined,
+  sourceDir: string | undefined,
+  label: string
+): { abs?: string; warning?: string } {
+  if (!relPath) return {};
+  if (!sourceDir) {
+    return { warning: `${label}: cannot resolve "${relPath}" without a source directory` };
+  }
+  const abs = resolvePath(sourceDir, relPath);
+  let stat;
+  try {
+    stat = statSync(abs);
+  } catch (err) {
+    const e = err as NodeJS.ErrnoException;
+    if (e.code === 'ENOENT' || e.code === 'ENOTDIR') {
+      return { warning: `${label}: sidecar file not found at ${abs}` };
+    }
+    // Surface real I/O failures (permissions, etc.) — silently treating
+    // an EACCES as "missing" hides config bugs from developers.
+    return { warning: `${label}: sidecar at ${abs} is not readable: ${e.message}` };
+  }
+  if (!stat.isFile()) {
+    return { warning: `${label}: sidecar at ${abs} is not a file` };
+  }
+  return { abs };
+}
+
+function mergeOverride(
+  base: PersonaSpec,
+  override: LocalPersonaOverride,
+  sidecarWarnings: string[] = []
+): PersonaSpec {
   const tiers = {} as Record<PersonaTier, PersonaRuntime>;
   for (const tier of PERSONA_TIERS) {
     const baseRuntime = base.tiers[tier];
@@ -702,6 +855,32 @@ function mergeOverride(base: PersonaSpec, override: LocalPersonaOverride): Perso
           }
         }
       : baseRuntime;
+    if (tierOverride?.claudeMd !== undefined) {
+      const { abs, warning } = resolveSidecarPath(
+        tierOverride.claudeMd,
+        override.__sourceDir,
+        `[${override.id}].tiers.${tier}.claudeMd`
+      );
+      if (warning) sidecarWarnings.push(warning);
+      // Override owns the channel — clear inherited content so the override
+      // path isn't masked by base.claudeMdContent in downstream selection.
+      merged = { ...merged };
+      delete merged.claudeMdContent;
+      if (abs) merged.claudeMd = abs;
+      else delete merged.claudeMd;
+    }
+    if (tierOverride?.agentsMd !== undefined) {
+      const { abs, warning } = resolveSidecarPath(
+        tierOverride.agentsMd,
+        override.__sourceDir,
+        `[${override.id}].tiers.${tier}.agentsMd`
+      );
+      if (warning) sidecarWarnings.push(warning);
+      merged = { ...merged };
+      delete merged.agentsMdContent;
+      if (abs) merged.agentsMd = abs;
+      else delete merged.agentsMd;
+    }
     if (override.systemPrompt && !tierOverride?.systemPrompt) {
       merged = { ...merged, systemPrompt: override.systemPrompt };
     }
@@ -723,6 +902,37 @@ function mergeOverride(base: PersonaSpec, override: LocalPersonaOverride): Perso
   const mount = mergeMount(base.mount, override.mount);
   const permissions = mergePermissions(base.permissions, override.permissions);
 
+  // When the override sets a new path, the override owns the channel —
+  // drop inherited `*Content` so the override path isn't shadowed by an
+  // inlined built-in body. When the override leaves the path alone, the
+  // inherited content (if any) stays.
+  let claudeMd: string | undefined = base.claudeMd;
+  let claudeMdContent: string | undefined = base.claudeMdContent;
+  if (override.claudeMd !== undefined) {
+    const { abs, warning } = resolveSidecarPath(
+      override.claudeMd,
+      override.__sourceDir,
+      `[${override.id}].claudeMd`
+    );
+    if (warning) sidecarWarnings.push(warning);
+    claudeMd = abs;
+    claudeMdContent = undefined;
+  }
+  let agentsMd: string | undefined = base.agentsMd;
+  let agentsMdContent: string | undefined = base.agentsMdContent;
+  if (override.agentsMd !== undefined) {
+    const { abs, warning } = resolveSidecarPath(
+      override.agentsMd,
+      override.__sourceDir,
+      `[${override.id}].agentsMd`
+    );
+    if (warning) sidecarWarnings.push(warning);
+    agentsMd = abs;
+    agentsMdContent = undefined;
+  }
+  const claudeMdMode = override.claudeMdMode ?? base.claudeMdMode;
+  const agentsMdMode = override.agentsMdMode ?? base.agentsMdMode;
+
   return {
     id: override.id,
     intent: base.intent,
@@ -734,9 +944,27 @@ function mergeOverride(base: PersonaSpec, override: LocalPersonaOverride): Perso
     ...(env ? { env } : {}),
     ...(mcpServers ? { mcpServers } : {}),
     ...(mount ? { mount } : {}),
-    ...(permissions ? { permissions } : {})
+    ...(permissions ? { permissions } : {}),
+    ...(claudeMd ? { claudeMd } : {}),
+    ...(claudeMdMode ? { claudeMdMode } : {}),
+    ...(agentsMd ? { agentsMd } : {}),
+    ...(agentsMdMode ? { agentsMdMode } : {}),
+    ...(claudeMdContent ? { claudeMdContent } : {}),
+    ...(agentsMdContent ? { agentsMdContent } : {})
   };
 }
+
+/**
+ * Test-only seam. Built-in personas are the only specs that can carry
+ * `claudeMdContent` / `agentsMdContent` (the catalog generator inlines
+ * sibling `.md` files at build time), and none ship sidecars today —
+ * so the file-based loader path can't be used to produce a `base` with
+ * inherited content. This export lets regression tests construct that
+ * scenario directly.
+ *
+ * @internal
+ */
+export const __mergeOverrideForTests = mergeOverride;
 
 function mergeMount(
   base: PersonaMount | undefined,
@@ -800,10 +1028,14 @@ export function loadLocalPersonas(options: LoadOptions = {}): LoadedLocalPersona
     if (!layerOverrides) continue;
     for (const id of layerOverrides.keys()) {
       if (byId.has(id)) continue; // higher-layer already won
+      const sidecarWarnings: string[] = [];
       try {
-        const resolved = resolveInLayer(id, i, layers, overrides, new Set());
+        const resolved = resolveInLayer(id, i, layers, overrides, new Set(), sidecarWarnings);
         byId.set(id, resolved);
         sources.set(id, layer.source);
+        for (const warning of sidecarWarnings) {
+          warnings.push(`[${layer.source}] ${warning}`);
+        }
       } catch (err) {
         warnings.push(`[${layer.source}] ${id}: ${(err as Error).message}`);
       }
