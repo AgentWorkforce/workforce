@@ -511,6 +511,116 @@ test('standalone local personas accept arbitrary intent names', () => {
   });
 });
 
+test('standalone local personas accept defaultTier and round-trip the value', () => {
+  withLayers(({ cwd, homeDir }) => {
+    writeJson(join(homeDir, 'nextjs-web-steward.json'), {
+      id: 'nextjs-web-steward',
+      intent: 'nextjs-web-steward',
+      tags: ['implementation'],
+      description: 'Stewards Next.js web surfaces.',
+      defaultTier: 'best',
+      tiers: {
+        best: {
+          harness: 'codex',
+          model: 'openai-codex/gpt-5.3-codex',
+          systemPrompt: 'Implement Next.js UI work carefully.',
+          harnessSettings: { reasoning: 'high', timeoutSeconds: 30 }
+        },
+        'best-value': {
+          harness: 'opencode',
+          model: 'opencode/gpt-5-nano',
+          systemPrompt: 'Implement Next.js UI work carefully.',
+          harnessSettings: { reasoning: 'medium', timeoutSeconds: 30 }
+        },
+        minimum: {
+          harness: 'opencode',
+          model: 'opencode/minimax-m2.5-free',
+          systemPrompt: 'Implement Next.js UI work carefully.',
+          harnessSettings: { reasoning: 'low', timeoutSeconds: 30 }
+        }
+      }
+    });
+
+    const loaded = loadLocalPersonas({ cwd, homeDir });
+    assert.deepEqual(loaded.warnings, []);
+    const spec = loaded.byId.get('nextjs-web-steward');
+    assert.equal(spec?.defaultTier, 'best');
+  });
+});
+
+test('rejects an invalid defaultTier value with a parse warning', () => {
+  withLayers(({ cwd, homeDir }) => {
+    writeJson(join(homeDir, 'bad-default-tier.json'), {
+      id: 'bad-default-tier',
+      intent: 'nextjs-web-steward',
+      tags: ['implementation'],
+      description: 'Has an invalid defaultTier.',
+      defaultTier: 'gold',
+      tiers: {
+        best: {
+          harness: 'codex',
+          model: 'm',
+          systemPrompt: 'p',
+          harnessSettings: { reasoning: 'high', timeoutSeconds: 30 }
+        },
+        'best-value': {
+          harness: 'opencode',
+          model: 'm',
+          systemPrompt: 'p',
+          harnessSettings: { reasoning: 'medium', timeoutSeconds: 30 }
+        },
+        minimum: {
+          harness: 'opencode',
+          model: 'm',
+          systemPrompt: 'p',
+          harnessSettings: { reasoning: 'low', timeoutSeconds: 30 }
+        }
+      }
+    });
+    const loaded = loadLocalPersonas({ cwd, homeDir });
+    assert.equal(loaded.byId.has('bad-default-tier'), false);
+    assert.match(loaded.warnings.join('\n'), /defaultTier must be one of/);
+  });
+});
+
+test('overlay defaultTier replaces the base value during merge', () => {
+  const base: PersonaSpec = {
+    id: 'b',
+    intent: 'review',
+    tags: ['review'],
+    description: 'Base persona with a defaultTier.',
+    skills: [],
+    defaultTier: 'minimum',
+    tiers: {
+      best: {
+        harness: 'codex',
+        model: 'm',
+        systemPrompt: 'p',
+        harnessSettings: { reasoning: 'high', timeoutSeconds: 30 }
+      },
+      'best-value': {
+        harness: 'opencode',
+        model: 'm',
+        systemPrompt: 'p',
+        harnessSettings: { reasoning: 'medium', timeoutSeconds: 30 }
+      },
+      minimum: {
+        harness: 'opencode',
+        model: 'm',
+        systemPrompt: 'p',
+        harnessSettings: { reasoning: 'low', timeoutSeconds: 30 }
+      }
+    }
+  };
+  const override: LocalPersonaOverride = { id: 'b', defaultTier: 'best' };
+  const merged = __mergeOverrideForTests(base, override);
+  assert.equal(merged.defaultTier, 'best');
+
+  const inheritOverride: LocalPersonaOverride = { id: 'b' };
+  const inherited = __mergeOverrideForTests(base, inheritOverride);
+  assert.equal(inherited.defaultTier, 'minimum');
+});
+
 test('standalone local personas can use inlined AGENTS content as prompt fallback', () => {
   withLayers(({ cwd, homeDir }) => {
     writeJson(join(homeDir, 'nextjs-web-steward.json'), {
