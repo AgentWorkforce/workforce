@@ -1273,24 +1273,43 @@ async function runInteractive(
     // seconds on a large repo; without an indicator, exiting the persona via
     // /exit looked like a hang.
     //
-    // SIGINT semantics:
-    //   • While the child is running: Ctrl-C reaches the harness directly via
-    //     the controlling TTY's foreground process group (the child is
-    //     spawned with `stdio: 'inherit'` and inherits the parent's pgid). We
-    //     register a no-op handler here purely to suppress Node's default
-    //     exit-on-SIGINT — forwarding via child.kill('SIGINT') would deliver
-    //     a *second* SIGINT and break harnesses that escalate on repeated
-    //     interrupts (e.g. claude treats 1st = cancel, 2nd = quit).
-    //   • While syncing: 1st press aborts the shutdownSignal (relayfile then
-    //     skips autosync's draining reconcile and returns the partial count
-    //     from the final syncBack). 2nd press hard-exits and rms the session
-    //     dir so no mount is left behind.
+    // SIGINT semantics — three phases:
+    //   • Pre-launch (setup): tear down the setup spinner, rm the session
+    //     dir, and exit(130). We must handle this ourselves because
+    //     registering any 'SIGINT' listener suppresses Node's default
+    //     exit-on-SIGINT, and createMount is now async (relayfile 0.7+) so
+    //     the handler actually fires during mount setup.
+    //   • Child running: Ctrl-C reaches the harness directly via the
+    //     controlling TTY's foreground process group (the child is spawned
+    //     with `stdio: 'inherit'` and inherits the parent's pgid). We
+    //     no-op purely to suppress Node's default exit — forwarding via
+    //     child.kill('SIGINT') would deliver a *second* SIGINT and break
+    //     harnesses that escalate on repeated interrupts (e.g. claude
+    //     treats 1st = cancel, 2nd = quit).
+    //   • Syncing (post-child): 1st press aborts the shutdownSignal
+    //     (relayfile then skips autosync's draining reconcile and returns
+    //     the partial count from the final syncBack). 2nd press hard-exits
+    //     and rms the session dir so no mount is left behind.
     const shutdownController = new AbortController();
     let syncSpinner: Ora | undefined;
     let isSyncing = false;
+    let childSpawned = false;
     let abortPresses = 0;
     const sigintHandler = () => {
-      if (!isSyncing) return;
+      if (!isSyncing) {
+        if (childSpawned) return;
+        // Pre-launch teardown.
+        if (setupSpinner) {
+          setupSpinner.fail('Sandbox mount setup interrupted (Ctrl-C)');
+          setupSpinner = undefined;
+        }
+        try {
+          rmSync(sessionRoot, { recursive: true, force: true });
+        } catch {
+          /* swallow — we're exiting anyway */
+        }
+        process.exit(130);
+      }
       abortPresses += 1;
       if (abortPresses === 1) {
         if (syncSpinner) {
@@ -1369,6 +1388,10 @@ async function runInteractive(
 
       const childEnv = resolvedEnv ? { ...process.env, ...resolvedEnv } : process.env;
       const childCwd = handle.mountDir;
+      // Flip the SIGINT phase flag before spawn so a Ctrl-C arriving during
+      // the child's lifetime is treated as "child has the TTY" (no-op),
+      // not as pre-launch teardown.
+      childSpawned = true;
       exitCode = await new Promise<number>((resolve, reject) => {
         const child = spawn(spec.bin, finalArgs, {
           cwd: childCwd,
