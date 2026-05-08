@@ -6,6 +6,7 @@ import {
   existsSync,
   mkdirSync,
   readFileSync,
+  readSync,
   rmSync,
   statSync,
   writeFileSync
@@ -59,6 +60,7 @@ import {
   type PersonaSource
 } from './local-personas.js';
 import { installPersonas, type PersonaInstallResult } from './persona-install.js';
+import { pickPersona, type PickCandidate, type PickResult } from './persona-picker.js';
 
 const USAGE = `Usage: agentworkforce <command> [args...]
 
@@ -140,6 +142,13 @@ Commands:
                       1-based configurable position.
   harness check       Probe which harnesses (claude, codex, opencode) are
                       installed and runnable on this machine.
+  pick "<task>"       Pick the best-fit persona for a free-text task description
+                      using a cheap LLM call (Claude Haiku via the local
+                      \`claude\` CLI). Prints the matched persona id to stdout
+                      on success. On low confidence, prompts (TTY) to launch
+                      persona-maker with the task as input, or exits non-zero
+                      (non-TTY) with a hint.
+                      Exit codes: 0 match, 2 no match, 3 picker unavailable.
 
 Options:
   -h, --help          Show this help text.
@@ -164,6 +173,8 @@ Examples:
   agentworkforce sources list
   agentworkforce sources add ../my-personas --position 1
   agentworkforce harness check
+  agentworkforce pick "review this PR for security issues"
+  agentworkforce agent "$(agentworkforce pick "fix the flaky test in foo.test.ts")"
 `;
 
 function die(msg: string, withUsage = true): never {
@@ -2038,6 +2049,155 @@ async function runAgentSelector(
   process.exit(code);
 }
 
+/**
+ * Enumerate persona candidates for the picker. Local overrides win over the
+ * built-in catalog when ids collide; the picker only needs the projection
+ * fields ({@link PickCandidate}), not full specs.
+ */
+export function buildPickCandidates(): PickCandidate[] {
+  const byId = new Map<string, PickCandidate>();
+  for (const spec of Object.values(personaCatalog)) {
+    byId.set(spec.id, {
+      id: spec.id,
+      intent: spec.intent,
+      tags: [...spec.tags],
+      description: spec.description
+    });
+  }
+  for (const [id, spec] of local.byId.entries()) {
+    byId.set(id, {
+      id,
+      intent: spec.intent,
+      tags: [...spec.tags],
+      description: spec.description
+    });
+  }
+  return [...byId.values()].sort((a, b) => a.id.localeCompare(b.id));
+}
+
+/**
+ * Synchronous y/n prompt over /dev/tty-equivalent stdin. Default is "no" on
+ * empty input or non-y answer. Used by `pick` when the picker reports
+ * no-match in an interactive session.
+ *
+ * Test seam: callers can inject `read` so the prompt path is exercisable
+ * without a real TTY.
+ */
+export function promptYesNoSync(
+  question: string,
+  opts: {
+    isTTY?: boolean;
+    write?: (chunk: string) => void;
+    read?: () => string | undefined;
+  } = {}
+): boolean {
+  const isTTY = opts.isTTY ?? Boolean(process.stdout.isTTY && process.stdin.isTTY);
+  if (!isTTY) return false;
+  const write = opts.write ?? ((chunk: string) => {
+    process.stderr.write(chunk);
+  });
+  write(question);
+  const answer = opts.read ? opts.read() : readLineFromStdinSync();
+  if (!answer) return false;
+  const normalized = answer.trim().toLowerCase();
+  return normalized === 'y' || normalized === 'yes';
+}
+
+function readLineFromStdinSync(): string | undefined {
+  const buf = Buffer.alloc(256);
+  let line = '';
+  for (;;) {
+    let n: number;
+    try {
+      n = readSync(0, buf, 0, buf.length, null);
+    } catch {
+      return line || undefined;
+    }
+    if (n <= 0) return line || undefined;
+    const chunk = buf.subarray(0, n).toString('utf8');
+    const newlineIdx = chunk.indexOf('\n');
+    if (newlineIdx === -1) {
+      line += chunk;
+      continue;
+    }
+    line += chunk.slice(0, newlineIdx);
+    return line;
+  }
+}
+
+async function runPick(args: readonly string[]): Promise<never> {
+  const positional: string[] = [];
+  for (const arg of args) {
+    if (arg === '-h' || arg === '--help') {
+      process.stdout.write(
+        'Usage: agentworkforce pick "<task description>"\n' +
+          '  Prints the best-fit persona id to stdout. On low confidence, prompts to\n' +
+          '  open persona-maker (TTY) or exits 2 (non-TTY). Exits 3 if `claude` is\n' +
+          '  not installed.\n'
+      );
+      process.exit(0);
+    }
+    positional.push(arg);
+  }
+  if (positional.length === 0) {
+    die('pick: missing task description. Usage: agentworkforce pick "<task>"');
+  }
+  if (positional.length > 1) {
+    die(
+      `pick: expected a single quoted task description, got ${positional.length} arguments. ` +
+        `Did you forget to quote the task? Try: agentworkforce pick "${positional.join(' ')}"`
+    );
+  }
+  const task = positional[0].trim();
+  if (!task) {
+    die('pick: task description is empty.');
+  }
+
+  const candidates = buildPickCandidates();
+  const result: PickResult = pickPersona(task, candidates);
+
+  if (result.kind === 'match') {
+    process.stderr.write(
+      `• picked ${result.personaId} (${result.confidence}): ${result.reason}\n`
+    );
+    process.stdout.write(`${result.personaId}\n`);
+    process.exit(0);
+  }
+
+  if (result.kind === 'picker-unavailable') {
+    process.stderr.write(`pick: ${result.message}\n`);
+    process.exit(3);
+  }
+
+  // no-match
+  process.stderr.write(`pick: no close persona match — ${result.reason}\n`);
+  const wantsCreate = promptYesNoSync(
+    'Open persona-maker to scaffold a new persona for this task? [y/N] '
+  );
+  if (!wantsCreate) {
+    process.stderr.write(
+      'Try: agentworkforce list   # to browse existing personas\n' +
+        '     agentworkforce create  # to author a new persona\n'
+    );
+    process.exit(2);
+  }
+
+  const target = resolveCreateTarget(undefined);
+  ensureCreateTargetDir(target);
+  const inputValues = {
+    ...buildCreateInputValues(target),
+    TASK_DESCRIPTION: task
+  };
+  await runAgentSelector(
+    CREATE_SELECTOR,
+    { installInRepo: false, noLaunchMetadata: false },
+    inputValues
+  );
+  // runAgentSelector terminates via process.exit; this satisfies TS's
+  // reachable-end-point check for the `Promise<never>` return type.
+  process.exit(0);
+}
+
 export async function main(): Promise<void> {
   const argv = process.argv.slice(2);
   const [subcommand, ...rest] = argv;
@@ -2085,6 +2245,10 @@ export async function main(): Promise<void> {
   if (subcommand === 'create') {
     const { flags, selector, inputValues } = parseCreateArgs(rest);
     await runAgentSelector(selector, flags, inputValues);
+  }
+
+  if (subcommand === 'pick') {
+    await runPick(rest);
   }
 
   if (subcommand !== 'agent') {
