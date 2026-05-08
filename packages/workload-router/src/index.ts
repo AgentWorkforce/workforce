@@ -368,7 +368,7 @@ export const HARNESS_SKILL_TARGETS: Record<Harness, HarnessSkillTarget> = {
  * Options for {@link materializeSkills} / {@link materializeSkillsFor}.
  *
  * `installRoot` stages skills under an out-of-repo directory (typically
- * `~/.agent-workforce/sessions/<id>/claude/plugin`) that doubles as a Claude
+ * `~/.agentworkforce/workforce/sessions/<id>/claude/plugin`) that doubles as a Claude
  * Code plugin root. The SDK generates the scaffold (`.claude-plugin/plugin.json`
  * and a `skills` symlink pointing at `.claude/skills/`), prpm installs into
  * `<installRoot>/.claude/skills/<name>/`, and post-run cleanup removes the

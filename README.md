@@ -388,7 +388,7 @@ and passes it via `--plugin-dir`, so the session sees exactly the persona's
 declared skills — and nothing the repo happens to have in `.claude/skills/`.
 
 ```
-~/.agent-workforce/
+~/.agentworkforce/workforce/
 └── sessions/<personaId>-<timestamp>-<rand>/
     └── claude/
         └── plugin/                                ← passed as --plugin-dir
@@ -407,7 +407,7 @@ agentworkforce agent --install-in-repo code-reviewer@best
 ```
 
 V1 scope: claude interactive only. codex and opencode still use the
-repo-relative install path. A content-addressed `~/.agent-workforce/cache/`
+repo-relative install path. A content-addressed `~/.agentworkforce/workforce/cache/`
 layer for reusing installs across sessions is planned but not yet wired up. See
 **[packages/cli/README.md#skill-staging](./packages/cli/README.md#skill-staging)**
 for the full mechanics.
@@ -434,7 +434,7 @@ never mount.
 
 Run `agentworkforce agent <id>@<tier>` for any installed/local persona.
 
-The repo tree is mirrored into `~/.agent-workforce/sessions/<id>/mount/`;
+The repo tree is mirrored into `~/.agentworkforce/workforce/sessions/<id>/mount/`;
 the harness sees the mount as its cwd. Writes inside the mount sync back to
 the real repo on exit unless the path is ignored or read-only by Relayfile
 rules. Ignore and read-only semantics follow gitignore — `.claude` hides
