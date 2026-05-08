@@ -95,18 +95,18 @@ Targets:
 Default target resolution:
 
 1. `--to <target>` wins.
-2. If `<cwd>/.agentworkforce/workforce` exists, use `cwd`.
-3. Else use `defaultCreateTarget` from `~/.agentworkforce/workforce/config.json`.
-4. Else use `user`.
+2. Else use `defaultCreateTarget` from `~/.agentworkforce/workforce/config.json`.
+3. Else use `cwd` (`<cwd>/.agentworkforce/workforce/personas`).
 
-`--save-default` persists the resolved target as `defaultCreateTarget` in the
-source config. This is only consulted when no cwd-local workforce directory is
-present.
+The cwd persona directory is created (`mkdir -p`) when it does not exist, so a
+fresh project can run `agentworkforce create` without any setup. To author
+personas anywhere else, pass `--to <target>` on the command line, or use
+`--save-default` once to persist a different default in the source config.
 
 Examples:
 
 ```sh
-# Create in the project-local persona directory when present, otherwise user dir
+# Create in <cwd>/.agentworkforce/workforce/personas (created if missing)
 agentworkforce create
 
 # Force the user persona directory
@@ -350,7 +350,7 @@ personas work as plain JSON files in the default user location, or from any
 checked-out repo you add as a source directory.
 
 The same config may also carry `defaultCreateTarget`, used by `agentworkforce create`
-when no cwd-local workforce directory exists:
+to override its default of `cwd`:
 
 ```json
 {
@@ -360,9 +360,10 @@ when no cwd-local workforce directory exists:
 ```
 
 Valid `defaultCreateTarget` values are the same values accepted by `create --to`:
-`cwd`, `user`, `dir:n`, `library`, or an explicit path. Use
-`agentworkforce create --to <target> --save-default` to write it without editing
-JSON by hand.
+`cwd`, `user`, `dir:n`, `library`, or an explicit path. When this key is unset,
+`agentworkforce create` writes to `<cwd>/.agentworkforce/workforce/personas`
+(creating it if missing). Use `agentworkforce create --to <target> --save-default`
+to write the override without editing JSON by hand.
 
 `sources add` appends by default. `--position <n>` inserts at the 1-based
 position among configurable directories, so `--position 1` gives that directory

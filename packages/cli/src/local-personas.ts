@@ -117,7 +117,7 @@ export interface LoadOptions {
   configPath?: string;
   /** Full ordered list of configurable persona dirs after cwd and before library. */
   personaDirs?: string[];
-  /** Default target used by `agentworkforce create` when no cwd-local workforce exists. */
+  /** Override target used by `agentworkforce create` when set. Defaults to `cwd`. */
   defaultCreateTarget?: string;
 }
 

@@ -17,6 +17,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Persona source config supports `defaultCreateTarget` for the implicit create target.
 - `--version`/`-v` now prints the CLI package version.
 
+### Changed
+
+- `agentworkforce create` now defaults to writing into
+  `<cwd>/.agentworkforce/workforce/personas` unconditionally, creating the
+  directory if it does not already exist. The previous behavior fell back to
+  the user persona dir when no cwd-local workforce existed; pass
+  `--to <target>` (or set `defaultCreateTarget` in the source config) to author
+  somewhere else.
+
 ## [0.12.0] - 2026-05-08
 
 ### Released

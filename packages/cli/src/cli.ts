@@ -70,10 +70,11 @@ Commands:
                       Flags:
                         --to <target>       Storage target: cwd, user, dir:n,
                                             library, or an explicit path.
-                                            Default: cwd when
-                                            .agentworkforce/workforce exists,
-                                            otherwise config defaultCreateTarget,
-                                            otherwise user.
+                                            Default: cwd
+                                            (<cwd>/.agentworkforce/workforce/personas);
+                                            the directory is created if missing.
+                                            Override via this flag, or pin a
+                                            different default with --save-default.
                         --save-default      Persist --to as defaultCreateTarget in
                                             ~/.agentworkforce/workforce/config.json.
                         --install-in-repo   Same behavior as agent.
@@ -1946,10 +1947,7 @@ interface CreateTarget {
 }
 
 function defaultCreateTargetSelector(): string {
-  if (existsSync(join(process.cwd(), '.agentworkforce', 'workforce'))) {
-    return 'cwd';
-  }
-  return loadPersonaSourceConfig().defaultCreateTarget ?? 'user';
+  return loadPersonaSourceConfig().defaultCreateTarget ?? 'cwd';
 }
 
 function resolveCreateTarget(rawTarget: string | undefined): CreateTarget {
