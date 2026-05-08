@@ -85,9 +85,10 @@ Commands:
                         --no-launch-metadata
                                             Same behavior as agent.
   agent [flags] <persona>[@<tier>]
-                      Run a persona. Tier one of: ${PERSONA_TIERS.join(' | ')}
-                      (default: best-value). Drops into an interactive harness
-                      session.
+                      Run a persona. Tier one of: ${PERSONA_TIERS.join(' | ')}.
+                      With no @<tier>, falls back to the persona's defaultTier
+                      (when set), then best-value. Drops into an interactive
+                      harness session.
 
                       Flags:
                         --install-in-repo   Disengage the sandbox mount and
@@ -308,12 +309,12 @@ function parseSelector(sel: string): ResolvedTarget {
   const key = at === -1 ? sel : sel.slice(0, at);
   const tierRaw = at === -1 ? undefined : sel.slice(at + 1);
   if (!key) die('Missing persona name before "@"');
-  const tier = (tierRaw ?? 'best-value') as PersonaTier;
-  if (tierRaw !== undefined && !PERSONA_TIERS.includes(tier)) {
+  if (tierRaw !== undefined && !PERSONA_TIERS.includes(tierRaw as PersonaTier)) {
     die(`Invalid tier "${tierRaw}". Must be one of: ${PERSONA_TIERS.join(', ')}`);
   }
   const result = resolveSpec(key);
   if ('error' in result) die(result.error, false);
+  const tier = (tierRaw ?? result.defaultTier ?? 'best-value') as PersonaTier;
   const kind = local.byId.has(key) ? 'local' : 'repo';
   if (kind === 'local') {
     return { kind, source: local.sources.get(result.id) ?? 'cwd', spec: result, tier };
@@ -1744,6 +1745,7 @@ interface PersonaListRow {
   tags: PersonaTag[];
   description: string;
   rating: PersonaTier;
+  defaultTier: PersonaTier | undefined;
 }
 
 function collectPersonaRows(): PersonaListRow[] {
@@ -1758,7 +1760,8 @@ function collectPersonaRows(): PersonaListRow[] {
         intent: spec.intent,
         tags: spec.tags,
         description: spec.description,
-        rating: tier
+        rating: tier,
+        defaultTier: spec.defaultTier
       });
     }
   };
@@ -1933,7 +1936,7 @@ function runList(args: readonly string[]): never {
     if (filterTag && !r.tags.includes(filterTag)) return false;
     if (applyRecommended) {
       const rule = (recommendedByIntent as Partial<Record<string, { tier: PersonaTier }>>)[r.intent];
-      if (r.rating !== (rule?.tier ?? 'best-value')) return false;
+      if (r.rating !== (rule?.tier ?? r.defaultTier ?? 'best-value')) return false;
     }
     return true;
   });
@@ -2029,7 +2032,7 @@ function resolveShowTarget(
     tiers = [explicitTier];
   } else {
     const rule = (routingProfiles.default.intents as Partial<Record<string, { tier: PersonaTier }>>)[spec.intent];
-    tiers = [rule?.tier ?? 'best-value'];
+    tiers = [rule?.tier ?? spec.defaultTier ?? 'best-value'];
   }
   return { spec, source, tiers, explicitTier };
 }
@@ -2053,6 +2056,9 @@ function formatPersonaShow(
   lines.push(`INTENT       ${spec.intent}`);
   lines.push(`TAGS         ${spec.tags.length ? spec.tags.join(', ') : '(none)'}`);
   lines.push(`DESCRIPTION  ${spec.description}`);
+  if (spec.defaultTier) {
+    lines.push(`DEFAULT TIER ${spec.defaultTier}`);
+  }
   lines.push(`TIERS SHOWN  ${tiers.join(', ')}${tierNote ? `  (${tierNote})` : ''}`);
 
   lines.push('');

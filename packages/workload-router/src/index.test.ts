@@ -485,6 +485,14 @@ test('resolveSidecar: mode cascades independently of path', () => {
   assert.equal(resolved.claudeMdMode, 'extend');
 });
 
+test('PersonaSpec accepts an optional defaultTier and the built-in catalog leaves it unset', () => {
+  // Surface check on the type and built-in catalog. Local-persona parsing of
+  // defaultTier (with bad-value rejection) is covered in local-personas.test.ts.
+  const spec = syntheticSpec({ defaultTier: 'best' });
+  assert.equal(spec.defaultTier, 'best');
+  assert.equal(personaCatalog['persona-authoring']?.defaultTier, undefined);
+});
+
 test('resolvePersona populates sidecar selection fields from the internal catalog', () => {
   const sel = resolvePersona('persona-authoring');
   assert.equal(sel.claudeMd, undefined);

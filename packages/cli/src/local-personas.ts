@@ -67,6 +67,12 @@ export interface LocalPersonaOverride {
   /** Per-tier overrides. If a tier is set here, it replaces the inherited tier wholesale. */
   tiers?: Partial<Record<PersonaTier, Partial<PersonaRuntime>>>;
   /**
+   * Persona-author's preferred tier when a caller does not request one
+   * explicitly. Mirrors {@link PersonaSpec.defaultTier}; when present in
+   * an override, it replaces the inherited base value.
+   */
+  defaultTier?: PersonaTier;
+  /**
    * Path to a `CLAUDE.md` sidecar, relative to this JSON file's directory.
    * The loader stats the file and resolves it to an absolute path on the
    * merged spec; missing files surface as load warnings rather than throws.
@@ -411,6 +417,12 @@ function parseOverride(value: unknown, context: string): LocalPersonaOverride {
   assertPermissionsShape(raw.permissions, `${context}.permissions`);
   assertTiersShape(raw.tiers, `${context}.tiers`);
 
+  if (raw.defaultTier !== undefined && !PERSONA_TIERS.includes(raw.defaultTier as PersonaTier)) {
+    throw new Error(
+      `${context}.defaultTier must be one of: ${PERSONA_TIERS.join(', ')}`
+    );
+  }
+
   if (raw.claudeMd !== undefined) assertSidecarPath(raw.claudeMd, `${context}.claudeMd`);
   if (raw.agentsMd !== undefined) assertSidecarPath(raw.agentsMd, `${context}.agentsMd`);
   if (raw.claudeMdContent !== undefined) {
@@ -438,6 +450,7 @@ function parseOverride(value: unknown, context: string): LocalPersonaOverride {
     permissions: raw.permissions as LocalPersonaOverride['permissions'],
     systemPrompt: raw.systemPrompt as string | undefined,
     tiers: raw.tiers as LocalPersonaOverride['tiers'],
+    ...(raw.defaultTier !== undefined ? { defaultTier: raw.defaultTier as PersonaTier } : {}),
     ...(typeof raw.claudeMd === 'string' ? { claudeMd: raw.claudeMd } : {}),
     ...(raw.claudeMdMode ? { claudeMdMode: raw.claudeMdMode as SidecarMdMode } : {}),
     ...(typeof raw.agentsMd === 'string' ? { agentsMd: raw.agentsMd } : {}),
@@ -839,6 +852,7 @@ function standaloneSpecFromOverride(
     skills: override.skills ?? [],
     ...(inputs ? { inputs } : {}),
     tiers,
+    ...(override.defaultTier ? { defaultTier: override.defaultTier } : {}),
     ...(env ? { env } : {}),
     ...(mcpServers ? { mcpServers } : {}),
     ...(mount ? { mount } : {}),
@@ -1082,6 +1096,11 @@ function mergeOverride(
     skills: override.skills ?? base.skills,
     ...(inputs ? { inputs } : {}),
     tiers,
+    ...(override.defaultTier
+      ? { defaultTier: override.defaultTier }
+      : base.defaultTier
+        ? { defaultTier: base.defaultTier }
+        : {}),
     ...(env ? { env } : {}),
     ...(mcpServers ? { mcpServers } : {}),
     ...(mount ? { mount } : {}),

@@ -241,6 +241,14 @@ export interface PersonaSpec {
   inputs?: Record<string, PersonaInputSpec>;
   tiers: Record<PersonaTier, PersonaRuntime>;
   /**
+   * Persona-author's preferred tier when a caller does not request one
+   * explicitly. Selectors like `agentworkforce agent <persona>` (no `@<tier>`
+   * suffix) resolve to this value before falling back to `'best-value'`.
+   * Routing-profile rules continue to override this for built-in personas
+   * resolved through {@link resolvePersona}.
+   */
+  defaultTier?: PersonaTier;
+  /**
    * Environment variables injected into the harness child process.
    * Values may be literal strings or `$VAR` references resolved from the
    * caller's environment at spawn time.
@@ -1181,6 +1189,7 @@ function parsePersonaSpec(value: unknown, expectedIntent: PersonaIntent): Person
     tags,
     description,
     tiers,
+    defaultTier,
     skills,
     inputs,
     env,
@@ -1215,6 +1224,16 @@ function parsePersonaSpec(value: unknown, expectedIntent: PersonaIntent): Person
   const parsedTiers = {} as Record<PersonaTier, PersonaRuntime>;
   for (const tier of PERSONA_TIERS) {
     parsedTiers[tier] = parseRuntime(tiers[tier], `persona[${expectedIntent}].tiers.${tier}`);
+  }
+
+  let parsedDefaultTier: PersonaTier | undefined;
+  if (defaultTier !== undefined) {
+    if (!isTier(defaultTier)) {
+      throw new Error(
+        `persona[${expectedIntent}].defaultTier must be one of: ${PERSONA_TIERS.join(', ')}`
+      );
+    }
+    parsedDefaultTier = defaultTier;
   }
 
   const parsedSkills = parseSkills(skills, `persona[${expectedIntent}].skills`);
@@ -1262,6 +1281,7 @@ function parsePersonaSpec(value: unknown, expectedIntent: PersonaIntent): Person
     skills: parsedSkills,
     ...(parsedInputs ? { inputs: parsedInputs } : {}),
     tiers: parsedTiers,
+    ...(parsedDefaultTier ? { defaultTier: parsedDefaultTier } : {}),
     ...(parsedEnv ? { env: parsedEnv } : {}),
     ...(parsedMcpServers ? { mcpServers: parsedMcpServers } : {}),
     ...(parsedPermissions ? { permissions: parsedPermissions } : {}),
