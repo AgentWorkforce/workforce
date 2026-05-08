@@ -642,7 +642,7 @@ export function loadSidecarForSelection(
   selection: PersonaSelection
 ): { sidecar?: ResolvedSidecar; warning?: string } {
   const harness = selection.runtime.harness;
-  if (harness !== 'claude' && harness !== 'opencode') return {};
+  if (harness !== 'claude' && harness !== 'opencode' && harness !== 'codex') return {};
   if (harness === 'claude') {
     if (selection.claudeMdContent) {
       return {
@@ -669,6 +669,10 @@ export function loadSidecarForSelection(
     }
     return {};
   }
+  // opencode and codex both read AGENTS.md from cwd. For codex, the mount
+  // only engages when a sidecar is declared (see decideCleanMode); without
+  // a mount the materialization warning fires. The resolution rule is
+  // identical for both harnesses here.
   if (selection.agentsMdContent) {
     return {
       sidecar: {
@@ -730,16 +734,22 @@ export function buildSidecarBody(
  * - Claude / opencode: mount engages by default. Hides CLAUDE.md / .claude
  *   / .mcp.json (claude) and routes `npx prpm install` / `npx skills add`
  *   writes (both) into the sandbox. Disengage with `--install-in-repo`.
- * - Codex: no sandbox mount support, always runs against the real cwd.
+ * - Codex: runs against the real cwd by default. Engages a mount only when
+ *   the persona declares an AGENTS.md sidecar so we can materialize it
+ *   without overwriting the user's real-cwd AGENTS.md.
  *
  * Pure — no side effects, trivially testable.
  */
 export function decideCleanMode(
   harness: Harness,
-  installInRepo = false
+  installInRepo = false,
+  hasSidecar = false
 ): { useClean: boolean } {
   if (harness === 'claude' || harness === 'opencode') {
     return { useClean: !installInRepo };
+  }
+  if (harness === 'codex') {
+    return { useClean: hasSidecar && !installInRepo };
   }
   return { useClean: false };
 }
@@ -762,12 +772,27 @@ async function runInteractive(
     selection.runtime.systemPrompt,
     inputResolution.values
   );
+  // Render input placeholders ($TARGET_DIR, ${CREATE_MODE}, …) inside the
+  // sidecar Content fields too. Personas that move heavy authoring guidance
+  // out of the systemPrompt and into AGENTS.md / CLAUDE.md still want
+  // their declared inputs interpolated; without this the materialized
+  // sidecar would carry literal `$TARGET_DIR` strings.
+  const renderedClaudeContent =
+    selection.claudeMdContent !== undefined
+      ? renderPersonaInputs(selection.claudeMdContent, inputResolution.values)
+      : undefined;
+  const renderedAgentsContent =
+    selection.agentsMdContent !== undefined
+      ? renderPersonaInputs(selection.agentsMdContent, inputResolution.values)
+      : undefined;
   const effectiveSelection: PersonaSelection = {
     ...selection,
     runtime: {
       ...selection.runtime,
       systemPrompt: renderedSystemPrompt
-    }
+    },
+    ...(renderedClaudeContent !== undefined ? { claudeMdContent: renderedClaudeContent } : {}),
+    ...(renderedAgentsContent !== undefined ? { agentsMdContent: renderedAgentsContent } : {})
   };
   const { runtime, personaId, tier } = effectiveSelection;
   // `installRoot` (out-of-repo skill staging via `--plugin-dir`) is currently
@@ -776,25 +801,25 @@ async function runInteractive(
   // running them inside a @relayfile/local-mount sandbox (see `useClean`
   // below). The --install-in-repo flag forces legacy in-repo installs
   // across the board.
-  const useClean = decideCleanMode(
-    runtime.harness,
-    options.installInRepo === true
-  ).useClean;
   // Per-persona CLAUDE.md / AGENTS.md: load the author content if any. The
-  // file is materialized into the mount inside onBeforeLaunch (claude/
-  // opencode default). Without a mount (codex, --install-in-repo) we
-  // skip-and-warn — writing into the real cwd would pollute the user's
-  // repo and is explicitly out of scope.
+  // file is materialized into the mount inside onBeforeLaunch. The lookup
+  // also drives whether codex engages a mount (see decideCleanMode) — codex
+  // otherwise runs against the real cwd, where we can't safely materialize
+  // a sidecar without overwriting the user's AGENTS.md.
   const sidecarLookup = loadSidecarForSelection(effectiveSelection);
   if (sidecarLookup.warning) {
     process.stderr.write(`warning: ${sidecarLookup.warning}\n`);
   }
+  const useClean = decideCleanMode(
+    runtime.harness,
+    options.installInRepo === true,
+    sidecarLookup.sidecar !== undefined
+  ).useClean;
   const resolvedSidecar = useClean ? sidecarLookup.sidecar : undefined;
   if (sidecarLookup.sidecar && !useClean) {
     process.stderr.write(
-      `warning: persona declares ${sidecarLookup.sidecar.mountFile} but no sandbox mount is available (` +
-        `${runtime.harness === 'codex' ? 'codex harness has no mount' : '--install-in-repo disengages the mount'})` +
-        `; skipping sidecar materialization to avoid writing into your repo.\n`
+      `warning: persona declares ${sidecarLookup.sidecar.mountFile} but no sandbox mount is available ` +
+        `(--install-in-repo disengages the mount); skipping sidecar materialization to avoid writing into your repo.\n`
     );
   }
   // A session dir is needed whenever we either (a) stage skills out-of-repo
