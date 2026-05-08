@@ -144,8 +144,7 @@ test('parseCreateArgs: runs persona-maker and preserves agent flags', () => {
     const { flags, selector, inputValues } = parseCreateArgs([
       '--install-in-repo',
       '--no-launch-metadata',
-      '--to',
-      'user'
+      '--save-in-directory=user'
     ]);
     assert.equal(selector, CREATE_SELECTOR);
     assert.equal(flags.installInRepo, true);
@@ -228,13 +227,30 @@ test('parseCreateArgs: saved defaultCreateTarget overrides the cwd default', () 
   }
 });
 
+test('parseCreateArgs: --save-in-directory accepts a space-separated value', () => {
+  const root = mkdtempSync(join(tmpdir(), 'aw-create-space-'));
+  const prev = process.env.AGENT_WORKFORCE_HOME;
+  process.env.AGENT_WORKFORCE_HOME = join(root, 'home', '.agentworkforce', 'workforce');
+  try {
+    const { inputValues } = parseCreateArgs(['--save-in-directory', 'user']);
+    assert.equal(
+      inputValues.TARGET_DIR,
+      join(root, 'home', '.agentworkforce', 'workforce', 'personas')
+    );
+  } finally {
+    if (prev === undefined) delete process.env.AGENT_WORKFORCE_HOME;
+    else process.env.AGENT_WORKFORCE_HOME = prev;
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
 test('parseCreateArgs: --save-default persists create target in source config', () => {
   const root = mkdtempSync(join(tmpdir(), 'aw-create-default-'));
   const workforceHome = join(root, 'home', '.agentworkforce', 'workforce');
   const prev = process.env.AGENT_WORKFORCE_HOME;
   process.env.AGENT_WORKFORCE_HOME = workforceHome;
   try {
-    parseCreateArgs(['--to', 'user', '--save-default']);
+    parseCreateArgs(['--save-in-directory=user', '--save-default']);
     const parsed = JSON.parse(readFileSync(join(workforceHome, 'config.json'), 'utf8'));
     assert.equal(parsed.defaultCreateTarget, 'user');
   } finally {

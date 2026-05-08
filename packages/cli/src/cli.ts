@@ -68,14 +68,16 @@ Commands:
   create [flags]     Opens persona-maker@best for creating a new
                       persona, with target path passed as persona inputs.
                       Flags:
-                        --to <target>       Storage target: cwd, user, dir:n,
+                        --save-in-directory=<target>
+                                            Storage target: cwd, user, dir:n,
                                             library, or an explicit path.
                                             Default: cwd
                                             (<cwd>/.agentworkforce/workforce/personas);
                                             the directory is created if missing.
                                             Override via this flag, or pin a
                                             different default with --save-default.
-                        --save-default      Persist --to as defaultCreateTarget in
+                        --save-default      Persist --save-in-directory as
+                                            defaultCreateTarget in
                                             ~/.agentworkforce/workforce/config.json.
                         --install-in-repo   Same behavior as agent.
                         --no-launch-metadata
@@ -163,7 +165,7 @@ configured persona dir is ~/.agentworkforce/workforce/personas.
 
 Examples:
   agentworkforce create
-  agentworkforce create --to user
+  agentworkforce create --save-in-directory=user
   agentworkforce agent npm-provenance-publisher@best
   agentworkforce agent my-posthog@best
   agentworkforce agent review@best-value
@@ -1974,7 +1976,7 @@ function resolveCreateTarget(rawTarget: string | undefined): CreateTarget {
     const dir = resolvePath(process.cwd(), 'personas');
     if (!existsSync(dir)) {
       die(
-        'create: --to library requires running from the AgentWorkforce repo root, where ./personas exists.'
+        'create: --save-in-directory=library requires running from the AgentWorkforce repo root, where ./personas exists.'
       );
     }
     return {
@@ -2269,7 +2271,7 @@ export interface AgentFlags {
 }
 
 export interface CreateFlags extends AgentFlags {
-  to?: string;
+  saveInDirectory?: string;
   saveDefault: boolean;
 }
 
@@ -2340,9 +2342,15 @@ export function parseCreateArgs(args: readonly string[]): {
       flags.noLaunchMetadata = true;
       continue;
     }
-    if (arg === '--to') {
-      flags.to = valueOf(i, arg);
+    if (arg === '--save-in-directory') {
+      flags.saveInDirectory = valueOf(i, arg);
       i += 1;
+      continue;
+    }
+    if (arg.startsWith('--save-in-directory=')) {
+      const value = arg.slice('--save-in-directory='.length);
+      if (!value) die(`create: --save-in-directory requires a value.`);
+      flags.saveInDirectory = value;
       continue;
     }
     if (arg === '--save-default') {
@@ -2351,7 +2359,7 @@ export function parseCreateArgs(args: readonly string[]): {
     }
     if (arg === '-h' || arg === '--help') {
       process.stdout.write(
-        'Usage: agentworkforce create [--to <cwd|user|dir:n|library|path>] [--save-default] [--install-in-repo] [--no-launch-metadata]\n'
+        'Usage: agentworkforce create [--save-in-directory=<cwd|user|dir:n|library|path>] [--save-default] [--install-in-repo] [--no-launch-metadata]\n'
       );
       process.exit(0);
     }
@@ -2365,7 +2373,7 @@ export function parseCreateArgs(args: readonly string[]): {
     );
   }
 
-  const target = resolveCreateTarget(flags.to);
+  const target = resolveCreateTarget(flags.saveInDirectory);
   ensureCreateTargetDir(target);
   if (flags.saveDefault) saveDefaultCreateTarget(target);
 

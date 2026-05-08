@@ -204,7 +204,7 @@ corepack pnpm --filter agentworkforce link --global
 ### Usage
 
 ```
-agentworkforce create [--to <target>] [--save-default] [--install-in-repo] [--no-launch-metadata]
+agentworkforce create [--save-in-directory=<target>] [--save-default] [--install-in-repo] [--no-launch-metadata]
 agentworkforce agent [--install-in-repo] [--no-launch-metadata] <persona>[@<tier>]
 agentworkforce list [flags]
 agentworkforce install [flags] <pkg|path>
@@ -215,9 +215,9 @@ agentworkforce --version
 
 - `create` — opens `persona-maker@best` for creating a new persona. By default
   it writes to `./.agentworkforce/workforce/personas/<id>.json` (the directory
-  is created if missing); pass `--to <cwd|user|dir:n|library|path>` to write
-  somewhere else. The chosen target and create mode are forwarded to the
-  persona via `TARGET_DIR` and `CREATE_MODE` inputs.
+  is created if missing); pass `--save-in-directory=<cwd|user|dir:n|library|path>`
+  to write somewhere else. The chosen target and create mode are forwarded to
+  the persona via `TARGET_DIR` and `CREATE_MODE` inputs.
 - `agent` — drops you into an interactive harness session for the persona.
   - `<tier>` is `best` | `best-value` | `minimum` (default: `best-value`).
   - `<persona>` resolves across source layers, highest first:
@@ -252,8 +252,8 @@ the value from the next lower layer; everything else cascades through.
 
 ```bash
 agentworkforce create
-agentworkforce create --to user
-agentworkforce create --to library
+agentworkforce create --save-in-directory=user
+agentworkforce create --save-in-directory=library
 
 # Interactive code reviewer
 agentworkforce agent review@best-value

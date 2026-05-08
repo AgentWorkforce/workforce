@@ -14,7 +14,7 @@
   ],
   "inputs": {
     "TARGET_DIR": {
-      "description": "Absolute directory where the new persona JSON should be written. The CLI defaults this to `<cwd>/.agentworkforce/workforce/personas` (created if missing); only overridden when `agentworkforce create --to` selects a different target.",
+      "description": "Absolute directory where the new persona JSON should be written. The CLI defaults this to `<cwd>/.agentworkforce/workforce/personas` (created if missing); only overridden when `agentworkforce create --save-in-directory=<target>` selects a different target.",
       "default": ".agentworkforce/workforce/personas"
     },
     "CREATE_MODE": {
