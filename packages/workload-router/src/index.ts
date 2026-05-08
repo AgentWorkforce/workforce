@@ -56,7 +56,37 @@ export type PersonaTag = (typeof PERSONA_TAGS)[number];
 export interface HarnessSettings {
   reasoning: 'low' | 'medium' | 'high';
   timeoutSeconds: number;
+  /**
+   * Codex CLI sandbox mode for model-generated shell commands. Prefer
+   * `workspace-write` with `workspaceWriteNetworkAccess` when network is the only
+   * missing capability; `danger-full-access` is the fully unsandboxed fallback.
+   */
+  sandboxMode?: CodexSandboxMode;
+  /** Codex CLI approval policy (`--ask-for-approval`). */
+  approvalPolicy?: CodexApprovalPolicy;
+  /**
+   * Allow outbound network access inside Codex's workspace-write sandbox
+   * (`sandbox_workspace_write.network_access`).
+   */
+  workspaceWriteNetworkAccess?: boolean;
+  /** Enable the Codex live web-search tool for this runtime. */
+  webSearch?: boolean;
 }
+
+export const CODEX_SANDBOX_MODES = [
+  'read-only',
+  'workspace-write',
+  'danger-full-access'
+] as const;
+export type CodexSandboxMode = (typeof CODEX_SANDBOX_MODES)[number];
+
+export const CODEX_APPROVAL_POLICIES = [
+  'untrusted',
+  'on-failure',
+  'on-request',
+  'never'
+] as const;
+export type CodexApprovalPolicy = (typeof CODEX_APPROVAL_POLICIES)[number];
 
 /**
  * Sidecar markdown delivery mode. `overwrite` writes only the persona's
@@ -194,7 +224,7 @@ export type McpServerSpec =
 
 export interface PersonaSpec {
   id: string;
-  intent: PersonaIntent;
+  intent: string;
   /**
    * Free-form classification labels (from {@link PERSONA_TAGS}). Every persona
    * has at least one; a persona may carry multiple tags when it spans concerns
@@ -489,10 +519,22 @@ const prpmProvider: SkillProvider = {
   }
 };
 
-// skill.sh source form: `<github-url>#<skill-name>`
-// Example: `https://github.com/vercel-labs/skills#find-skills`
+// skill.sh source forms:
+// - `<github-url>#<skill-name>`
+// - `<github-url>/tree/<ref>/<path-to-skill>`
+// Examples:
+// - `https://github.com/vercel-labs/skills#find-skills`
+// - `https://github.com/wsimmonds/claude-nextjs-skills/tree/main/nextjs-anti-patterns`
 const SKILL_SH_URL_RE =
   /^(https?:\/\/github\.com\/[^/\s?#]+\/[^/\s?#]+?)(?:\.git)?#([^\s?#]+)$/i;
+const SKILL_SH_TREE_URL_RE =
+  /^(https?:\/\/github\.com\/[^/\s?#]+\/[^/\s?#]+?)(?:\.git)?\/tree\/([^/\s?#]+)\/([^?#]+?)(?:[?#].*)?$/i;
+const SKILL_NAME_RE = /^(?!\.{1,2}$)[A-Za-z0-9][A-Za-z0-9._-]*$/;
+
+function toSafeSkillName(raw: string): string | null {
+  const name = raw.trim();
+  return SKILL_NAME_RE.test(name) ? name : null;
+}
 
 /**
  * Paths `npx skills add` writes per install. Mirrors the on-disk layout from
@@ -514,15 +556,27 @@ const skillShProvider: SkillProvider = {
   kind: 'skill.sh',
   parse(source) {
     const match = source.match(SKILL_SH_URL_RE);
-    if (!match) {
-      return null;
+    if (match) {
+      const [, repoUrl, rawSkillName] = match;
+      const skillName = toSafeSkillName(rawSkillName);
+      if (!skillName) return null;
+      return {
+        kind: 'skill.sh',
+        // packageRef preserves the full `<repo>#<skill>` shape so the command builder
+        // can reconstruct both halves without re-parsing the original source.
+        packageRef: `${repoUrl}#${skillName}`,
+        installedName: skillName
+      };
     }
-    const [, repoUrl, skillName] = match;
+
+    const treeMatch = source.match(SKILL_SH_TREE_URL_RE);
+    if (!treeMatch) return null;
+    const [, repoUrl, ref, skillPath] = treeMatch;
+    const skillName = toSafeSkillName(skillPath.split('/').filter(Boolean).at(-1) ?? '');
+    if (!skillName) return null;
     return {
       kind: 'skill.sh',
-      // packageRef preserves the full `<repo>#<skill>` shape so the command builder
-      // can reconstruct both halves without re-parsing the original source.
-      packageRef: `${repoUrl}#${skillName}`,
+      packageRef: `${repoUrl}/tree/${ref}#${skillName}`,
       installedName: skillName
     };
   },
@@ -560,7 +614,8 @@ function resolveSkillSource(source: string): ResolvedSkillSource {
     `Unsupported skill source: ${source}. ` +
       `Supported forms: prpm.dev package URL (https://prpm.dev/packages/<scope>/<name>), ` +
       `bare "<scope>/<name>" prpm reference, ` +
-      `or skill.sh github URL with skill fragment (https://github.com/<org>/<repo>#<skill>).`
+      `skill.sh github URL with skill fragment (https://github.com/<org>/<repo>#<skill>), ` +
+      `or GitHub tree URL to a skill directory (https://github.com/<org>/<repo>/tree/<ref>/<skill>).`
   );
 }
 
@@ -862,6 +917,58 @@ function assertSidecarPath(value: unknown, context: string): void {
   }
 }
 
+function parseHarnessSettings(value: unknown, context: string): HarnessSettings {
+  if (!isObject(value)) {
+    throw new Error(`${context} must be an object`);
+  }
+
+  const {
+    reasoning,
+    timeoutSeconds,
+    sandboxMode,
+    approvalPolicy,
+    workspaceWriteNetworkAccess,
+    webSearch
+  } = value;
+  if (!['low', 'medium', 'high'].includes(String(reasoning))) {
+    throw new Error(`${context}.reasoning must be low|medium|high`);
+  }
+  if (typeof timeoutSeconds !== 'number' || !Number.isFinite(timeoutSeconds) || timeoutSeconds <= 0) {
+    throw new Error(`${context}.timeoutSeconds must be a positive number`);
+  }
+
+  const out: HarnessSettings = {
+    reasoning: reasoning as HarnessSettings['reasoning'],
+    timeoutSeconds
+  };
+  if (sandboxMode !== undefined) {
+    if (!CODEX_SANDBOX_MODES.includes(sandboxMode as CodexSandboxMode)) {
+      throw new Error(`${context}.sandboxMode must be one of: ${CODEX_SANDBOX_MODES.join(', ')}`);
+    }
+    out.sandboxMode = sandboxMode as CodexSandboxMode;
+  }
+  if (approvalPolicy !== undefined) {
+    if (!CODEX_APPROVAL_POLICIES.includes(approvalPolicy as CodexApprovalPolicy)) {
+      throw new Error(`${context}.approvalPolicy must be one of: ${CODEX_APPROVAL_POLICIES.join(', ')}`);
+    }
+    out.approvalPolicy = approvalPolicy as CodexApprovalPolicy;
+  }
+  if (workspaceWriteNetworkAccess !== undefined) {
+    if (typeof workspaceWriteNetworkAccess !== 'boolean') {
+      throw new Error(`${context}.workspaceWriteNetworkAccess must be a boolean`);
+    }
+    out.workspaceWriteNetworkAccess = workspaceWriteNetworkAccess;
+  }
+  if (webSearch !== undefined) {
+    if (typeof webSearch !== 'boolean') {
+      throw new Error(`${context}.webSearch must be a boolean`);
+    }
+    out.webSearch = webSearch;
+  }
+
+  return out;
+}
+
 function parseRuntime(value: unknown, context: string): PersonaRuntime {
   if (!isObject(value)) {
     throw new Error(`${context} must be an object`);
@@ -889,17 +996,10 @@ function parseRuntime(value: unknown, context: string): PersonaRuntime {
   if (typeof systemPrompt !== 'string' || !systemPrompt.trim()) {
     throw new Error(`${context}.systemPrompt must be a non-empty string`);
   }
-  if (!isObject(harnessSettings)) {
-    throw new Error(`${context}.harnessSettings must be an object`);
-  }
-
-  const { reasoning, timeoutSeconds } = harnessSettings;
-  if (!['low', 'medium', 'high'].includes(String(reasoning))) {
-    throw new Error(`${context}.harnessSettings.reasoning must be low|medium|high`);
-  }
-  if (typeof timeoutSeconds !== 'number' || !Number.isFinite(timeoutSeconds) || timeoutSeconds <= 0) {
-    throw new Error(`${context}.harnessSettings.timeoutSeconds must be a positive number`);
-  }
+  const parsedHarnessSettings = parseHarnessSettings(
+    harnessSettings,
+    `${context}.harnessSettings`
+  );
 
   if (claudeMd !== undefined) assertSidecarPath(claudeMd, `${context}.claudeMd`);
   if (agentsMd !== undefined) assertSidecarPath(agentsMd, `${context}.agentsMd`);
@@ -924,10 +1024,7 @@ function parseRuntime(value: unknown, context: string): PersonaRuntime {
     harness,
     model,
     systemPrompt,
-    harnessSettings: {
-      reasoning: reasoning as HarnessSettings['reasoning'],
-      timeoutSeconds
-    },
+    harnessSettings: parsedHarnessSettings,
     ...(typeof claudeMd === 'string' ? { claudeMd } : {}),
     ...(claudeMdMode ? { claudeMdMode: claudeMdMode as SidecarMdMode } : {}),
     ...(typeof agentsMd === 'string' ? { agentsMd } : {}),

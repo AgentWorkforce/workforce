@@ -99,6 +99,34 @@ test('codex carries system prompt as initial positional; strips provider prefix 
   assert.equal(result.initialPrompt, 'system-directive');
 });
 
+test('codex translates sandbox harness settings to launch flags', () => {
+  const result = buildInteractiveSpec({
+    harness: 'codex',
+    personaId: 'test-persona',
+    model: 'openai-codex/gpt-5.3-codex',
+    systemPrompt: 'x',
+    harnessSettings: {
+      reasoning: 'high',
+      timeoutSeconds: 1200,
+      sandboxMode: 'workspace-write',
+      approvalPolicy: 'on-request',
+      workspaceWriteNetworkAccess: true,
+      webSearch: true
+    }
+  });
+  assert.deepEqual(result.args, [
+    '-m',
+    'gpt-5.3-codex',
+    '--sandbox',
+    'workspace-write',
+    '--ask-for-approval',
+    'on-request',
+    '-c',
+    'sandbox_workspace_write.network_access=true',
+    '--search'
+  ]);
+});
+
 test('codex warns when mcpServers / permissions are declared', () => {
   const result = buildInteractiveSpec({
     harness: 'codex',

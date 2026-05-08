@@ -80,7 +80,12 @@ Personas may declare prompt-visible runtime inputs:
       "harness": "codex",
       "model": "openai-codex/gpt-5.3-codex",
       "systemPrompt": "Check $PACKAGE_NAME and write ${REPORT_PATH}.",
-      "harnessSettings": { "reasoning": "high", "timeoutSeconds": 1200 }
+      "harnessSettings": {
+        "reasoning": "high",
+        "timeoutSeconds": 1200,
+        "sandboxMode": "workspace-write",
+        "workspaceWriteNetworkAccess": true
+      }
     }
     // best-value and minimum omitted in this fragment
   }
@@ -91,6 +96,11 @@ Input keys must be env-style uppercase names. The router validates and carries
 the declarations through `PersonaSpec` and `PersonaSelection`; launchers decide
 how to resolve and render them. The standard harness-kit policy is explicit
 value, env var, default, then fail.
+
+Codex runtimes may also set `harnessSettings.sandboxMode`,
+`harnessSettings.approvalPolicy`,
+`harnessSettings.workspaceWriteNetworkAccess`, and
+`harnessSettings.webSearch`; harness-kit maps those to Codex launch flags.
 
 ## Development
 

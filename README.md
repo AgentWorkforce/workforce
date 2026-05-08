@@ -47,6 +47,11 @@ A persona is a JSON file. Top-level fields apply to every tier; the `tiers` bloc
 
 Tiering controls depth, latency, and cost — **not** the quality bar. A **routing profile** layers on top: policy-only, selects which persona tier to use per intent.
 
+Codex-backed tiers can request Codex launch policy in `harnessSettings`. Use
+`"sandboxMode": "workspace-write"` with `"workspaceWriteNetworkAccess": true`
+when the persona must run shell commands with outbound network access, such as
+registry discovery via `npx`, while keeping filesystem writes sandboxed.
+
 ## Examples
 Sometimes the quickest way to understand the value of personas is to see real examples. These are intentionally verbose; useful personas tend to grow as teams capture local conventions.
 
