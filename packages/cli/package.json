@@ -13,7 +13,7 @@
     "@agentworkforce/harness-kit": "workspace:*",
     "@agentworkforce/workload-router": "workspace:*",
     "@relayburn/sdk": "^2.5.2",
-    "@relayfile/local-mount": "^0.6.15",
+    "@relayfile/local-mount": "^0.7.0",
     "ora": "^9.4.0"
   },
   "repository": {

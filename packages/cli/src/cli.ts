@@ -438,6 +438,9 @@ async function runInstallWithSpinner(
   const [bin, ...args] = command;
   if (!bin) return { code: 0, output: '' };
   const spinner = ora({ text: 'Installing skills…', stream: process.stderr }).start();
+  // Async spawn (not spawnSync) so ora's frame timer can fire during the
+  // install — spawnSync blocks the event loop and freezes the spinner on
+  // its first frame.
   const { code, output } = await new Promise<{ code: number; output: string }>((resolve) => {
     const child = spawn(bin, args, {
       stdio: ['ignore', 'pipe', 'pipe'],
@@ -1290,13 +1293,11 @@ async function runInteractive(
       configFilePaths: spec.configFiles.map((file) => file.path)
     });
     // Setup spinner covers createMount + git-config + (optional) in-mount
-    // install + config-file writes + autosync start, so the multi-second pause
-    // before the harness child appears is visibly live.
-    //
-    // Note: createMount's initial mirror runs synchronously and blocks the
-    // event loop, so ora's frame timer doesn't tick during it. The user still
-    // sees the initial spinner frame + label rather than dead silence, and the
-    // animation resumes between sync blocks.
+    // install + config-file writes + autosync start, so the multi-second
+    // pause before the harness child appears is visibly live. createMount
+    // is async in @relayfile/local-mount ≥0.7.0, which yields between
+    // directory entries — so this spinner actually animates instead of
+    // freezing on its first frame.
     let setupSpinner: Ora | undefined = ora({
       text: `Setting up sandbox mount → ${mountDir}…`,
       stream: process.stderr
@@ -1307,24 +1308,43 @@ async function runInteractive(
     // seconds on a large repo; without an indicator, exiting the persona via
     // /exit looked like a hang.
     //
-    // SIGINT semantics:
-    //   • While the child is running: Ctrl-C reaches the harness directly via
-    //     the controlling TTY's foreground process group (the child is
-    //     spawned with `stdio: 'inherit'` and inherits the parent's pgid). We
-    //     register a no-op handler here purely to suppress Node's default
-    //     exit-on-SIGINT — forwarding via child.kill('SIGINT') would deliver
-    //     a *second* SIGINT and break harnesses that escalate on repeated
-    //     interrupts (e.g. claude treats 1st = cancel, 2nd = quit).
-    //   • While syncing: 1st press aborts the shutdownSignal (relayfile then
-    //     skips autosync's draining reconcile and returns the partial count
-    //     from the final syncBack). 2nd press hard-exits and rms the session
-    //     dir so no mount is left behind.
+    // SIGINT semantics — three phases:
+    //   • Pre-launch (setup): tear down the setup spinner, rm the session
+    //     dir, and exit(130). We must handle this ourselves because
+    //     registering any 'SIGINT' listener suppresses Node's default
+    //     exit-on-SIGINT, and createMount is now async (relayfile 0.7+) so
+    //     the handler actually fires during mount setup.
+    //   • Child running: Ctrl-C reaches the harness directly via the
+    //     controlling TTY's foreground process group (the child is spawned
+    //     with `stdio: 'inherit'` and inherits the parent's pgid). We
+    //     no-op purely to suppress Node's default exit — forwarding via
+    //     child.kill('SIGINT') would deliver a *second* SIGINT and break
+    //     harnesses that escalate on repeated interrupts (e.g. claude
+    //     treats 1st = cancel, 2nd = quit).
+    //   • Syncing (post-child): 1st press aborts the shutdownSignal
+    //     (relayfile then skips autosync's draining reconcile and returns
+    //     the partial count from the final syncBack). 2nd press hard-exits
+    //     and rms the session dir so no mount is left behind.
     const shutdownController = new AbortController();
     let syncSpinner: Ora | undefined;
     let isSyncing = false;
+    let childSpawned = false;
     let abortPresses = 0;
     const sigintHandler = () => {
-      if (!isSyncing) return;
+      if (!isSyncing) {
+        if (childSpawned) return;
+        // Pre-launch teardown.
+        if (setupSpinner) {
+          setupSpinner.fail('Sandbox mount setup interrupted (Ctrl-C)');
+          setupSpinner = undefined;
+        }
+        try {
+          rmSync(sessionRoot, { recursive: true, force: true });
+        } catch {
+          /* swallow — we're exiting anyway */
+        }
+        process.exit(130);
+      }
       abortPresses += 1;
       if (abortPresses === 1) {
         if (syncSpinner) {
@@ -1351,21 +1371,22 @@ async function runInteractive(
     };
     process.on('SIGINT', sigintHandler);
 
-    let handle: ReturnType<typeof createMount> | undefined;
+    let handle: Awaited<ReturnType<typeof createMount>> | undefined;
     let autoSync: AutoSyncHandle | undefined;
     let exitCode = 0;
     try {
       // createMount inside the try so its initial-mirror failures fall into
       // the catch path and clean up the setup spinner.
-      handle = createMount(process.cwd(), mountDir, {
+      handle = await createMount(process.cwd(), mountDir, {
         ignoredPatterns: [...ignoredPatterns],
         readonlyPatterns: [...readonlyPatterns],
         excludeDirs: [],
         agentName: personaId,
-        // Pull `.git` into the mount so git commands work inside the sandbox.
-        // relayfile treats this as one-way project→mount: host-side `.git`
-        // changes flow in, mount-side commits/refs stay sandboxed and are
-        // discarded on cleanup. The agent must `git push` to persist work.
+        // Pull `.git` into the mount so git commands work inside the
+        // sandbox. relayfile treats this as one-way project→mount: host-side
+        // `.git` changes flow in, mount-side commits/refs stay sandboxed and
+        // are discarded on cleanup. The agent must `git push` to persist
+        // work.
         includeGit: true
       });
       // Run before install / configFile writes so the freshly written files
@@ -1398,8 +1419,9 @@ async function runInteractive(
 
       autoSync = handle.startAutoSync();
 
-      // Stop the setup spinner before spawning the child — the child inherits
-      // stdio and would otherwise interleave its output with spinner frames.
+      // Stop the setup spinner before spawning the child — the child
+      // inherits stdio and would otherwise interleave its output with
+      // spinner frames.
       setupSpinner?.succeed(`Sandbox mount ready → ${mountDir}`);
       setupSpinner = undefined;
 
@@ -1410,6 +1432,10 @@ async function runInteractive(
         options.capture.harness = runtime.harness;
         options.capture.startedAt = Date.now();
       }
+      // Flip the SIGINT phase flag before spawn so a Ctrl-C arriving during
+      // the child's lifetime is treated as "child has the TTY" (no-op),
+      // not as pre-launch teardown.
+      childSpawned = true;
       exitCode = await new Promise<number>((resolve, reject) => {
         const child = spawn(spec.bin, finalArgs, {
           cwd: childCwd,
