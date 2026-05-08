@@ -1,18 +1,17 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { setTimeout as sleep } from 'node:timers/promises';
 
 import type { PersonaSelection, PersonaSpec } from '@agentworkforce/workload-router';
 import {
-  buildBurnEnrichment,
-  burnIngestHarness,
+  buildPersonaTagEnrichment,
   canonicalJson,
+  personaTagIngestHarness,
   personaVersionHash,
-  shouldEnableBurnAttribution,
-  startBurnAttribution,
-  type BurnIngestOptions,
-  type BurnPendingStampOptions
-} from './burn-attribution.js';
+  shouldRecordPersonaTags,
+  startPersonaTagging,
+  type PersonaTagIngestOptions,
+  type PersonaTagPendingStampOptions
+} from './persona-tags.js';
 
 function fakeSelection(): Pick<PersonaSelection, 'personaId' | 'tier' | 'runtime'> {
   return {
@@ -83,9 +82,9 @@ test('personaVersionHash canonicalizes object keys and changes with effective co
   assert.notEqual(personaVersionHash(left), personaVersionHash({ ...right, tags: ['testing'] }));
 });
 
-test('buildBurnEnrichment emits the required AgentWorkforce tags', () => {
+test('buildPersonaTagEnrichment emits the required AgentWorkforce tags', () => {
   const spec = fakeSpec();
-  const tags = buildBurnEnrichment({
+  const tags = buildPersonaTagEnrichment({
     selection: fakeSelection(),
     personaSpec: spec,
     personaSource: 'dir:1'
@@ -100,10 +99,11 @@ test('buildBurnEnrichment emits the required AgentWorkforce tags', () => {
   });
 });
 
-test('startBurnAttribution writes a pending stamp and runs periodic plus final ingest', async () => {
-  const stamps: BurnPendingStampOptions[] = [];
-  const ingests: BurnIngestOptions[] = [];
-  const run = await startBurnAttribution({
+test('startPersonaTagging writes a pending stamp and runs periodic plus final ingest', async (t) => {
+  t.mock.timers.enable({ apis: ['setInterval'] });
+  const stamps: PersonaTagPendingStampOptions[] = [];
+  const ingests: PersonaTagIngestOptions[] = [];
+  const run = await startPersonaTagging({
     selection: fakeSelection(),
     personaSpec: fakeSpec(),
     personaSource: 'cwd',
@@ -121,7 +121,7 @@ test('startBurnAttribution writes a pending stamp and runs periodic plus final i
   });
 
   assert.equal(run.enabled, true);
-  await sleep(25);
+  t.mock.timers.tick(5);
   await run.stop();
 
   assert.equal(stamps.length, 1);
@@ -133,14 +133,14 @@ test('startBurnAttribution writes a pending stamp and runs periodic plus final i
   assert.deepEqual(ingests.at(-1), { harness: 'codex' });
 });
 
-test('startBurnAttribution skips SDK loading and ingest when opted out', async () => {
+test('startPersonaTagging skips SDK loading and ingest when opted out', async () => {
   let loads = 0;
-  const run = await startBurnAttribution({
+  const run = await startPersonaTagging({
     selection: fakeSelection(),
     personaSpec: fakeSpec(),
     personaSource: 'library',
     cwd: '/tmp/project',
-    noBurn: true,
+    noPersonaTags: true,
     sdk: async () => {
       loads += 1;
       throw new Error('should not load');
@@ -151,13 +151,25 @@ test('startBurnAttribution skips SDK loading and ingest when opted out', async (
   assert.equal(run.enabled, false);
   assert.equal(loads, 0);
   assert.equal(
-    shouldEnableBurnAttribution({ env: { AGENTWORKFORCE_BURN: '0' } }),
+    shouldRecordPersonaTags({ env: { AGENTWORKFORCE_PERSONA_TAGS: '0' } }),
     false
   );
+
+  const originalEnvValue = process.env.AGENTWORKFORCE_PERSONA_TAGS;
+  try {
+    process.env.AGENTWORKFORCE_PERSONA_TAGS = '0';
+    assert.equal(shouldRecordPersonaTags({}), false);
+  } finally {
+    if (originalEnvValue === undefined) {
+      delete process.env.AGENTWORKFORCE_PERSONA_TAGS;
+    } else {
+      process.env.AGENTWORKFORCE_PERSONA_TAGS = originalEnvValue;
+    }
+  }
 });
 
-test('burnIngestHarness maps AgentWorkforce claude to Burn claude-code', () => {
-  assert.equal(burnIngestHarness('claude'), 'claude-code');
-  assert.equal(burnIngestHarness('codex'), 'codex');
-  assert.equal(burnIngestHarness('opencode'), 'opencode');
+test('personaTagIngestHarness maps AgentWorkforce claude to backend claude-code', () => {
+  assert.equal(personaTagIngestHarness('claude'), 'claude-code');
+  assert.equal(personaTagIngestHarness('codex'), 'codex');
+  assert.equal(personaTagIngestHarness('opencode'), 'opencode');
 });

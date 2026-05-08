@@ -4,14 +4,15 @@ import { join } from 'node:path';
 
 import type { Harness, PersonaSelection } from '@agentworkforce/workload-router';
 
-export const BURN_ATTRIBUTION_INTERVAL_MS = 1_000;
-export const BURN_OPT_OUT_ENV = 'AGENTWORKFORCE_BURN';
+export const PERSONA_TAGGING_INTERVAL_MS = 1_000;
+export const PERSONA_TAGS_OPT_OUT_ENV = 'AGENTWORKFORCE_PERSONA_TAGS';
+const PERSONA_TAG_BACKEND_CALL_TIMEOUT_MS = 5_000;
 
-export type BurnIngestHarness = 'claude-code' | 'codex' | 'opencode';
-export type BurnPendingStampHarness = Harness;
+export type PersonaTagIngestHarness = 'claude-code' | 'codex' | 'opencode';
+export type PersonaTagPendingStampHarness = Harness;
 
-export interface BurnPendingStampOptions {
-  harness: BurnPendingStampHarness;
+export interface PersonaTagPendingStampOptions {
+  harness: PersonaTagPendingStampHarness;
   cwd: string;
   enrichment: Record<string, string>;
   sessionDirHint?: string;
@@ -19,35 +20,35 @@ export interface BurnPendingStampOptions {
   spawnerPid?: number;
 }
 
-export interface BurnIngestOptions {
-  harness: BurnIngestHarness;
+export interface PersonaTagIngestOptions {
+  harness: PersonaTagIngestHarness;
 }
 
-export interface BurnSdkLike {
-  writePendingStamp?: (opts: BurnPendingStampOptions) => unknown | Promise<unknown>;
-  ingest?: (opts?: BurnIngestOptions) => unknown | Promise<unknown>;
+export interface PersonaTagBackendLike {
+  writePendingStamp?: (opts: PersonaTagPendingStampOptions) => unknown | Promise<unknown>;
+  ingest?: (opts?: PersonaTagIngestOptions) => unknown | Promise<unknown>;
 }
 
-export interface BurnAttributionStartOptions {
+export interface PersonaTaggingStartOptions {
   selection: Pick<PersonaSelection, 'personaId' | 'tier' | 'runtime'>;
   personaSpec: unknown;
   personaSource: string;
   cwd: string;
-  noBurn?: boolean;
+  noPersonaTags?: boolean;
   env?: NodeJS.ProcessEnv;
-  sdk?: BurnSdkLike | (() => Promise<BurnSdkLike>);
+  sdk?: PersonaTagBackendLike | (() => Promise<PersonaTagBackendLike>);
   intervalMs?: number;
   now?: () => Date;
   onWarn?: (message: string) => void;
 }
 
-export interface BurnAttributionRun {
+export interface PersonaTaggingRun {
   readonly enabled: boolean;
   readonly tags: Record<string, string>;
   stop(): Promise<void>;
 }
 
-const NOOP_RUN: BurnAttributionRun = Object.freeze({
+const NOOP_RUN: PersonaTaggingRun = Object.freeze({
   enabled: false,
   tags: Object.freeze({}) as Record<string, string>,
   async stop() {
@@ -55,12 +56,13 @@ const NOOP_RUN: BurnAttributionRun = Object.freeze({
   }
 });
 
-export function shouldEnableBurnAttribution(input: {
-  noBurn?: boolean;
+export function shouldRecordPersonaTags(input: {
+  noPersonaTags?: boolean;
   env?: NodeJS.ProcessEnv;
 }): boolean {
-  if (input.noBurn === true) return false;
-  return input.env?.[BURN_OPT_OUT_ENV] !== '0';
+  if (input.noPersonaTags === true) return false;
+  const env = input.env ?? process.env;
+  return env[PERSONA_TAGS_OPT_OUT_ENV] !== '0';
 }
 
 export function canonicalJson(value: unknown): string {
@@ -75,7 +77,7 @@ export function personaVersionShort(personaSpec: unknown): string {
   return personaVersionHash(personaSpec).slice(0, 12);
 }
 
-export function buildBurnEnrichment(input: {
+export function buildPersonaTagEnrichment(input: {
   selection: Pick<PersonaSelection, 'personaId' | 'tier'>;
   personaSpec: unknown;
   personaSource: string;
@@ -89,11 +91,11 @@ export function buildBurnEnrichment(input: {
   };
 }
 
-export function burnIngestHarness(harness: Harness): BurnIngestHarness {
+export function personaTagIngestHarness(harness: Harness): PersonaTagIngestHarness {
   return harness === 'claude' ? 'claude-code' : harness;
 }
 
-export function burnSessionDirHint(harness: Harness): string | undefined {
+export function personaTagSessionDirHint(harness: Harness): string | undefined {
   const home = homedir();
   switch (harness) {
     case 'claude':
@@ -109,48 +111,54 @@ export function burnSessionDirHint(harness: Harness): string | undefined {
   }
 }
 
-export async function startBurnAttribution(
-  options: BurnAttributionStartOptions
-): Promise<BurnAttributionRun> {
-  if (!shouldEnableBurnAttribution(options)) return NOOP_RUN;
+export async function startPersonaTagging(
+  options: PersonaTaggingStartOptions
+): Promise<PersonaTaggingRun> {
+  if (!shouldRecordPersonaTags(options)) return NOOP_RUN;
 
-  const tags = buildBurnEnrichment({
+  const tags = buildPersonaTagEnrichment({
     selection: options.selection,
     personaSpec: options.personaSpec,
     personaSource: options.personaSource
   });
   const warn = makeOnceWarn(options.onWarn ?? ((msg) => process.stderr.write(`warning: ${msg}\n`)));
 
-  let sdk: BurnSdkLike;
+  let sdk: PersonaTagBackendLike;
   try {
-    sdk = await resolveBurnSdk(options.sdk);
+    sdk = await resolvePersonaTagBackend(options.sdk);
   } catch (err) {
-    warn(`burn attribution unavailable: ${errorMessage(err)}`);
+    warn(`persona tag recording unavailable: ${errorMessage(err)}`);
     return disabledRun(tags);
   }
 
   if (typeof sdk.writePendingStamp !== 'function') {
     warn(
-      'burn attribution unavailable: @relayburn/sdk does not export writePendingStamp; upgrade to a Burn SDK release with launcher tagging primitives.'
+      'persona tag recording unavailable: installed tag backend does not support launcher tagging yet.'
     );
     return disabledRun(tags);
   }
   if (typeof sdk.ingest !== 'function') {
-    warn('burn attribution unavailable: @relayburn/sdk does not export ingest.');
+    warn('persona tag recording unavailable: installed tag backend does not support ingest.');
     return disabledRun(tags);
   }
+  const writePendingStamp = sdk.writePendingStamp.bind(sdk);
+  const ingest = sdk.ingest.bind(sdk);
 
   try {
-    await sdk.writePendingStamp({
-      harness: options.selection.runtime.harness,
-      cwd: options.cwd,
-      enrichment: tags,
-      sessionDirHint: burnSessionDirHint(options.selection.runtime.harness),
-      spawnStartTs: (options.now?.() ?? new Date()).toISOString(),
-      spawnerPid: process.pid
-    });
+    await withTimeout(
+      writePendingStamp({
+        harness: options.selection.runtime.harness,
+        cwd: options.cwd,
+        enrichment: tags,
+        sessionDirHint: personaTagSessionDirHint(options.selection.runtime.harness),
+        spawnStartTs: (options.now?.() ?? new Date()).toISOString(),
+        spawnerPid: process.pid
+      }),
+      PERSONA_TAG_BACKEND_CALL_TIMEOUT_MS,
+      'writePendingStamp'
+    );
   } catch (err) {
-    warn(`burn attribution stamp failed: ${errorMessage(err)}`);
+    warn(`persona tag stamp failed: ${errorMessage(err)}`);
     return disabledRun(tags);
   }
 
@@ -159,11 +167,15 @@ export async function startBurnAttribution(
   let ingestWarned = false;
   const runIngest = async () => {
     try {
-      await sdk.ingest?.({ harness: burnIngestHarness(options.selection.runtime.harness) });
+      await withTimeout(
+        ingest({ harness: personaTagIngestHarness(options.selection.runtime.harness) }),
+        PERSONA_TAG_BACKEND_CALL_TIMEOUT_MS,
+        'ingest'
+      );
     } catch (err) {
       if (!ingestWarned) {
         ingestWarned = true;
-        warn(`burn ingest failed: ${errorMessage(err)}`);
+        warn(`persona tag ingest failed: ${errorMessage(err)}`);
       }
     }
   };
@@ -173,7 +185,7 @@ export async function startBurnAttribution(
       inFlight = undefined;
     });
   };
-  const interval = setInterval(tick, options.intervalMs ?? BURN_ATTRIBUTION_INTERVAL_MS);
+  const interval = setInterval(tick, options.intervalMs ?? PERSONA_TAGGING_INTERVAL_MS);
   interval.unref?.();
 
   return {
@@ -189,15 +201,15 @@ export async function startBurnAttribution(
   };
 }
 
-async function resolveBurnSdk(
-  sdk: BurnAttributionStartOptions['sdk']
-): Promise<BurnSdkLike> {
+async function resolvePersonaTagBackend(
+  sdk: PersonaTaggingStartOptions['sdk']
+): Promise<PersonaTagBackendLike> {
   if (typeof sdk === 'function') return await sdk();
   if (sdk) return sdk;
-  return (await import('@relayburn/sdk')) as unknown as BurnSdkLike;
+  return (await import('@relayburn/sdk')) as unknown as PersonaTagBackendLike;
 }
 
-function disabledRun(tags: Record<string, string>): BurnAttributionRun {
+function disabledRun(tags: Record<string, string>): PersonaTaggingRun {
   return Object.freeze({
     enabled: false,
     tags,
@@ -218,6 +230,24 @@ function makeOnceWarn(onWarn: (message: string) => void): (message: string) => v
 
 function errorMessage(err: unknown): string {
   return err instanceof Error ? err.message : String(err);
+}
+
+async function withTimeout<T>(value: T | Promise<T>, timeoutMs: number, label: string): Promise<T> {
+  let timeout: NodeJS.Timeout | undefined;
+  try {
+    return await Promise.race([
+      Promise.resolve(value),
+      new Promise<never>((_, reject) => {
+        timeout = setTimeout(
+          () => reject(new Error(`${label} timed out after ${timeoutMs}ms`)),
+          timeoutMs
+        );
+        timeout.unref?.();
+      })
+    ]);
+  } finally {
+    if (timeout) clearTimeout(timeout);
+  }
 }
 
 function canonicalize(value: unknown): unknown {

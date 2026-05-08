@@ -45,7 +45,7 @@ import {
 } from '@agentworkforce/harness-kit';
 import { launchOnMount, readAgentDotfiles } from '@relayfile/local-mount';
 import ora, { type Ora } from 'ora';
-import { startBurnAttribution, type BurnAttributionRun } from './burn-attribution.js';
+import { startPersonaTagging, type PersonaTaggingRun } from './persona-tags.js';
 import {
   buildPersonaSourceDirectories,
   defaultCwdPersonaDir,
@@ -72,7 +72,7 @@ Commands:
                         --save-default      Persist --to as defaultCreateTarget in
                                             ~/.agentworkforce/workforce/config.json.
                         --install-in-repo   Same behavior as agent.
-                        --no-burn           Same behavior as agent.
+                        --no-persona-tags   Same behavior as agent.
   agent [flags] <persona>[@<tier>]
                       Run a persona. Tier one of: ${PERSONA_TIERS.join(' | ')}
                       (default: best-value). Drops into an interactive harness
@@ -93,9 +93,9 @@ Commands:
                                             are hidden from the session. Codex
                                             sessions never mount and ignore
                                             this flag.
-                        --no-burn           Disable default Burn attribution
-                                            for this launch. Also disabled by
-                                            AGENTWORKFORCE_BURN=0.
+                        --no-persona-tags   Disable default persona tags for
+                                            this launch. Also disabled by
+                                            AGENTWORKFORCE_PERSONA_TAGS=0.
   list [flags]        List available personas from the cascade (cwd →
                       configured persona dirs → library). By default shows
                       one row per persona at the recommended tier for its
@@ -732,7 +732,7 @@ async function runInteractive(
   selection: PersonaSelection,
   options: {
     installInRepo?: boolean;
-    noBurn?: boolean;
+    noPersonaTags?: boolean;
     personaSpec: PersonaSpec;
     personaSource: PersonaSource;
   }
@@ -798,13 +798,13 @@ async function runInteractive(
   const { install } = ctx;
   process.stderr.write(`→ ${personaId} [${tier}] via ${runtime.harness} (${runtime.model})\n`);
 
-  const startBurnForLaunch = (cwd = process.cwd()) =>
-    startBurnAttribution({
+  const startPersonaTagsForLaunch = (cwd = process.cwd()) =>
+    startPersonaTagging({
       selection: effectiveSelection,
       personaSpec: options.personaSpec,
       personaSource: options.personaSource,
       cwd,
-      noBurn: options.noBurn,
+      noPersonaTags: options.noPersonaTags,
       env: process.env
     });
 
@@ -914,7 +914,7 @@ async function runInteractive(
   // copied in from the real repo nor synced back on exit.
   if (useClean && sessionRoot) {
     const mountDir = sessionMountDir(sessionRoot);
-    let burnAttribution: BurnAttributionRun | undefined;
+    let personaTags: PersonaTaggingRun | undefined;
     // Anything we materialize into the mount via onBeforeLaunch must be
     // hidden from the mount-mirror in both directions: without this, any
     // opencode.json already present in the real repo would be copied into
@@ -1058,7 +1058,7 @@ async function runInteractive(
             const body = buildSidecarBody(resolvedSidecar, process.cwd());
             writeFileSync(join(dir, resolvedSidecar.mountFile), body, 'utf8');
           }
-          burnAttribution = await startBurnForLaunch(dir);
+          personaTags = await startPersonaTagsForLaunch(dir);
         }
       });
       return result.exitCode;
@@ -1093,7 +1093,7 @@ async function runInteractive(
         syncSpinner.stop();
         syncSpinner = undefined;
       }
-      await burnAttribution?.stop();
+      await personaTags?.stop();
       process.removeListener('SIGINT', forceExitHandler);
       // When the install ran inside the mount, its cleanup paths are
       // mount-relative (e.g. `.skills/<name>`, `skills/<name>`) and
@@ -1108,7 +1108,7 @@ async function runInteractive(
     }
   }
 
-  const burnAttribution = await startBurnForLaunch();
+  const personaTags = await startPersonaTagsForLaunch();
   return new Promise((resolve) => {
     let settled = false;
     const finish = (code: number) => {
@@ -1116,7 +1116,7 @@ async function runInteractive(
       settled = true;
       runCleanup(install.cleanupCommand, install.cleanupCommandString);
       removeSessionRoot(sessionRoot);
-      void burnAttribution.stop().finally(() => resolve(code));
+      void personaTags.stop().finally(() => resolve(code));
     };
 
     const child = spawn(spec.bin, finalArgs, {
@@ -2026,7 +2026,7 @@ async function runAgentSelector(
 
   const code = await runInteractive(selection, {
     installInRepo: flags.installInRepo,
-    noBurn: flags.noBurn,
+    noPersonaTags: flags.noPersonaTags,
     personaSpec: target.spec,
     personaSource: target.source
   });
@@ -2098,7 +2098,7 @@ export async function main(): Promise<void> {
 
 export interface AgentFlags {
   installInRepo: boolean;
-  noBurn: boolean;
+  noPersonaTags: boolean;
 }
 
 export interface CreateFlags extends AgentFlags {
@@ -2110,7 +2110,7 @@ export function parseAgentArgs(args: readonly string[]): {
   flags: AgentFlags;
   positional: string[];
 } {
-  const flags: AgentFlags = { installInRepo: false, noBurn: false };
+  const flags: AgentFlags = { installInRepo: false, noPersonaTags: false };
   const positional: string[] = [];
   let seenDoubleDash = false;
   for (const arg of args) {
@@ -2126,8 +2126,8 @@ export function parseAgentArgs(args: readonly string[]): {
       flags.installInRepo = true;
       continue;
     }
-    if (arg === '--no-burn') {
-      flags.noBurn = true;
+    if (arg === '--no-persona-tags') {
+      flags.noPersonaTags = true;
       continue;
     }
     if (arg === '-h' || arg === '--help') {
@@ -2144,7 +2144,7 @@ export function parseCreateArgs(args: readonly string[]): {
   selector: string;
   inputValues: Record<string, string>;
 } {
-  const flags: CreateFlags = { installInRepo: false, noBurn: false, saveDefault: false };
+  const flags: CreateFlags = { installInRepo: false, noPersonaTags: false, saveDefault: false };
   let seenDoubleDash = false;
   const positional: string[] = [];
   const valueOf = (i: number, flag: string): string => {
@@ -2169,8 +2169,8 @@ export function parseCreateArgs(args: readonly string[]): {
       flags.installInRepo = true;
       continue;
     }
-    if (arg === '--no-burn') {
-      flags.noBurn = true;
+    if (arg === '--no-persona-tags') {
+      flags.noPersonaTags = true;
       continue;
     }
     if (arg === '--to') {
@@ -2184,7 +2184,7 @@ export function parseCreateArgs(args: readonly string[]): {
     }
     if (arg === '-h' || arg === '--help') {
       process.stdout.write(
-        'Usage: agentworkforce create [--to <cwd|user|dir:n|library|path>] [--save-default] [--install-in-repo] [--no-burn]\n'
+        'Usage: agentworkforce create [--to <cwd|user|dir:n|library|path>] [--save-default] [--install-in-repo] [--no-persona-tags]\n'
       );
       process.exit(0);
     }
