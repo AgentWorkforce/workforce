@@ -86,9 +86,10 @@ Commands:
                                             Same behavior as agent.
   agent [flags] <persona>[@<tier>]
                       Run a persona. Tier one of: ${PERSONA_TIERS.join(' | ')}.
-                      With no @<tier>, falls back to the persona's defaultTier
-                      (when set), then best-value. Drops into an interactive
-                      harness session.
+                      With no @<tier>, the resolution order is:
+                      routingProfiles.default.intents (built-in personas only)
+                      → persona.defaultTier (when set) → best-value. Drops into
+                      an interactive harness session.
 
                       Flags:
                         --install-in-repo   Disengage the sandbox mount and
@@ -314,8 +315,19 @@ function parseSelector(sel: string): ResolvedTarget {
   }
   const result = resolveSpec(key);
   if ('error' in result) die(result.error, false);
-  const tier = (tierRaw ?? result.defaultTier ?? 'best-value') as PersonaTier;
   const kind = local.byId.has(key) ? 'local' : 'repo';
+  // Resolution order when no @<tier> is given: routingProfiles default for the
+  // persona's intent (built-ins only — local personas with custom intents miss
+  // the lookup and fall through), then the persona's own defaultTier, then
+  // 'best-value'. Mirrors `resolveShowTarget` and the `list` recommended-tier
+  // filter so all three commands agree on what "no tier" means.
+  const profileRule =
+    kind === 'repo'
+      ? (routingProfiles.default.intents as Partial<Record<string, { tier: PersonaTier }>>)[
+          result.intent
+        ]
+      : undefined;
+  const tier = (tierRaw ?? profileRule?.tier ?? result.defaultTier ?? 'best-value') as PersonaTier;
   if (kind === 'local') {
     return { kind, source: local.sources.get(result.id) ?? 'cwd', spec: result, tier };
   }
