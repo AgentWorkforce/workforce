@@ -3,14 +3,18 @@ import { spawn, spawnSync } from 'node:child_process';
 import { randomBytes } from 'node:crypto';
 import {
   appendFileSync,
+  closeSync,
   existsSync,
   mkdirSync,
   mkdtempSync,
+  openSync,
+  readdirSync,
   readFileSync,
   readSync,
   rmSync,
   statSync,
-  writeFileSync
+  writeFileSync,
+  type Dirent
 } from 'node:fs';
 import { constants, homedir, tmpdir } from 'node:os';
 import { dirname, isAbsolute, join, resolve as resolvePath } from 'node:path';
@@ -43,6 +47,7 @@ import {
   resolvePersonaInputs,
   resolveMcpServersLenient,
   resolveStringMapLenient,
+  useRunnableSelection,
   type HarnessAvailability,
   type InteractiveSpec
 } from '@agentworkforce/harness-kit';
@@ -416,6 +421,10 @@ function subprocessExitCode(res: ReturnType<typeof spawnSync>): number {
  * captured so a successful install collapses to a single ✓ line; on failure,
  * the buffered output is dumped after spinner.fail so the user sees what
  * actually broke. stdin is ignored — the install commands don't prompt.
+ *
+ * Uses async `spawn` (not `spawnSync`) because ora's frame redraw runs on a
+ * setInterval — `spawnSync` blocks the event loop for the duration of the
+ * install, freezing the spinner on its first frame.
  *
  * The spinner text stays "Installing skills…" while running; the longer
  * `label` (which includes target paths and skill ids) is shown on
@@ -1042,6 +1051,31 @@ function runDryRun(selection: PersonaSelection): number {
   return failures[0]?.exitCode || 1;
 }
 
+/**
+ * Optional out-parameter populated by `runInteractive` so the caller can
+ * locate the just-ended session for follow-up tooling (e.g. the
+ * persona-improver post-session prompt). Populated regardless of exit
+ * status so failure paths are still inspectable.
+ */
+interface RunInteractiveCapture {
+  /** Cwd the harness child saw — mount dir for sandboxed sessions, real cwd otherwise. */
+  sessionCwd?: string;
+  /** Harness binary that was spawned. */
+  harness?: Harness;
+  /** Wallclock (ms) right before the harness child was spawned. Used to filter newer transcript files. */
+  startedAt?: number;
+  /**
+   * Burn-stamp enrichment written by launch-metadata (`agentworkforce`,
+   * `persona`, `personaVersion`, `personaTier`, `personaSource`). Empty
+   * `{}` when launch-metadata is disabled (opt-out via env or backend
+   * doesn't support stamps). Lets the post-session lookup match the
+   * just-ended session to its harness sessionId via `exportStamps`.
+   */
+  stampEnrichment?: Record<string, string>;
+  /** Whether burn stamping was actually wired this run (false → exportStamps lookup is moot). */
+  stampingEnabled?: boolean;
+}
+
 async function runInteractive(
   selection: PersonaSelection,
   options: {
@@ -1049,6 +1083,7 @@ async function runInteractive(
     noLaunchMetadata?: boolean;
     personaSpec: PersonaSpec;
     personaSource: PersonaSource;
+    capture?: RunInteractiveCapture;
   }
 ): Promise<number> {
   const inputResolution = resolvePersonaInputs(
@@ -1377,6 +1412,10 @@ async function runInteractive(
         writeFileSync(join(handle.mountDir, resolvedSidecar.mountFile), body, 'utf8');
       }
       launchMetadata = await startLaunchMetadataForLaunch(handle.mountDir);
+      if (options.capture) {
+        options.capture.stampEnrichment = { ...launchMetadata.metadata };
+        options.capture.stampingEnabled = launchMetadata.enabled;
+      }
 
       autoSync = handle.startAutoSync();
 
@@ -1388,6 +1427,11 @@ async function runInteractive(
 
       const childEnv = resolvedEnv ? { ...process.env, ...resolvedEnv } : process.env;
       const childCwd = handle.mountDir;
+      if (options.capture) {
+        options.capture.sessionCwd = childCwd;
+        options.capture.harness = runtime.harness;
+        options.capture.startedAt = Date.now();
+      }
       // Flip the SIGINT phase flag before spawn so a Ctrl-C arriving during
       // the child's lifetime is treated as "child has the TTY" (no-op),
       // not as pre-launch teardown.
@@ -1496,6 +1540,13 @@ async function runInteractive(
   }
 
   const launchMetadata = await startLaunchMetadataForLaunch();
+  if (options.capture) {
+    options.capture.sessionCwd = process.cwd();
+    options.capture.harness = runtime.harness;
+    options.capture.startedAt = Date.now();
+    options.capture.stampEnrichment = { ...launchMetadata.metadata };
+    options.capture.stampingEnabled = launchMetadata.enabled;
+  }
   return new Promise((resolve) => {
     let settled = false;
     const finish = (code: number) => {
@@ -2430,13 +2481,910 @@ async function runAgentSelector(
     process.exit(code);
   }
 
+  const capture: RunInteractiveCapture = {};
   const code = await runInteractive(selection, {
     installInRepo: flags.installInRepo,
     noLaunchMetadata: flags.noLaunchMetadata,
     personaSpec: target.spec,
-    personaSource: target.source
+    personaSource: target.source,
+    capture
+  });
+  // Post-session learnings prompt: only for local personas (built-in
+  // catalog and pack personas are read-only here), and only when stdin
+  // is a TTY so we can read y/N. Improver failures never affect the
+  // user-facing exit code — the original session's exit is what matters.
+  await maybeOfferLearningsImprover({
+    target,
+    capture,
+    flags
   });
   process.exit(code);
+}
+
+interface LocalPersonaImproverContext {
+  target: ResolvedTarget;
+  capture: RunInteractiveCapture;
+  flags: AgentFlags;
+}
+
+/**
+ * Decide whether to offer post-session auto-improvement, run the improver,
+ * walk the proposals interactively, and apply accepted patches. Silently
+ * skips the prompt when the persona is built-in or stdin is not a TTY.
+ *
+ * Failures (improver crash, malformed proposals JSON, unwriteable persona
+ * file) are surfaced as warnings on stderr; they never throw or change
+ * the original session's exit code. The user already saw their session
+ * complete — a flaky meta-step shouldn't mask that.
+ */
+async function maybeOfferLearningsImprover(ctx: LocalPersonaImproverContext): Promise<void> {
+  if (ctx.target.kind !== 'local') return;
+  if (ctx.target.source === 'library') return;
+  const personaFilePath = local.paths.get(ctx.target.spec.id);
+  if (!personaFilePath) {
+    // No on-disk path means we can't apply patches even if the user agrees.
+    // Skip silently — local-personas would have warned at load time.
+    return;
+  }
+  if (!process.stdin.isTTY || !process.stderr.isTTY) return;
+  const personaId = ctx.target.spec.id;
+  const wantsImprover = promptYesNoSync(
+    `\nAuto-improve "${personaId}" from this session? [y/N] `
+  );
+  if (!wantsImprover) return;
+
+  let transcriptPath = '';
+  try {
+    if (ctx.capture.stampingEnabled && ctx.capture.stampEnrichment) {
+      transcriptPath =
+        (await findSessionTranscriptViaStamps({
+          harness: ctx.capture.harness,
+          sessionCwd: ctx.capture.sessionCwd,
+          enrichment: ctx.capture.stampEnrichment,
+          startedAt: ctx.capture.startedAt
+        })) ?? '';
+    }
+    if (!transcriptPath) {
+      transcriptPath =
+        findSessionTranscriptPath({
+          harness: ctx.capture.harness,
+          sessionCwd: ctx.capture.sessionCwd,
+          startedAt: ctx.capture.startedAt
+        }) ?? '';
+    }
+  } catch (err) {
+    process.stderr.write(
+      `warning: could not locate session transcript: ${(err as Error).message}\n`
+    );
+  }
+  if (!transcriptPath) {
+    process.stderr.write(
+      `note: session transcript not found for harness "${ctx.capture.harness ?? '?'}" — proceeding from persona file alone.\n`
+    );
+  }
+
+  let proposals: ImproverProposalsFile | undefined;
+  const proposalsTempPath = join(
+    tmpdir(),
+    `agentworkforce-proposals-${randomBytes(6).toString('hex')}.json`
+  );
+  const spinner = ora({
+    text: 'Extracting learnings via persona-improver…',
+    stream: process.stderr
+  }).start();
+  try {
+    proposals = await runPersonaImprover({
+      personaFilePath,
+      transcriptPath,
+      proposalsOutputPath: proposalsTempPath
+    });
+    spinner.succeed(
+      proposals.proposals.length === 0
+        ? 'persona-improver: no improvements to propose.'
+        : `persona-improver: found ${proposals.proposals.length} proposed improvement${proposals.proposals.length === 1 ? '' : 's'}.`
+    );
+  } catch (err) {
+    spinner.fail(`persona-improver failed: ${(err as Error).message}`);
+    return;
+  } finally {
+    try {
+      rmSync(proposalsTempPath, { force: true });
+    } catch {
+      /* swallow — temp file in $TMPDIR is harmless */
+    }
+  }
+  if (!proposals || proposals.proposals.length === 0) return;
+
+  const accepted = walkProposalsInteractive(proposals);
+  if (accepted.length === 0) {
+    process.stderr.write('No improvements applied.\n');
+    return;
+  }
+  try {
+    applyAcceptedPatches(personaFilePath, accepted);
+    process.stderr.write(
+      `✓ Applied ${accepted.length} improvement${accepted.length === 1 ? '' : 's'} to ${personaFilePath}\n`
+    );
+  } catch (err) {
+    process.stderr.write(
+      `warning: failed to write updated persona to ${personaFilePath}: ${(err as Error).message}\n`
+    );
+  }
+}
+
+export interface ImproverPatch {
+  path: string;
+  op: 'set' | 'append';
+  value: unknown;
+}
+
+/**
+ * Allowlist of dot-paths the improver may rewrite via `op: "set"`. Mirrors
+ * the patch grammar advertised in the persona's AGENTS.md — anything else
+ * is a defense-in-depth reject (the persona's anti-goals already say "no
+ * changes to id/intent/harness/model/permissions", but we don't trust the
+ * model alone for a flow that mutates the user's persona file in place).
+ */
+const ALLOWED_SET_PATHS: readonly string[] = [
+  'description',
+  'agentsMdContent',
+  'claudeMdContent',
+  'tags',
+  'tiers.best.systemPrompt',
+  'tiers.best-value.systemPrompt',
+  'tiers.minimum.systemPrompt'
+];
+
+/**
+ * Allowlist of dot-paths the improver may rewrite via `op: "append"`.
+ * Currently just `skills` — the only array the AGENTS.md grammar exposes
+ * for append-style mutation.
+ */
+const ALLOWED_APPEND_PATHS: readonly string[] = ['skills'];
+
+/**
+ * Reserved JSON-object keys that must never appear as a path segment —
+ * setting them would either pollute the prototype chain (`__proto__`,
+ * `constructor`, `prototype`) for the running process or rewrite a
+ * built-in property that downstream code relies on. Belt-and-braces
+ * alongside the path allowlist; even an `inputs.<NAME>` segment can't
+ * smuggle one of these in.
+ */
+const FORBIDDEN_PATH_SEGMENTS = new Set(['__proto__', 'constructor', 'prototype']);
+
+function assertSafePathSegments(path: string, context: string): readonly string[] {
+  const segments = path.split('.').filter((s) => s.length > 0);
+  if (segments.length === 0) {
+    throw new Error(`${context}: path is empty`);
+  }
+  for (const seg of segments) {
+    if (FORBIDDEN_PATH_SEGMENTS.has(seg)) {
+      throw new Error(
+        `${context}: path "${path}" contains forbidden segment "${seg}"`
+      );
+    }
+  }
+  return segments;
+}
+
+/**
+ * Validate one improver patch against the path/op allowlist + the
+ * prototype-segment guard. Throws a descriptive error rejected at parse
+ * time so the CLI never offers a disallowed proposal to the user.
+ *
+ * Allowed set paths: see ALLOWED_SET_PATHS, plus any `inputs.<NAME>`
+ * (NAME must be env-style, matching the persona-input naming rule).
+ * Allowed append paths: see ALLOWED_APPEND_PATHS.
+ */
+function assertAllowedImproverPatch(patch: ImproverPatch, context: string): void {
+  assertSafePathSegments(patch.path, context);
+  if (patch.op === 'set') {
+    if (ALLOWED_SET_PATHS.includes(patch.path)) return;
+    if (patch.path.startsWith('inputs.')) {
+      const after = patch.path.slice('inputs.'.length);
+      if (!/^[A-Z_][A-Z0-9_]*$/.test(after)) {
+        throw new Error(
+          `${context}: inputs path "${patch.path}" must use an env-style NAME (got "${after}")`
+        );
+      }
+      return;
+    }
+    throw new Error(`${context}: set path "${patch.path}" is not in the allowlist`);
+  }
+  if (patch.op === 'append') {
+    if (!ALLOWED_APPEND_PATHS.includes(patch.path)) {
+      throw new Error(
+        `${context}: append path "${patch.path}" is not in the allowlist`
+      );
+    }
+    return;
+  }
+  throw new Error(`${context}: unknown patch op "${(patch as { op: string }).op}"`);
+}
+
+export interface ImproverProposal {
+  id: string;
+  summary: string;
+  rationale: string;
+  patches: ImproverPatch[];
+}
+
+export interface ImproverProposalsFile {
+  personaId: string;
+  personaFilePath: string;
+  transcriptPath: string;
+  proposals: ImproverProposal[];
+}
+
+/**
+ * Locate the just-ended session's transcript via the burn-stamp ledger.
+ * Authoritative when stamping is wired: `launch-metadata.ts` writes a
+ * pending stamp (with our `personaVersion` enrichment hash) before spawn
+ * and runs `ingest` on a 1s tick + once at stop, so by the time we get
+ * here the ledger already has a row whose `selector.sessionId` is the
+ * harness's own session id. We filter by `persona` + `personaVersion`
+ * (unique per persona spec hash) and `ts` near `startedAt` to avoid
+ * picking up a sibling launch of the same persona, then resolve the
+ * sessionId to a transcript file path per harness.
+ *
+ * Returns undefined when:
+ *   - the SDK call fails
+ *   - no row matches (ingest hasn't reconciled yet, or stamping is off)
+ *   - the resolved sessionId can't be located on disk
+ * Caller falls back to `findSessionTranscriptPath` (cwd-content match).
+ */
+async function findSessionTranscriptViaStamps(input: {
+  harness?: Harness;
+  sessionCwd?: string;
+  enrichment: Record<string, string>;
+  startedAt?: number;
+}): Promise<string | undefined> {
+  if (!input.harness || !input.sessionCwd) return undefined;
+  const persona = input.enrichment.persona;
+  const personaVersion = input.enrichment.personaVersion;
+  if (!persona || !personaVersion) return undefined;
+  let sdk: typeof import('@relayburn/sdk');
+  try {
+    sdk = await import('@relayburn/sdk');
+  } catch {
+    return undefined;
+  }
+  if (typeof sdk.exportStamps !== 'function') return undefined;
+  let rows: unknown[];
+  try {
+    rows = await sdk.exportStamps();
+  } catch {
+    return undefined;
+  }
+  const startedAt = input.startedAt ?? 0;
+  const spawnerPid = input.enrichment.spawnerPid;
+  // Tight window around our session: stamps written before our spawn
+  // (minus tolerance for clock skew) or after the prompt fires (plus
+  // tolerance for ingest latency) can't be ours. The upper bound matters
+  // when a sibling launch of the same persona starts AFTER ours but
+  // before we get here — without it, max-ts wins picks the wrong row.
+  const LOWER_TOLERANCE_MS = 5000;
+  const UPPER_TOLERANCE_MS = 1000;
+  const lowerMs = startedAt - LOWER_TOLERANCE_MS;
+  const upperMs = Date.now() + UPPER_TOLERANCE_MS;
+  let bestSessionId: string | undefined;
+  // Prefer the stamp closest to our spawn time (smallest |ts - startedAt|),
+  // not the most recent. Same-persona concurrent launches can both fall
+  // inside the window; the one launched at our PID/time is the right one.
+  let bestDelta = Number.POSITIVE_INFINITY;
+  let pidMatched = false;
+  for (const row of rows) {
+    if (!row || typeof row !== 'object') continue;
+    const r = row as {
+      ts?: unknown;
+      selector?: { sessionId?: unknown };
+      enrichment?: Record<string, unknown>;
+    };
+    const sessionId = r.selector?.sessionId;
+    const enrichment = r.enrichment;
+    const ts = r.ts;
+    if (typeof sessionId !== 'string' || !enrichment || typeof ts !== 'string') continue;
+    if (enrichment.persona !== persona) continue;
+    if (enrichment.personaVersion !== personaVersion) continue;
+    const tsMs = Date.parse(ts);
+    if (!Number.isFinite(tsMs)) continue;
+    if (tsMs < lowerMs || tsMs > upperMs) continue;
+    // spawnerPid is the strongest discriminator — folded into enrichment
+    // by `buildLaunchMetadata` so it survives stamp ingest. When present
+    // on both sides, treat a mismatch as a hard reject and a match as
+    // sticky: once we've seen a pid-matched row, ignore unmatched ones
+    // even if they're closer in time.
+    const rowPid = enrichment.spawnerPid;
+    if (spawnerPid && typeof rowPid === 'string') {
+      if (rowPid !== spawnerPid) continue;
+      if (!pidMatched) {
+        pidMatched = true;
+        bestDelta = Number.POSITIVE_INFINITY;
+        bestSessionId = undefined;
+      }
+    } else if (pidMatched) {
+      // We already locked onto pid-matched candidates — skip non-pid rows.
+      continue;
+    }
+    const delta = Math.abs(tsMs - startedAt);
+    if (delta >= bestDelta) continue;
+    bestDelta = delta;
+    bestSessionId = sessionId;
+  }
+  if (!bestSessionId) return undefined;
+  return resolveTranscriptForSessionId(input.harness, input.sessionCwd, bestSessionId);
+}
+
+/**
+ * Map a harness session id to its on-disk transcript file. The directory
+ * is harness-conventional, but the filename pattern varies:
+ *   • claude    → `<sessionId>.jsonl` directly under the cwd-encoded subdir
+ *   • codex     → `rollout-<ts>-<sessionId>.jsonl` under a date-grouped subdir
+ *   • opencode  → file or filename containing the sessionId under `<projectHash>/`
+ *
+ * For codex/opencode we scan once and match by filename substring (cheap;
+ * the substring is a UUID-ish so collisions don't happen in practice).
+ */
+function resolveTranscriptForSessionId(
+  harness: Harness,
+  sessionCwd: string,
+  sessionId: string
+): string | undefined {
+  const home = homedir();
+  if (harness === 'claude') {
+    const encoded = sessionCwd.replace(/[\\/]+/g, '-');
+    const candidate = join(home, '.claude', 'projects', encoded, `${sessionId}.jsonl`);
+    return existsSync(candidate) ? candidate : undefined;
+  }
+  if (harness === 'codex') {
+    return findFileByNameSubstring(join(home, '.codex', 'sessions'), sessionId, ['.jsonl']);
+  }
+  if (harness === 'opencode') {
+    return findFileByNameSubstring(
+      join(home, '.local', 'share', 'opencode', 'storage', 'session'),
+      sessionId,
+      ['.json']
+    );
+  }
+  return undefined;
+}
+
+function findFileByNameSubstring(
+  dir: string,
+  needle: string,
+  extensions: readonly string[]
+): string | undefined {
+  const wantsExt = (name: string) => extensions.some((ext) => name.endsWith(ext));
+  const visit = (cur: string, depth: number): string | undefined => {
+    let entries: Dirent[];
+    try {
+      entries = readdirSync(cur, { withFileTypes: true });
+    } catch {
+      return undefined;
+    }
+    for (const entry of entries) {
+      const full = join(cur, entry.name);
+      if (entry.isDirectory()) {
+        if (depth < 3) {
+          const found = visit(full, depth + 1);
+          if (found) return found;
+        }
+        continue;
+      }
+      if (!entry.isFile()) continue;
+      if (!wantsExt(entry.name)) continue;
+      if (entry.name.includes(needle)) return full;
+    }
+    return undefined;
+  };
+  return visit(dir, 0);
+}
+
+/**
+ * Fallback locator when the burn-stamp ledger is unavailable or the
+ * just-ended session hasn't reconciled yet. Walks the harness's
+ * transcript dir and verifies each candidate's embedded cwd matches the
+ * captured session cwd. Every harness embeds the session cwd:
+ *   • claude    → `~/.claude/projects/<cwd-encoded>/<sessionId>.jsonl` —
+ *                 each entry carries `"cwd"`. The dir-name encoding
+ *                 replaces `/` with `-` and is itself a strong filter.
+ *   • codex     → `~/.codex/sessions/YYYY/MM/DD/rollout-*.jsonl` — first
+ *                 line is a `session_meta` event with `payload.cwd`.
+ *   • opencode  → `~/.local/share/opencode/storage/session/<projectHash>/<sessionId>.json`
+ *                 — top-level `directory` field on the session object.
+ *
+ * For each harness we walk the candidate dir, filter to files with
+ * mtime ≥ sessionStart, and confirm the embedded cwd matches the captured
+ * session cwd. Among matches we pick the most recently mtime'd. The cwd
+ * confirmation makes this robust to concurrent harness sessions — the
+ * caveat that previously applied to codex/opencode (most-recent-mtime
+ * could pick a sibling) goes away when we read the file's own cwd.
+ *
+ * Returns undefined when nothing matches; callers handle gracefully (the
+ * persona-improver accepts an empty transcript path).
+ */
+function findSessionTranscriptPath(input: {
+  harness?: Harness;
+  sessionCwd?: string;
+  startedAt?: number;
+}): string | undefined {
+  if (!input.harness || !input.sessionCwd) return undefined;
+  const startedAt = input.startedAt ?? 0;
+  const cwd = input.sessionCwd;
+  const home = homedir();
+  if (input.harness === 'claude') {
+    const encoded = cwd.replace(/[\\/]+/g, '-');
+    const projectDir = join(home, '.claude', 'projects', encoded);
+    // Within the cwd-encoded dir, all candidates already share the cwd —
+    // mtime is enough. We still verify the first-line `cwd` so a stale
+    // dir-name match can't smuggle in a wrong file.
+    return findFreshestMatchingTranscript({
+      dir: projectDir,
+      recursive: false,
+      extensions: ['.jsonl'],
+      sinceMs: startedAt,
+      sessionCwd: cwd,
+      readCwd: readCwdFromClaudeJsonl
+    });
+  }
+  if (input.harness === 'codex') {
+    return findFreshestMatchingTranscript({
+      dir: join(home, '.codex', 'sessions'),
+      recursive: true,
+      extensions: ['.jsonl'],
+      sinceMs: startedAt,
+      sessionCwd: cwd,
+      readCwd: readCwdFromCodexJsonl
+    });
+  }
+  if (input.harness === 'opencode') {
+    return findFreshestMatchingTranscript({
+      dir: join(home, '.local', 'share', 'opencode', 'storage', 'session'),
+      recursive: true,
+      extensions: ['.json'],
+      sinceMs: startedAt,
+      sessionCwd: cwd,
+      readCwd: readCwdFromOpencodeSession
+    });
+  }
+  return undefined;
+}
+
+interface FindMatchingOptions {
+  dir: string;
+  /** Whether to walk subdirectories (codex date-grouped, opencode project-hash-grouped). */
+  recursive: boolean;
+  extensions: readonly string[];
+  sinceMs: number;
+  sessionCwd: string;
+  /**
+   * Extract the embedded cwd from the candidate file. Returns undefined
+   * when the file has no parseable cwd (skip rather than match).
+   */
+  readCwd: (path: string) => string | undefined;
+}
+
+/**
+ * Walk a candidate directory and pick the most recently modified file
+ * whose embedded cwd matches `sessionCwd`. Capped at depth 3 in
+ * recursive mode — codex/opencode group by date or project hash, never
+ * deeper. mtime gate eliminates files written before the session and
+ * keeps the scan cheap on large session stores.
+ */
+function findFreshestMatchingTranscript(opts: FindMatchingOptions): string | undefined {
+  const wantsExt = (name: string) => opts.extensions.some((ext) => name.endsWith(ext));
+  let bestPath: string | undefined;
+  let bestMtime = -1;
+  const visit = (cur: string, depth: number) => {
+    let entries: Dirent[];
+    try {
+      entries = readdirSync(cur, { withFileTypes: true });
+    } catch {
+      return;
+    }
+    for (const entry of entries) {
+      const full = join(cur, entry.name);
+      if (entry.isDirectory()) {
+        if (opts.recursive && depth < 3) visit(full, depth + 1);
+        continue;
+      }
+      if (!entry.isFile()) continue;
+      if (!wantsExt(entry.name)) continue;
+      let s;
+      try {
+        s = statSync(full);
+      } catch {
+        continue;
+      }
+      const mtime = s.mtimeMs;
+      if (mtime < opts.sinceMs) continue;
+      if (mtime <= bestMtime) continue;
+      const cwd = opts.readCwd(full);
+      if (cwd !== opts.sessionCwd) continue;
+      bestMtime = mtime;
+      bestPath = full;
+    }
+  };
+  visit(opts.dir, 0);
+  return bestPath;
+}
+
+/**
+ * Read up to ~64KB from `path` (enough for a JSONL header line plus
+ * margin) and return it as a string. Used by the per-harness cwd
+ * extractors so we don't slurp multi-megabyte transcripts to find a
+ * field on line 1.
+ */
+interface TranscriptHeader {
+  text: string;
+  /** True if the file was longer than `maxBytes` and we only read the prefix. */
+  truncated: boolean;
+}
+
+/**
+ * Read up to `maxBytes` from `path` and report whether the file was
+ * larger. Callers that need to JSON.parse the whole file (opencode's
+ * single-object session record) gate on `truncated === false`; callers
+ * that scan line-by-line (claude/codex JSONL) ignore it.
+ */
+function readTranscriptHeader(
+  path: string,
+  maxBytes = 65536
+): TranscriptHeader | undefined {
+  let fd: number | undefined;
+  try {
+    fd = openSync(path, 'r');
+    const buf = Buffer.alloc(maxBytes);
+    const n = readSync(fd, buf, 0, maxBytes, 0);
+    return {
+      text: buf.subarray(0, n).toString('utf8'),
+      truncated: n >= maxBytes
+    };
+  } catch {
+    return undefined;
+  } finally {
+    if (fd !== undefined) {
+      try {
+        closeSync(fd);
+      } catch {
+        /* swallow — fd already invalid */
+      }
+    }
+  }
+}
+
+/** Claude JSONL: `cwd` appears on most entries; the first line that has it wins. */
+function readCwdFromClaudeJsonl(path: string): string | undefined {
+  const header = readTranscriptHeader(path);
+  if (!header) return undefined;
+  for (const line of header.text.split('\n')) {
+    if (!line.includes('"cwd"')) continue;
+    try {
+      const obj = JSON.parse(line) as { cwd?: unknown };
+      if (typeof obj.cwd === 'string') return obj.cwd;
+    } catch {
+      // partial last line — skip
+    }
+  }
+  return undefined;
+}
+
+/** Codex JSONL: line 1 is `session_meta` with `payload.cwd`. */
+function readCwdFromCodexJsonl(path: string): string | undefined {
+  const header = readTranscriptHeader(path);
+  if (!header) return undefined;
+  const firstNewline = header.text.indexOf('\n');
+  const firstLine = firstNewline === -1 ? header.text : header.text.slice(0, firstNewline);
+  try {
+    const obj = JSON.parse(firstLine) as { payload?: { cwd?: unknown } };
+    const cwd = obj.payload?.cwd;
+    return typeof cwd === 'string' ? cwd : undefined;
+  } catch {
+    return undefined;
+  }
+}
+
+/**
+ * Opencode session JSON: top-level `directory` field. Opencode writes
+ * the whole session as a single JSON object, so a truncated read can't
+ * be parsed — the closing brace is missing. Re-read the full file when
+ * `truncated` flips, since real opencode session records are typically
+ * a few hundred bytes (summary, directory, ids) but we don't want to
+ * silently miss a larger one.
+ */
+function readCwdFromOpencodeSession(path: string): string | undefined {
+  const header = readTranscriptHeader(path);
+  if (!header) return undefined;
+  let body = header.text;
+  if (header.truncated) {
+    try {
+      body = readFileSync(path, 'utf8');
+    } catch {
+      return undefined;
+    }
+  }
+  try {
+    const obj = JSON.parse(body) as { directory?: unknown };
+    return typeof obj.directory === 'string' ? obj.directory : undefined;
+  } catch {
+    return undefined;
+  }
+}
+
+/**
+ * Run the persona-improver in headless one-shot mode against the given
+ * persona + transcript. Returns the parsed proposals file on success.
+ *
+ * Throws on: missing improver in catalog, harness binary not on PATH,
+ * non-zero harness exit, or unparseable proposals JSON. Caller is expected
+ * to surface the message and skip the apply step.
+ */
+async function runPersonaImprover(args: {
+  personaFilePath: string;
+  transcriptPath: string;
+  proposalsOutputPath: string;
+}): Promise<ImproverProposalsFile> {
+  const improverSpec = personaCatalog['persona-improvement' as const];
+  if (!improverSpec) {
+    throw new Error('built-in persona "persona-improver" is not registered in the catalog');
+  }
+  const tier: PersonaTier = 'best-value';
+  const selection = buildSelection(improverSpec, tier, 'repo');
+  const ctx = useRunnableSelection(selection);
+  const taskLines = [
+    'Improve this local persona from one finished session. The CLI will read your proposals JSON and walk the user through accept/deny.',
+    `PERSONA_FILE_PATH=${args.personaFilePath}`,
+    `SESSION_TRANSCRIPT_PATH=${args.transcriptPath}`,
+    `PROPOSALS_OUTPUT_PATH=${args.proposalsOutputPath}`
+  ];
+  const result = await ctx.sendMessage(taskLines.join('\n'), {
+    inputs: {
+      PERSONA_FILE_PATH: args.personaFilePath,
+      SESSION_TRANSCRIPT_PATH: args.transcriptPath,
+      PROPOSALS_OUTPUT_PATH: args.proposalsOutputPath
+    },
+    timeoutSeconds: selection.runtime.harnessSettings.timeoutSeconds
+  });
+  if (result.status !== 'completed' || (result.exitCode !== null && result.exitCode !== 0)) {
+    throw new Error(
+      `improver exited with status=${result.status}, code=${result.exitCode ?? 'null'}.${result.stderr ? ` stderr: ${result.stderr.slice(0, 400)}` : ''}`
+    );
+  }
+  let raw: string;
+  try {
+    raw = readFileSync(args.proposalsOutputPath, 'utf8');
+  } catch (err) {
+    throw new Error(
+      `improver did not write proposals file at ${args.proposalsOutputPath}: ${(err as Error).message}`
+    );
+  }
+  return parseProposals(raw);
+}
+
+export function parseProposals(raw: string): ImproverProposalsFile {
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(raw);
+  } catch (err) {
+    throw new Error(`proposals file is not valid JSON: ${(err as Error).message}`);
+  }
+  if (!parsed || typeof parsed !== 'object') {
+    throw new Error('proposals file must be a JSON object');
+  }
+  const obj = parsed as Record<string, unknown>;
+  const proposalsArr = Array.isArray(obj.proposals) ? obj.proposals : [];
+  const proposals: ImproverProposal[] = [];
+  for (const [idx, item] of proposalsArr.entries()) {
+    if (!item || typeof item !== 'object') {
+      throw new Error(`proposals[${idx}] must be an object`);
+    }
+    const p = item as Record<string, unknown>;
+    if (typeof p.id !== 'string' || !p.id.trim()) {
+      throw new Error(`proposals[${idx}].id must be a non-empty string`);
+    }
+    if (typeof p.summary !== 'string' || !p.summary.trim()) {
+      throw new Error(`proposals[${idx}].summary must be a non-empty string`);
+    }
+    if (typeof p.rationale !== 'string') {
+      throw new Error(`proposals[${idx}].rationale must be a string`);
+    }
+    if (!Array.isArray(p.patches) || p.patches.length === 0) {
+      throw new Error(`proposals[${idx}].patches must be a non-empty array`);
+    }
+    const patches: ImproverPatch[] = [];
+    for (const [pidx, rawPatch] of p.patches.entries()) {
+      if (!rawPatch || typeof rawPatch !== 'object') {
+        throw new Error(`proposals[${idx}].patches[${pidx}] must be an object`);
+      }
+      const rp = rawPatch as Record<string, unknown>;
+      if (typeof rp.path !== 'string' || !rp.path.trim()) {
+        throw new Error(`proposals[${idx}].patches[${pidx}].path must be a non-empty string`);
+      }
+      if (rp.op !== 'set' && rp.op !== 'append') {
+        throw new Error(
+          `proposals[${idx}].patches[${pidx}].op must be "set" or "append"`
+        );
+      }
+      const patch: ImproverPatch = { path: rp.path, op: rp.op, value: rp.value };
+      assertAllowedImproverPatch(patch, `proposals[${idx}].patches[${pidx}]`);
+      patches.push(patch);
+    }
+    proposals.push({
+      id: p.id,
+      summary: p.summary,
+      rationale: p.rationale,
+      patches
+    });
+  }
+  return {
+    personaId: typeof obj.personaId === 'string' ? obj.personaId : '',
+    personaFilePath: typeof obj.personaFilePath === 'string' ? obj.personaFilePath : '',
+    transcriptPath: typeof obj.transcriptPath === 'string' ? obj.transcriptPath : '',
+    proposals
+  };
+}
+
+/**
+ * Walk improver proposals one-by-one over the TTY. Returns only the
+ * accepted proposals; the caller applies the patches. Supports:
+ *   y / n — accept or skip the current proposal
+ *   a     — accept this and all remaining proposals
+ *   q     — quit without accepting any further proposals (already-accepted ones stay)
+ *
+ * On a non-TTY we shouldn't have reached this point (caller checks),
+ * but if we do, return an empty list so nothing is auto-applied.
+ */
+function walkProposalsInteractive(file: ImproverProposalsFile): ImproverProposal[] {
+  if (!process.stdin.isTTY) return [];
+  const accepted: ImproverProposal[] = [];
+  const total = file.proposals.length;
+  let acceptAll = false;
+  for (let i = 0; i < total; i++) {
+    const proposal = file.proposals[i];
+    process.stderr.write(`\n[${i + 1}/${total}] ${proposal.summary}\n`);
+    if (proposal.rationale) {
+      process.stderr.write(`  why: ${proposal.rationale}\n`);
+    }
+    for (const patch of proposal.patches) {
+      const preview = formatPatchPreview(patch);
+      process.stderr.write(`  ${preview}\n`);
+    }
+    if (acceptAll) {
+      accepted.push(proposal);
+      process.stderr.write('  → accepted (accept-all)\n');
+      continue;
+    }
+    // 'n' is first so empty Enter defaults to skip (matches the
+    // [y/N] default-no convention used by promptYesNoSync at the
+    // session-end "auto-improve?" prompt). If the user hammers Enter
+    // through a stack of proposals they get a no-op outcome, not an
+    // unintended file mutation.
+    const choice = readSingleCharChoice('  accept? [y/N/a/q] ', ['n', 'y', 'a', 'q']);
+    if (choice === 'y') {
+      accepted.push(proposal);
+    } else if (choice === 'a') {
+      accepted.push(proposal);
+      acceptAll = true;
+    } else if (choice === 'q') {
+      process.stderr.write('  → quit; no further proposals will be reviewed.\n');
+      break;
+    }
+    // 'n' (and bare Enter) falls through with no accept.
+  }
+  return accepted;
+}
+
+/**
+ * Render a one-line patch preview. Truncates long string values so a
+ * multi-paragraph systemPrompt rewrite doesn't dominate the screen.
+ */
+function formatPatchPreview(patch: ImproverPatch): string {
+  const op = patch.op === 'append' ? '+= ' : '= ';
+  const valueStr = formatPatchValue(patch.value);
+  return `${patch.path} ${op}${valueStr}`;
+}
+
+function formatPatchValue(value: unknown): string {
+  if (typeof value === 'string') {
+    const condensed = value.replace(/\s+/g, ' ').trim();
+    return condensed.length > 100 ? `"${condensed.slice(0, 97)}..."` : `"${condensed}"`;
+  }
+  try {
+    const json = JSON.stringify(value);
+    if (json === undefined) return '<undefined>';
+    return json.length > 120 ? `${json.slice(0, 117)}...` : json;
+  } catch {
+    return '<unserializable>';
+  }
+}
+
+/**
+ * Read a single-character choice from stdin synchronously, looping on
+ * invalid input. Empty Enter (no character) returns the first option in
+ * `valid` — callers should put the safe / default-no answer first.
+ *
+ * Test seam: callers can inject `read` so the prompt is exercisable
+ * without a real TTY (mirrors `promptYesNoSync`).
+ */
+export function readSingleCharChoice(
+  prompt: string,
+  valid: readonly string[],
+  opts: {
+    write?: (chunk: string) => void;
+    read?: () => string | undefined;
+  } = {}
+): string {
+  const write = opts.write ?? ((chunk: string) => {
+    process.stderr.write(chunk);
+  });
+  for (;;) {
+    write(prompt);
+    const line = opts.read ? opts.read() : readLineFromStdinSync();
+    const trimmed = (line ?? '').trim().toLowerCase();
+    if (trimmed.length === 0) return valid[0];
+    const ch = trimmed[0];
+    if (valid.includes(ch)) return ch;
+    write(`  invalid choice; expected one of: ${valid.join(', ')}\n`);
+  }
+}
+
+/**
+ * Apply accepted patches to the persona JSON on disk. Reads, mutates the
+ * parsed object, writes back with two-space indent + trailing newline
+ * (matches existing /personas style). Throws on unwriteable file or
+ * unsupported patch op/path resolution.
+ */
+export function applyAcceptedPatches(
+  personaFilePath: string,
+  accepted: readonly ImproverProposal[]
+): void {
+  const raw = readFileSync(personaFilePath, 'utf8');
+  const json = JSON.parse(raw) as Record<string, unknown>;
+  for (const proposal of accepted) {
+    for (const patch of proposal.patches) {
+      applyPatchInPlace(json, patch);
+    }
+  }
+  writeFileSync(personaFilePath, JSON.stringify(json, null, 2) + '\n', 'utf8');
+}
+
+function applyPatchInPlace(root: Record<string, unknown>, patch: ImproverPatch): void {
+  // Re-run the allowlist + prototype-segment guard at apply time, not
+  // just at parse time. Belt-and-braces: a patch list constructed by a
+  // future caller that bypasses parseProposals can't smuggle a
+  // disallowed path past this point either.
+  assertAllowedImproverPatch(patch, `applyPatchInPlace`);
+  const segments = patch.path.split('.').filter((s) => s.length > 0);
+  let cursor: Record<string, unknown> = root;
+  for (let i = 0; i < segments.length - 1; i++) {
+    const seg = segments[i];
+    const next = cursor[seg];
+    if (next === undefined || next === null) {
+      const created: Record<string, unknown> = {};
+      cursor[seg] = created;
+      cursor = created;
+      continue;
+    }
+    if (typeof next !== 'object' || Array.isArray(next)) {
+      throw new Error(`patch path "${patch.path}": "${seg}" is not an object`);
+    }
+    cursor = next as Record<string, unknown>;
+  }
+  const finalSeg = segments[segments.length - 1];
+  if (patch.op === 'append') {
+    const existing = cursor[finalSeg];
+    if (existing === undefined) {
+      cursor[finalSeg] = [patch.value];
+      return;
+    }
+    if (!Array.isArray(existing)) {
+      throw new Error(`patch path "${patch.path}": cannot append to non-array`);
+    }
+    existing.push(patch.value);
+    return;
+  }
+  // op === 'set'
+  cursor[finalSeg] = patch.value;
 }
 
 /**

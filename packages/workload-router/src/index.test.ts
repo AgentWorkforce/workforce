@@ -67,8 +67,9 @@ function syntheticSpec(over: Partial<PersonaSpec> = {}): PersonaSpec {
 
 test('built-in catalog is limited to internal system personas', () => {
   const builtIns = listBuiltInPersonas();
-  assert.deepEqual(builtIns.map((p) => p.id), ['persona-maker']);
+  assert.deepEqual(builtIns.map((p) => p.id).sort(), ['persona-improver', 'persona-maker']);
   assert.equal(personaCatalog['persona-authoring']?.id, 'persona-maker');
+  assert.equal(personaCatalog['persona-improvement']?.id, 'persona-improver');
   assert.equal(personaCatalog.review, undefined);
   assert.ok(PERSONA_INTENTS.includes('review'));
   assert.equal(routingProfiles.default.intents.review.tier, 'best-value');

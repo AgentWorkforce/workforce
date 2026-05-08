@@ -114,6 +114,13 @@ export interface LoadedLocalPersonas {
   byId: Map<string, PersonaSpec>;
   /** Where each id in `byId` was defined (top-most layer that declared it). */
   sources: Map<string, PersonaSource>;
+  /**
+   * Absolute path to the JSON file that produced each id in `byId`. Comes
+   * from the topmost layer that declared the id (the same layer
+   * `sources` records). Mutating tools — e.g. the post-session
+   * persona-improver flow — apply accepted patches at this path.
+   */
+  paths: Map<string, string>;
   warnings: string[];
 }
 
@@ -298,7 +305,8 @@ export function buildPersonaSourceDirectories(
 function readLayerDir(
   dir: string,
   layer: SourceLayer,
-  warnings: string[]
+  warnings: string[],
+  filePaths: Map<string, string>
 ): Map<string, LocalPersonaOverride> {
   const out = new Map<string, LocalPersonaOverride>();
   if (!existsSync(dir)) return out;
@@ -322,6 +330,7 @@ function readLayerDir(
         continue;
       }
       out.set(parsed.id, parsed);
+      filePaths.set(`${layer.key}:${parsed.id}`, path);
     } catch (err) {
       warnings.push(`[${layer.source}] ${file}: ${(err as Error).message}`);
     }
@@ -1175,12 +1184,14 @@ export function loadLocalPersonas(options: LoadOptions = {}): LoadedLocalPersona
   }));
 
   const overrides = new Map<string, Map<string, LocalPersonaOverride>>();
+  const layerFilePaths = new Map<string, string>();
   for (const layer of layers) {
-    overrides.set(layer.key, readLayerDir(layer.dir, layer, warnings));
+    overrides.set(layer.key, readLayerDir(layer.dir, layer, warnings, layerFilePaths));
   }
 
   const byId = new Map<string, PersonaSpec>();
   const sources = new Map<string, PersonaSource>();
+  const paths = new Map<string, string>();
 
   for (let i = 0; i < layers.length; i++) {
     const layer = layers[i];
@@ -1193,6 +1204,8 @@ export function loadLocalPersonas(options: LoadOptions = {}): LoadedLocalPersona
         const resolved = resolveInLayer(id, i, layers, overrides, new Set(), sidecarWarnings);
         byId.set(id, resolved);
         sources.set(id, layer.source);
+        const filePath = layerFilePaths.get(`${layer.key}:${id}`);
+        if (filePath) paths.set(id, filePath);
         for (const warning of sidecarWarnings) {
           warnings.push(`[${layer.source}] ${warning}`);
         }
@@ -1202,5 +1215,5 @@ export function loadLocalPersonas(options: LoadOptions = {}): LoadedLocalPersona
     }
   }
 
-  return { byId, sources, warnings };
+  return { byId, sources, paths, warnings };
 }
