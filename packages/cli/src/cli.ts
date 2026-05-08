@@ -5,18 +5,20 @@ import {
   appendFileSync,
   existsSync,
   mkdirSync,
+  mkdtempSync,
   readFileSync,
   readSync,
   rmSync,
   statSync,
   writeFileSync
 } from 'node:fs';
-import { constants, homedir } from 'node:os';
+import { constants, homedir, tmpdir } from 'node:os';
 import { dirname, isAbsolute, join, resolve as resolvePath } from 'node:path';
 import { pathToFileURL } from 'node:url';
 
 import {
   HARNESS_VALUES,
+  materializeSkills,
   PERSONA_TAGS,
   PERSONA_TIERS,
   listBuiltInPersonas,
@@ -106,6 +108,26 @@ Commands:
                                             Disable launch metadata recording.
                                             Also disabled by
                                             AGENTWORKFORCE_LAUNCH_METADATA=0.
+                        --dry-run           Validate the persona without
+                                            spawning the harness or burning
+                                            tier-model tokens. Three checks:
+                                            (1) sidecar — claudeMd / agentsMd
+                                            filename refs are readable;
+                                            (2) harness spec — permissions /
+                                            mcpServers / harness-settings
+                                            shape is accepted by the harness
+                                            translator; (3) skills — each
+                                            \`skills[].source\` is run through
+                                            its real installer (npx skills
+                                            add / npx prpm install) inside a
+                                            fresh temp dir, with per-skill
+                                            pass/fail reporting. Use this in
+                                            the persona-author loop to catch
+                                            hallucinated skill names and
+                                            malformed config before a persona
+                                            ships. Temp dir is removed on
+                                            success, kept on failure for
+                                            inspection.
   list [flags]        List available personas from the cascade (cwd →
                       configured persona dirs → library). By default shows
                       one row per persona at the recommended tier for its
@@ -802,6 +824,152 @@ export function decideCleanMode(
     return { useClean: !installInRepo };
   }
   return { useClean: false };
+}
+
+/**
+ * Persona authoring dry-run. Used by persona authors to verify a persona
+ * actually launches before it ships, without spawning the harness or
+ * running the agent's tier model. Three checks, in order:
+ *
+ *   1. Sidecar resolution — `claudeMd` / `agentsMd` filename references
+ *      that point at unreadable files would brick the launch silently
+ *      today (lenient warning); dry-run promotes them to failures.
+ *   2. Interactive spec build — runs `buildInteractiveSpec` on the
+ *      resolved selection. Catches malformed `permissions` patterns,
+ *      `mcpServers` shape errors, and missing required harness fields.
+ *      Pure / no side effects.
+ *   3. Skill install — runs each `skills[].source` through its real
+ *      installer (`npx skills add` / `npx prpm install`) inside a fresh
+ *      temp dir and reports per-skill pass/fail.
+ *
+ * Temp dir is deleted on success so dry-run leaves no trace; on a skill
+ * failure it is left in place and its path printed so the author can
+ * inspect the installer's output. Checks 1 and 2 run before any temp
+ * dir is created so an early failure doesn't litter `/tmp`.
+ */
+function runDryRun(selection: PersonaSelection): number {
+  const inputResolution = resolvePersonaInputs(
+    selection.inputs,
+    selection.inputValues,
+    process.env
+  );
+  const renderedSystemPrompt = renderPersonaInputs(
+    selection.runtime.systemPrompt,
+    inputResolution.values
+  );
+  const renderedClaudeContent =
+    selection.claudeMdContent !== undefined
+      ? renderPersonaInputs(selection.claudeMdContent, inputResolution.values)
+      : undefined;
+  const renderedAgentsContent =
+    selection.agentsMdContent !== undefined
+      ? renderPersonaInputs(selection.agentsMdContent, inputResolution.values)
+      : undefined;
+  const effectiveSelection: PersonaSelection = {
+    ...selection,
+    runtime: { ...selection.runtime, systemPrompt: renderedSystemPrompt },
+    ...(renderedClaudeContent !== undefined ? { claudeMdContent: renderedClaudeContent } : {}),
+    ...(renderedAgentsContent !== undefined ? { agentsMdContent: renderedAgentsContent } : {})
+  };
+  const { runtime, personaId, tier } = effectiveSelection;
+
+  process.stderr.write(
+    `→ ${personaId} [${tier}] via ${runtime.harness} (${runtime.model}) [DRY-RUN]\n`
+  );
+
+  // Check 1: sidecar resolution. A loadSidecarForSelection warning means
+  // the persona points `claudeMd` / `agentsMd` at a file we couldn't
+  // read; the launch path degrades to a warning today, which silently
+  // drops the persona's operating spec. In dry-run that's a failure.
+  const sidecarLookup = loadSidecarForSelection(effectiveSelection);
+  if (sidecarLookup.warning) {
+    process.stderr.write(`✗ sidecar: ${sidecarLookup.warning}\n`);
+    return 1;
+  }
+  process.stderr.write(
+    `✓ sidecar: ${sidecarLookup.sidecar ? sidecarLookup.sidecar.mountFile : '(none)'}\n`
+  );
+
+  // Check 2: harness-kit translation. buildInteractiveSpec validates
+  // permissions shape, mcpServers shape, and required runtime fields.
+  // We resolve env + mcp leniently (same as the live launch path) so
+  // the spec call sees the same inputs it would at runtime.
+  const callerEnv = { ...process.env, ...inputResolution.values };
+  const envResolution = resolveStringMapLenient(effectiveSelection.env, callerEnv, 'env');
+  const mcpResolution = resolveMcpServersLenient(effectiveSelection.mcpServers, callerEnv);
+  emitDropWarnings(
+    formatDropWarnings(envResolution.dropped, mcpResolution.dropped, mcpResolution.droppedServers)
+  );
+  let spec: InteractiveSpec;
+  try {
+    spec = buildInteractiveSpec({
+      harness: runtime.harness,
+      personaId,
+      model: runtime.model,
+      systemPrompt: runtime.systemPrompt,
+      harnessSettings: runtime.harnessSettings,
+      mcpServers: mcpResolution.servers,
+      permissions: effectiveSelection.permissions
+    });
+  } catch (err) {
+    const msg = err instanceof Error ? err.message : String(err);
+    process.stderr.write(`✗ harness spec: ${msg}\n`);
+    return 1;
+  }
+  for (const w of spec.warnings) process.stderr.write(`warning: ${w}\n`);
+  process.stderr.write(`✓ harness spec: ${spec.bin} (${spec.args.length} args)\n`);
+
+  // Check 3: skill installs.
+  const plan = materializeSkills(effectiveSelection.skills, runtime.harness);
+  if (plan.installs.length === 0) {
+    process.stderr.write('✓ skills: (none declared)\n');
+    process.stderr.write('✓ dry-run ok\n');
+    return 0;
+  }
+
+  const tempDir = mkdtempSync(join(tmpdir(), `agentworkforce-dryrun-${personaId}-`));
+  process.stderr.write(`• temp dir: ${tempDir}\n`);
+  process.stderr.write(`• installing ${plan.installs.length} skill(s)\n`);
+
+  const failures: { skillId: string; exitCode: number }[] = [];
+  for (const inst of plan.installs) {
+    const [bin, ...args] = inst.installCommand;
+    if (!bin) {
+      process.stderr.write(`  skipped ${inst.skillId}: empty install command\n`);
+      continue;
+    }
+    process.stderr.write(`• ${inst.skillId} (${inst.sourceKind}) → ${inst.packageRef}\n`);
+    const res = spawnSync(bin, args, { stdio: 'inherit', shell: false, cwd: tempDir });
+    const code = subprocessExitCode(res);
+    if (code === 0) {
+      process.stderr.write(`  ✓ ${inst.skillId}\n`);
+    } else {
+      process.stderr.write(`  ✗ ${inst.skillId} (exit ${code})\n`);
+      failures.push({ skillId: inst.skillId, exitCode: code });
+    }
+  }
+
+  if (failures.length === 0) {
+    try {
+      rmSync(tempDir, { recursive: true, force: true });
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : String(err);
+      process.stderr.write(`warning: failed to clean up ${tempDir}: ${msg}\n`);
+    }
+    process.stderr.write(
+      `✓ dry-run ok: ${plan.installs.length} skill(s) installed cleanly\n`
+    );
+    return 0;
+  }
+
+  process.stderr.write(
+    `✗ dry-run failed: ${failures.length} of ${plan.installs.length} skill(s) failed\n`
+  );
+  process.stderr.write(`  inspect ${tempDir} for installer output\n`);
+  for (const f of failures) {
+    process.stderr.write(`  - ${f.skillId} (exit ${f.exitCode})\n`);
+  }
+  return failures[0]?.exitCode || 1;
 }
 
 async function runInteractive(
@@ -2123,6 +2291,11 @@ async function runAgentSelector(
     ...(inputValues ? { inputValues } : {})
   };
 
+  if (flags.dryRun) {
+    const code = runDryRun(selection);
+    process.exit(code);
+  }
+
   const code = await runInteractive(selection, {
     installInRepo: flags.installInRepo,
     noLaunchMetadata: flags.noLaunchMetadata,
@@ -2273,7 +2446,7 @@ async function runPick(args: readonly string[]): Promise<never> {
   };
   await runAgentSelector(
     CREATE_SELECTOR,
-    { installInRepo: false, noLaunchMetadata: false },
+    { installInRepo: false, noLaunchMetadata: false, dryRun: false },
     inputValues
   );
   // runAgentSelector terminates via process.exit; this satisfies TS's
@@ -2351,6 +2524,7 @@ export async function main(): Promise<void> {
 export interface AgentFlags {
   installInRepo: boolean;
   noLaunchMetadata: boolean;
+  dryRun: boolean;
 }
 
 export interface CreateFlags extends AgentFlags {
@@ -2362,7 +2536,11 @@ export function parseAgentArgs(args: readonly string[]): {
   flags: AgentFlags;
   positional: string[];
 } {
-  const flags: AgentFlags = { installInRepo: false, noLaunchMetadata: false };
+  const flags: AgentFlags = {
+    installInRepo: false,
+    noLaunchMetadata: false,
+    dryRun: false
+  };
   const positional: string[] = [];
   let seenDoubleDash = false;
   for (const arg of args) {
@@ -2382,6 +2560,10 @@ export function parseAgentArgs(args: readonly string[]): {
       flags.noLaunchMetadata = true;
       continue;
     }
+    if (arg === '--dry-run') {
+      flags.dryRun = true;
+      continue;
+    }
     if (arg === '-h' || arg === '--help') {
       process.stdout.write(USAGE);
       process.exit(0);
@@ -2396,7 +2578,12 @@ export function parseCreateArgs(args: readonly string[]): {
   selector: string;
   inputValues: Record<string, string>;
 } {
-  const flags: CreateFlags = { installInRepo: false, noLaunchMetadata: false, saveDefault: false };
+  const flags: CreateFlags = {
+    installInRepo: false,
+    noLaunchMetadata: false,
+    dryRun: false,
+    saveDefault: false
+  };
   let seenDoubleDash = false;
   const positional: string[] = [];
   const valueOf = (i: number, flag: string): string => {

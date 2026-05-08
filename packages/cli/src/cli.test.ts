@@ -139,7 +139,27 @@ test('parseAgentArgs: no flags → installInRepo false', () => {
   const { flags, positional } = parseAgentArgs(['local-codex']);
   assert.equal(flags.installInRepo, false);
   assert.equal(flags.noLaunchMetadata, false);
+  assert.equal(flags.dryRun, false);
   assert.deepEqual(positional, ['local-codex']);
+});
+
+test('parseAgentArgs: --dry-run sets flag and preserves positional selector', () => {
+  const { flags, positional } = parseAgentArgs(['--dry-run', 'local-codex@best']);
+  assert.equal(flags.dryRun, true);
+  assert.equal(flags.installInRepo, false);
+  assert.equal(flags.noLaunchMetadata, false);
+  assert.deepEqual(positional, ['local-codex@best']);
+});
+
+test('parseAgentArgs: --dry-run composes with other flags', () => {
+  const { flags, positional } = parseAgentArgs([
+    '--dry-run',
+    '--install-in-repo',
+    'local-codex@best-value'
+  ]);
+  assert.equal(flags.dryRun, true);
+  assert.equal(flags.installInRepo, true);
+  assert.deepEqual(positional, ['local-codex@best-value']);
 });
 
 test('parseAgentArgs: -- stops flag parsing, positional args after are preserved', () => {
