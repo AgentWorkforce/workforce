@@ -36,8 +36,8 @@ importers:
         specifier: ^2.3.0
         version: 2.3.0
       '@relayfile/local-mount':
-        specifier: ^0.6.15
-        version: 0.6.15
+        specifier: ^0.7.0
+        version: 0.7.0
       ora:
         specifier: ^9.4.0
         version: 9.4.0
@@ -172,8 +172,8 @@ packages:
     resolution: {integrity: sha512-r0d75UxS2uVaPz0KdAN5ACeVhwOhziblyXI9E464YZUuFzwKmz8EVaAAx9KQToOt0pgh4je36kRV8xs1dnJ3Tg==}
     engines: {node: '>=22'}
 
-  '@relayfile/local-mount@0.6.15':
-    resolution: {integrity: sha512-llJi+QXPwMPwpynLsPBvscHt+w9Gw9OXeuMTpab3e14CYaGaatxtCJAwwTaZgTO3qz7z7O8CejoEFWrLS9AIiA==}
+  '@relayfile/local-mount@0.7.0':
+    resolution: {integrity: sha512-kkqSA0J711J4um/IIoDf9e99qrUHEPG3glKscyVmm3h30JZ0PTfUzBNJ2KsHGoZUPtT6jIXIYdswIFb12/Cluw==}
     engines: {node: '>=18'}
 
   '@types/node@22.19.15':
@@ -388,7 +388,7 @@ snapshots:
       '@relayburn/sdk-linux-arm64-gnu': 2.3.0
       '@relayburn/sdk-linux-x64-gnu': 2.3.0
 
-  '@relayfile/local-mount@0.6.15':
+  '@relayfile/local-mount@0.7.0':
     dependencies:
       '@parcel/watcher': 2.5.6
       ignore: 7.0.5

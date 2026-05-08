@@ -421,27 +421,41 @@ function subprocessExitCode(res: ReturnType<typeof spawnSync>): number {
  * `label` (which includes target paths and skill ids) is shown on
  * success/failure so the verbose detail is still discoverable in logs.
  */
-function runInstallWithSpinner(
+async function runInstallWithSpinner(
   command: readonly string[],
   label: string,
   cwd: string | undefined
-): { code: number; output: string } {
+): Promise<{ code: number; output: string }> {
   const [bin, ...args] = command;
   if (!bin) return { code: 0, output: '' };
   const spinner = ora({ text: 'Installing skills…', stream: process.stderr }).start();
-  const res = spawnSync(bin, args, {
-    stdio: ['ignore', 'pipe', 'pipe'],
-    shell: false,
-    encoding: 'utf8',
-    // Default is 1 MiB; verbose `npx prpm install` / `npx skills add` runs
-    // can blow past it, which would have spawnSync kill the child with
-    // ENOBUFS and report a spurious failure. 100 MiB is well past anything
-    // these installers print in practice.
-    maxBuffer: 100 * 1024 * 1024,
-    ...(cwd ? { cwd } : {})
+  // Async spawn (not spawnSync) so ora's frame timer can fire during the
+  // install — spawnSync blocks the event loop and freezes the spinner on
+  // its first frame.
+  const { code, output } = await new Promise<{ code: number; output: string }>((resolve) => {
+    const child = spawn(bin, args, {
+      stdio: ['ignore', 'pipe', 'pipe'],
+      shell: false,
+      ...(cwd ? { cwd } : {})
+    });
+    let buffered = '';
+    child.stdout?.setEncoding('utf8');
+    child.stderr?.setEncoding('utf8');
+    child.stdout?.on('data', (chunk: string) => {
+      buffered += chunk;
+    });
+    child.stderr?.on('data', (chunk: string) => {
+      buffered += chunk;
+    });
+    child.on('error', (err) => {
+      resolve({ code: 1, output: `${buffered}${err.message}\n` });
+    });
+    child.on('close', (status, signal) => {
+      const exit =
+        typeof status === 'number' ? status : signal ? signalExitCode(signal) : 1;
+      resolve({ code: exit, output: buffered });
+    });
   });
-  const output = `${res.stdout ?? ''}${res.stderr ?? ''}`;
-  const code = subprocessExitCode(res);
   if (code === 0) {
     spinner.succeed(label);
   } else {
@@ -451,12 +465,12 @@ function runInstallWithSpinner(
   return { code, output };
 }
 
-function runInstall(command: readonly string[], label: string, cwd?: string): void {
+async function runInstall(command: readonly string[], label: string, cwd?: string): Promise<void> {
   const [bin] = command;
   if (!bin) return;
   // runInstallWithSpinner already prints the failure line via spinner.fail;
   // the previous extra "${label} failed … Aborting." write would duplicate it.
-  const { code } = runInstallWithSpinner(command, label, cwd);
+  const { code } = await runInstallWithSpinner(command, label, cwd);
   if (code !== 0) process.exit(code);
 }
 
@@ -479,10 +493,14 @@ class InstallCommandError extends Error {
  * Used inside the mount branch's onBeforeLaunch step so mount teardown runs
  * before the error surfaces.
  */
-function runInstallOrThrow(command: readonly string[], label: string, cwd: string): void {
+async function runInstallOrThrow(
+  command: readonly string[],
+  label: string,
+  cwd: string
+): Promise<void> {
   const [bin] = command;
   if (!bin) return;
-  const { code } = runInstallWithSpinner(command, label, cwd);
+  const { code } = await runInstallWithSpinner(command, label, cwd);
   if (code !== 0) {
     throw new InstallCommandError(label, code);
   }
@@ -1146,7 +1164,7 @@ async function runInteractive(
   const deferInstallToMount =
     useClean && runtime.harness !== 'claude' && install.commandString !== ':';
   if (install.commandString !== ':' && !deferInstallToMount) {
-    runInstall(install.command, installLabel);
+    await runInstall(install.command, installLabel);
   }
 
   const spec = buildInteractiveSpec({
@@ -1239,31 +1257,59 @@ async function runInteractive(
       mount: effectiveSelection.mount,
       configFilePaths: spec.configFiles.map((file) => file.path)
     });
-    process.stderr.write(`• sandbox mount → ${mountDir}\n`);
+    // Setup spinner covers createMount + git-config + (optional) in-mount
+    // install + config-file writes + autosync start, so the multi-second
+    // pause before the harness child appears is visibly live. createMount
+    // is async in @relayfile/local-mount ≥0.7.0, which yields between
+    // directory entries — so this spinner actually animates instead of
+    // freezing on its first frame.
+    let setupSpinner: Ora | undefined = ora({
+      text: `Setting up sandbox mount → ${mountDir}…`,
+      stream: process.stderr
+    }).start();
     // Inline mount lifecycle (formerly delegated to launchOnMount) so we can
     // surface a spinner the moment the child exits — not just when the user
     // presses Ctrl-C. The sync-back walks both trees and can take several
     // seconds on a large repo; without an indicator, exiting the persona via
     // /exit looked like a hang.
     //
-    // SIGINT semantics:
-    //   • While the child is running: Ctrl-C reaches the harness directly via
-    //     the controlling TTY's foreground process group (the child is
-    //     spawned with `stdio: 'inherit'` and inherits the parent's pgid). We
-    //     register a no-op handler here purely to suppress Node's default
-    //     exit-on-SIGINT — forwarding via child.kill('SIGINT') would deliver
-    //     a *second* SIGINT and break harnesses that escalate on repeated
-    //     interrupts (e.g. claude treats 1st = cancel, 2nd = quit).
-    //   • While syncing: 1st press aborts the shutdownSignal (relayfile then
-    //     skips autosync's draining reconcile and returns the partial count
-    //     from the final syncBack). 2nd press hard-exits and rms the session
-    //     dir so no mount is left behind.
+    // SIGINT semantics — three phases:
+    //   • Pre-launch (setup): tear down the setup spinner, rm the session
+    //     dir, and exit(130). We must handle this ourselves because
+    //     registering any 'SIGINT' listener suppresses Node's default
+    //     exit-on-SIGINT, and createMount is now async (relayfile 0.7+) so
+    //     the handler actually fires during mount setup.
+    //   • Child running: Ctrl-C reaches the harness directly via the
+    //     controlling TTY's foreground process group (the child is spawned
+    //     with `stdio: 'inherit'` and inherits the parent's pgid). We
+    //     no-op purely to suppress Node's default exit — forwarding via
+    //     child.kill('SIGINT') would deliver a *second* SIGINT and break
+    //     harnesses that escalate on repeated interrupts (e.g. claude
+    //     treats 1st = cancel, 2nd = quit).
+    //   • Syncing (post-child): 1st press aborts the shutdownSignal
+    //     (relayfile then skips autosync's draining reconcile and returns
+    //     the partial count from the final syncBack). 2nd press hard-exits
+    //     and rms the session dir so no mount is left behind.
     const shutdownController = new AbortController();
     let syncSpinner: Ora | undefined;
     let isSyncing = false;
+    let childSpawned = false;
     let abortPresses = 0;
     const sigintHandler = () => {
-      if (!isSyncing) return;
+      if (!isSyncing) {
+        if (childSpawned) return;
+        // Pre-launch teardown.
+        if (setupSpinner) {
+          setupSpinner.fail('Sandbox mount setup interrupted (Ctrl-C)');
+          setupSpinner = undefined;
+        }
+        try {
+          rmSync(sessionRoot, { recursive: true, force: true });
+        } catch {
+          /* swallow — we're exiting anyway */
+        }
+        process.exit(130);
+      }
       abortPresses += 1;
       if (abortPresses === 1) {
         if (syncSpinner) {
@@ -1290,27 +1336,35 @@ async function runInteractive(
     };
     process.on('SIGINT', sigintHandler);
 
-    const handle = createMount(process.cwd(), mountDir, {
-      ignoredPatterns: [...ignoredPatterns],
-      readonlyPatterns: [...readonlyPatterns],
-      excludeDirs: [],
-      agentName: personaId,
-      // Pull `.git` into the mount so git commands work inside the sandbox.
-      // relayfile treats this as one-way project→mount: host-side `.git`
-      // changes flow in, mount-side commits/refs stay sandboxed and are
-      // discarded on cleanup. The agent must `git push` to persist work.
-      includeGit: true
-    });
+    let handle: Awaited<ReturnType<typeof createMount>> | undefined;
     let autoSync: AutoSyncHandle | undefined;
     let exitCode = 0;
     try {
+      // createMount inside the try so its initial-mirror failures fall into
+      // the catch path and clean up the setup spinner.
+      handle = await createMount(process.cwd(), mountDir, {
+        ignoredPatterns: [...ignoredPatterns],
+        readonlyPatterns: [...readonlyPatterns],
+        excludeDirs: [],
+        agentName: personaId,
+        // Pull `.git` into the mount so git commands work inside the
+        // sandbox. relayfile treats this as one-way project→mount: host-side
+        // `.git` changes flow in, mount-side commits/refs stay sandboxed and
+        // are discarded on cleanup. The agent must `git push` to persist
+        // work.
+        includeGit: true
+      });
       // Run before install / configFile writes so the freshly written files
       // (e.g. `.opencode/`, `opencode.json`) aren't yet present when we run
       // `git ls-files` to pick skip-worktree candidates — we don't need them
       // flagged in the index, just hidden via the `.git/info/exclude` block.
       configureGitForMount(handle.mountDir, ignoredPatterns);
       if (deferInstallToMount) {
-        runInstallOrThrow(install.command, installLabel, handle.mountDir);
+        // Hand the line off to the install spinner so the two don't fight
+        // for the same stream, then resume the setup spinner afterwards.
+        setupSpinner?.stop();
+        await runInstallOrThrow(install.command, installLabel, handle.mountDir);
+        setupSpinner?.start();
       }
       for (const file of spec.configFiles) {
         assertSafeRelativePath(file.path);
@@ -1326,10 +1380,21 @@ async function runInteractive(
 
       autoSync = handle.startAutoSync();
 
+      // Stop the setup spinner before spawning the child — the child
+      // inherits stdio and would otherwise interleave its output with
+      // spinner frames.
+      setupSpinner?.succeed(`Sandbox mount ready → ${mountDir}`);
+      setupSpinner = undefined;
+
       const childEnv = resolvedEnv ? { ...process.env, ...resolvedEnv } : process.env;
+      const childCwd = handle.mountDir;
+      // Flip the SIGINT phase flag before spawn so a Ctrl-C arriving during
+      // the child's lifetime is treated as "child has the TTY" (no-op),
+      // not as pre-launch teardown.
+      childSpawned = true;
       exitCode = await new Promise<number>((resolve, reject) => {
         const child = spawn(spec.bin, finalArgs, {
-          cwd: handle.mountDir,
+          cwd: childCwd,
           stdio: 'inherit',
           env: childEnv
         });
@@ -1371,6 +1436,10 @@ async function runInteractive(
       syncSpinner = undefined;
       return exitCode;
     } catch (err) {
+      if (setupSpinner) {
+        setupSpinner.fail('Sandbox mount setup failed');
+        setupSpinner = undefined;
+      }
       if (syncSpinner) {
         syncSpinner.fail('Sync did not complete');
         syncSpinner = undefined;
@@ -1393,6 +1462,10 @@ async function runInteractive(
       process.stderr.write(`Failed to launch sandbox mount: ${e.message}\n`);
       return 1;
     } finally {
+      if (setupSpinner) {
+        setupSpinner.stop();
+        setupSpinner = undefined;
+      }
       if (syncSpinner) {
         syncSpinner.stop();
         syncSpinner = undefined;
@@ -1406,7 +1479,7 @@ async function runInteractive(
           /* ignore — we're tearing down anyway */
         }
       }
-      handle.cleanup();
+      handle?.cleanup();
       await launchMetadata?.stop();
       process.removeListener('SIGINT', sigintHandler);
       // When the install ran inside the mount, its cleanup paths are
