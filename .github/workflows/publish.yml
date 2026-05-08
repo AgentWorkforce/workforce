@@ -347,6 +347,7 @@ jobs:
                 if (type === 'test' || type === 'ci') return 'reliability';
                 if (type === 'chore' && scope === 'release') return 'release';
                 if (type === 'chore') return 'deps';
+                if (type === 'docs') return 'docs';
                 return 'other';
               }
               const trimmed = subject.trim();
