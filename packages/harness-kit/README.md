@@ -39,7 +39,7 @@ import {
 } from '@agentworkforce/harness-kit';
 import { spawn } from 'node:child_process';
 
-const selection = resolvePersona('posthog');
+const selection = resolvePersona('persona-authoring');
 
 // Resolve env + MCP refs against the current process environment. Missing
 // refs don't throw — they come back on `.dropped` so you can warn the user.
@@ -81,15 +81,23 @@ It resolves the persona, launches the selected harness in non-interactive
 mode, captures stdout/stderr, reports progress chunks, supports cancellation
 and timeouts, and returns a stable execution result.
 
+`useRunnablePersona` follows the router's internal built-in resolver. For
+optional pack/local personas, resolve a `PersonaSelection` through your source
+cascade and call `useRunnableSelection(selection)`.
+
 ```ts
 import { useRunnablePersona } from '@agentworkforce/harness-kit';
 
-const persona = useRunnablePersona('agent-relay-workflow');
-const run = persona.sendMessage('Write a workflow artifact as structured JSON.', {
+const persona = useRunnablePersona('persona-authoring');
+const run = persona.sendMessage('Draft a persona for workflow artifact writing.', {
   workingDirectory: process.cwd(),
-  name: 'workflow-writer',
+  name: 'persona-author',
   timeoutSeconds: persona.selection.runtime.harnessSettings.timeoutSeconds,
-  inputs: { outputPath: 'workflows/generated/docs-audit.ts' },
+  inputs: {
+    TARGET_DIR: '.agentworkforce/workforce/personas',
+    CREATE_MODE: 'local',
+    TASK_DESCRIPTION: 'Write a workflow artifact as structured JSON.'
+  },
   onProgress: (chunk) => process.stderr.write(chunk.text)
 });
 

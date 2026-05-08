@@ -31,8 +31,8 @@ function mapToOpenClawSpawn(intent: PersonaIntent, task: string): OpenClawSpawnP
 
 // Example usage
 const payload = mapToOpenClawSpawn(
-  'review',
-  'Review PR #123 for correctness, risk, and missing tests.'
+  'persona-authoring',
+  'Create a persona for reviewing PRs for correctness, risk, and missing tests.'
 );
 
 console.log(JSON.stringify(payload, null, 2));

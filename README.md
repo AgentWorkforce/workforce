@@ -14,17 +14,21 @@ Workforce personas are just **a super easy to instantiate** pre-configured harne
 The great token squeeze :tm: is coming and you're probably still using opus for everything. Instead of using a sledgehammer to knock in some screws, use an agentworkforce persona to design a screwdriver.
 
 ## Quick start
-It's super easy to define a persona.
+Install a first-party persona pack, then run one of its personas:
 
 ```bash
-npx agentworkforce create --name=frontend-implementer
-```
-This will drop you into an instance of claude with a special set of skills to help you create a persona. Once it's generated, you can then use it. By default, this will be saved to your current working directory at `./.agentworkforce/workforce/personas` (the directory is created automatically if it does not already exist).
-
-```bash
+npx agentworkforce install @agentworkforce/personas-core
 npx agentworkforce agent frontend-implementer
 ```
-Voila! You've got a reusable persona focused on your teams specific needs for a frontend-implementer.
+
+To create a project-specific persona, run:
+
+```bash
+npx agentworkforce create
+```
+
+This opens the internal `persona-maker` system persona. By default, the new
+persona is saved to `./.agentworkforce/workforce/personas` (created if needed).
 
 
 ## Inside a persona
@@ -52,7 +56,11 @@ registry discovery via `npx`, while keeping filesystem writes sandboxed.
 Sometimes the quickest way to understand the value of personas is to see real examples. These are intentionally verbose; useful personas tend to grow as teams capture local conventions.
 
 ### Next.js marketing website agent
-A persona specifically for a Next.js marketing surface. This local overlay inherits the generic frontend implementer, switches tiers to Claude so MCP and tool permissions are enforced today, and attaches a browser MCP for visual checks. File scope is handled by the Relayfile `mount` block.
+A persona specifically for a Next.js marketing surface. This local overlay
+inherits the generic frontend implementer from `@agentworkforce/personas-core`,
+switches tiers to Claude so MCP and tool permissions are enforced today, and
+attaches a browser MCP for visual checks. File scope is handled by the Relayfile
+`mount` block.
 
 ```json
 {
@@ -119,13 +127,14 @@ npx agentworkforce agent nextjs-marketing@best-value
 ```
 
 ### Code Reviewer
-Tune the built-in reviewer for a repo where API compatibility and migration
-risk matter more than style commentary.
+Tune the core-pack reviewer for a repo where API compatibility and migration
+risk matter more than style commentary. Install `@agentworkforce/personas-core`
+first so `code-reviewer` exists in a lower source layer.
 
 ```json
 {
   "id": "api-reviewer",
-  "extends": "review",
+  "extends": "code-reviewer",
   "description": "Reviews this repository's changes with extra focus on API compatibility, migrations, and regression risk.",
   "mount": {
     "readonlyPatterns": ["*"]
@@ -151,7 +160,9 @@ agentworkforce agent api-reviewer@best-value
 
 ### Documentation writer
 Add a project-specific writer that inherits the technical writer persona, but
-binds the docs target through a prompt-visible input.
+binds the docs target through a prompt-visible input. Install
+`@agentworkforce/personas-core` first so `technical-writer` exists in a lower
+source layer.
 
 ```json
 {
@@ -185,7 +196,7 @@ DOCS_PATH=docs/api.md agentworkforce npx agent docs-writer@best-value
 
 ## CLI
 
-The `agentworkforce` command is the fastest way to actually *run* a persona. It resolves the persona from the built-in catalog or your local overrides, installs any declared skills, and execs the harness CLI (`claude`, `codex`, or `opencode`) with the right model, system prompt, env vars, MCP servers, and permissions wired up.
+The `agentworkforce` command is the fastest way to actually *run* a persona. It resolves personas from project-local files, configured source directories, and the small internal built-in catalog, installs any declared skills, and execs the harness CLI (`claude`, `codex`, or `opencode`) with the right model, system prompt, env vars, MCP servers, and permissions wired up.
 
 ### Install
 
@@ -229,7 +240,7 @@ agentworkforce --version
     1. `./.agentworkforce/workforce/personas/*.json` — project-local
     2. Configured persona source dirs. Default:
        `~/.agentworkforce/workforce/personas/*.json`
-    3. Built-in personas in `/personas/`
+    3. Internal built-in system personas in `/personas/` (currently `persona-maker`)
   - Launch metadata is recorded by default for launched sessions; opt out with
     `--no-launch-metadata` or `AGENTWORKFORCE_LAUNCH_METADATA=0`.
 - `list` — print the catalog of personas from the cascade (cwd →
@@ -261,12 +272,8 @@ agentworkforce create --save-in-directory=user
 agentworkforce create --save-in-directory=library
 
 # Interactive code reviewer
-agentworkforce agent review@best-value
-
-# Interactive PostHog session — the built-in persona ships with the PostHog
-# MCP server wired up and its tools auto-approved.
-export POSTHOG_API_KEY=phx_…
-agentworkforce agent posthog@best
+agentworkforce install @agentworkforce/personas-core --persona code-reviewer
+agentworkforce agent code-reviewer@best-value
 ```
 
 Persona launches record metadata by default when the installed backend supports
@@ -356,23 +363,18 @@ git add .agentworkforce/workforce/personas/reviewer.json
 
 ### Local persona override
 
-Project-local `./.agentworkforce/workforce/personas/my-posthog.json`:
+Project-local `./.agentworkforce/workforce/personas/api-reviewer.json`:
 
 ```json
 {
-  "id": "my-posthog",
-  "extends": "posthog",
-  "env": { "POSTHOG_API_KEY": "$POSTHOG_API_KEY" },
-  "permissions": {
-    "allow": ["mcp__posthog__insights-list", "mcp__posthog__events-query"]
-  }
+  "id": "api-reviewer",
+  "extends": "code-reviewer",
+  "systemPrompt": "Review this repository's API compatibility and migration risks. Lead with blockers."
 }
 ```
 
-`agentworkforce agent my-posthog@best` inherits everything from the built-in
-`posthog` persona, layers your env var and narrower allow list on top, and
-launches claude against the PostHog MCP server with only the two named tools
-auto-approved.
+This inherits from an installed lower-layer `code-reviewer` persona, then
+layers project-specific instructions on top.
 
 The full docs — cascade rules, `${VAR}` interpolation, MCP transport
 options, permission grammar, troubleshooting — live in
@@ -400,6 +402,7 @@ to the legacy behavior and install into the repo's `.claude/skills/`, pass
 `--install-in-repo`:
 
 ```bash
+agentworkforce install @agentworkforce/personas-core --persona code-reviewer
 agentworkforce agent --install-in-repo code-reviewer@best
 ```
 
@@ -429,9 +432,7 @@ never mount.
 | `.mcp.json` | persona's own `mcpServers` block |
 |  | your keychain auth (unchanged) |
 
-```bash
-agentworkforce agent posthog@best
-```
+Run `agentworkforce agent <id>@<tier>` for any installed/local persona.
 
 The repo tree is mirrored into `~/.agent-workforce/sessions/<id>/mount/`;
 the harness sees the mount as its cwd. Writes inside the mount sync back to
@@ -460,29 +461,13 @@ for the full mount layout and semantics.
 
 ## Personas
 
-- `personas/agent-relay-workflow.json`
-- `personas/frontend-implementer.json`
-- `personas/code-reviewer.json`
-- `personas/architecture-planner.json`
-- `personas/requirements-analyst.json`
-- `personas/debugger.json`
-- `personas/security-reviewer.json`
-- `personas/technical-writer.json`
-- `personas/verifier.json`
-- `personas/test-strategist.json`
-- `personas/tdd-guard.json`
-- `personas/flake-hunter.json`
-- `personas/opencode-workflow-specialist.json`
-- `personas/npm-provenance-publisher.json`
-- `personas/posthog.json`
 - `personas/persona-maker.json`
-- `personas/anti-slop-auditor.json`
-- `personas/api-contract-reviewer.json`
-- `personas/docker-stack-wrangler.json`
-- `personas/e2e-validator.json`
-- `personas/integration-test-author.json`
-- `personas/npm-package-bundler-guard.json`
-- `personas/relay-orchestrator.json`
+
+The built-in catalog is intentionally limited to required internal/system
+personas. Optional reusable personas are distributed through persona packs:
+
+- `packages/personas-core/personas/*.json` publishes as `@agentworkforce/personas-core`.
+- Relay-specific personas are owned by the Relay repo and publish as `@agentrelay/personas`.
 
 ## Routing profiles
 
@@ -491,16 +476,19 @@ for the full mount layout and semantics.
 
 ## TypeScript SDK usage
 
-The recommended entry point is **`usePersona(intent)`** — a synchronous,
-side-effect-free factory that resolves a persona and returns grouped install
-metadata. Calling it does nothing but pre-compute the routing; nothing is
-installed or spawned until you run the install command yourself.
+For internal system personas, the recommended entry point is
+**`usePersona(intent)`** — a synchronous, side-effect-free factory that resolves
+a persona and returns grouped install metadata. Calling it does nothing but
+pre-compute the routing; nothing is installed or spawned until you run the
+install command yourself. Optional pack/local personas should be resolved
+through the CLI/source cascade and passed to `useSelection` or
+`materializeSkillsFor` as resolved selections.
 
 ```ts
 import { usePersona } from '@agentworkforce/workload-router';
 import { spawnSync } from 'node:child_process';
 
-const { selection, install } = usePersona('npm-provenance');
+const { selection, install } = usePersona('persona-authoring');
 
 // Materialize the persona's skills into the repo, then hand `selection`
 // (`personaId`, `tier`, `runtime`, `skills`, `rationale`) to your harness
@@ -514,7 +502,7 @@ spawnSync(install.commandString, { shell: true, stdio: 'inherit' });
 The full return shape is:
 
 ```ts
-const { selection, install } = usePersona('npm-provenance');
+const { selection, install } = usePersona('persona-authoring');
 ```
 
 - `selection`: resolved persona choice and runtime metadata.
@@ -547,16 +535,17 @@ and friends — see
    - `opencode-workflow-correctness`
    - `npm-provenance`
    - `posthog`
-2. Call `usePersona(intent, { profile? })` to resolve the persona and
-   receive the selected persona plus grouped install metadata bound to its
-   runtime (harness, model, settings, prompt).
+2. Call `usePersona(intent, { profile? })` only for internal built-in personas.
+   Optional personas from packs should be loaded by the CLI/source cascade or
+   passed to lower-level helpers as resolved selections.
 3. Run `install.commandString` to materialize the persona's skills into the
    repo, then spawn the harness CLI yourself with `selection.runtime`. The
    `agentworkforce` CLI is the reference implementation of step 3 — see
    `packages/cli/src/cli.ts`.
 
-`resolvePersona` and `materializeSkillsFor` are also exported as the
-underlying primitives if you want to bypass `usePersona`.
+`resolvePersona` remains the lower-level resolver for internal built-ins.
+`useSelection` and `materializeSkillsFor` are the lower-level primitives for
+already-resolved pack/local persona selections.
 
 See runnable mapping example:
 - `examples/openclaw-routing.ts`
@@ -613,7 +602,7 @@ This runs minimal guardrails across the workspace:
 
 ## Developing
 
-For iterating on the CLI, harness-kit, workload-router, or persona JSON files,
+For iterating on the CLI, harness-kit, workload-router, or internal system persona JSON files,
 use the watch-mode dev loop instead of rebuilding by hand.
 
 **Terminal 1 — start the watchers (leave running):**
@@ -624,8 +613,8 @@ npm run dev
 
 First runs a cold `corepack pnpm -r build` so every package's `dist/` exists,
 then starts `tsc --watch` on all three packages in parallel. For
-`workload-router` it also runs a persona-JSON watcher: editing any file under
-`/personas/*.json` regenerates
+`workload-router` it also runs a persona-JSON watcher: editing any internal
+system file under `/personas/*.json` regenerates
 `packages/workload-router/src/generated/personas.ts`, and tsc picks up the
 change and rebuilds dist automatically — full JSON → built artifact flow with
 no manual step.
@@ -634,7 +623,7 @@ no manual step.
 
 ```bash
 npm run dev:cli -- harness check
-npm run dev:cli -- agent review@best-value "look at the diff on this branch"
+npm run dev:cli -- agent code-reviewer@best-value "look at the diff on this branch"
 ```
 
 The `--` is required so npm forwards everything after it as argv to the CLI

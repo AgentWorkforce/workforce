@@ -10,35 +10,7 @@ const personasDir = path.join(repoRoot, 'personas');
 const outputFile = path.join(repoRoot, 'packages/workload-router/src/generated/personas.ts');
 
 const exportNameMap = new Map([
-  ['frontend-implementer', 'frontendImplementer'],
-  ['code-reviewer', 'codeReviewer'],
-  ['architecture-planner', 'architecturePlanner'],
-  ['requirements-analyst', 'requirementsAnalyst'],
-  ['debugger', 'debuggerPersona'],
-  ['security-reviewer', 'securityReviewer'],
-  ['technical-writer', 'technicalWriter'],
-  ['verifier', 'verifierPersona'],
-  ['test-strategist', 'testStrategist'],
-  ['tdd-guard', 'tddGuard'],
-  ['flake-hunter', 'flakeHunter'],
-  ['opencode-workflow-specialist', 'opencodeWorkflowSpecialist'],
-  ['npm-provenance-publisher', 'npmProvenancePublisher'],
-  ['cloud-sandbox-infra', 'cloudSandboxInfra'],
-  ['sage-slack-egress-migrator', 'sageSlackEgressMigrator'],
-  ['sage-proactive-rewirer', 'sageProactiveRewirer'],
-  ['cloud-slack-proxy-guard', 'cloudSlackProxyGuard'],
-  ['agent-relay-e2e-conductor', 'agentRelayE2eConductor'],
-  ['capability-discoverer', 'capabilityDiscoverer'],
-  ['npm-package-bundler-guard', 'npmPackageBundlerGuard'],
-  ['posthog', 'posthogAgent'],
-  ['persona-maker', 'personaMaker'],
-  ['agent-relay-workflow', 'agentRelayWorkflow'],
-  ['anti-slop-auditor', 'antiSlopAuditor'],
-  ['api-contract-reviewer', 'apiContractReviewer'],
-  ['docker-stack-wrangler', 'dockerStackWrangler'],
-  ['e2e-validator', 'e2eValidator'],
-  ['integration-test-author', 'integrationTestAuthor'],
-  ['relay-orchestrator', 'relayOrchestrator']
+  ['persona-maker', 'personaMaker']
 ]);
 
 /**

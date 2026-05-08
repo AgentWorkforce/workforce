@@ -3,217 +3,86 @@ import assert from 'node:assert/strict';
 import {
   HARNESS_SKILL_TARGETS,
   HARNESS_VALUES,
+  PERSONA_INTENTS,
+  listBuiltInPersonas,
   materializeSkills,
   materializeSkillsFor,
   personaCatalog,
   resolvePersona,
   resolvePersonaByTier,
   resolveSidecar,
+  routingProfiles,
   usePersona,
   useSelection,
+  type PersonaSelection,
   type PersonaSpec
 } from './index.js';
 
-test('resolves frontend implementer from default routing profile', () => {
-  const result = resolvePersona('implement-frontend');
-  assert.equal(result.personaId, 'frontend-implementer');
-  assert.equal(result.tier, 'best-value');
-  assert.equal(result.runtime.harness, 'opencode');
-  assert.match(result.rationale, /balanced-default/);
+const prpmSkill = {
+  id: 'prpm/npm-trusted-publishing',
+  source: '@prpm/npm-trusted-publishing',
+  description: 'trusted publishing skill'
+};
+
+const skillShSkill = {
+  id: 'skill.sh/find-skills',
+  source: 'https://github.com/vercel-labs/skills#find-skills',
+  description: 'skill.sh discovery skill'
+};
+
+function syntheticSelection(over: Partial<PersonaSelection> = {}): PersonaSelection {
+  const runtime = {
+    harness: 'codex' as const,
+    model: 'test-model',
+    systemPrompt: 'test prompt',
+    harnessSettings: { reasoning: 'medium' as const, timeoutSeconds: 300 }
+  };
+  return {
+    personaId: 'synthetic',
+    tier: 'best-value',
+    runtime,
+    skills: [],
+    rationale: 'test',
+    ...over
+  };
+}
+
+function syntheticSpec(over: Partial<PersonaSpec> = {}): PersonaSpec {
+  const baseRuntime = {
+    harness: 'claude' as const,
+    model: 'claude-3-5-sonnet',
+    systemPrompt: 'base',
+    harnessSettings: { reasoning: 'medium' as const, timeoutSeconds: 300 }
+  };
+  return {
+    id: 's',
+    intent: 'documentation',
+    tags: ['documentation'],
+    description: 'd',
+    skills: [],
+    tiers: { best: baseRuntime, 'best-value': baseRuntime, minimum: baseRuntime },
+    ...over
+  };
+}
+
+test('built-in catalog is limited to internal system personas', () => {
+  const builtIns = listBuiltInPersonas();
+  assert.deepEqual(builtIns.map((p) => p.id), ['persona-maker']);
+  assert.equal(personaCatalog['persona-authoring']?.id, 'persona-maker');
+  assert.equal(personaCatalog.review, undefined);
+  assert.ok(PERSONA_INTENTS.includes('review'));
+  assert.equal(routingProfiles.default.intents.review.tier, 'best-value');
 });
 
-test('resolves review from custom routing profile rule', () => {
-  const result = resolvePersona('review', {
-    id: 'fast-review',
-    description: 'Aggressive low-cost mode for lightweight checks',
-    intents: {
-      'implement-frontend': {
-        tier: 'minimum',
-        rationale: 'fast and cheap'
-      },
-      review: {
-        tier: 'minimum',
-        rationale: 'small PR sanity checks only'
-      },
-      'architecture-plan': {
-        tier: 'best-value',
-        rationale: 'still needs decent quality'
-      },
-      'requirements-analysis': {
-        tier: 'minimum',
-        rationale: 'quick scope triage is enough here'
-      },
-      debugging: {
-        tier: 'best',
-        rationale: 'debugging still needs deeper reasoning'
-      },
-      'security-review': {
-        tier: 'best',
-        rationale: 'security stays on the strongest tier'
-      },
-      documentation: {
-        tier: 'minimum',
-        rationale: 'docs tweaks can be short'
-      },
-      verification: {
-        tier: 'best-value',
-        rationale: 'fresh evidence review needs balanced depth'
-      },
-      'test-strategy': {
-        tier: 'best-value',
-        rationale: 'needs balanced coverage planning'
-      },
-      'tdd-enforcement': {
-        tier: 'minimum',
-        rationale: 'short process reminders are enough'
-      },
-      'flake-investigation': {
-        tier: 'best',
-        rationale: 'deep debugging is worth the cost'
-      },
-      'opencode-workflow-correctness': {
-        tier: 'best',
-        rationale: 'cross-layer workflow failures need deeper investigation'
-      },
-      'npm-provenance': {
-        tier: 'best-value',
-        rationale: 'mechanical workflow wiring'
-      },
-      'cloud-sandbox-infra': {
-        tier: 'best',
-        rationale: 'infra changes need deep reasoning'
-      },
-      'sage-slack-egress-migration': {
-        tier: 'best-value',
-        rationale: 'migration wiring can use the balanced default'
-      },
-      'sage-proactive-rewire': {
-        tier: 'best-value',
-        rationale: 'rewiring work is configuration-heavy rather than max-depth by default'
-      },
-      'cloud-slack-proxy-guard': {
-        tier: 'best-value',
-        rationale: 'proxy guard checks usually fit the balanced default tier'
-      },
-      'sage-cloud-e2e-conduction': {
-        tier: 'best-value',
-        rationale: 'e2e conduction benefits from strong reasoning without the highest-cost default'
-      },
-      'capability-discovery': {
-        tier: 'best-value',
-        rationale: 'lightweight discovery work'
-      },
-      'npm-package-compat': {
-        tier: 'best-value',
-        rationale: 'mechanical package.json audits'
-      },
-      posthog: {
-        tier: 'best-value',
-        rationale: 'analytics lookups via MCP'
-      },
-      'persona-authoring': {
-        tier: 'best-value',
-        rationale: 'scaffolding a persona is mechanical wiring work'
-      },
-      'slop-audit': {
-        tier: 'minimum',
-        rationale: 'quick slop sweep is enough here'
-      },
-      'api-contract-review': {
-        tier: 'best',
-        rationale: 'breaking-change classification has high blast radius'
-      },
-      'local-stack-orchestration': {
-        tier: 'best-value',
-        rationale: 'compose wiring is mechanical given the topology'
-      },
-      'e2e-validation': {
-        tier: 'best',
-        rationale: 'hop-by-hop validation is the last line of defense'
-      },
-      'write-integration-tests': {
-        tier: 'best-value',
-        rationale: 'integration test template is well-defined'
-      },
-      'agent-relay-workflow': {
-        tier: 'best-value',
-        rationale: 'workflow orchestration uses balanced reasoning'
-      },
-      'relay-orchestrator': {
-        tier: 'best-value',
-        rationale: 'relay orchestration uses balanced reasoning'
-      }
-    }
-  });
-
-  assert.equal(result.personaId, 'code-reviewer');
-  assert.equal(result.tier, 'minimum');
-  assert.equal(result.runtime.harness, 'opencode');
-});
-
-test('resolves npm-package-compat to npm-package-bundler-guard from default routing profile', () => {
-  const result = resolvePersona('npm-package-compat');
-  assert.equal(result.personaId, 'npm-package-bundler-guard');
-  assert.equal(result.tier, 'best-value');
-  assert.equal(result.runtime.harness, 'claude');
-  assert.match(result.rationale, /balanced-default/);
-});
-
-test('legacy tier override remains available via resolvePersonaByTier', () => {
-  const result = resolvePersonaByTier('architecture-plan', 'best');
-  assert.equal(result.runtime.harness, 'codex');
-  assert.equal(result.runtime.harnessSettings.reasoning, 'high');
-  assert.match(result.rationale, /legacy-tier-override/);
-});
-
-test('resolvePersona propagates mcpServers and permissions to the selection', () => {
-  // posthog is the library's canonical carrier for mcpServers + permissions.
-  // It used to also carry env.POSTHOG_API_KEY, but the persona switched to
-  // mcp-remote/OAuth (stdio, no env, no bearer header) in e3342c7. Env
-  // propagation through the loader is covered by the cli package's
-  // local-personas cascade tests.
-  const selection = resolvePersona('posthog');
-  assert.equal(selection.personaId, 'posthog');
-
-  // mcpServers carry through with the full stdio shape (command + args).
-  const posthogServer = selection.mcpServers?.posthog;
-  assert.ok(posthogServer, 'expected mcpServers.posthog on the selection');
-  assert.equal(posthogServer.type, 'stdio');
-  if (posthogServer.type === 'stdio') {
-    assert.equal(posthogServer.command, 'npx');
-    assert.deepEqual(posthogServer.args, [
-      '-y',
-      'mcp-remote@latest',
-      'https://mcp.posthog.com/mcp'
-    ]);
-  }
-
-  // permissions.allow is carried without modification.
-  assert.deepEqual(selection.permissions?.allow, ['mcp__posthog']);
-});
-
-test('resolvePersonaByTier also propagates mcpServers / permissions', () => {
-  const selection = resolvePersonaByTier('posthog', 'minimum');
-  assert.equal(selection.tier, 'minimum');
-  assert.ok(selection.mcpServers, 'mcpServers should flow through tier override resolver');
-  assert.ok(selection.permissions, 'permissions should flow through tier override resolver');
-});
-
-test('resolvePersonaByTier propagates persona input declarations', () => {
-  const selection = resolvePersonaByTier('persona-authoring', 'best');
+test('resolves persona-maker from the default routing profile', () => {
+  const selection = resolvePersona('persona-authoring');
+  assert.equal(selection.personaId, 'persona-maker');
+  assert.equal(selection.tier, 'best');
+  assert.equal(selection.runtime.harness, 'codex');
+  assert.match(selection.rationale, /balanced-default/);
   assert.equal(selection.inputs?.TARGET_DIR?.default, '.agentworkforce/workforce/personas');
-  assert.equal(
-    selection.inputs?.CREATE_MODE?.default,
-    'local'
-  );
-  // Persona-maker carries its full authoring spec in agentsMdContent; the
-  // CLI renders input placeholders into the sidecar before materialization,
-  // so the unrendered selection here still contains the literal `$TARGET_DIR`
-  // reference.
-  assert.match(
-    selection.agentsMdContent ?? '',
-    /\$TARGET_DIR\/<id>\.json/
-  );
+  assert.equal(selection.inputs?.CREATE_MODE?.default, 'local');
+  assert.match(selection.agentsMdContent ?? '', /\$TARGET_DIR\/<id>\.json/);
   assert.equal(selection.runtime.harnessSettings.sandboxMode, 'workspace-write');
   assert.equal(selection.runtime.harnessSettings.approvalPolicy, 'on-request');
   assert.equal(selection.runtime.harnessSettings.workspaceWriteNetworkAccess, true);
@@ -221,137 +90,29 @@ test('resolvePersonaByTier propagates persona input declarations', () => {
     selection.agentsMdContent ?? '',
     /Do not request network escalation only to complete this fallback/
   );
-  assert.doesNotMatch(
-    selection.agentsMdContent ?? '',
-    /Check prpm\.dev as a secondary registry when skills\.sh has nothing relevant/
+});
+
+test('optional pack-owned intents do not resolve from the built-in catalog', () => {
+  assert.throws(
+    () => resolvePersona('review'),
+    /No built-in persona is registered for intent "review".*personas-core/
+  );
+  assert.throws(
+    () => resolvePersonaByTier('review', 'best'),
+    /No built-in persona is registered for intent "review"/
   );
 });
 
-test('personas with no optional fields keep them undefined on the selection', () => {
-  // code-reviewer has no env/mcpServers/permissions in its JSON.
-  const selection = resolvePersona('review');
-  assert.equal(selection.env, undefined);
-  assert.equal(selection.mcpServers, undefined);
-  assert.equal(selection.permissions, undefined);
-});
-
-test('resolves testing personas from the default routing profile', () => {
-  const testStrategy = resolvePersona('test-strategy');
-  assert.equal(testStrategy.personaId, 'test-strategist');
-  assert.equal(testStrategy.tier, 'best-value');
-
-  const tdd = resolvePersona('tdd-enforcement');
-  assert.equal(tdd.personaId, 'tdd-guard');
-  assert.equal(tdd.tier, 'best-value');
-
-  const flake = resolvePersona('flake-investigation');
-  assert.equal(flake.personaId, 'flake-hunter');
-  assert.equal(flake.tier, 'best');
-  assert.equal(flake.runtime.harness, 'codex');
-});
-
-
-test('resolves newly added personas from the default routing profile', () => {
-  const analyst = resolvePersona('requirements-analysis');
-  assert.equal(analyst.personaId, 'requirements-analyst');
-  assert.equal(analyst.tier, 'best-value');
-
-  const debuggerSelection = resolvePersona('debugging');
-  assert.equal(debuggerSelection.personaId, 'debugger');
-  assert.equal(debuggerSelection.tier, 'best');
-  assert.equal(debuggerSelection.runtime.harness, 'codex');
-
-  const security = resolvePersona('security-review');
-  assert.equal(security.personaId, 'security-reviewer');
-  assert.equal(security.tier, 'best');
-
-  const docs = resolvePersona('documentation');
-  assert.equal(docs.personaId, 'technical-writer');
-  assert.equal(docs.tier, 'best-value');
-
-  const verification = resolvePersona('verification');
-  assert.equal(verification.personaId, 'verifier');
-  assert.equal(verification.tier, 'best-value');
-
-  const opencodeWorkflow = resolvePersona('opencode-workflow-correctness');
-  assert.equal(opencodeWorkflow.personaId, 'opencode-workflow-specialist');
-  assert.equal(opencodeWorkflow.tier, 'best');
-  assert.equal(opencodeWorkflow.runtime.harness, 'codex');
-});
-
-test('resolves agent-relay-workflow persona from the default routing profile', () => {
-  const maker = resolvePersona('agent-relay-workflow');
-  assert.equal(maker.personaId, 'agent-relay-workflow');
-  assert.equal(maker.tier, 'best-value');
-  assert.equal(maker.runtime.harness, 'opencode');
-  assert.equal(maker.skills.length, 4);
-  assert.equal(maker.skills[0].id, 'skill.sh/writing-agent-relay-workflows');
-  assert.equal(maker.skills[3].id, 'prpm/choosing-swarm-patterns');
-  assert.match(maker.runtime.systemPrompt, /complete workflow source/);
-  assert.match(maker.runtime.systemPrompt, /GitHub primitive shipping steps/);
-  assert.match(maker.runtime.systemPrompt, /createGitHubStep/);
-});
-
-// removed: writing-agent-relay-workflows persona renamed to agent-relay-workflow
-
-test('resolves relay-orchestrator persona from the default routing profile', () => {
-  const relay = resolvePersona('relay-orchestrator');
-  assert.equal(relay.personaId, 'relay-orchestrator');
-  assert.equal(relay.tier, 'best-value');
-  assert.equal(relay.runtime.harness, 'opencode');
-  assert.equal(relay.skills.length, 1);
-  assert.equal(relay.skills[0].id, 'running-headless-orchestrator');
-});
-
-test('resolves anti-slop-auditor with the jscpd skill.sh skill attached', () => {
-  const auditor = resolvePersona('slop-audit');
-  assert.equal(auditor.personaId, 'anti-slop-auditor');
-  assert.equal(auditor.tier, 'best');
-  assert.equal(auditor.runtime.harness, 'codex');
-  assert.equal(auditor.skills.length, 1);
-  assert.equal(auditor.skills[0].id, 'kucherenko/jscpd');
-  assert.match(auditor.skills[0].source, /github\.com\/kucherenko\/jscpd#jscpd/);
-
-  // materializeSkillsFor must not throw — the skill.sh URL must be supported.
-  const plan = materializeSkillsFor(auditor);
-  assert.equal(plan.installs.length, 1);
-  assert.deepEqual(plan.installs[0].installCommand, [
-    'npx',
-    '-y',
-    'skills',
-    'add',
-    'https://github.com/kucherenko/jscpd',
-    '--skill',
-    'jscpd',
-    '-y'
-  ]);
+test('legacy tier override remains available for internal personas', () => {
+  const selection = resolvePersonaByTier('persona-authoring', 'minimum');
+  assert.equal(selection.personaId, 'persona-maker');
+  assert.equal(selection.tier, 'minimum');
+  assert.equal(selection.runtime.harness, 'opencode');
+  assert.match(selection.rationale, /legacy-tier-override/);
 });
 
 test('claude is a recognized harness value', () => {
   assert.ok(HARNESS_VALUES.includes('claude'));
-});
-
-test('personas default to an empty skills array when none declared', () => {
-  const reviewer = personaCatalog.review;
-  assert.ok(Array.isArray(reviewer.skills));
-  assert.equal(reviewer.skills.length, 0);
-});
-
-test('resolves npm-provenance persona with the trusted publishing skill attached', () => {
-  const selection = resolvePersona('npm-provenance');
-  assert.equal(selection.personaId, 'npm-provenance-publisher');
-  assert.equal(selection.tier, 'best-value');
-  assert.equal(selection.skills.length, 1);
-  const [skill] = selection.skills;
-  assert.equal(skill.id, 'prpm/npm-trusted-publishing');
-  assert.match(skill.source, /prpm\.dev\/packages\/@prpm\/npm-trusted-publishing/);
-  assert.match(selection.runtime.systemPrompt, /prpm\/npm-trusted-publishing/);
-});
-
-test('resolvePersonaByTier carries persona skills through legacy path', () => {
-  const selection = resolvePersonaByTier('npm-provenance', 'best');
-  assert.equal(selection.runtime.harness, 'codex');
-  assert.equal(selection.skills[0]?.id, 'prpm/npm-trusted-publishing');
 });
 
 test('HARNESS_SKILL_TARGETS covers every harness value', () => {
@@ -363,13 +124,29 @@ test('HARNESS_SKILL_TARGETS covers every harness value', () => {
   }
 });
 
+test('materializeSkillsFor derives an install plan from a resolved internal persona', () => {
+  const selection = resolvePersona('persona-authoring');
+  const plan = materializeSkillsFor(selection);
+  assert.equal(plan.harness, 'codex');
+  assert.equal(plan.installs.length, 1);
+  assert.deepEqual([...plan.installs[0].installCommand], [
+    'npx',
+    '-y',
+    'skills',
+    'add',
+    'https://github.com/vercel-labs/skills',
+    '--skill',
+    'find-skills',
+    '-y'
+  ]);
+});
+
 test('materializeSkills emits a codex-scoped prpm install for a prpm.dev URL', () => {
   const plan = materializeSkills(
     [
       {
-        id: 'prpm/npm-trusted-publishing',
-        source: 'https://prpm.dev/packages/@prpm/npm-trusted-publishing',
-        description: 'trusted publishing skill'
+        ...prpmSkill,
+        source: 'https://prpm.dev/packages/@prpm/npm-trusted-publishing'
       }
     ],
     'codex'
@@ -389,17 +166,7 @@ test('materializeSkills emits a codex-scoped prpm install for a prpm.dev URL', (
 });
 
 test('materializeSkills routes claude skills to .claude/skills via --as claude', () => {
-  const plan = materializeSkills(
-    [
-      {
-        id: 'prpm/npm-trusted-publishing',
-        source: '@prpm/npm-trusted-publishing',
-        description: 'bare ref form'
-      }
-    ],
-    'claude'
-  );
-
+  const plan = materializeSkills([prpmSkill], 'claude');
   const [install] = plan.installs;
   assert.deepEqual(
     [...install.installCommand],
@@ -408,26 +175,8 @@ test('materializeSkills routes claude skills to .claude/skills via --as claude',
   assert.equal(install.installedDir, '.claude/skills/npm-trusted-publishing');
 });
 
-test('materializeSkillsFor derives an install plan from a resolved persona', () => {
-  const selection = resolvePersona('npm-provenance');
-  const plan = materializeSkillsFor(selection);
-  assert.equal(plan.harness, selection.runtime.harness);
-  assert.equal(plan.installs.length, 1);
-  const cmd = plan.installs[0].installCommand.join(' ');
-  assert.match(cmd, /prpm install @prpm\/npm-trusted-publishing --as /);
-});
-
 test('materializeSkills emits a skill.sh install for a github#skill source', () => {
-  const plan = materializeSkills(
-    [
-      {
-        id: 'skill.sh/find-skills',
-        source: 'https://github.com/vercel-labs/skills#find-skills',
-        description: 'skill.sh discovery skill'
-      }
-    ],
-    'claude'
-  );
+  const plan = materializeSkills([skillShSkill], 'claude');
 
   assert.equal(plan.installs.length, 1);
   const [install] = plan.installs;
@@ -435,13 +184,19 @@ test('materializeSkills emits a skill.sh install for a github#skill source', () 
   assert.equal(install.packageRef, 'https://github.com/vercel-labs/skills#find-skills');
   assert.deepEqual(
     [...install.installCommand],
-    ['npx', '-y', 'skills', 'add', 'https://github.com/vercel-labs/skills', '--skill', 'find-skills', '-y']
+    [
+      'npx',
+      '-y',
+      'skills',
+      'add',
+      'https://github.com/vercel-labs/skills',
+      '--skill',
+      'find-skills',
+      '-y'
+    ]
   );
-  // skill.sh uses a single universal content dir regardless of harness.
   assert.equal(install.installedDir, '.agents/skills/find-skills');
   assert.equal(install.installedManifest, '.agents/skills/find-skills/SKILL.md');
-  // Cleanup should target every harness symlink + the universal dir, but
-  // never the lockfile itself.
   assert.deepEqual(
     [...install.cleanupPaths],
     [
@@ -543,78 +298,53 @@ test('materializeSkills rejects unsafe skill.sh skill names', () => {
   );
 });
 
-test('prpm installs carry a harness-scoped cleanup path (not the lockfile)', () => {
-  const plan = materializeSkills(
-    [
-      {
-        id: 'prpm/npm-trusted-publishing',
-        source: '@prpm/npm-trusted-publishing',
-        description: 'bare ref form'
-      }
-    ],
-    'codex'
-  );
+test('prpm installs carry a harness-scoped cleanup path, not the lockfile', () => {
+  const plan = materializeSkills([prpmSkill], 'codex');
   const [install] = plan.installs;
   assert.deepEqual([...install.cleanupPaths], ['.agents/skills/npm-trusted-publishing']);
   assert.ok(!install.cleanupPaths.includes('prpm.lock'));
 });
 
-test('usePersona install command never embeds cleanup (agent must read skills first)', () => {
-  // Regression guard: previously buildInstallArtifacts inlined `&& rm -rf` into
-  // the install step, which ran BEFORE the agent step and deleted skill files
-  // the agent needed to read. Cleanup now lives on a separate post-agent step
-  // and on install.cleanupCommandString for Mode B callers.
-  const context = usePersona('npm-provenance');
+test('useSelection install command never embeds cleanup', () => {
+  const context = useSelection(syntheticSelection({ skills: [prpmSkill] }));
   assert.doesNotMatch(context.install.commandString, /rm -rf/);
   assert.match(
     context.install.commandString,
-    /prpm install @prpm\/npm-trusted-publishing --as [a-z]+/
+    /prpm install @prpm\/npm-trusted-publishing --as codex/
   );
 });
 
-test('usePersona exposes a post-run cleanupCommandString targeting skill artifact paths', () => {
-  const context = usePersona('npm-provenance');
+test('useSelection exposes a post-run cleanupCommandString targeting skill artifacts', () => {
+  const context = useSelection(syntheticSelection({ skills: [prpmSkill] }));
   assert.ok(Array.isArray(context.install.cleanupCommand));
   assert.equal(context.install.cleanupCommand[0], 'sh');
   assert.match(context.install.cleanupCommandString, /^rm -rf /);
   assert.match(context.install.cleanupCommandString, /npm-trusted-publishing/);
-  // The provider lockfile must never be cleaned — repeat runs depend on it.
   assert.doesNotMatch(context.install.cleanupCommandString, /prpm\.lock|skills-lock\.json/);
 });
 
-test('usePersona cleanupCommandString chains paths from every install in the plan', () => {
-  const context = usePersona('capability-discovery');
+test('useSelection cleanupCommandString chains paths from every install in the plan', () => {
+  const context = useSelection(
+    syntheticSelection({ skills: [skillShSkill, prpmSkill] })
+  );
   const cleanup = context.install.cleanupCommandString;
-  // Both the skill.sh symlink set and the prpm per-harness dir should appear
-  // in a single rm -rf chain.
   assert.match(cleanup, /^rm -rf /);
   assert.match(cleanup, /find-skills/);
-  assert.match(cleanup, /self-improving/);
-  // Cover every skill.sh harness symlink, not just the universal dir.
+  assert.match(cleanup, /npm-trusted-publishing/);
   assert.match(cleanup, /\.agents\/skills\/find-skills/);
   assert.match(cleanup, /\.claude\/skills\/find-skills/);
   assert.match(cleanup, /\.factory\/skills\/find-skills/);
   assert.match(cleanup, /\.kiro\/skills\/find-skills/);
 });
 
-test('usePersona cleanupCommandString is a shell no-op when the persona declares no skills', () => {
-  const context = usePersona('architecture-plan');
+test('useSelection cleanupCommandString is a shell no-op when the persona declares no skills', () => {
+  const context = useSelection(syntheticSelection());
   assert.equal(context.install.cleanupCommandString, ':');
 });
 
 test('materializeSkills with installRoot stages claude skills under the stage dir', () => {
   const installRoot = '/tmp/agent-workforce/sessions/test-run/claude/plugin';
-  const plan = materializeSkills(
-    [
-      {
-        id: 'prpm/npm-trusted-publishing',
-        source: '@prpm/npm-trusted-publishing',
-        description: 'bare ref form'
-      }
-    ],
-    'claude',
-    { installRoot }
-  );
+  const plan = materializeSkills([prpmSkill], 'claude', { installRoot });
 
   assert.equal(plan.sessionInstallRoot, installRoot);
   const [install] = plan.installs;
@@ -626,133 +356,66 @@ test('materializeSkills with installRoot stages claude skills under the stage di
     install.installedManifest,
     `${installRoot}/.claude/skills/npm-trusted-publishing/SKILL.md`
   );
-  // Per-install command is self-contained: runs prpm inside the stage dir.
   assert.equal(install.installCommand[0], 'sh');
   assert.equal(install.installCommand[1], '-c');
   const script = install.installCommand[2];
   assert.match(script, /^cd /);
   assert.match(script, /agent-workforce\/sessions\/test-run\/claude\/plugin/);
   assert.match(script, /npx -y prpm install @prpm\/npm-trusted-publishing --as claude/);
-  // Per-skill cleanupPaths is empty; cleanup lives at the plan level.
   assert.deepEqual([...install.cleanupPaths], []);
 });
 
 test('materializeSkills rejects installRoot for non-claude harnesses', () => {
   assert.throws(
     () =>
-      materializeSkills(
-        [
-          {
-            id: 'prpm/x',
-            source: '@prpm/x',
-            description: 'x'
-          }
-        ],
-        'codex',
-        { installRoot: '/tmp/agent-workforce/sessions/abc/claude/plugin' }
-      ),
+      materializeSkills([prpmSkill], 'codex', {
+        installRoot: '/tmp/agent-workforce/sessions/abc/claude/plugin'
+      }),
     /installRoot is only supported for the claude harness/
   );
 });
 
-test('useSelection with installRoot emits scaffold + chained prpm in install.commandString', () => {
+test('useSelection with installRoot emits scaffold plus chained prpm', () => {
   const installRoot = '/tmp/agent-workforce/sessions/scaffold-test/claude/plugin';
-  const selection = resolvePersonaByTier('npm-provenance', 'best-value');
-  // Force harness=claude so the installRoot path is exercised regardless of
-  // the persona's default tier harness.
+  const selection = syntheticSelection({ skills: [prpmSkill] });
   const context = useSelection(selection, { harness: 'claude', installRoot });
   assert.equal(context.install.plan.sessionInstallRoot, installRoot);
   const cmd = context.install.commandString;
-  // Scaffold: the three mkdir/ln/printf steps go first.
   assert.match(cmd, /^mkdir -p /);
   assert.match(cmd, /\.claude-plugin/);
   assert.match(cmd, /ln -sfn \.claude\/skills /);
   assert.match(cmd, /printf '%s' /);
-  // Then a single cd into the stage dir, then the prpm call.
   assert.match(cmd, / && cd '?\/tmp\/agent-workforce\/sessions\/scaffold-test\/claude\/plugin'? && /);
   assert.match(cmd, /npx -y prpm install @prpm\/npm-trusted-publishing --as claude/);
 });
 
 test('useSelection with installRoot collapses cleanup to a single rm -rf of the stage dir', () => {
   const installRoot = '/tmp/agent-workforce/sessions/cleanup-test/claude/plugin';
-  const selection = resolvePersonaByTier('npm-provenance', 'best-value');
-  const context = useSelection(selection, { harness: 'claude', installRoot });
-  // shellEscape leaves paths made of [A-Za-z0-9_./:@%+=,-] unquoted.
+  const context = useSelection(
+    syntheticSelection({ skills: [prpmSkill] }),
+    { harness: 'claude', installRoot }
+  );
   assert.equal(
     context.install.cleanupCommandString,
     `rm -rf /tmp/agent-workforce/sessions/cleanup-test/claude/plugin`
   );
 });
 
-test('materializeSkills with installRoot + no skills still reports the sessionInstallRoot', () => {
+test('materializeSkills with installRoot and no skills still reports the sessionInstallRoot', () => {
   const installRoot = '/tmp/agent-workforce/sessions/empty/claude/plugin';
   const plan = materializeSkills([], 'claude', { installRoot });
   assert.equal(plan.sessionInstallRoot, installRoot);
   assert.equal(plan.installs.length, 0);
 });
 
-test('useSelection with installRoot + no skills emits scaffold so --plugin-dir target exists', () => {
-  // Skill-less claude personas (e.g. posthog) still need the stage dir to
-  // exist so `claude --plugin-dir <installRoot>` finds a valid plugin.
+test('useSelection with installRoot and no skills emits scaffold so plugin dir exists', () => {
   const installRoot = '/tmp/agent-workforce/sessions/empty-scaffold/claude/plugin';
-  const selection = resolvePersonaByTier('posthog', 'best');
-  const context = useSelection(selection, { harness: 'claude', installRoot });
+  const context = useSelection(syntheticSelection(), { harness: 'claude', installRoot });
   assert.equal(context.install.plan.sessionInstallRoot, installRoot);
   assert.equal(context.install.plan.installs.length, 0);
-  const cmd = context.install.commandString;
-  // Must NOT be the `:` no-op; must run the scaffold.
-  assert.notEqual(cmd, ':');
-  assert.match(cmd, /^mkdir -p /);
-  assert.match(cmd, /\.claude-plugin/);
-  assert.match(cmd, /ln -sfn \.claude\/skills /);
-  assert.match(cmd, /printf '%s' /);
-  // Cleanup always drops the stage dir in session mode, even with zero skills.
-  assert.equal(
-    context.install.cleanupCommandString,
-    `rm -rf ${installRoot}`
-  );
-});
-
-test('resolves capability-discovery persona carrying both skill.sh and prpm skills', () => {
-  const selection = resolvePersona('capability-discovery');
-  assert.equal(selection.personaId, 'capability-discoverer');
-  assert.equal(selection.tier, 'best-value');
-  assert.equal(selection.skills.length, 2);
-
-  const byId = new Map(selection.skills.map((s) => [s.id, s]));
-  const skillSh = byId.get('skill.sh/find-skills');
-  assert.ok(skillSh, 'missing skill.sh/find-skills skill');
-  assert.equal(skillSh!.source, 'https://github.com/vercel-labs/skills#find-skills');
-  const prpm = byId.get('prpm/self-improving');
-  assert.ok(prpm, 'missing prpm/self-improving skill');
-  assert.match(prpm!.source, /prpm\.dev\/packages\/@prpm\/self-improving/);
-});
-
-test('materializeSkillsFor capability-discovery plans both installs under one shell chain with cleanup', () => {
-  const selection = resolvePersona('capability-discovery');
-  const plan = materializeSkillsFor(selection);
-  assert.equal(plan.installs.length, 2);
-
-  const byKind = new Map(plan.installs.map((i) => [i.sourceKind, i]));
-  const skillShInstall = byKind.get('skill.sh');
-  const prpmInstall = byKind.get('prpm');
-  assert.ok(skillShInstall, 'missing skill.sh install');
-  assert.ok(prpmInstall, 'missing prpm install');
-  assert.deepEqual(
-    [...skillShInstall!.installCommand],
-    ['npx', '-y', 'skills', 'add', 'https://github.com/vercel-labs/skills', '--skill', 'find-skills', '-y']
-  );
-  assert.equal(prpmInstall!.packageRef, '@prpm/self-improving');
-
-  const context = usePersona('capability-discovery');
-  const cmd = context.install.commandString;
-  // Both installs should be chained back-to-back with `&&`, with NO inline
-  // cleanup — cleanup lives on a separate post-agent step.
-  assert.match(
-    cmd,
-    /skills add https:\/\/github\.com\/vercel-labs\/skills --skill find-skills -y && npx -y prpm install @prpm\/self-improving/
-  );
-  assert.doesNotMatch(cmd, /rm -rf/);
+  assert.notEqual(context.install.commandString, ':');
+  assert.match(context.install.commandString, /^mkdir -p /);
+  assert.equal(context.install.cleanupCommandString, `rm -rf ${installRoot}`);
 });
 
 test('materializeSkills rejects unknown skill sources', () => {
@@ -763,7 +426,7 @@ test('materializeSkills rejects unknown skill sources', () => {
           {
             id: 'x',
             source: 'https://example.com/random',
-            description: 'not a prpm source'
+            description: 'not a supported source'
           }
         ],
         'claude'
@@ -778,14 +441,14 @@ test('materializeSkills handles personas with no skills', () => {
 });
 
 test('usePersona combines selection and grouped install metadata into a frozen context', () => {
-  const context = usePersona('npm-provenance');
-  const selection = resolvePersona('npm-provenance');
+  const context = usePersona('persona-authoring');
+  const selection = resolvePersona('persona-authoring');
   const plan = materializeSkillsFor(selection);
 
   assert.deepEqual(context.selection, selection);
   assert.deepEqual(context.install.plan, plan);
   assert.equal(context.install.command[0], 'sh');
-  assert.match(context.install.commandString, /prpm install/);
+  assert.match(context.install.commandString, /skills add/);
   assert.ok(Object.isFrozen(context));
   assert.ok(Object.isFrozen(context.selection));
   assert.ok(Object.isFrozen(context.install));
@@ -793,28 +456,7 @@ test('usePersona combines selection and grouped install metadata into a frozen c
   assert.ok(Object.isFrozen(context.install.command));
 });
 
-function syntheticSpec(over: Partial<PersonaSpec> = {}): PersonaSpec {
-  const baseRuntime = {
-    harness: 'claude' as const,
-    model: 'claude-3-5-sonnet',
-    systemPrompt: 'base',
-    harnessSettings: { reasoning: 'medium' as const, timeoutSeconds: 300 }
-  };
-  return {
-    id: 's',
-    intent: 'documentation',
-    tags: ['documentation'],
-    description: 'd',
-    skills: [],
-    tiers: { best: baseRuntime, 'best-value': baseRuntime, minimum: baseRuntime },
-    ...over
-  };
-}
-
 test('resolveSidecar: tier path override drops top-level inlined content for the same channel', () => {
-  // Regression for channel mixing: a tier-level claudeMd MUST own the
-  // channel and exclude top-level claudeMdContent, otherwise downstream
-  // selection (which prefers Content) silently discards the override.
   const spec = syntheticSpec({
     claudeMdContent: '# top-level inlined\n',
     claudeMdMode: 'overwrite',
@@ -830,12 +472,10 @@ test('resolveSidecar: tier path override drops top-level inlined content for the
   const resolved = resolveSidecar(spec, 'best');
   assert.equal(resolved.claudeMd, '/abs/persona.md');
   assert.equal(resolved.claudeMdContent, undefined);
-  // Mode still falls back to top-level even though path/content didn't.
   assert.equal(resolved.claudeMdMode, 'overwrite');
 });
 
 test('resolveSidecar: mode cascades independently of path', () => {
-  // Top-level claudeMdMode overrides default, tier inherits the path.
   const spec = syntheticSpec({
     claudeMd: '/abs/top.md',
     claudeMdMode: 'extend'
@@ -845,15 +485,12 @@ test('resolveSidecar: mode cascades independently of path', () => {
   assert.equal(resolved.claudeMdMode, 'extend');
 });
 
-test('resolvePersona populates sidecar selection fields from the catalog', () => {
-  // Built-in personas don't ship sidecars today, so the resolved selection
-  // has no sidecar fields — but the helper must at least never throw and
-  // must omit the optional fields cleanly. This is the contract that lets
-  // a future built-in with claudeMd flow through usePersona without a
-  // separate resolveSidecar call.
-  const sel = resolvePersona('documentation');
+test('resolvePersona populates sidecar selection fields from the internal catalog', () => {
+  const sel = resolvePersona('persona-authoring');
   assert.equal(sel.claudeMd, undefined);
   assert.equal(sel.claudeMdContent, undefined);
   assert.equal(sel.claudeMdMode, undefined);
   assert.equal(sel.agentsMd, undefined);
+  assert.match(sel.agentsMdContent ?? '', /Persona author/);
+  assert.equal(sel.agentsMdMode, 'overwrite');
 });

@@ -6,6 +6,7 @@ import {
   CODEX_APPROVAL_POLICIES,
   CODEX_SANDBOX_MODES,
   HARNESS_VALUES,
+  listBuiltInPersonas,
   personaCatalog,
   PERSONA_TAGS,
   PERSONA_TIERS,
@@ -658,9 +659,9 @@ function assertPartialHarnessSettingsShape(value: Record<string, unknown>, conte
 }
 
 function findInLibrary(key: string): PersonaSpec | undefined {
-  const byIntent = (personaCatalog as Record<string, PersonaSpec>)[key];
+  const byIntent = (personaCatalog as Record<string, PersonaSpec | undefined>)[key];
   if (byIntent) return byIntent;
-  for (const spec of Object.values(personaCatalog)) {
+  for (const spec of listBuiltInPersonas()) {
     if (spec.id === key) return spec;
   }
   return undefined;

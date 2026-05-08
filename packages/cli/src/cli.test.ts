@@ -74,48 +74,84 @@ function trapExit(): ExitTrap {
   return trap;
 }
 
+function writeStandaloneCodexPersona(workforceHome: string, id = 'local-codex'): string {
+  const personaDir = join(workforceHome, 'personas');
+  mkdirSync(personaDir, { recursive: true });
+  writeFileSync(
+    join(personaDir, `${id}.json`),
+    JSON.stringify({
+      id,
+      intent: 'review',
+      tags: ['review'],
+      description: 'Local no-skill codex persona for CLI subprocess tests.',
+      tiers: {
+        best: {
+          harness: 'codex',
+          model: 'test-codex',
+          systemPrompt: 'Run the local codex test harness.',
+          harnessSettings: { reasoning: 'high', timeoutSeconds: 30 }
+        },
+        'best-value': {
+          harness: 'codex',
+          model: 'test-codex',
+          systemPrompt: 'Run the local codex test harness.',
+          harnessSettings: { reasoning: 'medium', timeoutSeconds: 30 }
+        },
+        minimum: {
+          harness: 'codex',
+          model: 'test-codex',
+          systemPrompt: 'Run the local codex test harness.',
+          harnessSettings: { reasoning: 'low', timeoutSeconds: 30 }
+        }
+      }
+    }),
+    'utf8'
+  );
+  return id;
+}
+
 test('parseAgentArgs: --install-in-repo sets flag and preserves positional selector', () => {
-  const { flags, positional } = parseAgentArgs(['--install-in-repo', 'posthog@best']);
+  const { flags, positional } = parseAgentArgs(['--install-in-repo', 'local-codex@best']);
   assert.equal(flags.installInRepo, true);
   assert.equal(flags.noLaunchMetadata, false);
-  assert.deepEqual(positional, ['posthog@best']);
+  assert.deepEqual(positional, ['local-codex@best']);
 });
 
 test('parseAgentArgs: --no-launch-metadata sets flag and preserves positional selector', () => {
-  const { flags, positional } = parseAgentArgs(['--no-launch-metadata', 'posthog@best']);
+  const { flags, positional } = parseAgentArgs(['--no-launch-metadata', 'local-codex@best']);
   assert.equal(flags.noLaunchMetadata, true);
   assert.equal(flags.installInRepo, false);
-  assert.deepEqual(positional, ['posthog@best']);
+  assert.deepEqual(positional, ['local-codex@best']);
 });
 
 test('parseAgentArgs: preserves trailing positionals after the selector', () => {
   const { flags, positional } = parseAgentArgs([
     '--install-in-repo',
-    'review@best-value',
+    'local-codex@best-value',
     'extra-arg'
   ]);
   assert.equal(flags.installInRepo, true);
   assert.equal(flags.noLaunchMetadata, false);
-  assert.deepEqual(positional, ['review@best-value', 'extra-arg']);
+  assert.deepEqual(positional, ['local-codex@best-value', 'extra-arg']);
 });
 
 test('parseAgentArgs: no flags → installInRepo false', () => {
-  const { flags, positional } = parseAgentArgs(['posthog']);
+  const { flags, positional } = parseAgentArgs(['local-codex']);
   assert.equal(flags.installInRepo, false);
   assert.equal(flags.noLaunchMetadata, false);
-  assert.deepEqual(positional, ['posthog']);
+  assert.deepEqual(positional, ['local-codex']);
 });
 
 test('parseAgentArgs: -- stops flag parsing, positional args after are preserved', () => {
   const { flags, positional } = parseAgentArgs([
     '--',
     '--install-in-repo',
-    'posthog'
+    'local-codex'
   ]);
   // --install-in-repo AFTER `--` is positional, not a flag.
   assert.equal(flags.installInRepo, false);
   assert.equal(flags.noLaunchMetadata, false);
-  assert.deepEqual(positional, ['--install-in-repo', 'posthog']);
+  assert.deepEqual(positional, ['--install-in-repo', 'local-codex']);
 });
 
 test('parseInstallArgs: accepts package specs, repeatable persona flags, and overwrite', () => {
@@ -164,9 +200,9 @@ test('parseCreateArgs: runs persona-maker and preserves agent flags', () => {
 test('parseCreateArgs: rejects positional selectors because create has a fixed persona', () => {
   const trap = trapExit();
   try {
-    assert.throws(() => parseCreateArgs(['posthog']), /__exit_trap__:1/);
+    assert.throws(() => parseCreateArgs(['local-codex']), /__exit_trap__:1/);
     assert.deepEqual(trap.exits, [1]);
-    assert.match(trap.stderr, /create: unexpected argument "posthog"/);
+    assert.match(trap.stderr, /create: unexpected argument "local-codex"/);
     assert.match(trap.stderr, /always runs persona-maker@best/);
   } finally {
     trap.restore();
@@ -499,6 +535,7 @@ async function runCliCapturingStderr(
   const child = spawn(process.execPath, [cliPath, ...args], {
     env: {
       ...process.env,
+      AGENT_WORKFORCE_HOME: join(tmpdir(), `aw-cli-empty-home-${process.pid}`),
       ...extraEnv,
       // Force any harness spawn to ENOENT so the run terminates quickly.
       PATH: extraEnv.PATH ?? '/nonexistent-path-for-test',
@@ -541,7 +578,7 @@ async function runCliCapturingStderr(
 test('main: extra positional after the persona selector is rejected', async () => {
   const { stderr, exitCode } = await runCliCapturingStderr([
     'agent',
-    'posthog',
+    'local-codex',
     'hello'
   ]);
   assert.match(stderr, /unexpected argument "hello"/);
@@ -877,35 +914,44 @@ test('loadSidecarForSelection: opencode picks agentsMd, not claudeMd', () => {
 });
 
 test('main: codex sessions engage the sandbox mount by default', async () => {
-  // npm-provenance-publisher@best runs on codex; codex now defaults to a
-  // relayfile mount in parity with claude/opencode so persona-supplied
-  // AGENTS.md sidecars (and any per-session writes) stay sandboxed. The
-  // mount branch emits a "sandbox mount → …" line before calling
-  // launchOnMount, then fails to spawn codex (PATH is scrubbed) — we just
-  // need the marker to confirm the mount path was taken.
-  const { stderr } = await runCliCapturingStderr([
-    'agent',
-    'npm-provenance-publisher@best'
-  ]);
-  assert.match(
-    stderr,
-    /sandbox mount →/,
-    `expected the mount branch to engage; saw stderr:\n${stderr}`
-  );
+  const root = mkdtempSync(join(tmpdir(), 'aw-cli-mount-'));
+  try {
+    const workforceHome = join(root, '.agentworkforce', 'workforce');
+    const personaId = writeStandaloneCodexPersona(workforceHome);
+    // Codex defaults to a relayfile mount in parity with claude/opencode so
+    // persona-supplied AGENTS.md sidecars and per-session writes stay sandboxed.
+    const { stderr } = await runCliCapturingStderr(
+      ['agent', `${personaId}@best`],
+      { AGENT_WORKFORCE_HOME: workforceHome }
+    );
+    assert.match(
+      stderr,
+      /sandbox mount →/,
+      `expected the mount branch to engage; saw stderr:\n${stderr}`
+    );
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
 });
 
 test('main: codex --install-in-repo disengages the sandbox mount', async () => {
-  // The single opt-out: --install-in-repo. Confirms parity with claude/
-  // opencode where the same flag turns the mount off.
-  const { stderr } = await runCliCapturingStderr([
-    'agent',
-    'npm-provenance-publisher@best',
-    '--install-in-repo'
-  ]);
-  assert.ok(
-    !/sandbox mount →/.test(stderr),
-    `expected the mount branch to be skipped under --install-in-repo; saw stderr:\n${stderr}`
-  );
+  const root = mkdtempSync(join(tmpdir(), 'aw-cli-no-mount-'));
+  try {
+    const workforceHome = join(root, '.agentworkforce', 'workforce');
+    const personaId = writeStandaloneCodexPersona(workforceHome);
+    // The single opt-out: --install-in-repo. Confirms parity with claude/
+    // opencode where the same flag turns the mount off.
+    const { stderr } = await runCliCapturingStderr(
+      ['agent', `${personaId}@best`, '--install-in-repo'],
+      { AGENT_WORKFORCE_HOME: workforceHome }
+    );
+    assert.ok(
+      !/sandbox mount →/.test(stderr),
+      `expected the mount branch to be skipped under --install-in-repo; saw stderr:\n${stderr}`
+    );
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
 });
 
 test('main: preserves the harness exit code', async () => {
@@ -922,8 +968,11 @@ process.exit(7);
     );
     chmodSync(codex, 0o755);
 
-    const res = await runCliCapturingStderr(['agent', 'code-reviewer@best'], {
+    const workforceHome = join(dir, '.agentworkforce', 'workforce');
+    const personaId = writeStandaloneCodexPersona(workforceHome);
+    const res = await runCliCapturingStderr(['agent', `${personaId}@best`, '--install-in-repo'], {
       PATH: `${dir}:${process.env.PATH ?? ''}`,
+      AGENT_WORKFORCE_HOME: workforceHome,
       AGENTWORKFORCE_LAUNCH_METADATA: '0'
     });
 
