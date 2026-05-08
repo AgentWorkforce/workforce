@@ -224,6 +224,7 @@ export interface BuildInteractiveSpecInput {
   personaId: string;
   model: string;
   systemPrompt: string;
+  harnessSettings?: HarnessSettings;
   mcpServers?: Record<string, McpServerSpec>;
   permissions?: PersonaPermissions;
 }
