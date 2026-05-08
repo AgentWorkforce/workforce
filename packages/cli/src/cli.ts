@@ -24,7 +24,6 @@ import {
   routingProfiles,
   useSelection,
   type Harness,
-  type PersonaIntent,
   type PersonaMount,
   type PersonaSelection,
   type PersonaSpec,
@@ -68,13 +67,16 @@ Commands:
   create [flags]     Opens persona-maker@best for creating a new
                       persona, with target path passed as persona inputs.
                       Flags:
-                        --to <target>       Storage target: cwd, user, dir:n,
+                        --save-in-directory=<target>
+                                            Storage target: cwd, user, dir:n,
                                             library, or an explicit path.
-                                            Default: cwd when
-                                            .agentworkforce/workforce exists,
-                                            otherwise config defaultCreateTarget,
-                                            otherwise user.
-                        --save-default      Persist --to as defaultCreateTarget in
+                                            Default: cwd
+                                            (<cwd>/.agentworkforce/workforce/personas);
+                                            the directory is created if missing.
+                                            Override via this flag, or pin a
+                                            different default with --save-default.
+                        --save-default      Persist --save-in-directory as
+                                            defaultCreateTarget in
                                             ~/.agentworkforce/workforce/config.json.
                         --install-in-repo   Same behavior as agent.
                         --no-launch-metadata
@@ -162,7 +164,7 @@ configured persona dir is ~/.agentworkforce/workforce/personas.
 
 Examples:
   agentworkforce create
-  agentworkforce create --to user
+  agentworkforce create --save-in-directory=user
   agentworkforce agent npm-provenance-publisher@best
   agentworkforce agent my-posthog@best
   agentworkforce agent review@best-value
@@ -208,6 +210,59 @@ type ResolvedTarget =
   | { kind: 'repo'; source: 'library'; spec: PersonaSpec; tier: PersonaTier }
   | { kind: 'local'; source: PersonaSource; spec: PersonaSpec; tier: PersonaTier };
 
+interface KnownPersonaRow {
+  name: string;
+  description: string;
+}
+
+function collectKnownPersonas(): KnownPersonaRow[] {
+  const byName = new Map<string, KnownPersonaRow>();
+  for (const spec of local.byId.values()) {
+    byName.set(spec.id, {
+      name: spec.id,
+      description: spec.description
+    });
+  }
+  for (const spec of Object.values(personaCatalog)) {
+    if (byName.has(spec.id)) continue;
+    byName.set(spec.id, {
+      name: spec.id,
+      description: spec.description
+    });
+  }
+  return [...byName.values()].sort((a, b) => a.name.localeCompare(b.name));
+}
+
+function formatNameDescriptionTable(rows: readonly KnownPersonaRow[]): string {
+  const headers: KnownPersonaRow = {
+    name: 'NAME',
+    description: 'DESCRIPTION'
+  };
+  const rendered = rows.map((r) => ({
+    name: r.name,
+    description: r.description.replace(/\s+/g, ' ').trim()
+  }));
+  const nameWidth = Math.max(
+    headers.name.length,
+    ...rendered.map((r) => r.name.length)
+  );
+  const termWidth =
+    process.stderr.isTTY && typeof process.stderr.columns === 'number'
+      ? process.stderr.columns
+      : 120;
+  const descBudget = Math.max(
+    headers.description.length,
+    Math.max(32, termWidth - nameWidth - 3)
+  );
+  const truncate = (text: string) =>
+    text.length <= descBudget
+      ? text
+      : `${text.slice(0, Math.max(1, descBudget - 3)).trimEnd()}...`;
+  const line = (row: KnownPersonaRow) =>
+    `${row.name.padEnd(nameWidth)} | ${truncate(row.description)}`.trimEnd();
+  return [line(headers), ...rendered.map(line)].join('\n');
+}
+
 function resolveSpec(key: string): ResolvedTarget['spec'] | { error: string } {
   const localSpec = local.byId.get(key);
   if (localSpec) return localSpec;
@@ -216,15 +271,9 @@ function resolveSpec(key: string): ResolvedTarget['spec'] | { error: string } {
   const byId = Object.values(personaCatalog).find((p) => p.id === key);
   if (byId) return byId;
 
-  const repoListing = Object.values(personaCatalog)
-    .slice()
-    .sort((a, b) => a.id.localeCompare(b.id))
-    .map((p) => `  ${p.id}  (intent: ${p.intent})`);
-  const localListing = [...local.byId.values()]
-    .sort((a, b) => a.id.localeCompare(b.id))
-    .map((p) => `  ${p.id}  (${local.sources.get(p.id) ?? 'local'})`);
-  const listing = [...repoListing, ...localListing].join('\n');
-  return { error: `Unknown persona "${key}". Known personas:\n${listing}` };
+  return {
+    error: `Unknown persona "${key}". Known personas:\n${formatNameDescriptionTable(collectKnownPersonas())}`
+  };
 }
 
 function parseSelector(sel: string): ResolvedTarget {
@@ -1710,8 +1759,8 @@ function runList(args: readonly string[]): never {
     if (filterHarness && r.harness !== filterHarness) return false;
     if (filterTag && !r.tags.includes(filterTag)) return false;
     if (applyRecommended) {
-      const rule = recommendedByIntent[r.intent as PersonaIntent];
-      if (!rule || r.rating !== rule.tier) return false;
+      const rule = (recommendedByIntent as Partial<Record<string, { tier: PersonaTier }>>)[r.intent];
+      if (r.rating !== (rule?.tier ?? 'best-value')) return false;
     }
     return true;
   });
@@ -1806,7 +1855,7 @@ function resolveShowTarget(
   } else if (explicitTier) {
     tiers = [explicitTier];
   } else {
-    const rule = routingProfiles.default.intents[spec.intent];
+    const rule = (routingProfiles.default.intents as Partial<Record<string, { tier: PersonaTier }>>)[spec.intent];
     tiers = [rule?.tier ?? 'best-value'];
   }
   return { spec, source, tiers, explicitTier };
@@ -1978,10 +2027,7 @@ interface CreateTarget {
 }
 
 function defaultCreateTargetSelector(): string {
-  if (existsSync(join(process.cwd(), '.agentworkforce', 'workforce'))) {
-    return 'cwd';
-  }
-  return loadPersonaSourceConfig().defaultCreateTarget ?? 'user';
+  return loadPersonaSourceConfig().defaultCreateTarget ?? 'cwd';
 }
 
 function resolveCreateTarget(rawTarget: string | undefined): CreateTarget {
@@ -2008,7 +2054,7 @@ function resolveCreateTarget(rawTarget: string | undefined): CreateTarget {
     const dir = resolvePath(process.cwd(), 'personas');
     if (!existsSync(dir)) {
       die(
-        'create: --to library requires running from the AgentWorkforce repo root, where ./personas exists.'
+        'create: --save-in-directory=library requires running from the AgentWorkforce repo root, where ./personas exists.'
       );
     }
     return {
@@ -2303,7 +2349,7 @@ export interface AgentFlags {
 }
 
 export interface CreateFlags extends AgentFlags {
-  to?: string;
+  saveInDirectory?: string;
   saveDefault: boolean;
 }
 
@@ -2374,9 +2420,17 @@ export function parseCreateArgs(args: readonly string[]): {
       flags.noLaunchMetadata = true;
       continue;
     }
-    if (arg === '--to') {
-      flags.to = valueOf(i, arg);
+    if (arg === '--save-in-directory') {
+      const value = valueOf(i, arg).trim();
+      if (!value) die('create: --save-in-directory requires a non-empty value.');
+      flags.saveInDirectory = value;
       i += 1;
+      continue;
+    }
+    if (arg.startsWith('--save-in-directory=')) {
+      const value = arg.slice('--save-in-directory='.length).trim();
+      if (!value) die('create: --save-in-directory requires a non-empty value.');
+      flags.saveInDirectory = value;
       continue;
     }
     if (arg === '--save-default') {
@@ -2385,7 +2439,7 @@ export function parseCreateArgs(args: readonly string[]): {
     }
     if (arg === '-h' || arg === '--help') {
       process.stdout.write(
-        'Usage: agentworkforce create [--to <cwd|user|dir:n|library|path>] [--save-default] [--install-in-repo] [--no-launch-metadata]\n'
+        'Usage: agentworkforce create [--save-in-directory=<cwd|user|dir:n|library|path>] [--save-default] [--install-in-repo] [--no-launch-metadata]\n'
       );
       process.exit(0);
     }
@@ -2399,7 +2453,7 @@ export function parseCreateArgs(args: readonly string[]): {
     );
   }
 
-  const target = resolveCreateTarget(flags.to);
+  const target = resolveCreateTarget(flags.saveInDirectory);
   ensureCreateTargetDir(target);
   if (flags.saveDefault) saveDefaultCreateTarget(target);
 

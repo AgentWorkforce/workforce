@@ -9,7 +9,7 @@ npm i -g agentworkforce
 Then:
 
 ```sh
-agentworkforce create [--to <target>] [--save-default] [--install-in-repo] [--no-launch-metadata]
+agentworkforce create [--save-in-directory=<target>] [--save-default] [--install-in-repo] [--no-launch-metadata]
 agentworkforce agent [--install-in-repo] [--no-launch-metadata] <persona>[@<tier>]
 agentworkforce list [flags]
 agentworkforce show <persona>

@@ -222,7 +222,7 @@ export type McpServerSpec =
 
 export interface PersonaSpec {
   id: string;
-  intent: PersonaIntent;
+  intent: string;
   /**
    * Free-form classification labels (from {@link PERSONA_TAGS}). Every persona
    * has at least one; a persona may carry multiple tags when it spans concerns
@@ -517,10 +517,22 @@ const prpmProvider: SkillProvider = {
   }
 };
 
-// skill.sh source form: `<github-url>#<skill-name>`
-// Example: `https://github.com/vercel-labs/skills#find-skills`
+// skill.sh source forms:
+// - `<github-url>#<skill-name>`
+// - `<github-url>/tree/<ref>/<path-to-skill>`
+// Examples:
+// - `https://github.com/vercel-labs/skills#find-skills`
+// - `https://github.com/wsimmonds/claude-nextjs-skills/tree/main/nextjs-anti-patterns`
 const SKILL_SH_URL_RE =
   /^(https?:\/\/github\.com\/[^/\s?#]+\/[^/\s?#]+?)(?:\.git)?#([^\s?#]+)$/i;
+const SKILL_SH_TREE_URL_RE =
+  /^(https?:\/\/github\.com\/[^/\s?#]+\/[^/\s?#]+?)(?:\.git)?\/tree\/([^/\s?#]+)\/([^?#]+?)(?:[?#].*)?$/i;
+const SKILL_NAME_RE = /^(?!\.{1,2}$)[A-Za-z0-9][A-Za-z0-9._-]*$/;
+
+function toSafeSkillName(raw: string): string | null {
+  const name = raw.trim();
+  return SKILL_NAME_RE.test(name) ? name : null;
+}
 
 /**
  * Paths `npx skills add` writes per install. Mirrors the on-disk layout from
@@ -542,15 +554,27 @@ const skillShProvider: SkillProvider = {
   kind: 'skill.sh',
   parse(source) {
     const match = source.match(SKILL_SH_URL_RE);
-    if (!match) {
-      return null;
+    if (match) {
+      const [, repoUrl, rawSkillName] = match;
+      const skillName = toSafeSkillName(rawSkillName);
+      if (!skillName) return null;
+      return {
+        kind: 'skill.sh',
+        // packageRef preserves the full `<repo>#<skill>` shape so the command builder
+        // can reconstruct both halves without re-parsing the original source.
+        packageRef: `${repoUrl}#${skillName}`,
+        installedName: skillName
+      };
     }
-    const [, repoUrl, skillName] = match;
+
+    const treeMatch = source.match(SKILL_SH_TREE_URL_RE);
+    if (!treeMatch) return null;
+    const [, repoUrl, ref, skillPath] = treeMatch;
+    const skillName = toSafeSkillName(skillPath.split('/').filter(Boolean).at(-1) ?? '');
+    if (!skillName) return null;
     return {
       kind: 'skill.sh',
-      // packageRef preserves the full `<repo>#<skill>` shape so the command builder
-      // can reconstruct both halves without re-parsing the original source.
-      packageRef: `${repoUrl}#${skillName}`,
+      packageRef: `${repoUrl}/tree/${ref}#${skillName}`,
       installedName: skillName
     };
   },
@@ -588,7 +612,8 @@ function resolveSkillSource(source: string): ResolvedSkillSource {
     `Unsupported skill source: ${source}. ` +
       `Supported forms: prpm.dev package URL (https://prpm.dev/packages/<scope>/<name>), ` +
       `bare "<scope>/<name>" prpm reference, ` +
-      `or skill.sh github URL with skill fragment (https://github.com/<org>/<repo>#<skill>).`
+      `skill.sh github URL with skill fragment (https://github.com/<org>/<repo>#<skill>), ` +
+      `or GitHub tree URL to a skill directory (https://github.com/<org>/<repo>/tree/<ref>/<skill>).`
   );
 }
 

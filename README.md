@@ -19,7 +19,7 @@ It's super easy to define a persona.
 ```bash
 npx agentworkforce create --name=frontend-implementer
 ```
-This will drop you into an instance of claude with a special set of skills to help you create a persona. Once it's generated, you can then use it. By default, this will be saved to your current working directory at `./agentworkforce/workforce/personas`
+This will drop you into an instance of claude with a special set of skills to help you create a persona. Once it's generated, you can then use it. By default, this will be saved to your current working directory at `./.agentworkforce/workforce/personas` (the directory is created automatically if it does not already exist).
 
 ```bash
 npx agentworkforce agent frontend-implementer
@@ -209,7 +209,7 @@ corepack pnpm --filter agentworkforce link --global
 ### Usage
 
 ```
-agentworkforce create [--to <target>] [--save-default] [--install-in-repo] [--no-launch-metadata]
+agentworkforce create [--save-in-directory=<target>] [--save-default] [--install-in-repo] [--no-launch-metadata]
 agentworkforce agent [--install-in-repo] [--no-launch-metadata] <persona>[@<tier>]
 agentworkforce list [flags]
 agentworkforce install [flags] <pkg|path>
@@ -218,9 +218,11 @@ agentworkforce harness check
 agentworkforce --version
 ```
 
-- `create` — opens `persona-maker@best` for creating a new persona. It chooses a
-  target from `cwd`, `user`, configured `dir:n`, `library`, or an explicit path,
-  then passes `TARGET_DIR` and `CREATE_MODE` into the persona.
+- `create` — opens `persona-maker@best` for creating a new persona. By default
+  it writes to `./.agentworkforce/workforce/personas/<id>.json` (the directory
+  is created if missing); pass `--save-in-directory=<cwd|user|dir:n|library|path>`
+  to write somewhere else. The chosen target and create mode are forwarded to
+  the persona via `TARGET_DIR` and `CREATE_MODE` inputs.
 - `agent` — drops you into an interactive harness session for the persona.
   - `<tier>` is `best` | `best-value` | `minimum` (default: `best-value`).
   - `<persona>` resolves across source layers, highest first:
@@ -255,8 +257,8 @@ the value from the next lower layer; everything else cascades through.
 
 ```bash
 agentworkforce create
-agentworkforce create --to user
-agentworkforce create --to library
+agentworkforce create --save-in-directory=user
+agentworkforce create --save-in-directory=library
 
 # Interactive code reviewer
 agentworkforce agent review@best-value

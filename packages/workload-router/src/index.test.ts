@@ -201,10 +201,10 @@ test('resolvePersonaByTier also propagates mcpServers / permissions', () => {
 
 test('resolvePersonaByTier propagates persona input declarations', () => {
   const selection = resolvePersonaByTier('persona-authoring', 'best');
-  assert.equal(selection.inputs?.TARGET_DIR?.default, 'personas');
+  assert.equal(selection.inputs?.TARGET_DIR?.default, '.agentworkforce/workforce/personas');
   assert.equal(
     selection.inputs?.CREATE_MODE?.default,
-    'built-in'
+    'local'
   );
   // Persona-maker carries its full authoring spec in agentsMdContent; the
   // CLI renders input placeholders into the sidecar before materialization,
@@ -217,6 +217,14 @@ test('resolvePersonaByTier propagates persona input declarations', () => {
   assert.equal(selection.runtime.harnessSettings.sandboxMode, 'workspace-write');
   assert.equal(selection.runtime.harnessSettings.approvalPolicy, 'on-request');
   assert.equal(selection.runtime.harnessSettings.workspaceWriteNetworkAccess, true);
+  assert.match(
+    selection.agentsMdContent ?? '',
+    /Do not request network escalation only to complete this fallback/
+  );
+  assert.doesNotMatch(
+    selection.agentsMdContent ?? '',
+    /Check prpm\.dev as a secondary registry when skills\.sh has nothing relevant/
+  );
 });
 
 test('personas with no optional fields keep them undefined on the selection', () => {
@@ -445,6 +453,94 @@ test('materializeSkills emits a skill.sh install for a github#skill source', () 
     ]
   );
   assert.ok(!install.cleanupPaths.includes('skills-lock.json'));
+});
+
+test('materializeSkills accepts GitHub tree URLs for skill.sh skill directories', () => {
+  const plan = materializeSkills(
+    [
+      {
+        id: 'nextjs-anti-patterns',
+        source: 'https://github.com/wsimmonds/claude-nextjs-skills/tree/main/nextjs-anti-patterns',
+        description: 'Next.js anti-pattern guidance'
+      },
+      {
+        id: 'lighthouse-ci-integrator',
+        source: 'https://github.com/Dexploarer/hyper-forge/tree/main/.claude/skills/lighthouse-ci-integrator',
+        description: 'Lighthouse CI guidance'
+      }
+    ],
+    'opencode'
+  );
+
+  assert.deepEqual(
+    plan.installs.map((install) => ({
+      packageRef: install.packageRef,
+      installedDir: install.installedDir,
+      command: [...install.installCommand]
+    })),
+    [
+      {
+        packageRef: 'https://github.com/wsimmonds/claude-nextjs-skills/tree/main#nextjs-anti-patterns',
+        installedDir: '.agents/skills/nextjs-anti-patterns',
+        command: [
+          'npx',
+          '-y',
+          'skills',
+          'add',
+          'https://github.com/wsimmonds/claude-nextjs-skills/tree/main',
+          '--skill',
+          'nextjs-anti-patterns',
+          '-y'
+        ]
+      },
+      {
+        packageRef: 'https://github.com/Dexploarer/hyper-forge/tree/main#lighthouse-ci-integrator',
+        installedDir: '.agents/skills/lighthouse-ci-integrator',
+        command: [
+          'npx',
+          '-y',
+          'skills',
+          'add',
+          'https://github.com/Dexploarer/hyper-forge/tree/main',
+          '--skill',
+          'lighthouse-ci-integrator',
+          '-y'
+        ]
+      }
+    ]
+  );
+});
+
+test('materializeSkills rejects unsafe skill.sh skill names', () => {
+  assert.throws(
+    () =>
+      materializeSkills(
+        [
+          {
+            id: 'unsafe',
+            source: 'https://github.com/example/skills#../unsafe',
+            description: 'unsafe fragment'
+          }
+        ],
+        'opencode'
+      ),
+    /Unsupported skill source/
+  );
+
+  assert.throws(
+    () =>
+      materializeSkills(
+        [
+          {
+            id: 'unsafe',
+            source: 'https://github.com/example/skills/tree/main/.hidden',
+            description: 'unsafe tree leaf'
+          }
+        ],
+        'opencode'
+      ),
+    /Unsupported skill source/
+  );
 });
 
 test('prpm installs carry a harness-scoped cleanup path (not the lockfile)', () => {
