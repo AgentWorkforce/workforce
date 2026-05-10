@@ -3235,23 +3235,34 @@ async function runPersonaImprover(args: {
         shell: false
       });
       let stderrBuf = '';
+      let forceKillTimeout: NodeJS.Timeout | undefined;
       child.stdout?.setEncoding('utf8');
       child.stderr?.setEncoding('utf8');
       child.stderr?.on('data', (chunk: string) => {
         stderrBuf += chunk;
       });
+      // SIGTERM first; if the harness traps or ignores it, escalate to
+      // SIGKILL after a 1s grace so the timeout is actually enforced
+      // (matches the previous spawnCapture behavior in harness-kit).
       const timeout =
         timeoutMs !== undefined
           ? setTimeout(() => {
               child.kill('SIGTERM');
+              forceKillTimeout = setTimeout(() => {
+                if (!child.killed) child.kill('SIGKILL');
+              }, 1000);
             }, timeoutMs)
           : undefined;
-      child.on('error', (err) => {
+      const clearTimers = () => {
         if (timeout) clearTimeout(timeout);
+        if (forceKillTimeout) clearTimeout(forceKillTimeout);
+      };
+      child.on('error', (err) => {
+        clearTimers();
         resolveResult({ exitCode: 1, stderr: `${stderrBuf}${err.message}\n` });
       });
       child.on('close', (code, signal) => {
-        if (timeout) clearTimeout(timeout);
+        clearTimers();
         const exitCode =
           typeof code === 'number' ? code : signal ? signalExitCode(signal) : null;
         resolveResult({ exitCode, stderr: stderrBuf });
