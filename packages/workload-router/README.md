@@ -18,11 +18,11 @@ resolved persona and grouped install metadata. Nothing is installed,
 spawned, or written to disk — run `install.commandString` yourself when
 you are ready to materialize the persona's skills.
 
-`usePersona` resolves only the internal built-in catalog (`persona-maker` /
-`persona-authoring`). Optional personas such as `code-reviewer` and
-`frontend-implementer` are distributed through installable persona packs and
-should be loaded through the CLI/source cascade, then passed to `useSelection`
-or `materializeSkillsFor`.
+`usePersona` resolves only the internal built-in catalog (`persona-maker`,
+`persona-improver`, and `nango-function-builder`). Optional personas such as
+`code-reviewer` and `frontend-implementer` are distributed through installable
+persona packs and should be loaded through the CLI/source cascade, then passed
+to `useSelection` or `materializeSkillsFor`.
 
 ```ts
 import { usePersona } from '@agentworkforce/workload-router';

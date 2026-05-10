@@ -1,4 +1,4 @@
-import { personaImprover, personaMaker } from './generated/personas.js';
+import { nangoFunctionBuilder, personaImprover, personaMaker } from './generated/personas.js';
 import defaultRoutingProfileJson from '../routing-profiles/default.json' with { type: 'json' };
 
 export const HARNESS_VALUES = ['opencode', 'codex', 'claude'] as const;
@@ -38,6 +38,7 @@ export const PERSONA_INTENTS = [
   'posthog',
   'persona-authoring',
   'persona-improvement',
+  'nango-function-building',
   'agent-relay-workflow',
   'slop-audit',
   'api-contract-review',
@@ -47,7 +48,7 @@ export const PERSONA_INTENTS = [
   'relay-orchestrator'
 ] as const;
 
-export const BUILT_IN_PERSONA_INTENTS = ['persona-authoring', 'persona-improvement'] as const;
+export const BUILT_IN_PERSONA_INTENTS = ['persona-authoring', 'persona-improvement', 'nango-function-building'] as const;
 
 export type Harness = (typeof HARNESS_VALUES)[number];
 export type PersonaTier = (typeof PERSONA_TIERS)[number];
@@ -1430,7 +1431,8 @@ function parseRoutingProfile(value: unknown, context: string): RoutingProfile {
 
 export const personaCatalog: Partial<Record<PersonaIntent, PersonaSpec>> = {
   'persona-authoring': parsePersonaSpec(personaMaker, 'persona-authoring'),
-  'persona-improvement': parsePersonaSpec(personaImprover, 'persona-improvement')
+  'persona-improvement': parsePersonaSpec(personaImprover, 'persona-improvement'),
+  'nango-function-building': parsePersonaSpec(nangoFunctionBuilder, 'nango-function-building')
 };
 
 export function listBuiltInPersonas(): PersonaSpec[] {

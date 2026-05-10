@@ -67,9 +67,14 @@ function syntheticSpec(over: Partial<PersonaSpec> = {}): PersonaSpec {
 
 test('built-in catalog is limited to internal system personas', () => {
   const builtIns = listBuiltInPersonas();
-  assert.deepEqual(builtIns.map((p) => p.id).sort(), ['persona-improver', 'persona-maker']);
+  assert.deepEqual(builtIns.map((p) => p.id).sort(), [
+    'nango-function-builder',
+    'persona-improver',
+    'persona-maker'
+  ]);
   assert.equal(personaCatalog['persona-authoring']?.id, 'persona-maker');
   assert.equal(personaCatalog['persona-improvement']?.id, 'persona-improver');
+  assert.equal(personaCatalog['nango-function-building']?.id, 'nango-function-builder');
   assert.equal(personaCatalog.review, undefined);
   assert.ok(PERSONA_INTENTS.includes('review'));
   assert.equal(routingProfiles.default.intents.review.tier, 'best-value');
@@ -91,6 +96,18 @@ test('resolves persona-maker from the default routing profile', () => {
     selection.agentsMdContent ?? '',
     /Do not request network escalation only to complete this fallback/
   );
+});
+
+test('resolves nango-function-builder from the default routing profile', () => {
+  const selection = resolvePersona('nango-function-building');
+  assert.equal(selection.personaId, 'nango-function-builder');
+  assert.equal(selection.tier, 'best-value');
+  assert.equal(selection.runtime.harness, 'codex');
+  assert.equal(selection.skills.length, 1);
+  assert.equal(selection.skills[0].id, 'building-nango-functions-locally');
+  assert.match(selection.skills[0].source, /NangoHQ\/skills#building-nango-functions-locally/);
+  assert.match(selection.agentsMdContent ?? '', /NangoHQ\/integration-templates/);
+  assert.equal(selection.runtime.harnessSettings.workspaceWriteNetworkAccess, true);
 });
 
 test('optional pack-owned intents do not resolve from the built-in catalog', () => {

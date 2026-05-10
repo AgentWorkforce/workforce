@@ -240,7 +240,7 @@ agentworkforce --version
     1. `./.agentworkforce/workforce/personas/*.json` — project-local
     2. Configured persona source dirs. Default:
        `~/.agentworkforce/workforce/personas/*.json`
-    3. Internal built-in system personas in `/personas/` (currently `persona-maker`)
+    3. Internal built-in system personas in `/personas/` (currently `persona-maker`, `persona-improver`, and `nango-function-builder`)
   - Launch metadata is recorded by default for launched sessions; opt out with
     `--no-launch-metadata` or `AGENTWORKFORCE_LAUNCH_METADATA=0`.
 - `list` — print the catalog of personas from the cascade (cwd →
@@ -337,9 +337,9 @@ First-party examples:
 - `@agentrelay/personas` is owned by the Relay repo and contains Relay-specific
   personas such as `relay-orchestrator`.
 
-`persona-maker` remains part of the internal built-in distribution. You do not
-need to install `@agentworkforce/personas-core` before running
-`agentworkforce create`.
+`persona-maker`, `persona-improver`, and `nango-function-builder` remain part
+of the internal built-in distribution. You do not need to install
+`@agentworkforce/personas-core` before running `agentworkforce create`.
 
 `install` is a copy utility. Use it when a project should own and edit its
 persona files. `sources add <dir>` is separate: it points the cascade at a live
@@ -462,6 +462,8 @@ for the full mount layout and semantics.
 ## Personas
 
 - `personas/persona-maker.json`
+- `personas/persona-improver.json`
+- `personas/nango-function-builder.json`
 
 The built-in catalog is intentionally limited to required internal/system
 personas. Optional reusable personas are distributed through persona packs:

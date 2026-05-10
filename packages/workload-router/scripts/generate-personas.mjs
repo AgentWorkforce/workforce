@@ -11,7 +11,8 @@ const outputFile = path.join(repoRoot, 'packages/workload-router/src/generated/p
 
 const exportNameMap = new Map([
   ['persona-maker', 'personaMaker'],
-  ['persona-improver', 'personaImprover']
+  ['persona-improver', 'personaImprover'],
+  ['nango-function-builder', 'nangoFunctionBuilder']
 ]);
 
 /**

@@ -10,7 +10,7 @@
     "intents": {
       "type": "object",
       "additionalProperties": false,
-      "required": ["implement-frontend", "review", "architecture-plan", "requirements-analysis", "debugging", "security-review", "documentation", "verification", "test-strategy", "tdd-enforcement", "flake-investigation", "opencode-workflow-correctness", "npm-provenance", "cloud-sandbox-infra", "sage-slack-egress-migration", "sage-proactive-rewire", "cloud-slack-proxy-guard", "sage-cloud-e2e-conduction", "capability-discovery", "npm-package-compat", "posthog", "persona-authoring", "agent-relay-workflow", "slop-audit", "api-contract-review", "local-stack-orchestration", "e2e-validation", "write-integration-tests"],
+      "required": ["implement-frontend", "review", "architecture-plan", "requirements-analysis", "debugging", "security-review", "documentation", "verification", "test-strategy", "tdd-enforcement", "flake-investigation", "opencode-workflow-correctness", "npm-provenance", "cloud-sandbox-infra", "sage-slack-egress-migration", "sage-proactive-rewire", "cloud-slack-proxy-guard", "sage-cloud-e2e-conduction", "capability-discovery", "npm-package-compat", "posthog", "persona-authoring", "persona-improvement", "nango-function-building", "agent-relay-workflow", "slop-audit", "api-contract-review", "local-stack-orchestration", "e2e-validation", "write-integration-tests", "relay-orchestrator"],
       "properties": {
         "implement-frontend": { "$ref": "#/definitions/rule" },
         "review": { "$ref": "#/definitions/rule" },
@@ -34,12 +34,15 @@
         "npm-package-compat": { "$ref": "#/definitions/rule" },
         "posthog": { "$ref": "#/definitions/rule" },
         "persona-authoring": { "$ref": "#/definitions/rule" },
+        "persona-improvement": { "$ref": "#/definitions/rule" },
+        "nango-function-building": { "$ref": "#/definitions/rule" },
         "agent-relay-workflow": { "$ref": "#/definitions/rule" },
         "slop-audit": { "$ref": "#/definitions/rule" },
         "api-contract-review": { "$ref": "#/definitions/rule" },
         "local-stack-orchestration": { "$ref": "#/definitions/rule" },
         "e2e-validation": { "$ref": "#/definitions/rule" },
-        "write-integration-tests": { "$ref": "#/definitions/rule" }
+        "write-integration-tests": { "$ref": "#/definitions/rule" },
+        "relay-orchestrator": { "$ref": "#/definitions/rule" }
       }
     }
   },

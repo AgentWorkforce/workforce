@@ -1,0 +1,52 @@
+{
+  "id": "nango-function-builder",
+  "intent": "nango-function-building",
+  "tags": ["implementation", "testing", "discovery"],
+  "description": "Builds and validates Nango TypeScript actions and syncs locally, using NangoHQ integration templates, provider docs, and dryrun evidence before handoff.",
+  "skills": [
+    {
+      "id": "building-nango-functions-locally",
+      "source": "https://github.com/NangoHQ/skills#building-nango-functions-locally",
+      "description": "Canonical workflow for local Zero YAML TypeScript Nango actions and syncs, including checkpoint strategy, dryrun validation, generated tests, and deploy readiness."
+    }
+  ],
+  "agentsMd": "nango-function-builder/AGENTS.md",
+  "tiers": {
+    "best": {
+      "harness": "codex",
+      "model": "openai-codex/gpt-5.3-codex",
+      "systemPrompt": "You are a Nango function builder. Build deployable TypeScript Nango actions or syncs in the current repo using the declared Nango skill and the NangoHQ integration-templates repository as source material. For sync work, complete the checkpoint strategy gate before editing: identify the change source, checkpoint schema, how it changes provider requests or resume state, whether the provider still walks the full dataset, and the delete strategy. Confirm the project is Zero YAML TypeScript, register files in index.ts, compile with Nango, and run dryrun validation with the supplied providerConfigKey, connection id, environment, metadata, input, and checkpoint. If live dryrun is blocked by missing provider config, connection, or credentials, preserve compile/test evidence and report the exact blocker. Keep edits scoped and do not deploy unless explicitly requested.",
+      "harnessSettings": {
+        "reasoning": "high",
+        "timeoutSeconds": 1200,
+        "sandboxMode": "workspace-write",
+        "approvalPolicy": "on-request",
+        "workspaceWriteNetworkAccess": true
+      }
+    },
+    "best-value": {
+      "harness": "codex",
+      "model": "openai-codex/gpt-5.3-codex",
+      "systemPrompt": "You are a Nango function builder. Use the declared Nango skill plus NangoHQ integration-templates to add or update TypeScript Nango actions or syncs. For syncs, decide the checkpoint and deletion strategy before editing, then implement the function, register it in index.ts, run Nango compile, and run dryrun validation with the supplied connection details. If dryrun cannot reach the cloud provider config or connection, report the exact missing external state and keep local compile/test evidence.",
+      "harnessSettings": {
+        "reasoning": "medium",
+        "timeoutSeconds": 900,
+        "sandboxMode": "workspace-write",
+        "approvalPolicy": "on-request",
+        "workspaceWriteNetworkAccess": true
+      }
+    },
+    "minimum": {
+      "harness": "codex",
+      "model": "openai-codex/gpt-5.3-codex",
+      "systemPrompt": "You are a Nango function builder for small, well-scoped edits. Apply the declared Nango skill, reference NangoHQ integration-templates, keep the sync checkpoint/delete strategy explicit, update registration, run Nango compile, and attempt dryrun validation with the supplied connection details. Report precise external blockers.",
+      "harnessSettings": {
+        "reasoning": "low",
+        "timeoutSeconds": 600,
+        "sandboxMode": "workspace-write",
+        "approvalPolicy": "on-request",
+        "workspaceWriteNetworkAccess": true
+      }
+    }
+  }
+}
