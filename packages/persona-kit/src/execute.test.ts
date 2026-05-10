@@ -161,7 +161,7 @@ test('runSkillInstalls rejects cleanup paths that escape cwd', async () => {
           sourceKind: 'prpm',
           packageRef: 'x/y',
           harness: 'claude',
-          installCommand: ['true'],
+          installCommand: [process.execPath, '-e', 'process.exit(0)'],
           installedDir: '.claude/skills/y',
           installedManifest: '.claude/skills/y/SKILL.md',
           cleanupPaths: ['../escape']
@@ -202,7 +202,7 @@ test('runSkillInstalls spawns the chained install command for a non-session plan
           sourceKind: 'prpm',
           packageRef: 'noop/noop',
           harness: 'claude',
-          installCommand: ['sh', '-c', 'true'],
+          installCommand: [process.execPath, '-e', 'process.exit(0)'],
           installedDir: '.claude/skills/noop',
           installedManifest: '.claude/skills/noop/SKILL.md',
           cleanupPaths: []
@@ -225,7 +225,7 @@ test('runSkillInstalls surfaces a non-zero install with SkillInstallError', asyn
           sourceKind: 'prpm',
           packageRef: 'fail/fail',
           harness: 'claude',
-          installCommand: ['sh', '-c', 'exit 17'],
+          installCommand: [process.execPath, '-e', 'process.exit(17)'],
           installedDir: '.claude/skills/fail',
           installedManifest: '.claude/skills/fail/SKILL.md',
           cleanupPaths: []
