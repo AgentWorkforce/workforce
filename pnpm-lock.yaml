@@ -48,6 +48,8 @@ importers:
         specifier: workspace:*
         version: link:../workload-router
 
+  packages/persona-kit: {}
+
   packages/personas-core: {}
 
   packages/workload-router: {}
