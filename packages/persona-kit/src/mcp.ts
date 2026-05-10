@@ -1,4 +1,4 @@
-import type { McpServerSpec } from '@agentworkforce/workload-router';
+import type { McpServerSpec } from './types.js';
 import { type DroppedRef, makeLenientResolver, resolveStringMapLenient } from './env-refs.js';
 
 export interface DroppedMcpServer {

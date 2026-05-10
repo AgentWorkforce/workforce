@@ -3,7 +3,7 @@ import type {
   HarnessSettings,
   McpServerSpec,
   PersonaPermissions
-} from '@agentworkforce/workload-router';
+} from './types.js';
 
 /**
  * A config file the caller should materialize before launching the harness.
