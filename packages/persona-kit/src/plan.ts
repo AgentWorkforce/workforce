@@ -214,7 +214,12 @@ export function buildPersonaSpawnPlan(
   options: PlanOptions = {}
 ): PersonaSpawnPlan {
   const harness = persona.runtime.harness;
-  const processEnv = options.processEnv ?? process.env;
+  // Input env-var fallbacks read from `processEnv` only when ambient capture
+  // is opted into. With ambient capture off, `resolvePersonaInputs` sees an
+  // empty env and inputs must resolve from explicit values, persona
+  // `inputValues`, or `default` — keeping plans deterministic across hosts.
+  const processEnv: NodeJS.ProcessEnv =
+    options.processEnv ?? (options.includeProcessEnv ? process.env : {});
   const inputResolution = resolvePersonaInputs(
     persona.inputs ?? persona.inputValues
       ? persona.inputs ?? undefined

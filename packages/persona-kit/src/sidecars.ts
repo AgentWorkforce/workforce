@@ -47,6 +47,11 @@ async function readIfExists(path: string): Promise<string | null> {
 async function loadSidecarBody(sidecar: ResolvedSidecarWrite): Promise<string> {
   if (sidecar.contents !== undefined) return sidecar.contents;
   if (sidecar.sourcePath !== undefined) {
+    if (!isAbsolute(sidecar.sourcePath)) {
+      throw new Error(
+        `ResolvedSidecarWrite.sourcePath must be absolute; got ${JSON.stringify(sidecar.sourcePath)}`
+      );
+    }
     return readFile(sidecar.sourcePath, 'utf8');
   }
   // Type system already enforces this; the runtime check keeps the message

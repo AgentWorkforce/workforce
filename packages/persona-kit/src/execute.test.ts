@@ -7,7 +7,7 @@ import { buildPersonaSpawnPlan, type ResolvedPersona } from './plan.js';
 import { executePersonaSpawnPlan } from './execute.js';
 import { writePersonaSidecars } from './sidecars.js';
 import { materializePersonaConfigFiles } from './config-files.js';
-import { runSkillInstalls } from './skill-runner.js';
+import { runSkillInstalls, SkillInstallError } from './skill-runner.js';
 import type { SkillMaterializationPlan } from './types.js';
 
 const cleanEnv: NodeJS.ProcessEnv = Object.freeze({}) as NodeJS.ProcessEnv;
@@ -173,20 +173,70 @@ test('runSkillInstalls rejects cleanup paths that escape cwd', async () => {
   });
 });
 
-test('runSkillInstalls executes the install command and disposes session install root', async () => {
+test('runSkillInstalls scaffolds the session install root and disposes it', async () => {
   await withTmpDir(async (dir) => {
     const sessionRoot = join(dir, 'session');
-    // Synthesize a session-mode plan whose install command is a no-op echo.
     const plan: SkillMaterializationPlan = {
       harness: 'claude',
       installs: [],
       sessionInstallRoot: sessionRoot
     };
     const handle = await runSkillInstalls(plan, { cwd: dir });
-    // Session-mode scaffold creates the install root + plugin manifest.
     assert.ok(await exists(join(sessionRoot, '.claude-plugin', 'plugin.json')));
     await handle.dispose();
     assert.equal(await exists(sessionRoot), false);
+  });
+});
+
+test('runSkillInstalls spawns the chained install command for a non-session plan', async () => {
+  await withTmpDir(async (dir) => {
+    // Non-session mode runs `install.installCommand` verbatim — use a
+    // harmless `true` so the spawn path is exercised without network or
+    // disk side effects. cleanupPaths is empty so dispose is a no-op.
+    const plan: SkillMaterializationPlan = {
+      harness: 'claude',
+      installs: [
+        {
+          skillId: 'noop',
+          source: 'noop/noop',
+          sourceKind: 'prpm',
+          packageRef: 'noop/noop',
+          harness: 'claude',
+          installCommand: ['sh', '-c', 'true'],
+          installedDir: '.claude/skills/noop',
+          installedManifest: '.claude/skills/noop/SKILL.md',
+          cleanupPaths: []
+        }
+      ]
+    };
+    const handle = await runSkillInstalls(plan, { cwd: dir });
+    await handle.dispose();
+  });
+});
+
+test('runSkillInstalls surfaces a non-zero install with SkillInstallError', async () => {
+  await withTmpDir(async (dir) => {
+    const plan: SkillMaterializationPlan = {
+      harness: 'claude',
+      installs: [
+        {
+          skillId: 'fail',
+          source: 'fail/fail',
+          sourceKind: 'prpm',
+          packageRef: 'fail/fail',
+          harness: 'claude',
+          installCommand: ['sh', '-c', 'exit 17'],
+          installedDir: '.claude/skills/fail',
+          installedManifest: '.claude/skills/fail/SKILL.md',
+          cleanupPaths: []
+        }
+      ]
+    };
+    await assert.rejects(runSkillInstalls(plan, { cwd: dir }), (err: Error) => {
+      assert.equal(err.name, 'SkillInstallError');
+      assert.equal((err as SkillInstallError).exitCode, 17);
+      return true;
+    });
   });
 });
 
