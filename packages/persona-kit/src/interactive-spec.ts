@@ -306,3 +306,73 @@ export function buildInteractiveSpec(input: BuildInteractiveSpecInput): Interact
     }
   }
 }
+
+/** Result of translating a persona's runtime into a one-shot, non-interactive
+ * spawnable command. Caller writes `configFiles` before spawning. */
+export interface NonInteractiveSpec {
+  bin: string;
+  args: readonly string[];
+  configFiles: readonly InteractiveConfigFile[];
+  warnings: readonly string[];
+}
+
+/**
+ * Translate a persona's runtime into a non-interactive, one-shot command.
+ * Layers harness-specific non-interactive flags on top of {@link buildInteractiveSpec},
+ * then appends the user task. Pure — no I/O.
+ *
+ * - `claude`: appends `--print --output-format text [--name <n>] <task>`.
+ * - `codex`:  prefixes `exec`, appends `--skip-git-repo-check`, then a prompt
+ *   built from any `initialPrompt` joined with the user task.
+ * - `opencode`: prefixes `run`, appends `--model <m> --format default
+ *   [--dir <cwd>] [--title <n>] <task>`.
+ */
+export function buildNonInteractiveSpec(
+  input: BuildInteractiveSpecInput & {
+    task: string;
+    name?: string;
+    workingDirectory?: string;
+  }
+): NonInteractiveSpec {
+  const interactive = buildInteractiveSpec(input);
+  switch (input.harness) {
+    case 'claude': {
+      const args = [...interactive.args, '--print', '--output-format', 'text'];
+      if (input.name) args.push('--name', input.name);
+      args.push(input.task);
+      return {
+        bin: interactive.bin,
+        args,
+        configFiles: interactive.configFiles,
+        warnings: interactive.warnings
+      };
+    }
+    case 'codex': {
+      const prompt = interactive.initialPrompt
+        ? `${interactive.initialPrompt}\n\nUser task:\n${input.task}`
+        : input.task;
+      return {
+        bin: interactive.bin,
+        args: ['exec', ...interactive.args, '--skip-git-repo-check', prompt],
+        configFiles: interactive.configFiles,
+        warnings: interactive.warnings
+      };
+    }
+    case 'opencode': {
+      const args = ['run', ...interactive.args, '--model', input.model, '--format', 'default'];
+      if (input.workingDirectory) args.push('--dir', input.workingDirectory);
+      if (input.name) args.push('--title', input.name);
+      args.push(input.task);
+      return {
+        bin: interactive.bin,
+        args,
+        configFiles: interactive.configFiles,
+        warnings: interactive.warnings
+      };
+    }
+    default: {
+      const _exhaustive: never = input.harness;
+      throw new Error(`Unhandled harness: ${String(_exhaustive)}`);
+    }
+  }
+}

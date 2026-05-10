@@ -109,9 +109,11 @@ export {
 // Interactive harness spec
 export {
   buildInteractiveSpec,
+  buildNonInteractiveSpec,
   type BuildInteractiveSpecInput,
   type InteractiveConfigFile,
-  type InteractiveSpec
+  type InteractiveSpec,
+  type NonInteractiveSpec
 } from './interactive-spec.js';
 
 // Harness detection

@@ -26,9 +26,6 @@ importers:
 
   packages/cli:
     dependencies:
-      '@agentworkforce/harness-kit':
-        specifier: workspace:*
-        version: link:../harness-kit
       '@agentworkforce/persona-kit':
         specifier: workspace:*
         version: link:../persona-kit
