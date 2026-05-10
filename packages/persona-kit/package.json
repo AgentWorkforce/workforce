@@ -30,5 +30,8 @@
     "typecheck": "tsc -p tsconfig.json --noEmit",
     "test": "tsc -p tsconfig.json && node --test dist/*.test.js",
     "lint": "tsc -p tsconfig.json --noEmit"
+  },
+  "dependencies": {
+    "@relayfile/local-mount": "^0.7.0"
   }
 }
