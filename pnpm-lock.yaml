@@ -54,7 +54,11 @@ importers:
         specifier: workspace:*
         version: link:../workload-router
 
-  packages/persona-kit: {}
+  packages/persona-kit:
+    dependencies:
+      '@relayfile/local-mount':
+        specifier: ^0.7.0
+        version: 0.7.0
 
   packages/personas-core: {}
 

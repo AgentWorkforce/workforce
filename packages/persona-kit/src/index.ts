@@ -120,3 +120,43 @@ export {
   detectHarnesses,
   type HarnessAvailability
 } from './detect.js';
+
+// Plan builder + plan types
+export {
+  buildPersonaSpawnPlan,
+  type PersonaSpawnPlan,
+  type PlanOptions,
+  type ResolvedInputBinding,
+  type ResolvedMountPolicy,
+  type ResolvedPersona,
+  type ResolvedSidecarWrite
+} from './plan.js';
+
+// Side-effecting orchestration
+export {
+  executePersonaSpawnPlan,
+  type ExecuteOptions,
+  type ExecutionHandle
+} from './execute.js';
+
+// Piecewise side-effect helpers (advanced orchestration)
+export {
+  applyPersonaMount,
+  type ApplyPersonaMountOptions,
+  type PersonaMountHandle
+} from './mount.js';
+export {
+  writePersonaSidecars,
+  type PersonaSidecarHandle
+} from './sidecars.js';
+export {
+  assertSafeRelativePath,
+  materializePersonaConfigFiles,
+  type PersonaConfigFilesHandle
+} from './config-files.js';
+export {
+  runSkillInstalls,
+  SkillInstallError,
+  type PersonaSkillsHandle,
+  type RunSkillInstallsOptions
+} from './skill-runner.js';
