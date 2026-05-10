@@ -1,7 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 
-import { buildInteractiveSpec } from './harness.js';
+import { buildInteractiveSpec } from './interactive-spec.js';
 
 test('claude branch always emits --mcp-config + --strict-mcp-config', () => {
   const result = buildInteractiveSpec({

@@ -29,6 +29,9 @@ importers:
       '@agentworkforce/harness-kit':
         specifier: workspace:*
         version: link:../harness-kit
+      '@agentworkforce/persona-kit':
+        specifier: workspace:*
+        version: link:../persona-kit
       '@agentworkforce/workload-router':
         specifier: workspace:*
         version: link:../workload-router
@@ -44,6 +47,9 @@ importers:
 
   packages/harness-kit:
     dependencies:
+      '@agentworkforce/persona-kit':
+        specifier: workspace:*
+        version: link:../persona-kit
       '@agentworkforce/workload-router':
         specifier: workspace:*
         version: link:../workload-router
@@ -52,7 +58,11 @@ importers:
 
   packages/personas-core: {}
 
-  packages/workload-router: {}
+  packages/workload-router:
+    dependencies:
+      '@agentworkforce/persona-kit':
+        specifier: workspace:*
+        version: link:../persona-kit
 
 packages:
 

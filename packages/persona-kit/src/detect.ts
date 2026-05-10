@@ -2,7 +2,8 @@ import { spawnSync } from 'node:child_process';
 import { statSync } from 'node:fs';
 import { delimiter, join } from 'node:path';
 
-import { HARNESS_VALUES, type Harness } from '@agentworkforce/workload-router';
+import { HARNESS_VALUES } from './constants.js';
+import type { Harness } from './types.js';
 
 /**
  * Result of probing a harness binary on the caller's machine.

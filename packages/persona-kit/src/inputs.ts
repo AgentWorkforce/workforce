@@ -1,4 +1,4 @@
-import type { PersonaInputSpec } from '@agentworkforce/workload-router';
+import type { PersonaInputSpec } from './types.js';
 
 export type PersonaInputValues = Record<string, string | number | boolean | null | undefined>;
 

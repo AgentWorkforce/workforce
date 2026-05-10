@@ -1,3 +1,10 @@
+// harness-kit's surface is persona-shaped. The canonical implementations live
+// in @agentworkforce/persona-kit; this file is a re-export shim until 6/8
+// removes harness-kit entirely. The runner functions (useRunnablePersona,
+// makeRunnablePersonaContext, etc.) bridge persona-kit + workload-router and
+// stay co-located here for now to avoid a workspace dep cycle between
+// persona-kit and workload-router.
+
 export {
   MissingEnvRefError,
   makeEnvRefResolver,
@@ -7,14 +14,14 @@ export {
   type DroppedRef,
   type EnvRefResolver,
   type LenientResult
-} from './env-refs.js';
+} from '@agentworkforce/persona-kit';
 
 export {
   formatDropWarnings,
   resolveMcpServersLenient,
   type DroppedMcpServer,
   type McpResolution
-} from './mcp.js';
+} from '@agentworkforce/persona-kit';
 
 export {
   MissingPersonaInputError,
@@ -22,14 +29,20 @@ export {
   resolvePersonaInputs,
   type PersonaInputResolution,
   type PersonaInputValues
-} from './inputs.js';
+} from '@agentworkforce/persona-kit';
 
 export {
   buildInteractiveSpec,
   type BuildInteractiveSpecInput,
   type InteractiveConfigFile,
   type InteractiveSpec
-} from './harness.js';
+} from '@agentworkforce/persona-kit';
+
+export {
+  detectHarness,
+  detectHarnesses,
+  type HarnessAvailability
+} from '@agentworkforce/persona-kit';
 
 export {
   buildNonInteractiveSpec,
@@ -44,9 +57,3 @@ export {
   type RunnablePersonaOptions,
   type RunnableSelectionOptions
 } from './runner.js';
-
-export {
-  detectHarness,
-  detectHarnesses,
-  type HarnessAvailability
-} from './detect.js';

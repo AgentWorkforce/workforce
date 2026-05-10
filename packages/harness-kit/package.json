@@ -18,6 +18,7 @@
     "package.json"
   ],
   "dependencies": {
+    "@agentworkforce/persona-kit": "workspace:*",
     "@agentworkforce/workload-router": "workspace:*"
   },
   "repository": {

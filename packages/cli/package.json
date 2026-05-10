@@ -11,6 +11,7 @@
   ],
   "dependencies": {
     "@agentworkforce/harness-kit": "workspace:*",
+    "@agentworkforce/persona-kit": "workspace:*",
     "@agentworkforce/workload-router": "workspace:*",
     "@relayburn/sdk": "^2.5.2",
     "@relayfile/local-mount": "^0.7.0",

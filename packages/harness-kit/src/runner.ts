@@ -15,10 +15,15 @@ import {
   type RoutingProfileId
 } from '@agentworkforce/workload-router';
 
-import { resolveStringMapLenient } from './env-refs.js';
-import { buildInteractiveSpec, type BuildInteractiveSpecInput } from './harness.js';
-import { renderPersonaInputs, resolvePersonaInputs } from './inputs.js';
-import { formatDropWarnings, resolveMcpServersLenient } from './mcp.js';
+import {
+  buildInteractiveSpec,
+  formatDropWarnings,
+  renderPersonaInputs,
+  resolveMcpServersLenient,
+  resolvePersonaInputs,
+  resolveStringMapLenient,
+  type BuildInteractiveSpecInput
+} from '@agentworkforce/persona-kit';
 
 export interface PersonaSendOptions {
   workingDirectory?: string;
