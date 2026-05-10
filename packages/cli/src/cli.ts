@@ -3226,50 +3226,57 @@ async function runPersonaImprover(args: {
   const timeoutMs = selection.runtime.harnessSettings.timeoutSeconds
     ? selection.runtime.harnessSettings.timeoutSeconds * 1000
     : undefined;
-  const captureResult = await new Promise<{ exitCode: number | null; stderr: string }>(
-    (resolveResult) => {
-      const child = spawn(spec.bin, [...spec.args], {
-        cwd,
-        env: childEnv,
-        stdio: ['ignore', 'pipe', 'pipe'],
-        shell: false
-      });
-      let stderrBuf = '';
-      let forceKillTimeout: NodeJS.Timeout | undefined;
-      child.stdout?.setEncoding('utf8');
-      child.stderr?.setEncoding('utf8');
-      child.stderr?.on('data', (chunk: string) => {
-        stderrBuf += chunk;
-      });
-      // SIGTERM first; if the harness traps or ignores it, escalate to
-      // SIGKILL after a 1s grace so the timeout is actually enforced
-      // (matches the previous spawnCapture behavior in harness-kit).
-      const timeout =
-        timeoutMs !== undefined
-          ? setTimeout(() => {
-              child.kill('SIGTERM');
-              forceKillTimeout = setTimeout(() => {
-                if (!child.killed) child.kill('SIGKILL');
-              }, 1000);
-            }, timeoutMs)
-          : undefined;
-      const clearTimers = () => {
-        if (timeout) clearTimeout(timeout);
-        if (forceKillTimeout) clearTimeout(forceKillTimeout);
-      };
-      child.on('error', (err) => {
-        clearTimers();
-        resolveResult({ exitCode: 1, stderr: `${stderrBuf}${err.message}\n` });
-      });
-      child.on('close', (code, signal) => {
-        clearTimers();
-        const exitCode =
-          typeof code === 'number' ? code : signal ? signalExitCode(signal) : null;
-        resolveResult({ exitCode, stderr: stderrBuf });
-      });
-    }
-  );
-  restoreConfigWrites();
+  let captureResult: { exitCode: number | null; stderr: string };
+  try {
+    captureResult = await new Promise<{ exitCode: number | null; stderr: string }>(
+      (resolveResult) => {
+        const child = spawn(spec.bin, [...spec.args], {
+          cwd,
+          env: childEnv,
+          stdio: ['ignore', 'pipe', 'pipe'],
+          shell: false
+        });
+        let stderrBuf = '';
+        let forceKillTimeout: NodeJS.Timeout | undefined;
+        child.stdout?.setEncoding('utf8');
+        child.stderr?.setEncoding('utf8');
+        child.stderr?.on('data', (chunk: string) => {
+          stderrBuf += chunk;
+        });
+        // SIGTERM first; if the harness traps or ignores it, escalate to
+        // SIGKILL after a 1s grace so the timeout is actually enforced
+        // (matches the previous spawnCapture behavior in harness-kit).
+        const timeout =
+          timeoutMs !== undefined
+            ? setTimeout(() => {
+                child.kill('SIGTERM');
+                forceKillTimeout = setTimeout(() => {
+                  if (!child.killed) child.kill('SIGKILL');
+                }, 1000);
+              }, timeoutMs)
+            : undefined;
+        const clearTimers = () => {
+          if (timeout) clearTimeout(timeout);
+          if (forceKillTimeout) clearTimeout(forceKillTimeout);
+        };
+        child.on('error', (err) => {
+          clearTimers();
+          resolveResult({ exitCode: 1, stderr: `${stderrBuf}${err.message}\n` });
+        });
+        child.on('close', (code, signal) => {
+          clearTimers();
+          const exitCode =
+            typeof code === 'number' ? code : signal ? signalExitCode(signal) : null;
+          resolveResult({ exitCode, stderr: stderrBuf });
+        });
+      }
+    );
+  } finally {
+    // Always restore — a synchronous spawn() throw or unexpected promise
+    // rejection must not leave orphaned `opencode.json` (or any other
+    // configFile) sitting in the user's working directory.
+    restoreConfigWrites();
+  }
   if (captureResult.exitCode !== 0) {
     throw new Error(
       `improver exited with code=${captureResult.exitCode ?? 'null'}.${captureResult.stderr ? ` stderr: ${captureResult.stderr.slice(0, 400)}` : ''}`
