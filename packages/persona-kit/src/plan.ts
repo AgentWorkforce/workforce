@@ -27,18 +27,33 @@ export interface ResolvedMountPolicy {
   readonlyPatterns: string[];
 }
 
-/** Sidecar markdown the executor must write into the harness cwd. */
-export interface ResolvedSidecarWrite {
+/**
+ * Sidecar markdown the executor must write into the harness cwd. The body
+ * is supplied either inline (built-in personas, where the catalog generator
+ * already inlined the markdown) or by absolute path (local/pack personas
+ * that ship the sidecar as a sibling file). The path form keeps the plan
+ * JSON-serializable; the executor reads the file at write time.
+ */
+export type ResolvedSidecarWrite = {
   /** Filename inside the cwd: `CLAUDE.md` (claude) or `AGENTS.md` (opencode/codex). */
   filename: 'CLAUDE.md' | 'AGENTS.md';
-  /** Body to write. Already inlined for built-ins. */
-  contents: string;
   /**
    * `overwrite` writes verbatim; `extend` appends a `\n\n---\n\n`-joined
    * suffix onto whatever already exists at the destination at execute time.
    */
   mode: SidecarMdMode;
-}
+} & (
+  | {
+      /** Inlined body. */
+      contents: string;
+      sourcePath?: never;
+    }
+  | {
+      /** Absolute path to read at execute time. */
+      sourcePath: string;
+      contents?: never;
+    }
+);
 
 /** Per-input env binding to merge into the spawn env. */
 export interface ResolvedInputBinding {
@@ -76,8 +91,6 @@ export interface PersonaSpawnPlan {
 }
 
 export interface PlanOptions {
-  /** Working directory the harness will be spawned in (default: process.cwd()). */
-  cwd?: string;
   /**
    * Stage skills under this absolute directory instead of the repo's
    * `.claude/skills/`. Claude harness only — throws otherwise (matching the
@@ -88,9 +101,20 @@ export interface PlanOptions {
   envOverrides?: Record<string, string>;
   /**
    * Process env to read input env-var fallbacks from (default: process.env).
-   * Exposed so tests and out-of-process callers can supply a clean snapshot.
+   * **Captured into `plan.env`.** The plan is JSON-serializable, so passing
+   * `process.env` here will inline ambient values (potentially including
+   * secrets) into the serialized plan — set `includeProcessEnv` only when
+   * you intend to forward ambient env to the harness, and prefer supplying
+   * a curated snapshot via {@link processEnv}.
    */
   processEnv?: NodeJS.ProcessEnv;
+  /**
+   * Opt in to capturing ambient {@link processEnv} into `plan.env`. Default
+   * `false`: when omitted, `plan.env` contains only persona-author env,
+   * resolved input bindings, and {@link envOverrides}. When `true` and no
+   * explicit {@link processEnv} is supplied, `process.env` is captured.
+   */
+  includeProcessEnv?: boolean;
   /**
    * Caller-supplied input values (highest precedence over env/default). Same
    * shape as {@link import('./inputs.js').resolvePersonaInputs}'s `provided`.
@@ -117,7 +141,7 @@ function resolveSidecarWrite(
 ): ResolvedSidecarWrite[] {
   const harness = selection.runtime.harness;
   if (harness === 'claude') {
-    if (selection.claudeMdContent) {
+    if (selection.claudeMdContent !== undefined) {
       return [
         {
           filename: 'CLAUDE.md',
@@ -126,14 +150,32 @@ function resolveSidecarWrite(
         }
       ];
     }
+    if (selection.claudeMd) {
+      return [
+        {
+          filename: 'CLAUDE.md',
+          sourcePath: selection.claudeMd,
+          mode: selection.claudeMdMode ?? 'overwrite'
+        }
+      ];
+    }
     return [];
   }
   if (harness === 'opencode' || harness === 'codex') {
-    if (selection.agentsMdContent) {
+    if (selection.agentsMdContent !== undefined) {
       return [
         {
           filename: 'AGENTS.md',
           contents: selection.agentsMdContent,
+          mode: selection.agentsMdMode ?? 'overwrite'
+        }
+      ];
+    }
+    if (selection.agentsMd) {
+      return [
+        {
+          filename: 'AGENTS.md',
+          sourcePath: selection.agentsMd,
           mode: selection.agentsMdMode ?? 'overwrite'
         }
       ];
@@ -209,15 +251,20 @@ export function buildPersonaSpawnPlan(
   const sidecars = resolveSidecarWrite(persona);
   const mount = resolveMountPolicy(persona.mount);
 
-  // Env: process.env (string-typed), then inputs (env name binding), then
-  // overrides, then persona env. Persona env wins on conflict.
+  // Env precedence (later wins):
+  //   ambient processEnv (opt-in)
+  //   → resolved input bindings
+  //   → caller envOverrides
+  //   → persona-author env
+  //
+  // Ambient capture is opt-in to keep secrets out of the JSON-serializable
+  // plan by default — callers must pass `includeProcessEnv: true` (or supply
+  // a curated `processEnv` snapshot) to forward ambient values.
   const env: Record<string, string> = {};
-  if (options.processEnv) {
-    for (const [k, v] of Object.entries(options.processEnv)) {
-      if (typeof v === 'string') env[k] = v;
-    }
-  } else {
-    for (const [k, v] of Object.entries(process.env)) {
+  const ambientSource =
+    options.processEnv ?? (options.includeProcessEnv ? process.env : undefined);
+  if (ambientSource) {
+    for (const [k, v] of Object.entries(ambientSource)) {
       if (typeof v === 'string') env[k] = v;
     }
   }

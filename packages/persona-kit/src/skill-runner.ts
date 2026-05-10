@@ -1,6 +1,7 @@
 import { spawn } from 'node:child_process';
 import { rm } from 'node:fs/promises';
-import { isAbsolute, join } from 'node:path';
+import { constants as osConstants } from 'node:os';
+import { isAbsolute, join, relative, resolve } from 'node:path';
 import { buildInstallArtifacts } from './skills.js';
 import type { SkillMaterializationPlan } from './types.js';
 
@@ -35,7 +36,8 @@ export class SkillInstallError extends Error {
 
 function signalExitCode(signal: NodeJS.Signals | null): number {
   if (!signal) return 0;
-  return 128 + 1; // conventional fallback; persona-kit doesn't depend on `os.constants.signals`.
+  const num = (osConstants.signals as Record<string, number | undefined>)[signal];
+  return 128 + (num ?? 1);
 }
 
 async function spawnInstall(
@@ -99,9 +101,19 @@ export async function runSkillInstalls(
         await rm(plan.sessionInstallRoot, { recursive: true, force: true });
         return;
       }
+      const cwdAbs = resolve(options.cwd);
       for (const install of plan.installs) {
         for (const path of install.cleanupPaths) {
-          const abs = isAbsolute(path) ? path : join(options.cwd, path);
+          const abs = isAbsolute(path) ? resolve(path) : resolve(cwdAbs, path);
+          const rel = relative(cwdAbs, abs);
+          // Refuse to follow a tampered plan into directories outside the
+          // workspace — `rm -rf` doesn't get a free pass just because the
+          // path was declared in plan data.
+          if (rel === '' || rel.startsWith('..') || isAbsolute(rel)) {
+            throw new Error(
+              `runSkillInstalls: cleanup path must stay within cwd; got ${JSON.stringify(path)}`
+            );
+          }
           await rm(abs, { recursive: true, force: true });
         }
       }

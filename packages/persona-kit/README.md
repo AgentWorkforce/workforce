@@ -22,8 +22,9 @@ import { spawn } from 'node:child_process';
 declare const persona: ResolvedPersona; // from loadPersonas() / personaCatalog
 
 // 1. Compose a plan. Pure — no I/O, no subprocesses.
+//    PlanOptions: inputValues, envOverrides, processEnv, installRoot.
+//    cwd belongs to ExecuteOptions, not the plan builder.
 const plan = buildPersonaSpawnPlan(persona, {
-  cwd: process.cwd(),
   inputValues: { TASK: 'tidy up the README' }
 });
 

@@ -82,7 +82,10 @@ export async function applyPersonaMount(
     async dispose(): Promise<void> {
       if (disposed) return;
       disposed = true;
-      handle.cleanup();
+      // Defensive await — relayfile's typed signature is void today, but
+      // future versions may return a promise; awaiting a non-promise is a
+      // no-op and protects the dispose contract executors rely on.
+      await handle.cleanup();
     }
   };
 }

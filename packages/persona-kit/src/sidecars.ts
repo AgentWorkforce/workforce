@@ -1,5 +1,5 @@
 import { readFile, writeFile, unlink } from 'node:fs/promises';
-import { join } from 'node:path';
+import { basename, isAbsolute, join } from 'node:path';
 import type { ResolvedSidecarWrite } from './plan.js';
 
 export interface PersonaSidecarHandle {
@@ -15,6 +15,26 @@ interface ResoredFile {
 
 const SIDECAR_DELIMITER = '\n\n---\n\n';
 
+/**
+ * The plan's filename is typed `'CLAUDE.md' | 'AGENTS.md'` at compile time,
+ * but plans can be JSON-deserialized from untrusted sources at runtime.
+ * Bound to safe basenames here so a hand-built or tampered plan cannot
+ * escape `cwd` via `..` or absolute path segments.
+ */
+function assertSafeSidecarFilename(filename: string): void {
+  if (!filename) throw new Error('sidecar filename must be non-empty');
+  if (isAbsolute(filename)) {
+    throw new Error(
+      `sidecar filename must be relative; got ${JSON.stringify(filename)}`
+    );
+  }
+  if (basename(filename) !== filename) {
+    throw new Error(
+      `sidecar filename must be a basename (no directory segments); got ${JSON.stringify(filename)}`
+    );
+  }
+}
+
 async function readIfExists(path: string): Promise<string | null> {
   try {
     return await readFile(path, 'utf8');
@@ -24,11 +44,26 @@ async function readIfExists(path: string): Promise<string | null> {
   }
 }
 
+async function loadSidecarBody(sidecar: ResolvedSidecarWrite): Promise<string> {
+  if (sidecar.contents !== undefined) return sidecar.contents;
+  if (sidecar.sourcePath !== undefined) {
+    return readFile(sidecar.sourcePath, 'utf8');
+  }
+  // Type system already enforces this; the runtime check keeps the message
+  // clear if a hand-built plan slips through.
+  const probe = sidecar as { filename?: string };
+  throw new Error(
+    `ResolvedSidecarWrite for ${probe.filename ?? '<unknown>'} must supply either contents or sourcePath.`
+  );
+}
+
 /**
  * Write each sidecar to `<cwd>/<filename>`. In `extend` mode the persona body
  * is appended to the existing on-disk content (joined with `\n\n---\n\n`). In
- * `overwrite` mode the file is replaced. The returned handle restores every
- * touched file to its prior state on `dispose()`.
+ * `overwrite` mode the file is replaced. Path-backed sidecars
+ * ({@link ResolvedSidecarWrite.sourcePath}) are read at this point, so the
+ * plan stays JSON-serializable. The returned handle restores every touched
+ * file to its prior state on `dispose()`.
  */
 export async function writePersonaSidecars(
   sidecars: readonly ResolvedSidecarWrite[],
@@ -38,13 +73,15 @@ export async function writePersonaSidecars(
   let disposed = false;
   try {
     for (const sidecar of sidecars) {
+      assertSafeSidecarFilename(sidecar.filename);
       const target = join(options.cwd, sidecar.filename);
+      const personaBody = await loadSidecarBody(sidecar);
       const prior = await readIfExists(target);
       restored.push({ path: target, prior });
       const body =
         sidecar.mode === 'extend' && prior !== null
-          ? `${prior}${SIDECAR_DELIMITER}${sidecar.contents}`
-          : sidecar.contents;
+          ? `${prior}${SIDECAR_DELIMITER}${personaBody}`
+          : personaBody;
       await writeFile(target, body, 'utf8');
     }
   } catch (err) {

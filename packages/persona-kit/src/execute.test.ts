@@ -61,6 +61,53 @@ test('writePersonaSidecars overwrite + dispose restores empty target', async () 
   });
 });
 
+test('writePersonaSidecars resolves sourcePath at write time', async () => {
+  await withTmpDir(async (dir) => {
+    const sourcePath = join(dir, 'source.md');
+    await writeFile(sourcePath, 'persona body from disk', 'utf8');
+    const handle = await writePersonaSidecars(
+      [{ filename: 'CLAUDE.md', sourcePath, mode: 'overwrite' }],
+      { cwd: dir }
+    );
+    assert.equal(
+      await readFile(join(dir, 'CLAUDE.md'), 'utf8'),
+      'persona body from disk'
+    );
+    await handle.dispose();
+  });
+});
+
+test('writePersonaSidecars rejects unsafe filenames', async () => {
+  await withTmpDir(async (dir) => {
+    await assert.rejects(
+      writePersonaSidecars(
+        [
+          {
+            filename: '../escape.md' as 'CLAUDE.md',
+            contents: 'x',
+            mode: 'overwrite'
+          }
+        ],
+        { cwd: dir }
+      ),
+      /must be a basename/
+    );
+    await assert.rejects(
+      writePersonaSidecars(
+        [
+          {
+            filename: '/abs.md' as 'CLAUDE.md',
+            contents: 'x',
+            mode: 'overwrite'
+          }
+        ],
+        { cwd: dir }
+      ),
+      /must be relative/
+    );
+  });
+});
+
 test('writePersonaSidecars extend joins existing content with delimiter', async () => {
   await withTmpDir(async (dir) => {
     const target = join(dir, 'AGENTS.md');
@@ -100,6 +147,29 @@ test('materializePersonaConfigFiles rejects unsafe paths before writing', async 
       materializePersonaConfigFiles([{ path: '/abs', contents: 'x' }], { cwd: dir }),
       /must be relative/
     );
+  });
+});
+
+test('runSkillInstalls rejects cleanup paths that escape cwd', async () => {
+  await withTmpDir(async (dir) => {
+    const plan: SkillMaterializationPlan = {
+      harness: 'claude',
+      installs: [
+        {
+          skillId: 's',
+          source: 'x/y',
+          sourceKind: 'prpm',
+          packageRef: 'x/y',
+          harness: 'claude',
+          installCommand: ['true'],
+          installedDir: '.claude/skills/y',
+          installedManifest: '.claude/skills/y/SKILL.md',
+          cleanupPaths: ['../escape']
+        }
+      ]
+    };
+    const handle = await runSkillInstalls(plan, { cwd: dir });
+    await assert.rejects(handle.dispose(), /must stay within cwd/);
   });
 });
 

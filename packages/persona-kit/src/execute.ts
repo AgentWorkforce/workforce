@@ -79,6 +79,7 @@ export async function executePersonaSpawnPlan(
   try {
     mountHandle = await applyPersonaMount(plan.mount, {
       cwd: options.cwd,
+      personaId: plan.persona.personaId,
       ...(options.mount ?? {})
     });
     handles.push(mountHandle);

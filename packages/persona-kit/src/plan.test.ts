@@ -186,6 +186,52 @@ test('buildPersonaSpawnPlan threads installRoot into the skill plan', () => {
   );
 });
 
+test('buildPersonaSpawnPlan emits sourcePath when only claudeMd path is set', () => {
+  const plan = buildPersonaSpawnPlan(
+    persona({ claudeMd: '/abs/path/to/CLAUDE.md', claudeMdMode: 'extend' }),
+    { processEnv: cleanEnv }
+  );
+  assert.equal(plan.sidecars.length, 1);
+  assert.equal(plan.sidecars[0].filename, 'CLAUDE.md');
+  assert.equal(plan.sidecars[0].sourcePath, '/abs/path/to/CLAUDE.md');
+  assert.equal(plan.sidecars[0].contents, undefined);
+  assert.equal(plan.sidecars[0].mode, 'extend');
+});
+
+test('buildPersonaSpawnPlan emits sourcePath for opencode/codex agentsMd path', () => {
+  const plan = buildPersonaSpawnPlan(
+    persona({
+      runtime: {
+        harness: 'opencode',
+        model: 'm',
+        systemPrompt: 's',
+        harnessSettings: { reasoning: 'medium', timeoutSeconds: 300 }
+      },
+      agentsMd: '/abs/path/to/AGENTS.md'
+    }),
+    { processEnv: cleanEnv }
+  );
+  assert.equal(plan.sidecars.length, 1);
+  assert.equal(plan.sidecars[0].sourcePath, '/abs/path/to/AGENTS.md');
+});
+
+test('buildPersonaSpawnPlan does not capture ambient env by default', () => {
+  // No processEnv or includeProcessEnv — plan.env should only carry persona/input bindings.
+  const plan = buildPersonaSpawnPlan(persona({ env: { ONLY: 'persona' } }));
+  assert.deepEqual(plan.env, { ONLY: 'persona' });
+});
+
+test('buildPersonaSpawnPlan opt-in includeProcessEnv captures process.env', () => {
+  const sentinel = `__PK_TEST_${Date.now()}_${Math.random()}__`;
+  process.env[sentinel] = 'on';
+  try {
+    const plan = buildPersonaSpawnPlan(persona(), { includeProcessEnv: true });
+    assert.equal(plan.env[sentinel], 'on');
+  } finally {
+    delete process.env[sentinel];
+  }
+});
+
 test('buildPersonaSpawnPlan empty-skills case keeps installs empty', () => {
   for (const harness of ['claude', 'codex', 'opencode'] as Harness[]) {
     const plan = buildPersonaSpawnPlan(
