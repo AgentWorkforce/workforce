@@ -456,7 +456,7 @@ for the full mount layout and semantics.
 ## Packages
 
 - `packages/workload-router` — TypeScript SDK for typed persona + routing profile resolution (harness-agnostic).
-- `packages/harness-kit` — Composable primitives for launching a persona's harness: env-ref resolution, MCP server translation, per-harness argv building. The layer the CLI sits on top of. Depend on this directly if you're building your own orchestrator on top of `@agentworkforce/workload-router` and want the same behaviors.
+- `packages/persona-kit` — Composable primitives for launching a persona's harness: env-ref resolution, MCP server translation, per-harness argv building. The layer the CLI sits on top of. Depend on this directly if you're building your own orchestrator on top of `@agentworkforce/workload-router` and want the same behaviors.
 - `packages/cli` — command-line implementation used by the `agentworkforce` wrapper: spawn a persona's harness (claude/codex/opencode) from the shell. See **[packages/cli/README.md](./packages/cli/README.md)** for the full docs, and the [CLI](#cli) section below for a quick tour.
 
 ## Personas
@@ -602,7 +602,7 @@ This runs minimal guardrails across the workspace:
 
 ## Developing
 
-For iterating on the CLI, harness-kit, workload-router, or internal system persona JSON files,
+For iterating on the CLI, persona-kit, workload-router, or internal system persona JSON files,
 use the watch-mode dev loop instead of rebuilding by hand.
 
 **Terminal 1 — start the watchers (leave running):**
@@ -633,4 +633,4 @@ Edit → save → re-run in terminal 2. TypeScript errors show up in terminal 1.
 
 **Per-package dev:** if you only want to watch one package, run
 `corepack pnpm --filter @agentworkforce/<name> run dev` (where `<name>` is
-`cli`, `harness-kit`, or `workload-router`).
+`cli`, `persona-kit`, or `workload-router`).

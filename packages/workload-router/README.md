@@ -94,13 +94,13 @@ Personas may declare prompt-visible runtime inputs:
 
 Input keys must be env-style uppercase names. The router validates and carries
 the declarations through `PersonaSpec` and `PersonaSelection`; launchers decide
-how to resolve and render them. The standard harness-kit policy is explicit
+how to resolve and render them. The standard persona-kit policy is explicit
 value, env var, default, then fail.
 
 Codex runtimes may also set `harnessSettings.sandboxMode`,
 `harnessSettings.approvalPolicy`,
 `harnessSettings.workspaceWriteNetworkAccess`, and
-`harnessSettings.webSearch`; harness-kit maps those to Codex launch flags.
+`harnessSettings.webSearch`; persona-kit maps those to Codex launch flags.
 
 ## Development
 

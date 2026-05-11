@@ -258,8 +258,8 @@ export function buildInteractiveSpec(input: BuildInteractiveSpecInput): Interact
       // of autosync, and callers who want a read-only persona (e.g. a code
       // reviewer) can override this in a follow-up PR that threads a
       // richer permission spec through the persona config — the current
-      // harness-kit PersonaPermissions shape is claude-specific and
-      // already warned about for opencode.
+      // PersonaPermissions shape is claude-specific and already warned about
+      // for opencode.
       //
       // The bare-string form `permission: 'allow'` was valid in older
       // opencode versions but is rejected by 1.14.x: the agent decoder

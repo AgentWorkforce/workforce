@@ -612,11 +612,11 @@ function sessionMountDir(sessionRoot: string): string {
  * launching opencode without a persona-specific agent selection.
  *
  * Strips all occurrences rather than just the first — the current producer
- * (harness-kit's opencode branch) emits exactly one pair, so both behaviors
- * are equivalent today, but "remove all" is idempotent and safer if a future
- * caller ever appends a second `--agent` for any reason. A trailing `--agent`
- * with no following value is preserved so the malformed argv surfaces at the
- * harness rather than getting silently swallowed here.
+ * (the opencode branch in persona-kit) emits exactly one pair, so both
+ * behaviors are equivalent today, but "remove all" is idempotent and safer if
+ * a future caller ever appends a second `--agent` for any reason. A trailing
+ * `--agent` with no following value is preserved so the malformed argv
+ * surfaces at the harness rather than getting silently swallowed here.
  */
 export function stripAgentFlag(args: readonly string[]): string[] {
   const out: string[] = [];
@@ -1008,7 +1008,7 @@ function runDryRun(selection: PersonaSelection): number {
     `✓ sidecar: ${sidecarLookup.sidecar ? sidecarLookup.sidecar.mountFile : '(none)'}\n`
   );
 
-  // Check 2: harness-kit translation. buildInteractiveSpec validates
+  // Check 2: persona-kit translation. buildInteractiveSpec validates
   // permissions shape, mcpServers shape, and required runtime fields.
   // We resolve env + mcp leniently (same as the live launch path) so
   // the spec call sees the same inputs it would at runtime.
@@ -3244,8 +3244,7 @@ async function runPersonaImprover(args: {
           stderrBuf += chunk;
         });
         // SIGTERM first; if the harness traps or ignores it, escalate to
-        // SIGKILL after a 1s grace so the timeout is actually enforced
-        // (matches the previous spawnCapture behavior in harness-kit).
+        // SIGKILL after a 1s grace so the timeout is actually enforced.
         const timeout =
           timeoutMs !== undefined
             ? setTimeout(() => {
