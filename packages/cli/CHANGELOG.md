@@ -7,6 +7,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [2.1.2] - 2026-05-11
+
+### Changed
+
+- Persona sources: keep cwd label as `cwd` (not `repo`)
+- Persona sources: rename display labels (built-in / repo / personal)
+- Persona-kit: add local skill source provider
+
 ## [2.1.0] - 2026-05-11
 
 ### Changed

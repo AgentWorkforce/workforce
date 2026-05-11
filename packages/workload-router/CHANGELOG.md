@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [2.1.2] - 2026-05-11
+
+### Changed
+
+- Persona-kit: add local skill source provider
+
 ## [2.0.1] - 2026-05-11
 
 ### Changed
