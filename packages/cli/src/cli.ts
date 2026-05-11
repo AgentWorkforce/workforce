@@ -2514,7 +2514,6 @@ async function runAgentSelector(
   inputValues?: Record<string, string>
 ): Promise<never> {
   const target = parseSelector(selector);
-  recordRecent(target.spec.id);
   const selection = {
     ...buildSelection(target.spec, target.tier, target.kind),
     ...(inputValues ? { inputValues } : {})
@@ -2525,6 +2524,9 @@ async function runAgentSelector(
     process.exit(code);
   }
 
+  // Record only on real launches so `--dry-run` validations don't pollute the
+  // MRU list used by the bare-invocation picker.
+  recordRecent(target.spec.id);
   const capture: RunInteractiveCapture = {};
   const code = await runInteractive(selection, {
     installInRepo: flags.installInRepo,

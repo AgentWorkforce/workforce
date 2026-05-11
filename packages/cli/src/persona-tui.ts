@@ -193,9 +193,54 @@ export interface RunPersonaTuiOptions {
   stderr?: NodeJS.WriteStream;
   /** Cap on visible rows. Tests inject a small number; default 20. */
   visibleCap?: number;
+  /** Escape-sequence debounce in ms. Tests inject 0; default 50. */
+  escapeTimeoutMs?: number;
 }
 
 const DEFAULT_VISIBLE_CAP = 20;
+/**
+ * Window we wait for the rest of an escape sequence before treating a bare
+ * `\x1b` as a quit keystroke. Arrow keys arrive as `\x1b[A` / `\x1b[B`, and
+ * over slow connections (SSH, multiplexers, low-baud serial) those bytes can
+ * land in separate `data` events. 50ms is well below the human-perceptible
+ * delay for a real Esc press but plenty of slack for fragmented sequences.
+ */
+const DEFAULT_ESCAPE_TIMEOUT_MS = 50;
+
+export type TuiViewMode = 'recents' | 'all' | 'matches';
+
+export interface TuiView {
+  mode: TuiViewMode;
+  items: TuiCandidate[];
+}
+
+/**
+ * Decide what the picker should show given the candidate set, recents list,
+ * and current query. Exported (and pure) so the recents-header logic can be
+ * unit-tested without spinning up a TTY.
+ *
+ * - `recents` — empty query AND at least one recent id still resolves to a
+ *   known candidate.
+ * - `all`     — empty query AND no recent ids resolve (fresh install, or all
+ *               previously-used personas have been uninstalled/renamed).
+ * - `matches` — non-empty query; items are the ranked fuzzy hits.
+ */
+export function computeTuiView(
+  candidates: readonly TuiCandidate[],
+  recentIds: readonly string[],
+  query: string,
+  visibleCap: number = DEFAULT_VISIBLE_CAP
+): TuiView {
+  if (!query.trim()) {
+    const recents = recentCandidates(candidates, recentIds, RECENT_DEFAULT_VISIBLE);
+    if (recents.length > 0) return { mode: 'recents', items: recents };
+    return { mode: 'all', items: [...candidates].slice(0, visibleCap) };
+  }
+  return {
+    mode: 'matches',
+    items: rankCandidates(candidates, query).slice(0, visibleCap)
+  };
+}
 
 /**
  * Interactive persona picker. Renders inside the alternate screen buffer so
@@ -213,46 +258,38 @@ export async function runPersonaPickerTui(
   if (!stdin.isTTY || !stderr.isTTY) return undefined;
 
   const visibleCap = opts.visibleCap ?? DEFAULT_VISIBLE_CAP;
+  const escapeTimeoutMs = opts.escapeTimeoutMs ?? DEFAULT_ESCAPE_TIMEOUT_MS;
   let query = '';
   let cursor = 0;
-  let visible = computeVisible();
-
-  function computeVisible(): TuiCandidate[] {
-    if (!query.trim()) {
-      const recents = recentCandidates(opts.candidates, opts.recentIds, RECENT_DEFAULT_VISIBLE);
-      if (recents.length > 0) return recents;
-      return [...opts.candidates].slice(0, visibleCap);
-    }
-    return rankCandidates(opts.candidates, query).slice(0, visibleCap);
-  }
+  let view = computeTuiView(opts.candidates, opts.recentIds, query, visibleCap);
 
   function render(): void {
     const cols = stderr.columns ?? 100;
-    const showingRecents = !query.trim() && opts.recentIds.length > 0 && visible.length > 0;
+    const items = view.items;
     let out = SEQ.clear;
     out += `${SEQ.bold}agentworkforce${SEQ.reset}  ·  pick a persona\n`;
     out += `${SEQ.dim}↑↓ navigate · enter run · esc quit · type to search${SEQ.reset}\n\n`;
     out += `${SEQ.cyan}›${SEQ.reset} ${query || `${SEQ.dim}(type to search by name or description)${SEQ.reset}`}\n\n`;
-    const header = visible.length === 0
+    const header = items.length === 0
       ? 'NO MATCHES'
-      : showingRecents
+      : view.mode === 'recents'
         ? 'RECENT'
         : 'PERSONAS';
     out += `${SEQ.dim}${header}${SEQ.reset}\n`;
-    if (visible.length === 0) {
+    if (items.length === 0) {
       out += `${SEQ.dim}(no persona name or description matches "${query}")${SEQ.reset}\n`;
     } else {
       const nameWidth = Math.min(
         32,
-        Math.max(8, ...visible.map((c) => c.id.length))
+        Math.max(8, ...items.map((c) => c.id.length))
       );
       const sourceWidth = Math.min(
         14,
-        Math.max(7, ...visible.map((c) => c.source.length))
+        Math.max(7, ...items.map((c) => c.source.length))
       );
       const descBudget = Math.max(20, cols - nameWidth - sourceWidth - 7);
-      for (let i = 0; i < visible.length; i += 1) {
-        const c = visible[i];
+      for (let i = 0; i < items.length; i += 1) {
+        const c = items[i];
         const isSel = i === cursor;
         const marker = isSel ? `${SEQ.cyan}›${SEQ.reset}` : ' ';
         const desc = truncate(c.description.replace(/\s+/g, ' ').trim(), descBudget);
@@ -265,16 +302,29 @@ export async function runPersonaPickerTui(
   }
 
   function refresh(): void {
-    visible = computeVisible();
-    if (cursor >= visible.length) cursor = Math.max(0, visible.length - 1);
+    view = computeTuiView(opts.candidates, opts.recentIds, query, visibleCap);
+    if (cursor >= view.items.length) cursor = Math.max(0, view.items.length - 1);
     render();
   }
 
   return new Promise<string | undefined>((resolve) => {
     let settled = false;
+    // Buffered bare-Escape: stays set while we wait for the rest of a possible
+    // escape sequence. If `escapeTimer` fires first the user pressed Esc on
+    // its own; if more bytes arrive first we glue them together and dispatch.
+    let pendingEscape = '';
+    let escapeTimer: NodeJS.Timeout | undefined;
+    function clearEscapeBuffer(): void {
+      pendingEscape = '';
+      if (escapeTimer) {
+        clearTimeout(escapeTimer);
+        escapeTimer = undefined;
+      }
+    }
     function settle(value: string | undefined): void {
       if (settled) return;
       settled = true;
+      clearEscapeBuffer();
       stdin.removeListener('data', onData);
       try {
         stdin.setRawMode?.(false);
@@ -285,30 +335,34 @@ export async function runPersonaPickerTui(
       stderr.write(`${SEQ.showCursor}${SEQ.leaveAlt}`);
       resolve(value);
     }
-    function onData(chunk: Buffer | string): void {
-      const text = typeof chunk === 'string' ? chunk : chunk.toString('utf8');
-      // Ctrl-C or bare Escape — quit.
-      if (text === '\x03' || text === '\x1b') {
+    function handleKey(text: string): void {
+      // Ctrl-C — quit.
+      if (text === '\x03') {
+        settle(undefined);
+        return;
+      }
+      // Bare Escape that has already cleared the debounce window.
+      if (text === '\x1b') {
         settle(undefined);
         return;
       }
       // Enter — accept current selection.
       if (text === '\r' || text === '\n') {
-        const sel = visible[cursor];
+        const sel = view.items[cursor];
         settle(sel?.id);
         return;
       }
       // Arrow Up / Ctrl-P
       if (text === '\x1b[A' || text === '\x10') {
-        if (visible.length === 0) return;
-        cursor = (cursor - 1 + visible.length) % visible.length;
+        if (view.items.length === 0) return;
+        cursor = (cursor - 1 + view.items.length) % view.items.length;
         render();
         return;
       }
       // Arrow Down / Ctrl-N
       if (text === '\x1b[B' || text === '\x0e') {
-        if (visible.length === 0) return;
-        cursor = (cursor + 1) % visible.length;
+        if (view.items.length === 0) return;
+        cursor = (cursor + 1) % view.items.length;
         render();
         return;
       }
@@ -321,6 +375,10 @@ export async function runPersonaPickerTui(
         }
         return;
       }
+      // Anything else that *starts* with ESC is an unrecognized CSI / SS3 /
+      // function-key sequence — swallow it rather than typing the bytes into
+      // the search box.
+      if (text.startsWith('\x1b')) return;
       // Strip any remaining control bytes and append printable input.
       let printable = '';
       for (const ch of text) {
@@ -332,6 +390,29 @@ export async function runPersonaPickerTui(
         cursor = 0;
         refresh();
       }
+    }
+    function onData(chunk: Buffer | string): void {
+      const text = typeof chunk === 'string' ? chunk : chunk.toString('utf8');
+      // Mid-sequence: the previous tick buffered a lone ESC. Glue and
+      // dispatch as a single keystroke so `\x1b` + `[A` is treated as an
+      // arrow press, not Esc-then-`[A`.
+      if (pendingEscape) {
+        const combined = pendingEscape + text;
+        clearEscapeBuffer();
+        handleKey(combined);
+        return;
+      }
+      // Lone ESC: wait briefly for the rest of a possible sequence.
+      if (text === '\x1b' && escapeTimeoutMs > 0) {
+        pendingEscape = text;
+        escapeTimer = setTimeout(() => {
+          if (pendingEscape !== '\x1b') return;
+          clearEscapeBuffer();
+          handleKey('\x1b');
+        }, escapeTimeoutMs);
+        return;
+      }
+      handleKey(text);
     }
     try {
       stdin.setRawMode?.(true);
