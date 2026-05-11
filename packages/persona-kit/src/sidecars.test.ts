@@ -96,22 +96,29 @@ test('writePersonaSidecars: rejects sourcePath that is not absolute', async () =
   });
 });
 
-test('writePersonaSidecars: dispose runs in LIFO order (later sidecar restored before earlier)', async () => {
+test('writePersonaSidecars: dispose runs in LIFO order (later write restored before earlier)', async () => {
+  // Two writes to the SAME filename in one call. The second write captures
+  // the first's body as its `prior`. Only LIFO dispose ends in the original
+  // state — restoring oldest-first would leave the file at "first" content.
   await withTmpDir(async (dir) => {
-    // Two sidecars touched in order [CLAUDE, AGENTS]; both originally absent.
-    // After dispose neither should exist.
+    const target = join(dir, 'CLAUDE.md');
+    await writeFile(target, 'original', 'utf8');
+
     const handle = await writePersonaSidecars(
       [
         { filename: 'CLAUDE.md', contents: 'first', mode: 'overwrite' },
-        { filename: 'AGENTS.md', contents: 'second', mode: 'overwrite' }
+        { filename: 'CLAUDE.md', contents: 'second', mode: 'overwrite' }
       ],
       { cwd: dir }
     );
-    assert.equal(await exists(join(dir, 'CLAUDE.md')), true);
-    assert.equal(await exists(join(dir, 'AGENTS.md')), true);
+    assert.equal(await readFile(target, 'utf8'), 'second');
+
     await handle.dispose();
-    assert.equal(await exists(join(dir, 'CLAUDE.md')), false);
-    assert.equal(await exists(join(dir, 'AGENTS.md')), false);
+    assert.equal(
+      await readFile(target, 'utf8'),
+      'original',
+      'LIFO dispose must restore back through "first" to the pre-call "original"'
+    );
   });
 });
 
