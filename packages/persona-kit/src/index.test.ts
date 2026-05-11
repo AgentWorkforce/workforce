@@ -282,6 +282,133 @@ test('materializeSkills handles personas with no skills', () => {
   assert.equal(plan.installs.length, 0);
 });
 
+const localSkill = {
+  id: 'local/essay-authoring',
+  source: '.agentworkforce/workforce/skills/essay-authoring.md',
+  description: 'repo-local SKILL.md'
+};
+
+test('materializeSkills emits a mkdir+cp install for a local .md source', () => {
+  const plan = materializeSkills([localSkill], 'claude');
+
+  assert.equal(plan.installs.length, 1);
+  const [install] = plan.installs;
+  assert.equal(install.sourceKind, 'local');
+  assert.equal(install.packageRef, '.agentworkforce/workforce/skills/essay-authoring.md');
+  assert.equal(install.installedDir, '.claude/skills/essay-authoring');
+  assert.equal(install.installedManifest, '.claude/skills/essay-authoring/SKILL.md');
+  assert.deepEqual([...install.cleanupPaths], ['.claude/skills/essay-authoring']);
+  assert.deepEqual([...install.installCommand], [
+    'sh',
+    '-c',
+    'mkdir -p .claude/skills/essay-authoring && cp .agentworkforce/workforce/skills/essay-authoring.md .claude/skills/essay-authoring/SKILL.md'
+  ]);
+});
+
+test('local sources accept ./-prefixed and absolute paths and strip the .md extension for the installed name', () => {
+  const plan = materializeSkills(
+    [
+      { id: 'dot-slash', source: './skills/dot-slash.md', description: 'leading ./' },
+      { id: 'abs', source: '/abs/path/abs-skill.md', description: 'absolute path' }
+    ],
+    'codex'
+  );
+  assert.equal(plan.installs[0].installedDir, '.agents/skills/dot-slash');
+  assert.equal(plan.installs[1].installedDir, '.agents/skills/abs-skill');
+  assert.match(plan.installs[1].installCommand[2] ?? '', / \/abs\/path\/abs-skill\.md /);
+});
+
+test('local sources using SKILL.md adopt the parent dir name as the installed name', () => {
+  const plan = materializeSkills(
+    [
+      {
+        id: 'my-skill',
+        source: '.agentworkforce/workforce/skills/my-skill/SKILL.md',
+        description: 'directory-shaped local skill'
+      }
+    ],
+    'claude'
+  );
+  const [install] = plan.installs;
+  assert.equal(install.installedDir, '.claude/skills/my-skill');
+});
+
+test('local source with repoRoot absoluteifies the cp source path', () => {
+  const plan = materializeSkills([localSkill], 'claude', {
+    repoRoot: '/home/user/project'
+  });
+  const [install] = plan.installs;
+  assert.equal(install.sourceKind, 'local');
+  assert.equal(plan.repoRoot, '/home/user/project');
+  assert.match(
+    install.installCommand[2] ?? '',
+    /cp \/home\/user\/project\/\.agentworkforce\/workforce\/skills\/essay-authoring\.md /
+  );
+});
+
+test('local source absolute path is left alone even with repoRoot', () => {
+  const plan = materializeSkills(
+    [{ id: 'abs', source: '/abs/path/foo.md', description: 'absolute' }],
+    'claude',
+    { repoRoot: '/home/user/project' }
+  );
+  const script = plan.installs[0].installCommand[2] ?? '';
+  assert.match(script, / \/abs\/path\/foo\.md /);
+  assert.ok(!script.includes('/home/user/project/abs/path'));
+});
+
+test('local source survives installRoot session mode by embedding the absolute repo path', () => {
+  const installRoot = '/tmp/agent-workforce/sessions/local-test/claude/plugin';
+  const plan = materializeSkills([localSkill], 'claude', {
+    installRoot,
+    repoRoot: '/home/user/project'
+  });
+  const [install] = plan.installs;
+  assert.equal(install.installCommand[0], 'sh');
+  assert.equal(install.installCommand[1], '-c');
+  const script = install.installCommand[2] ?? '';
+  // Outer wrapper: cd <installRoot> && <inner>; inner is the sh -c mkdir+cp.
+  assert.match(script, /^cd /);
+  assert.match(script, /\/local-test\/claude\/plugin/);
+  assert.match(script, /\/home\/user\/project\/\.agentworkforce\/workforce\/skills\/essay-authoring\.md/);
+  // Per-skill cleanupPaths stay empty in session mode (cleaned via stage dir).
+  assert.deepEqual([...install.cleanupPaths], []);
+});
+
+test('local source does NOT shadow prpm bare references like coreyhaines31/marketingskills', () => {
+  // The local provider is registered first; it must only claim sources that
+  // look like local .md paths. A bare prpm <scope>/<name> ref must still go
+  // to the prpm provider.
+  const plan = materializeSkills(
+    [
+      {
+        id: 'bare-prpm',
+        source: 'coreyhaines31/marketingskills',
+        description: 'prpm bare ref'
+      }
+    ],
+    'claude'
+  );
+  assert.equal(plan.installs[0].sourceKind, 'prpm');
+});
+
+test('local source rejects paths without .md suffix', () => {
+  assert.throws(
+    () =>
+      materializeSkills(
+        [
+          {
+            id: 'dir',
+            source: './skills/my-skill',
+            description: 'no .md suffix'
+          }
+        ],
+        'claude'
+      ),
+    /Unsupported skill source/
+  );
+});
+
 test('resolveSidecar: tier path override drops top-level inlined content for the same channel', () => {
   const spec = syntheticSpec({
     claudeMdContent: '# top-level inlined\n',

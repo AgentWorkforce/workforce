@@ -186,6 +186,11 @@ export function usePersona(
      * repo's `.claude/skills/`. See {@link SkillMaterializationOptions.installRoot}.
      */
     installRoot?: string;
+    /**
+     * Filesystem root that relative `local`-kind skill sources resolve
+     * against. See {@link SkillMaterializationOptions.repoRoot}.
+     */
+    repoRoot?: string;
   } = {}
 ): PersonaContext {
   const baseSelection = options.tier
@@ -194,7 +199,8 @@ export function usePersona(
 
   return useSelection(baseSelection, {
     harness: options.harness,
-    installRoot: options.installRoot
+    installRoot: options.installRoot,
+    repoRoot: options.repoRoot
   });
 }
 
@@ -206,7 +212,7 @@ export function usePersona(
  */
 export function useSelection(
   baseSelection: PersonaSelection,
-  options: { harness?: Harness; installRoot?: string } = {}
+  options: { harness?: Harness; installRoot?: string; repoRoot?: string } = {}
 ): PersonaContext {
   const effectiveHarness = options.harness ?? baseSelection.runtime.harness;
   const selection =
@@ -220,8 +226,10 @@ export function useSelection(
           }
         };
 
-  const materializationOptions: SkillMaterializationOptions =
-    options.installRoot !== undefined ? { installRoot: options.installRoot } : {};
+  const materializationOptions: SkillMaterializationOptions = {
+    ...(options.installRoot !== undefined ? { installRoot: options.installRoot } : {}),
+    ...(options.repoRoot !== undefined ? { repoRoot: options.repoRoot } : {})
+  };
   const installPlan =
     effectiveHarness === baseSelection.runtime.harness
       ? materializeSkillsFor(selection, materializationOptions)

@@ -77,7 +77,7 @@ export const PERMISSION_MODES = [
   'plan'
 ] as const;
 
-export const SKILL_SOURCE_KINDS = ['prpm', 'skill.sh'] as const;
+export const SKILL_SOURCE_KINDS = ['prpm', 'skill.sh', 'local'] as const;
 
 export const HARNESS_SKILL_TARGETS: Record<Harness, HarnessSkillTarget> = {
   claude: { asFlag: 'claude', dir: '.claude/skills' },
