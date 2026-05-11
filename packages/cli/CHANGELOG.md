@@ -7,6 +7,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [2.1.0] - 2026-05-11
+
+### Changed
+
+- Persona-tui: address review feedback
+- Cli: open interactive persona picker on bare invocation
+
 ## [2.0.1] - 2026-05-11
 
 ### Changed
