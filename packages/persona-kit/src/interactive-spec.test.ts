@@ -183,6 +183,28 @@ test('codex translates stdio mcpServers into command/args/env config args', () =
   assert.deepEqual(result.warnings, []);
 });
 
+test('codex quotes mcp server names in TOML keys when bare-key rules do not allow them', () => {
+  const result = buildInteractiveSpec({
+    harness: 'codex',
+    personaId: 'test-persona',
+    model: 'openai-codex/gpt-5.3-codex',
+    systemPrompt: 'x',
+    mcpServers: {
+      'nango.docs': {
+        type: 'http',
+        url: 'https://nango.dev/docs/mcp'
+      }
+    }
+  });
+  assert.deepEqual(result.args, [
+    '-m',
+    'gpt-5.3-codex',
+    '--config',
+    'mcp_servers."nango.docs".url="https://nango.dev/docs/mcp"'
+  ]);
+  assert.deepEqual(result.warnings, []);
+});
+
 test('codex warns for unsupported permission wiring and sse transport hints', () => {
   const result = buildInteractiveSpec({
     harness: 'codex',

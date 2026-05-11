@@ -111,13 +111,18 @@ function pushCodexConfigArg(args: string[], key: string, tomlValue: string): voi
   args.push('--config', `${key}=${tomlValue}`);
 }
 
+function toTomlDottedKeySegment(key: string): string {
+  // Bare keys are simpler/readable; quote only when TOML requires it.
+  return /^[A-Za-z0-9_-]+$/.test(key) ? key : toTomlBasicString(key);
+}
+
 function appendCodexMcpServerArgs(
   args: string[],
   mcpServers: Record<string, McpServerSpec>,
   warnings: string[]
 ): void {
   for (const [name, server] of Object.entries(mcpServers).sort(([a], [b]) => a.localeCompare(b))) {
-    const prefix = `mcp_servers.${name}`;
+    const prefix = `mcp_servers.${toTomlDottedKeySegment(name)}`;
     if (server.type === 'stdio') {
       pushCodexConfigArg(args, `${prefix}.command`, toTomlBasicString(server.command));
       if (server.args && server.args.length > 0) {
