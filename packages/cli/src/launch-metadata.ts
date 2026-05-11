@@ -2,7 +2,7 @@ import { createHash } from 'node:crypto';
 import { homedir } from 'node:os';
 import { join } from 'node:path';
 
-import type { Harness, PersonaSelection } from '@agentworkforce/workload-router';
+import type { Harness, PersonaSelection } from '@agentworkforce/persona-kit';
 import * as launchMetadataBackendSdk from '@relayburn/sdk';
 
 export const LAUNCH_METADATA_INTERVAL_MS = 1_000;

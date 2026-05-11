@@ -25,64 +25,6 @@ import { personaImprover, personaMaker } from './generated/personas.js';
 import defaultRoutingProfileJson from '../routing-profiles/default.json' with { type: 'json' };
 
 // ---------------------------------------------------------------------------
-// Re-exports of persona-shape symbols moved into @agentworkforce/persona-kit.
-// These keep workload-router's external surface stable while the canonical
-// implementations live in persona-kit. Issues 5/8 and 6/8 will delete these
-// re-exports and the consumers that still depend on them.
-// ---------------------------------------------------------------------------
-
-export {
-  // Constants
-  BUILT_IN_PERSONA_INTENTS,
-  CODEX_APPROVAL_POLICIES,
-  CODEX_SANDBOX_MODES,
-  HARNESS_SKILL_TARGETS,
-  HARNESS_VALUES,
-  PERMISSION_MODES,
-  PERSONA_INTENTS,
-  PERSONA_TAGS,
-  PERSONA_TIERS,
-  SIDECAR_MD_MODES,
-  SKILL_SOURCE_KINDS,
-  // Skill materialization
-  materializeSkills,
-  materializeSkillsFor,
-  resolveSkillSource,
-  // Parsers + sidecar resolver
-  parsePersonaSpec,
-  parseSkills,
-  resolveSidecar
-} from '@agentworkforce/persona-kit';
-
-export type {
-  // Types
-  CodexApprovalPolicy,
-  CodexSandboxMode,
-  Harness,
-  HarnessSettings,
-  HarnessSkillTarget,
-  McpServerSpec,
-  PermissionMode,
-  PersonaContext,
-  PersonaInputSpec,
-  PersonaInstallContext,
-  PersonaIntent,
-  PersonaMount,
-  PersonaPermissions,
-  PersonaRuntime,
-  PersonaSelection,
-  PersonaSkill,
-  PersonaSpec,
-  PersonaTag,
-  PersonaTier,
-  SidecarMdMode,
-  SkillInstall,
-  SkillMaterializationOptions,
-  SkillMaterializationPlan,
-  SkillSourceKind
-} from '@agentworkforce/persona-kit';
-
-// ---------------------------------------------------------------------------
 // Routing profile + built-in persona catalog (workload-router's own concern).
 // ---------------------------------------------------------------------------
 
