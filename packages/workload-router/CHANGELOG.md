@@ -7,6 +7,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [2.0.1] - 2026-05-11
+
+### Changed
+
+- Move persona-shape code from harness-kit + workload-router into persona-kit (#65)
+- Delete @agentworkforce/harness-kit from the monorepo (#65)
+- Shrink workload-router: drop persona-domain re-exports (1.0.0) (#68)
+
 ## [1.0.0] - 2026-05-11
 
 ### Changed (BREAKING)

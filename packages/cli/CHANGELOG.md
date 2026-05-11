@@ -7,6 +7,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [2.0.1] - 2026-05-11
+
+### Changed
+
+- Migrate workforce CLI to consume persona-kit directly (#67)
+- Move persona-shape code from harness-kit + workload-router into persona-kit (#65)
+- Delete @agentworkforce/harness-kit from the monorepo (#65)
+- Shrink workload-router: drop persona-domain re-exports (1.0.0) (#68)
+- RunPersonaImprover: restore config files in try/finally
+- RunPersonaImprover: escalate to SIGKILL after SIGTERM grace
+
 ## [0.19.0] - 2026-05-08
 
 ### Changed
