@@ -127,6 +127,27 @@ test('codex translates sandbox harness settings to launch flags', () => {
   ]);
 });
 
+test('codex emits the single bypass flag when dangerouslyBypassApprovalsAndSandbox is set', () => {
+  const result = buildInteractiveSpec({
+    harness: 'codex',
+    personaId: 'test-persona',
+    model: 'openai-codex/gpt-5.3-codex',
+    systemPrompt: 'x',
+    harnessSettings: {
+      reasoning: 'high',
+      timeoutSeconds: 1200,
+      dangerouslyBypassApprovalsAndSandbox: true,
+      webSearch: true
+    }
+  });
+  assert.deepEqual(result.args, [
+    '-m',
+    'gpt-5.3-codex',
+    '--dangerously-bypass-approvals-and-sandbox',
+    '--search'
+  ]);
+});
+
 test('codex translates http mcpServers into --config mcp_servers.* args', () => {
   const result = buildInteractiveSpec({
     harness: 'codex',

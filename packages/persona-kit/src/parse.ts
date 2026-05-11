@@ -95,7 +95,8 @@ export function parseHarnessSettings(value: unknown, context: string): HarnessSe
     sandboxMode,
     approvalPolicy,
     workspaceWriteNetworkAccess,
-    webSearch
+    webSearch,
+    dangerouslyBypassApprovalsAndSandbox
   } = value;
   if (!['low', 'medium', 'high'].includes(String(reasoning))) {
     throw new Error(`${context}.reasoning must be low|medium|high`);
@@ -131,6 +132,25 @@ export function parseHarnessSettings(value: unknown, context: string): HarnessSe
       throw new Error(`${context}.webSearch must be a boolean`);
     }
     out.webSearch = webSearch;
+  }
+  if (dangerouslyBypassApprovalsAndSandbox !== undefined) {
+    if (typeof dangerouslyBypassApprovalsAndSandbox !== 'boolean') {
+      throw new Error(`${context}.dangerouslyBypassApprovalsAndSandbox must be a boolean`);
+    }
+    // Reject mixed-shape configs whenever the field is *present*, not only
+    // when true. Co-declaring sandboxMode/approvalPolicy/workspaceWriteNetworkAccess
+    // with an explicit `false` is still a contradictory shape — the two-flag
+    // form and the single-flag form are mutually exclusive concepts.
+    const conflicts: string[] = [];
+    if (sandboxMode !== undefined) conflicts.push('sandboxMode');
+    if (approvalPolicy !== undefined) conflicts.push('approvalPolicy');
+    if (workspaceWriteNetworkAccess !== undefined) conflicts.push('workspaceWriteNetworkAccess');
+    if (conflicts.length > 0) {
+      throw new Error(
+        `${context}.dangerouslyBypassApprovalsAndSandbox is mutually exclusive with: ${conflicts.join(', ')}`
+      );
+    }
+    out.dangerouslyBypassApprovalsAndSandbox = dangerouslyBypassApprovalsAndSandbox;
   }
 
   return out;

@@ -38,6 +38,15 @@ export interface HarnessSettings {
   workspaceWriteNetworkAccess?: boolean;
   /** Enable the Codex live web-search tool for this runtime. */
   webSearch?: boolean;
+  /**
+   * Emit codex's single `--dangerously-bypass-approvals-and-sandbox` flag,
+   * which collapses "no sandbox + never ask for approval" and also
+   * suppresses codex's interactive "are you sure?" startup confirmation.
+   * Mutually exclusive with `sandboxMode`, `approvalPolicy`, and
+   * `workspaceWriteNetworkAccess` — those translate to the two-flag form
+   * which still prompts.
+   */
+  dangerouslyBypassApprovalsAndSandbox?: boolean;
 }
 
 export interface PersonaRuntime {

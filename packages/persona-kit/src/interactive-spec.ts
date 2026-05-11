@@ -86,9 +86,13 @@ function hasCodexLaunchSettings(settings: HarnessSettings | undefined): boolean 
     settings.sandboxMode ||
       settings.approvalPolicy ||
       settings.workspaceWriteNetworkAccess !== undefined ||
-      settings.webSearch
+      settings.webSearch ||
+      settings.dangerouslyBypassApprovalsAndSandbox !== undefined
   );
 }
+
+const CODEX_ONLY_WARNING =
+  'persona declares codex-only harnessSettings but the {harness} harness ignores sandboxMode, approvalPolicy, workspaceWriteNetworkAccess, webSearch, and dangerouslyBypassApprovalsAndSandbox.';
 
 
 function toTomlBasicString(value: string): string {
@@ -229,7 +233,7 @@ export function buildInteractiveSpec(input: BuildInteractiveSpecInput): Interact
       }
       if (hasCodexLaunchSettings(harnessSettings)) {
         warnings.push(
-          'persona declares codex-only harnessSettings but the claude harness ignores sandboxMode, approvalPolicy, workspaceWriteNetworkAccess, and webSearch.'
+          CODEX_ONLY_WARNING.replace('{harness}', 'claude')
         );
       }
       return { bin: 'claude', args, initialPrompt: null, warnings, configFiles: [] };
@@ -249,19 +253,26 @@ export function buildInteractiveSpec(input: BuildInteractiveSpecInput): Interact
       if (mcpServers && Object.keys(mcpServers).length > 0) {
         appendCodexMcpServerArgs(args, mcpServers, warnings);
       }
-      if (harnessSettings?.sandboxMode) {
-        args.push('--sandbox', harnessSettings.sandboxMode);
-      }
-      if (harnessSettings?.approvalPolicy) {
-        args.push('--ask-for-approval', harnessSettings.approvalPolicy);
-      }
-      if (harnessSettings?.workspaceWriteNetworkAccess !== undefined) {
-        args.push(
-          '-c',
-          `sandbox_workspace_write.network_access=${String(
-            harnessSettings.workspaceWriteNetworkAccess
-          )}`
-        );
+      if (harnessSettings?.dangerouslyBypassApprovalsAndSandbox) {
+        // Single combined flag — collapses "no sandbox + never ask" and
+        // suppresses codex's interactive "are you sure?" startup
+        // confirmation. The two-flag form below still prompts.
+        args.push('--dangerously-bypass-approvals-and-sandbox');
+      } else {
+        if (harnessSettings?.sandboxMode) {
+          args.push('--sandbox', harnessSettings.sandboxMode);
+        }
+        if (harnessSettings?.approvalPolicy) {
+          args.push('--ask-for-approval', harnessSettings.approvalPolicy);
+        }
+        if (harnessSettings?.workspaceWriteNetworkAccess !== undefined) {
+          args.push(
+            '-c',
+            `sandbox_workspace_write.network_access=${String(
+              harnessSettings.workspaceWriteNetworkAccess
+            )}`
+          );
+        }
       }
       if (harnessSettings?.webSearch) {
         args.push('--search');
@@ -292,7 +303,7 @@ export function buildInteractiveSpec(input: BuildInteractiveSpecInput): Interact
       }
       if (hasCodexLaunchSettings(harnessSettings)) {
         warnings.push(
-          'persona declares codex-only harnessSettings but the opencode harness ignores sandboxMode, approvalPolicy, workspaceWriteNetworkAccess, and webSearch.'
+          CODEX_ONLY_WARNING.replace('{harness}', 'opencode')
         );
       }
       // opencode resolves a persona's system prompt + model through its own
