@@ -18,6 +18,7 @@ on:
           - 'agentworkforce'
           - '@agentworkforce/harness-kit'
           - '@agentworkforce/workload-router'
+          - '@agentworkforce/persona-kit'
       version:
         description: 'Version to verify (defaults to the "latest" dist-tag)'
         required: false

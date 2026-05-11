@@ -85,10 +85,11 @@ jobs:
       - name: Resolve target packages
         id: targets
         run: |
-          # Dependency order: workload-router → harness-kit → cli → agentworkforce.
-          # The top-level `agentworkforce` wrapper depends on `@agentworkforce/cli`,
-          # so it must publish last.
-          echo "packages=workload-router harness-kit cli agentworkforce" >> "$GITHUB_OUTPUT"
+          # Dependency order: persona-kit → workload-router → harness-kit → cli → agentworkforce.
+          # persona-kit is a leaf dep consumed by workload-router, harness-kit, and cli,
+          # so it must publish first. The top-level `agentworkforce` wrapper depends on
+          # `@agentworkforce/cli`, so it must publish last.
+          echo "packages=persona-kit workload-router harness-kit cli agentworkforce" >> "$GITHUB_OUTPUT"
 
       # Lockstep baseline heal. The workspace publishes every package at the
       # same version, so if any package's local version lags either its own
