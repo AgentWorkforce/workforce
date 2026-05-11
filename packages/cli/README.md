@@ -881,11 +881,11 @@ verbatim. Three transport types:
 | Harness  | Interactive MCP | One-shot MCP |
 | -------- | --------------- | ------------ |
 | claude   | yes (via `--mcp-config` + `--strict-mcp-config`) | not yet — SDK workflow path doesn't thread MCP |
-| codex    | not yet — warns and proceeds without MCP | not yet |
+| codex    | yes (via `--config mcp_servers.<name>...`) | not yet — SDK workflow path doesn't thread MCP |
 | opencode | not yet — warns and proceeds without MCP | not yet |
 
-For a persona that needs MCP today, pick `claude` as the harness on every tier
-and use interactive mode.
+For a persona that needs MCP today, pick `claude` or `codex` as the harness
+for that tier.
 
 ### MCP isolation
 
@@ -1120,8 +1120,8 @@ stage dir is cleaned up by the existing `rm -rf` cleanup command.
 
 A persona's three tiers can use different harnesses.
 
-If a persona uses MCP, keep every tier on `claude` — only the claude harness
-wires MCP at spawn time today.
+If a persona uses MCP, use `claude` or `codex` tiers.
+`opencode` still does not inject persona `mcpServers` at spawn time.
 
 ## Troubleshooting
 
@@ -1137,9 +1137,9 @@ wires MCP at spawn time today.
 - **`Failed to spawn "claude": binary not found on PATH.`** — Install the
   harness CLI (`claude`, `codex`, or `opencode`) and ensure it's on your PATH.
 
-- **`warning: persona declares mcpServers but the codex harness is not yet
-  wired …`** — Either switch the tier's `harness` to `claude`, or drop the MCP
-  requirement.
+- **`warning: persona declares mcpServers but the opencode harness is not yet
+  wired …`** — Switch that tier's `harness` to `claude` or `codex`, or drop the
+  MCP requirement.
 
 - **`extends cycle detected through …`** — A local persona extends itself
   transitively. Break the chain or point one link at the library directly.
