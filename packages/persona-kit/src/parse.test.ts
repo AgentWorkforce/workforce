@@ -184,15 +184,17 @@ test('parseHarnessSettings accepts optional codex fields and rejects bad ones', 
 });
 
 test('parseHarnessSettings accepts dangerouslyBypassApprovalsAndSandbox alone', () => {
-  const ok = parseHarnessSettings(
-    {
-      reasoning: 'high',
-      timeoutSeconds: 60,
-      dangerouslyBypassApprovalsAndSandbox: true
-    },
-    'rt'
-  );
-  assert.equal(ok.dangerouslyBypassApprovalsAndSandbox, true);
+  for (const value of [true, false]) {
+    const ok = parseHarnessSettings(
+      {
+        reasoning: 'high',
+        timeoutSeconds: 60,
+        dangerouslyBypassApprovalsAndSandbox: value
+      },
+      'rt'
+    );
+    assert.equal(ok.dangerouslyBypassApprovalsAndSandbox, value);
+  }
 });
 
 test('parseHarnessSettings rejects dangerouslyBypassApprovalsAndSandbox with conflicting fields', () => {
