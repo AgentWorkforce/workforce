@@ -21,36 +21,39 @@ import { dirname, isAbsolute, join, resolve as resolvePath } from 'node:path';
 import { pathToFileURL } from 'node:url';
 
 import {
+  buildCleanupArtifacts,
+  buildInstallArtifacts,
+  buildInteractiveSpec,
+  buildNonInteractiveSpec,
+  detectHarnesses,
+  formatDropWarnings,
   HARNESS_VALUES,
   materializeSkills,
+  MissingPersonaInputError,
   PERSONA_TAGS,
   PERSONA_TIERS,
-  listBuiltInPersonas,
-  personaCatalog,
+  renderPersonaInputs,
+  resolveMcpServersLenient,
+  resolvePersonaInputs,
   resolveSidecar,
-  routingProfiles,
-  useSelection,
+  resolveStringMapLenient,
   type Harness,
+  type HarnessAvailability,
+  type InteractiveSpec,
+  type NonInteractiveSpec,
   type PersonaMount,
   type PersonaSelection,
   type PersonaSpec,
   type PersonaTag,
   type PersonaTier,
-  type SidecarMdMode
-} from '@agentworkforce/workload-router';
+  type SidecarMdMode,
+  type SkillMaterializationPlan
+} from '@agentworkforce/persona-kit';
 import {
-  buildInteractiveSpec,
-  detectHarnesses,
-  formatDropWarnings,
-  MissingPersonaInputError,
-  renderPersonaInputs,
-  resolvePersonaInputs,
-  resolveMcpServersLenient,
-  resolveStringMapLenient,
-  useRunnableSelection,
-  type HarnessAvailability,
-  type InteractiveSpec
-} from '@agentworkforce/harness-kit';
+  listBuiltInPersonas,
+  personaCatalog,
+  routingProfiles
+} from '@agentworkforce/workload-router';
 import {
   createMount,
   readAgentDotfiles,
@@ -513,6 +516,42 @@ async function runInstallOrThrow(
   if (code !== 0) {
     throw new InstallCommandError(label, code);
   }
+}
+
+/**
+ * CLI-side install context shaped like workload-router's `useSelection().install`.
+ * Built directly from persona-kit's pure helpers
+ * ({@link materializeSkills}, {@link buildInstallArtifacts},
+ * {@link buildCleanupArtifacts}) so the spawn flow can keep its own
+ * spinner-driven install/cleanup orchestration without importing
+ * `useSelection` from `@agentworkforce/workload-router`.
+ */
+interface CliInstallContext {
+  plan: SkillMaterializationPlan;
+  command: readonly string[];
+  commandString: string;
+  cleanupCommand: readonly string[];
+  cleanupCommandString: string;
+}
+
+function buildInstallContext(
+  selection: PersonaSelection,
+  options: { installRoot?: string } = {}
+): CliInstallContext {
+  const plan = materializeSkills(
+    selection.skills,
+    selection.runtime.harness,
+    options.installRoot !== undefined ? { installRoot: options.installRoot } : {}
+  );
+  const { installCommand, installCommandString } = buildInstallArtifacts(plan);
+  const { cleanupCommand, cleanupCommandString } = buildCleanupArtifacts(plan);
+  return {
+    plan,
+    command: installCommand,
+    commandString: installCommandString,
+    cleanupCommand,
+    cleanupCommandString
+  };
 }
 
 function runCleanup(command: readonly string[], commandString: string): void {
@@ -1153,11 +1192,10 @@ async function runInteractive(
     sessionRoot && runtime.harness === 'claude'
       ? sessionInstallRoot(sessionRoot)
       : undefined;
-  const ctx = useSelection(
+  const install = buildInstallContext(
     effectiveSelection,
     installRoot !== undefined ? { installRoot } : {}
   );
-  const { install } = ctx;
   process.stderr.write(`→ ${personaId} [${tier}] via ${runtime.harness} (${runtime.model})\n`);
 
   const startLaunchMetadataForLaunch = (cwd = process.cwd()) =>
@@ -3130,24 +3168,118 @@ async function runPersonaImprover(args: {
   }
   const tier: PersonaTier = 'best-value';
   const selection = buildSelection(improverSpec, tier, 'repo');
-  const ctx = useRunnableSelection(selection);
-  const taskLines = [
+  const inputValues: Record<string, string> = {
+    PERSONA_FILE_PATH: args.personaFilePath,
+    SESSION_TRANSCRIPT_PATH: args.transcriptPath,
+    PROPOSALS_OUTPUT_PATH: args.proposalsOutputPath
+  };
+  const inputResolution = resolvePersonaInputs(
+    selection.inputs,
+    inputValues,
+    process.env
+  );
+  const renderedSystemPrompt = renderPersonaInputs(
+    selection.runtime.systemPrompt,
+    inputResolution.values
+  );
+  const callerEnv = { ...process.env, ...inputResolution.values };
+  const envResolution = resolveStringMapLenient(selection.env, callerEnv, 'env');
+  const mcpResolution = resolveMcpServersLenient(selection.mcpServers, callerEnv);
+  const taskBody = [
     'Improve this local persona from one finished session. The CLI will read your proposals JSON and walk the user through accept/deny.',
     `PERSONA_FILE_PATH=${args.personaFilePath}`,
     `SESSION_TRANSCRIPT_PATH=${args.transcriptPath}`,
     `PROPOSALS_OUTPUT_PATH=${args.proposalsOutputPath}`
-  ];
-  const result = await ctx.sendMessage(taskLines.join('\n'), {
-    inputs: {
-      PERSONA_FILE_PATH: args.personaFilePath,
-      SESSION_TRANSCRIPT_PATH: args.transcriptPath,
-      PROPOSALS_OUTPUT_PATH: args.proposalsOutputPath
-    },
-    timeoutSeconds: selection.runtime.harnessSettings.timeoutSeconds
+  ].join('\n');
+  const task = `${taskBody}\n\nRun inputs:\n${JSON.stringify(inputValues, null, 2)}`;
+  const spec = buildNonInteractiveSpec({
+    harness: selection.runtime.harness,
+    personaId: selection.personaId,
+    model: selection.runtime.model,
+    systemPrompt: renderedSystemPrompt,
+    harnessSettings: selection.runtime.harnessSettings,
+    mcpServers: mcpResolution.servers,
+    permissions: selection.permissions,
+    task
   });
-  if (result.status !== 'completed' || (result.exitCode !== null && result.exitCode !== 0)) {
+  const childEnv = { ...callerEnv, ...(envResolution.value ?? {}), ...inputResolution.values };
+  const cwd = process.cwd();
+  const configWrites: { path: string; existed: boolean; previous?: string }[] = [];
+  for (const file of spec.configFiles) {
+    assertSafeRelativePath(file.path);
+    const target = join(cwd, file.path);
+    const existed = existsSync(target);
+    const previous = existed ? readFileSync(target, 'utf8') : undefined;
+    mkdirSync(dirname(target), { recursive: true });
+    writeFileSync(target, file.contents, 'utf8');
+    configWrites.push({ path: target, existed, ...(previous !== undefined ? { previous } : {}) });
+  }
+  const restoreConfigWrites = () => {
+    for (const write of [...configWrites].reverse()) {
+      if (write.existed) {
+        writeFileSync(write.path, write.previous ?? '', 'utf8');
+      } else {
+        rmSync(write.path, { force: true });
+      }
+    }
+  };
+  const timeoutMs = selection.runtime.harnessSettings.timeoutSeconds
+    ? selection.runtime.harnessSettings.timeoutSeconds * 1000
+    : undefined;
+  let captureResult: { exitCode: number | null; stderr: string };
+  try {
+    captureResult = await new Promise<{ exitCode: number | null; stderr: string }>(
+      (resolveResult) => {
+        const child = spawn(spec.bin, [...spec.args], {
+          cwd,
+          env: childEnv,
+          stdio: ['ignore', 'pipe', 'pipe'],
+          shell: false
+        });
+        let stderrBuf = '';
+        let forceKillTimeout: NodeJS.Timeout | undefined;
+        child.stdout?.setEncoding('utf8');
+        child.stderr?.setEncoding('utf8');
+        child.stderr?.on('data', (chunk: string) => {
+          stderrBuf += chunk;
+        });
+        // SIGTERM first; if the harness traps or ignores it, escalate to
+        // SIGKILL after a 1s grace so the timeout is actually enforced
+        // (matches the previous spawnCapture behavior in harness-kit).
+        const timeout =
+          timeoutMs !== undefined
+            ? setTimeout(() => {
+                child.kill('SIGTERM');
+                forceKillTimeout = setTimeout(() => {
+                  if (!child.killed) child.kill('SIGKILL');
+                }, 1000);
+              }, timeoutMs)
+            : undefined;
+        const clearTimers = () => {
+          if (timeout) clearTimeout(timeout);
+          if (forceKillTimeout) clearTimeout(forceKillTimeout);
+        };
+        child.on('error', (err) => {
+          clearTimers();
+          resolveResult({ exitCode: 1, stderr: `${stderrBuf}${err.message}\n` });
+        });
+        child.on('close', (code, signal) => {
+          clearTimers();
+          const exitCode =
+            typeof code === 'number' ? code : signal ? signalExitCode(signal) : null;
+          resolveResult({ exitCode, stderr: stderrBuf });
+        });
+      }
+    );
+  } finally {
+    // Always restore — a synchronous spawn() throw or unexpected promise
+    // rejection must not leave orphaned `opencode.json` (or any other
+    // configFile) sitting in the user's working directory.
+    restoreConfigWrites();
+  }
+  if (captureResult.exitCode !== 0) {
     throw new Error(
-      `improver exited with status=${result.status}, code=${result.exitCode ?? 'null'}.${result.stderr ? ` stderr: ${result.stderr.slice(0, 400)}` : ''}`
+      `improver exited with code=${captureResult.exitCode ?? 'null'}.${captureResult.stderr ? ` stderr: ${captureResult.stderr.slice(0, 400)}` : ''}`
     );
   }
   let raw: string;

@@ -6,8 +6,6 @@ import {
   CODEX_APPROVAL_POLICIES,
   CODEX_SANDBOX_MODES,
   HARNESS_VALUES,
-  listBuiltInPersonas,
-  personaCatalog,
   PERSONA_TAGS,
   PERSONA_TIERS,
   SIDECAR_MD_MODES,
@@ -23,7 +21,8 @@ import {
   type PersonaTag,
   type PersonaTier,
   type SidecarMdMode
-} from '@agentworkforce/workload-router';
+} from '@agentworkforce/persona-kit';
+import { listBuiltInPersonas, personaCatalog } from '@agentworkforce/workload-router';
 
 /**
  * User-defined persona override. Local files are partial overlays — only the
