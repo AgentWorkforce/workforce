@@ -544,13 +544,12 @@ interface CliInstallContext {
 
 function buildInstallContext(
   selection: PersonaSelection,
-  options: { installRoot?: string } = {}
+  options: { installRoot?: string; repoRoot?: string } = {}
 ): CliInstallContext {
-  const plan = materializeSkills(
-    selection.skills,
-    selection.runtime.harness,
-    options.installRoot !== undefined ? { installRoot: options.installRoot } : {}
-  );
+  const plan = materializeSkills(selection.skills, selection.runtime.harness, {
+    ...(options.installRoot !== undefined ? { installRoot: options.installRoot } : {}),
+    ...(options.repoRoot !== undefined ? { repoRoot: options.repoRoot } : {})
+  });
   const { installCommand, installCommandString } = buildInstallArtifacts(plan);
   const { cleanupCommand, cleanupCommandString } = buildCleanupArtifacts(plan);
   return {
@@ -1046,7 +1045,12 @@ function runDryRun(selection: PersonaSelection): number {
   process.stderr.write(`✓ harness spec: ${spec.bin} (${spec.args.length} args)\n`);
 
   // Check 3: skill installs.
-  const plan = materializeSkills(effectiveSelection.skills, runtime.harness);
+  // Dry-run runs each install inside a fresh tempDir (see `cwd: tempDir` on
+  // the spawnSync below). Pass repoRoot=process.cwd() so `local`-kind skills
+  // resolve their relative source paths against the real repo, not the tmp.
+  const plan = materializeSkills(effectiveSelection.skills, runtime.harness, {
+    repoRoot: process.cwd()
+  });
   if (plan.installs.length === 0) {
     process.stderr.write('✓ skills: (none declared)\n');
     process.stderr.write('✓ dry-run ok\n');
@@ -1200,10 +1204,15 @@ async function runInteractive(
     sessionRoot && runtime.harness === 'claude'
       ? sessionInstallRoot(sessionRoot)
       : undefined;
-  const install = buildInstallContext(
-    effectiveSelection,
-    installRoot !== undefined ? { installRoot } : {}
-  );
+  // `repoRoot` lets the local skill provider (kind: 'local') resolve
+  // relative source paths like `.agentworkforce/workforce/skills/foo.md` to
+  // absolute paths before the install command runs. Critical for claude's
+  // installRoot mode, where the install runs `cd <installRoot> && cp ...`
+  // and a relative source would otherwise resolve against the wrong dir.
+  const install = buildInstallContext(effectiveSelection, {
+    ...(installRoot !== undefined ? { installRoot } : {}),
+    repoRoot: process.cwd()
+  });
   process.stderr.write(`→ ${personaId} [${tier}] via ${runtime.harness} (${runtime.model})\n`);
 
   const startLaunchMetadataForLaunch = (cwd = process.cwd()) =>

@@ -278,6 +278,16 @@ export interface HarnessSkillTarget {
  */
 export interface SkillMaterializationOptions {
   installRoot?: string;
+  /**
+   * Filesystem root that relative `local`-kind skill sources are resolved
+   * against. When set, the local provider absolute-ifies a source like
+   * `.agentworkforce/workforce/skills/foo.md` to `<repoRoot>/.agentworkforce/...`
+   * before embedding it into the install command, so the `cp` survives the
+   * `cd <installRoot>` prefix that session-mode installs add. Has no effect on
+   * `prpm` / `skill.sh` skills. When unset, local sources are embedded as-is
+   * and resolve against whatever cwd the caller runs the install command in.
+   */
+  repoRoot?: string;
 }
 
 export interface SkillInstall {
@@ -313,6 +323,12 @@ export interface SkillMaterializationPlan {
    * removes the whole directory instead of individual skill paths.
    */
   sessionInstallRoot?: string;
+  /**
+   * Echoed from {@link SkillMaterializationOptions.repoRoot} so downstream
+   * artifact builders (`buildInstallArtifacts`) can re-resolve `local` skill
+   * sources to the same absolute paths the per-install commands embedded.
+   */
+  repoRoot?: string;
 }
 
 export interface PersonaInstallContext {

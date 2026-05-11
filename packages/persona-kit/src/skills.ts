@@ -33,12 +33,25 @@ interface ResolvedSkillSource {
   installedName: string;
 }
 
+/**
+ * Subset of {@link SkillMaterializationOptions} that providers care about when
+ * building install commands. Forwarded by `materializeSkills` and the
+ * `buildInstallArtifacts` chain. Optional so providers can ignore it.
+ */
+interface BuildInstallContext {
+  repoRoot?: string;
+}
+
 interface SkillProvider {
   readonly kind: SkillSourceKind;
   /** Parse a persona `source` string; return null if this provider does not claim it. */
   parse(source: string): ResolvedSkillSource | null;
   /** Build the argv-style install command for `materializeSkills`. */
-  buildInstallCommand(ref: ResolvedSkillSource, harness: Harness): readonly string[];
+  buildInstallCommand(
+    ref: ResolvedSkillSource,
+    harness: Harness,
+    context?: BuildInstallContext
+  ): readonly string[];
   /**
    * Ephemeral paths the installer scatters for this skill under `harness` that are
    * safe to remove once the persona has finished reading them. Does not include
@@ -170,7 +183,86 @@ const skillShProvider: SkillProvider = {
   }
 };
 
-const SKILL_PROVIDERS: readonly SkillProvider[] = Object.freeze([prpmProvider, skillShProvider]);
+// Local source forms:
+// - A repo-relative or absolute path to a single `.md` file that will be
+//   installed as `<harness-skill-dir>/<name>/SKILL.md`.
+// Examples:
+// - `.agentworkforce/workforce/skills/essay-authoring.md`
+// - `./skills/my-skill.md`
+// - `/abs/path/to/SKILL.md`
+//
+// The provider intentionally rejects URLs and prpm `<scope>/<name>` shorthand
+// (no `.md` suffix) so it never claims sources the other providers should
+// handle. It is registered FIRST so its narrow `.md`-suffix test gets first
+// refusal on path-shaped strings before prpm's bare-ref regex sees them.
+const LOCAL_MD_RE = /\.md$/i;
+const URL_PREFIX_RE = /^[a-z][a-z0-9+.-]*:\/\//i;
+
+function localInstalledName(source: string): string | null {
+  const lastSlash = source.lastIndexOf('/');
+  const basename = lastSlash >= 0 ? source.slice(lastSlash + 1) : source;
+  const stem = basename.replace(/\.md$/i, '');
+  // A SKILL.md inside a skill dir is conventional; in that case the parent
+  // directory name is the meaningful identifier. Strip a trailing `/SKILL`
+  // stem and use the segment above it instead.
+  if (stem === 'SKILL' && lastSlash > 0) {
+    const parentSlice = source.slice(0, lastSlash);
+    const parentSlash = parentSlice.lastIndexOf('/');
+    const parent = parentSlash >= 0 ? parentSlice.slice(parentSlash + 1) : parentSlice;
+    return toSafeSkillName(parent);
+  }
+  return toSafeSkillName(stem);
+}
+
+const localProvider: SkillProvider = {
+  kind: 'local',
+  parse(source) {
+    if (URL_PREFIX_RE.test(source)) return null;
+    if (!LOCAL_MD_RE.test(source)) return null;
+    const installedName = localInstalledName(source);
+    if (!installedName) return null;
+    return {
+      kind: 'local',
+      // packageRef preserves the original source string verbatim so the
+      // command builder can resolve it against `repoRoot` if supplied.
+      packageRef: source,
+      installedName
+    };
+  },
+  buildInstallCommand(ref, harness, context) {
+    const target = HARNESS_SKILL_TARGETS[harness];
+    const destDir = `${target.dir}/${ref.installedName}`;
+    const source = resolveLocalSource(ref.packageRef, context?.repoRoot);
+    // A single shell command so the mkdir + cp pair is atomic from the
+    // caller's perspective (one spawn, one exit code) and survives a
+    // `cd <installRoot> && …` wrapper in session mode — the destination
+    // stays harness-relative, the source is absolute when `repoRoot` is set.
+    const script = `mkdir -p ${shellEscape(destDir)} && cp ${shellEscape(source)} ${shellEscape(`${destDir}/SKILL.md`)}`;
+    return Object.freeze(['sh', '-c', script]) as readonly string[];
+  },
+  cleanupPaths(ref, harness) {
+    const target = HARNESS_SKILL_TARGETS[harness];
+    return Object.freeze([`${target.dir}/${ref.installedName}`]) as readonly string[];
+  }
+};
+
+function resolveLocalSource(source: string, repoRoot: string | undefined): string {
+  // Absolute paths and `file://` URLs (already stripped above for the URL
+  // check, but kept defensive here) stand on their own. Relative paths are
+  // joined to `repoRoot` when supplied so session-mode `cd <installRoot>`
+  // doesn't change their meaning.
+  if (source.startsWith('/')) return source;
+  if (!repoRoot) return source;
+  const trimmedRoot = repoRoot.endsWith('/') ? repoRoot.slice(0, -1) : repoRoot;
+  const trimmedSource = source.startsWith('./') ? source.slice(2) : source;
+  return `${trimmedRoot}/${trimmedSource}`;
+}
+
+const SKILL_PROVIDERS: readonly SkillProvider[] = Object.freeze([
+  localProvider,
+  prpmProvider,
+  skillShProvider
+]);
 
 export function resolveSkillSource(source: string): ResolvedSkillSource {
   for (const provider of SKILL_PROVIDERS) {
@@ -184,7 +276,8 @@ export function resolveSkillSource(source: string): ResolvedSkillSource {
       `Supported forms: prpm.dev package URL (https://prpm.dev/packages/<scope>/<name>), ` +
       `bare "<scope>/<name>" prpm reference, ` +
       `skill.sh github URL with skill fragment (https://github.com/<org>/<repo>#<skill>), ` +
-      `or GitHub tree URL to a skill directory (https://github.com/<org>/<repo>/tree/<ref>/<skill>).`
+      `GitHub tree URL to a skill directory (https://github.com/<org>/<repo>/tree/<ref>/<skill>), ` +
+      `or a local repo-relative path to a SKILL markdown file (e.g. ./skills/my-skill.md, .agentworkforce/workforce/skills/my-skill.md).`
   );
 }
 
@@ -213,7 +306,7 @@ export function materializeSkills(
   if (!target) {
     throw new Error(`No skill install target configured for harness: ${harness}`);
   }
-  const { installRoot } = options;
+  const { installRoot, repoRoot } = options;
   if (installRoot !== undefined && harness !== 'claude') {
     throw new Error(
       `installRoot is only supported for the claude harness (got: ${harness}). ` +
@@ -221,10 +314,13 @@ export function materializeSkills(
     );
   }
 
+  const providerContext: BuildInstallContext | undefined =
+    repoRoot !== undefined ? { repoRoot } : undefined;
+
   const installs = skills.map((skill): SkillInstall => {
     const resolved = resolveSkillSource(skill.source);
     const provider = providerFor(resolved.kind);
-    const baseCommand = provider.buildInstallCommand(resolved, harness);
+    const baseCommand = provider.buildInstallCommand(resolved, harness, providerContext);
     // In session-install-root mode, the install runs `cd <installRoot> && <prpm>`
     // so that prpm's harness-relative dirs (`.claude/skills/<name>`) land
     // inside the stage dir instead of the user's repo. The per-install command
@@ -272,7 +368,8 @@ export function materializeSkills(
   return {
     harness,
     installs,
-    ...(installRoot !== undefined ? { sessionInstallRoot: installRoot } : {})
+    ...(installRoot !== undefined ? { sessionInstallRoot: installRoot } : {}),
+    ...(repoRoot !== undefined ? { repoRoot } : {})
   };
 }
 
@@ -349,11 +446,15 @@ export function buildInstallArtifacts(plan: SkillMaterializationPlan): {
     // install.installCommand is already self-contained (`sh -c 'cd <root> &&
     // …'`) for callers who want to run one at a time, but here we flatten
     // to the underlying prpm argv for a cleaner chain.
+    const providerContext: BuildInstallContext | undefined =
+      plan.repoRoot !== undefined ? { repoRoot: plan.repoRoot } : undefined;
     const perSkill = plan.installs
       .map((install) => {
         const resolved = resolveSkillSource(install.source);
         const provider = providerFor(resolved.kind);
-        return commandToShellString(provider.buildInstallCommand(resolved, plan.harness));
+        return commandToShellString(
+          provider.buildInstallCommand(resolved, plan.harness, providerContext)
+        );
       })
       .join(' && ');
     const installCommandString = `${scaffold} && cd ${shellEscape(root)} && ${perSkill}`;
