@@ -283,6 +283,38 @@ launcher metadata. AgentWorkforce records
 Use `--no-launch-metadata` or `AGENTWORKFORCE_LAUNCH_METADATA=0` to skip
 metadata writing and session-log refresh for that launch.
 
+### Persona sources
+
+Three places a persona can live, surfaced as `SOURCE` in `agentworkforce list`,
+`sources list`, and the interactive picker:
+
+- **`built-in`** — bundled with `@agentworkforce/cli`. Reserved for personas
+  that are directly about Agent Workforce itself, e.g. `persona-maker` and
+  `persona-improver`. Every user has these without installing anything. This
+  is intentionally a small set.
+- **`personal`** — `~/.agentworkforce/workforce/personas/`. For things one
+  user wants on every repo on their machine, but doesn't want to commit.
+- **`repo`** — `<cwd>/.agentworkforce/workforce/personas/`. Personas codified
+  in the working tree so the whole team gets them on checkout. Two flavors
+  end up here:
+  - **library personas you've copied in** via `agentworkforce install <pkg>` —
+    generalized personas that can be extended to multiple codebases, similar
+    to the shadcn copy-and-own model. Example: the Relay team's
+    [`@agentrelay/personas`](https://github.com/AgentWorkforce/relay/tree/main/packages/personas)
+    pack.
+  - **repo-specific overrides** — hand-authored or `extends`-based personas
+    that encode rules unique to this codebase. Often extend a library persona
+    with project-specific auth, conventions, or skills. See
+    [AgentWorkforce/relay#839](https://github.com/AgentWorkforce/relay/pull/839)
+    for a worked example.
+
+Both flavors physically share the `repo` directory; the distinction is
+conceptual — "did this persona come from a published pack, or did we write
+it for this codebase?"
+
+Cascade order is `repo` → configured persona dirs → `personal` → `built-in`;
+higher layers may override or `extends` lower ones field-by-field.
+
 ### Persona pack installs
 
 Install a persona pack into the current project:

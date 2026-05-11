@@ -6,6 +6,7 @@ import { join } from 'node:path';
 
 import {
   __mergeOverrideForTests,
+  formatPersonaSourceLabel,
   loadLocalPersonas,
   loadPersonaSourceConfig,
   type LocalPersonaOverride
@@ -1029,4 +1030,13 @@ test('override leaves channel alone: inherited claudeMdContent flows through', (
   const merged = __mergeOverrideForTests(base, override, []);
   assert.equal(merged.claudeMdContent, '# keep me\n');
   assert.equal(merged.claudeMd, undefined);
+});
+
+test('formatPersonaSourceLabel maps internal cascade keys to display labels', () => {
+  assert.equal(formatPersonaSourceLabel('library'), 'built-in');
+  assert.equal(formatPersonaSourceLabel('cwd'), 'repo');
+  assert.equal(formatPersonaSourceLabel('user'), 'personal');
+  // dir:N passes through unchanged so cascade position stays legible.
+  assert.equal(formatPersonaSourceLabel('dir:1'), 'dir:1');
+  assert.equal(formatPersonaSourceLabel('dir:42'), 'dir:42');
 });

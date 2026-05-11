@@ -88,6 +88,32 @@ export interface LocalPersonaOverride {
 
 export type PersonaSource = string;
 
+/**
+ * Map an internal {@link PersonaSource} cascade label to the human-readable
+ * vocabulary surfaced in `agentworkforce list`, `sources list`, and the
+ * interactive picker:
+ *
+ *   - `library`  → `built-in` — bundled with `@agentworkforce/cli`,
+ *                  available to every user without an install step.
+ *   - `cwd`      → `repo`     — `<cwd>/.agentworkforce/workforce/personas/`,
+ *                  i.e. personas codified in the working tree (typically
+ *                  team-specific rules, or library packs installed via
+ *                  `agentworkforce install`).
+ *   - `user`     → `personal` — `~/.agentworkforce/workforce/personas/`,
+ *                  i.e. personas a single user keeps across all repos.
+ *   - `dir:N`    → `dir:N`    — extra configurable persona dirs (passed
+ *                  through unchanged so position is still legible).
+ *
+ * Internal strings are left alone so `--save-in-directory <target>` and the
+ * JSON outputs of `list` / `sources list` keep their existing values.
+ */
+export function formatPersonaSourceLabel(source: PersonaSource): string {
+  if (source === 'library') return 'built-in';
+  if (source === 'cwd') return 'repo';
+  if (source === 'user') return 'personal';
+  return source;
+}
+
 interface SourceLayer {
   key: string;
   source: PersonaSource;

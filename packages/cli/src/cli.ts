@@ -67,6 +67,7 @@ import {
 import {
   buildPersonaSourceDirectories,
   defaultCwdPersonaDir,
+  formatPersonaSourceLabel,
   loadLocalPersonas,
   loadPersonaSourceConfig,
   normalizePersonaDir,
@@ -81,7 +82,9 @@ const USAGE = `Usage: agentworkforce <command> [args...]
 
 Run with no arguments inside a TTY to open an interactive persona picker —
 the top 3 most recently used personas are shown first, and typing fuzzy-
-searches across persona names and descriptions.
+searches across persona names and descriptions. Each row's SOURCE column
+is one of: built-in (bundled), repo (./.agentworkforce/workforce/personas),
+personal (~/.agentworkforce/workforce/personas), or dir:N (configured).
 
 Commands:
   create [flags]     Opens persona-maker@best for creating a new
@@ -1694,15 +1697,21 @@ function formatSourcesTable(
     dir: 'DIR'
   };
   const cols = ['cascade', 'config', 'source', 'exists', 'dir'] as const;
+  // Display label only — the underlying `source` literal flows through to
+  // --json so tooling that pins on `'cwd'` / `'user'` / `'library'` is fine.
+  const display: readonly SourceDirRow[] = rows.map((r) => ({
+    ...r,
+    source: formatPersonaSourceLabel(r.source)
+  }));
   const widths = Object.fromEntries(
-    cols.map((c) => [c, Math.max(headers[c].length, ...rows.map((r) => r[c].length))])
+    cols.map((c) => [c, Math.max(headers[c].length, ...display.map((r) => r[c].length))])
   ) as Record<(typeof cols)[number], number>;
   const line = (row: SourceDirRow) =>
     cols.map((c) => row[c].padEnd(widths[c])).join('  ').trimEnd();
   return [
     `Config: ${configPath}`,
     `Default create target: ${defaultCreateTarget ?? '(auto)'}`,
-    [line(headers), ...rows.map(line)].join('\n'),
+    [line(headers), ...display.map(line)].join('\n'),
     ''
   ].join('\n');
 }
@@ -2032,7 +2041,9 @@ function formatPersonaTable(
   };
   const rendered: RenderRow[] = rows.map((r) => ({
     persona: r.persona,
-    source: r.source,
+    // Show the user-facing label (`built-in` / `repo` / `personal` / `dir:N`).
+    // The internal cascade key is still in `--json` output for tooling.
+    source: formatPersonaSourceLabel(r.source),
     harness: r.harness,
     model: r.model,
     rating: r.rating,
@@ -3535,13 +3546,17 @@ function applyPatchInPlace(root: Record<string, unknown>, patch: ImproverPatch):
 export function buildTuiCandidates(): TuiCandidate[] {
   const byId = new Map<string, TuiCandidate>();
   for (const spec of listBuiltInPersonas()) {
-    byId.set(spec.id, { id: spec.id, description: spec.description, source: 'library' });
+    byId.set(spec.id, {
+      id: spec.id,
+      description: spec.description,
+      source: formatPersonaSourceLabel('library')
+    });
   }
   for (const [id, spec] of local.byId.entries()) {
     byId.set(id, {
       id,
       description: spec.description,
-      source: local.sources.get(id) ?? 'library'
+      source: formatPersonaSourceLabel(local.sources.get(id) ?? 'library')
     });
   }
   return [...byId.values()].sort((a, b) => a.id.localeCompare(b.id));
