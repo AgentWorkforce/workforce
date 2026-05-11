@@ -133,6 +133,68 @@ test('startLaunchMetadataRecording writes a pending stamp and runs periodic plus
   assert.deepEqual(ingests.at(-1), { harness: 'codex' });
 });
 
+test('startLaunchMetadataRecording stays quiet on transient ingest failures and warns on a sustained run', async () => {
+  const warnings: string[] = [];
+  const captureWarn = (msg: string): void => {
+    warnings.push(msg);
+  };
+
+  // One failing ingest per run (only the final ingest on stop) — below the threshold, no warning.
+  const run = await startLaunchMetadataRecording({
+    selection: fakeSelection(),
+    personaSpec: fakeSpec(),
+    personaSource: 'cwd',
+    cwd: '/tmp/project',
+    intervalMs: 1_000_000,
+    onWarn: captureWarn,
+    sdk: {
+      writePendingStamp: () => {},
+      ingest: async () => {
+        throw new Error('ingest timed out after 5000ms');
+      }
+    }
+  });
+  await run.stop();
+  assert.deepEqual(warnings, [], 'a single failure is below the warn threshold');
+
+  // Sustained failures: drive enough ticks for the counter to cross the threshold.
+  const run2 = await startLaunchMetadataRecording({
+    selection: fakeSelection(),
+    personaSpec: fakeSpec(),
+    personaSource: 'cwd',
+    cwd: '/tmp/project',
+    intervalMs: 1,
+    onWarn: captureWarn,
+    sdk: {
+      writePendingStamp: () => {},
+      ingest: async () => {
+        throw new Error('ingest timed out after 5000ms');
+      }
+    }
+  });
+  await new Promise((r) => setTimeout(r, 50));
+  await run2.stop();
+  assert.equal(warnings.length, 1, 'sustained failures surface exactly one warning');
+  assert.match(warnings[0]!, /launch metadata ingest failed: ingest timed out after 5000ms/);
+
+  // Successful ingests stay quiet.
+  warnings.length = 0;
+  const run3 = await startLaunchMetadataRecording({
+    selection: fakeSelection(),
+    personaSpec: fakeSpec(),
+    personaSource: 'cwd',
+    cwd: '/tmp/project',
+    intervalMs: 1_000_000,
+    onWarn: captureWarn,
+    sdk: {
+      writePendingStamp: () => {},
+      ingest: async () => {}
+    }
+  });
+  await run3.stop();
+  assert.deepEqual(warnings, []);
+});
+
 test('startLaunchMetadataRecording skips SDK loading and ingest when opted out', async () => {
   let loads = 0;
   const run = await startLaunchMetadataRecording({
