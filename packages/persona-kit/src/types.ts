@@ -189,8 +189,10 @@ export interface PersonaSpec {
    */
   env?: Record<string, string>;
   /**
-   * MCP servers to attach to the harness session. Only wired for `claude`
-   * today (via `--mcp-config`); other harnesses warn and skip.
+   * MCP servers to attach to the harness session.
+   * - `claude`: passed via `--mcp-config`
+   * - `codex`: translated into `--config mcp_servers.<name>...` overrides
+   * - `opencode`: currently warns and skips
    */
   mcpServers?: Record<string, McpServerSpec>;
   /**
