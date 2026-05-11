@@ -64,7 +64,7 @@ export interface BuildInteractiveSpecInput {
    * Absolute paths of directories to load as Claude Code plugins for this
    * session (`--plugin-dir <path>` per entry). Used to wire in out-of-repo
    * skill stages produced by
-   * {@link import('@agentworkforce/workload-router').SkillMaterializationOptions.installRoot}.
+   * {@link SkillMaterializationOptions.installRoot}.
    * Claude-only: other harnesses emit a warning and ignore the field.
    */
   pluginDirs?: readonly string[];

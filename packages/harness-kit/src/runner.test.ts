@@ -4,7 +4,7 @@ import { chmodSync, existsSync, mkdtempSync, readFileSync, realpathSync, rmSync,
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
-import type { PersonaSelection } from '@agentworkforce/workload-router';
+import type { PersonaSelection } from '@agentworkforce/persona-kit';
 import {
   buildNonInteractiveSpec,
   useRunnableSelection

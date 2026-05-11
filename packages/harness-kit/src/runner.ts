@@ -6,11 +6,6 @@ import { randomUUID } from 'node:crypto';
 import {
   usePersona,
   useSelection,
-  type Harness,
-  type PersonaContext,
-  type PersonaIntent,
-  type PersonaSelection,
-  type PersonaTier,
   type RoutingProfile,
   type RoutingProfileId
 } from '@agentworkforce/workload-router';
@@ -22,7 +17,12 @@ import {
   resolveMcpServersLenient,
   resolvePersonaInputs,
   resolveStringMapLenient,
-  type BuildInteractiveSpecInput
+  type BuildInteractiveSpecInput,
+  type Harness,
+  type PersonaContext,
+  type PersonaIntent,
+  type PersonaSelection,
+  type PersonaTier
 } from '@agentworkforce/persona-kit';
 
 export interface PersonaSendOptions {

@@ -10,7 +10,7 @@ import {
   loadPersonaSourceConfig,
   type LocalPersonaOverride
 } from './local-personas.js';
-import type { PersonaSpec } from '@agentworkforce/workload-router';
+import type { PersonaSpec } from '@agentworkforce/persona-kit';
 
 type Dirs = { cwd: string; home: string; pwdDir: string; homeDir: string };
 

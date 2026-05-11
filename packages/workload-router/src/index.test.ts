@@ -2,15 +2,17 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import {
   PERSONA_INTENTS,
-  listBuiltInPersonas,
   materializeSkillsFor,
+  type PersonaSelection
+} from '@agentworkforce/persona-kit';
+import {
+  listBuiltInPersonas,
   personaCatalog,
   resolvePersona,
   resolvePersonaByTier,
   routingProfiles,
   usePersona,
-  useSelection,
-  type PersonaSelection
+  useSelection
 } from './index.js';
 
 const prpmSkill = {

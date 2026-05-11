@@ -1,4 +1,4 @@
-import type { PersonaIntent, PersonaTier } from './index.js';
+import type { PersonaIntent, PersonaTier } from '@agentworkforce/persona-kit';
 
 export interface EvalCase {
   id: string;

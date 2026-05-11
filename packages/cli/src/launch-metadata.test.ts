@@ -1,7 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 
-import type { PersonaSelection, PersonaSpec } from '@agentworkforce/workload-router';
+import type { PersonaSelection, PersonaSpec } from '@agentworkforce/persona-kit';
 import {
   buildLaunchMetadata,
   canonicalJson,
