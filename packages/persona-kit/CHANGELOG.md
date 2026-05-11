@@ -7,6 +7,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [2.1.4] - 2026-05-11
+
+### Added
+
+- **Add dangerouslyBypassApprovalsAndSandbox HarnessSettings**
+
+### Fixed
+
+- Tighten dangerouslyBypass field handling per PR review (#86)
+
+### Reliability
+
+- Cover explicit `false` happy-path for bypass field (#86)
+
 ## [2.1.3] - 2026-05-11
 
 ### Added
