@@ -183,6 +183,46 @@ test('parseHarnessSettings accepts optional codex fields and rejects bad ones', 
   );
 });
 
+test('parseHarnessSettings accepts dangerouslyBypassApprovalsAndSandbox alone', () => {
+  const ok = parseHarnessSettings(
+    {
+      reasoning: 'high',
+      timeoutSeconds: 60,
+      dangerouslyBypassApprovalsAndSandbox: true
+    },
+    'rt'
+  );
+  assert.equal(ok.dangerouslyBypassApprovalsAndSandbox, true);
+});
+
+test('parseHarnessSettings rejects dangerouslyBypassApprovalsAndSandbox with conflicting fields', () => {
+  for (const conflict of ['sandboxMode', 'approvalPolicy', 'workspaceWriteNetworkAccess']) {
+    const overlay: Record<string, unknown> = {
+      reasoning: 'high',
+      timeoutSeconds: 60,
+      dangerouslyBypassApprovalsAndSandbox: true
+    };
+    if (conflict === 'sandboxMode') overlay.sandboxMode = 'workspace-write';
+    if (conflict === 'approvalPolicy') overlay.approvalPolicy = 'never';
+    if (conflict === 'workspaceWriteNetworkAccess') overlay.workspaceWriteNetworkAccess = true;
+    assert.throws(
+      () => parseHarnessSettings(overlay, 'rt'),
+      new RegExp(`mutually exclusive with: .*${conflict}`)
+    );
+  }
+});
+
+test('parseHarnessSettings rejects non-boolean dangerouslyBypassApprovalsAndSandbox', () => {
+  assert.throws(
+    () =>
+      parseHarnessSettings(
+        { reasoning: 'high', timeoutSeconds: 60, dangerouslyBypassApprovalsAndSandbox: 'yes' },
+        'rt'
+      ),
+    /dangerouslyBypassApprovalsAndSandbox must be a boolean/
+  );
+});
+
 test('parseTags rejects empty arrays and unknown tags', () => {
   assert.throws(() => parseTags([], 'tags'), /must be a non-empty array/);
   assert.throws(() => parseTags(['nonsense-tag'], 'tags'), /tags\[0\] must be one of:/);

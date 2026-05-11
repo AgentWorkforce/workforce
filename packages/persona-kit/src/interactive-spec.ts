@@ -86,7 +86,8 @@ function hasCodexLaunchSettings(settings: HarnessSettings | undefined): boolean 
     settings.sandboxMode ||
       settings.approvalPolicy ||
       settings.workspaceWriteNetworkAccess !== undefined ||
-      settings.webSearch
+      settings.webSearch ||
+      settings.dangerouslyBypassApprovalsAndSandbox
   );
 }
 
@@ -249,19 +250,26 @@ export function buildInteractiveSpec(input: BuildInteractiveSpecInput): Interact
       if (mcpServers && Object.keys(mcpServers).length > 0) {
         appendCodexMcpServerArgs(args, mcpServers, warnings);
       }
-      if (harnessSettings?.sandboxMode) {
-        args.push('--sandbox', harnessSettings.sandboxMode);
-      }
-      if (harnessSettings?.approvalPolicy) {
-        args.push('--ask-for-approval', harnessSettings.approvalPolicy);
-      }
-      if (harnessSettings?.workspaceWriteNetworkAccess !== undefined) {
-        args.push(
-          '-c',
-          `sandbox_workspace_write.network_access=${String(
-            harnessSettings.workspaceWriteNetworkAccess
-          )}`
-        );
+      if (harnessSettings?.dangerouslyBypassApprovalsAndSandbox) {
+        // Single combined flag — collapses "no sandbox + never ask" and
+        // suppresses codex's interactive "are you sure?" startup
+        // confirmation. The two-flag form below still prompts.
+        args.push('--dangerously-bypass-approvals-and-sandbox');
+      } else {
+        if (harnessSettings?.sandboxMode) {
+          args.push('--sandbox', harnessSettings.sandboxMode);
+        }
+        if (harnessSettings?.approvalPolicy) {
+          args.push('--ask-for-approval', harnessSettings.approvalPolicy);
+        }
+        if (harnessSettings?.workspaceWriteNetworkAccess !== undefined) {
+          args.push(
+            '-c',
+            `sandbox_workspace_write.network_access=${String(
+              harnessSettings.workspaceWriteNetworkAccess
+            )}`
+          );
+        }
       }
       if (harnessSettings?.webSearch) {
         args.push('--search');
