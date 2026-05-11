@@ -1,4 +1,5 @@
-import { resolvePersona, type PersonaIntent } from '../packages/workload-router/src/index.js';
+import { resolvePersona } from '../packages/workload-router/src/index.js';
+import type { PersonaIntent } from '../packages/persona-kit/src/index.js';
 
 type OpenClawSpawnPayload = {
   runtime: 'subagent' | 'acp';
