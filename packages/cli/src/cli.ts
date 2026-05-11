@@ -75,8 +75,13 @@ import {
 } from './local-personas.js';
 import { installPersonas, type PersonaInstallResult } from './persona-install.js';
 import { pickPersona, type PickCandidate, type PickResult } from './persona-picker.js';
+import { recordRecent, loadRecents, runPersonaPickerTui, type TuiCandidate } from './persona-tui.js';
 
 const USAGE = `Usage: agentworkforce <command> [args...]
+
+Run with no arguments inside a TTY to open an interactive persona picker —
+the top 3 most recently used personas are shown first, and typing fuzzy-
+searches across persona names and descriptions.
 
 Commands:
   create [flags]     Opens persona-maker@best for creating a new
@@ -2509,6 +2514,7 @@ async function runAgentSelector(
   inputValues?: Record<string, string>
 ): Promise<never> {
   const target = parseSelector(selector);
+  recordRecent(target.spec.id);
   const selection = {
     ...buildSelection(target.spec, target.tier, target.kind),
     ...(inputValues ? { inputValues } : {})
@@ -3519,6 +3525,59 @@ function applyPatchInPlace(root: Record<string, unknown>, patch: ImproverPatch):
 }
 
 /**
+ * Enumerate personas for the interactive TUI. Source label mirrors the cascade
+ * shown by `agentworkforce list` so the picker tells the user *where* a
+ * persona is coming from (cwd, user, dir:n, library) without a separate
+ * lookup.
+ */
+export function buildTuiCandidates(): TuiCandidate[] {
+  const byId = new Map<string, TuiCandidate>();
+  for (const spec of listBuiltInPersonas()) {
+    byId.set(spec.id, { id: spec.id, description: spec.description, source: 'library' });
+  }
+  for (const [id, spec] of local.byId.entries()) {
+    byId.set(id, {
+      id,
+      description: spec.description,
+      source: local.sources.get(id) ?? 'library'
+    });
+  }
+  return [...byId.values()].sort((a, b) => a.id.localeCompare(b.id));
+}
+
+/**
+ * Bare-invocation flow: open the interactive TUI, then hand the chosen
+ * persona to {@link runAgentSelector}. Quitting the picker (Esc / Ctrl-C)
+ * exits with conventional 130 so shell pipelines see SIGINT-style failure.
+ *
+ * runAgentSelector terminates the process via process.exit; this function
+ * only returns when the picker is dismissed without a selection.
+ */
+async function runInteractivePicker(): Promise<never> {
+  const candidates = buildTuiCandidates();
+  if (candidates.length === 0) {
+    process.stderr.write(
+      'No personas available. Try `agentworkforce install <pack>` or run with --help.\n'
+    );
+    process.exit(1);
+  }
+  const selected = await runPersonaPickerTui({
+    candidates,
+    recentIds: loadRecents()
+  });
+  if (!selected) {
+    process.exit(130);
+  }
+  await runAgentSelector(selected, {
+    installInRepo: false,
+    noLaunchMetadata: false,
+    dryRun: false
+  });
+  // runAgentSelector has Promise<never> return type; this is unreachable.
+  process.exit(0);
+}
+
+/**
  * Enumerate persona candidates for the picker. Local overrides win over the
  * built-in catalog when ids collide; the picker only needs the projection
  * fields ({@link PickCandidate}), not full specs.
@@ -3671,9 +3730,20 @@ export async function main(): Promise<void> {
   const argv = process.argv.slice(2);
   const [subcommand, ...rest] = argv;
 
-  if (!subcommand || subcommand === '-h' || subcommand === '--help') {
+  if (subcommand === '-h' || subcommand === '--help') {
     process.stdout.write(USAGE);
-    process.exit(subcommand ? 0 : 1);
+    process.exit(0);
+  }
+
+  if (!subcommand) {
+    if (process.stdin.isTTY && process.stderr.isTTY) {
+      await runInteractivePicker();
+      // runInteractivePicker either runAgentSelector → process.exit, or
+      // exits itself on quit / no-match. Satisfy TS's unreachable check.
+      process.exit(0);
+    }
+    process.stdout.write(USAGE);
+    process.exit(1);
   }
 
   if (subcommand === '-v' || subcommand === '--version') {
