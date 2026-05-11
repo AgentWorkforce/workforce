@@ -294,7 +294,7 @@ Three places a persona can live, surfaced as `SOURCE` in `agentworkforce list`,
   is intentionally a small set.
 - **`personal`** — `~/.agentworkforce/workforce/personas/`. For things one
   user wants on every repo on their machine, but doesn't want to commit.
-- **`repo`** — `<cwd>/.agentworkforce/workforce/personas/`. Personas codified
+- **`cwd`** — `<cwd>/.agentworkforce/workforce/personas/`. Personas codified
   in the working tree so the whole team gets them on checkout. Two flavors
   end up here:
   - **library personas you've copied in** via `agentworkforce install <pkg>` —
@@ -308,11 +308,11 @@ Three places a persona can live, surfaced as `SOURCE` in `agentworkforce list`,
     [AgentWorkforce/relay#839](https://github.com/AgentWorkforce/relay/pull/839)
     for a worked example.
 
-Both flavors physically share the `repo` directory; the distinction is
+Both flavors physically share the `cwd` directory; the distinction is
 conceptual — "did this persona come from a published pack, or did we write
 it for this codebase?"
 
-Cascade order is `repo` → configured persona dirs → `personal` → `built-in`;
+Cascade order is `cwd` → configured persona dirs → `personal` → `built-in`;
 higher layers may override or `extends` lower ones field-by-field.
 
 ### Persona pack installs

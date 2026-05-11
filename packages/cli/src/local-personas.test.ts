@@ -1034,8 +1034,9 @@ test('override leaves channel alone: inherited claudeMdContent flows through', (
 
 test('formatPersonaSourceLabel maps internal cascade keys to display labels', () => {
   assert.equal(formatPersonaSourceLabel('library'), 'built-in');
-  assert.equal(formatPersonaSourceLabel('cwd'), 'repo');
   assert.equal(formatPersonaSourceLabel('user'), 'personal');
+  // cwd passes through — it's already a precise pointer to a real dir.
+  assert.equal(formatPersonaSourceLabel('cwd'), 'cwd');
   // dir:N passes through unchanged so cascade position stays legible.
   assert.equal(formatPersonaSourceLabel('dir:1'), 'dir:1');
   assert.equal(formatPersonaSourceLabel('dir:42'), 'dir:42');

@@ -83,7 +83,7 @@ const USAGE = `Usage: agentworkforce <command> [args...]
 Run with no arguments inside a TTY to open an interactive persona picker —
 the top 3 most recently used personas are shown first, and typing fuzzy-
 searches across persona names and descriptions. Each row's SOURCE column
-is one of: built-in (bundled), repo (./.agentworkforce/workforce/personas),
+is one of: built-in (bundled), cwd (./.agentworkforce/workforce/personas),
 personal (~/.agentworkforce/workforce/personas), or dir:N (configured).
 
 Commands:

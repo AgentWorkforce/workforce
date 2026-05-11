@@ -95,12 +95,12 @@ export type PersonaSource = string;
  *
  *   - `library`  → `built-in` — bundled with `@agentworkforce/cli`,
  *                  available to every user without an install step.
- *   - `cwd`      → `repo`     — `<cwd>/.agentworkforce/workforce/personas/`,
- *                  i.e. personas codified in the working tree (typically
- *                  team-specific rules, or library packs installed via
- *                  `agentworkforce install`).
  *   - `user`     → `personal` — `~/.agentworkforce/workforce/personas/`,
  *                  i.e. personas a single user keeps across all repos.
+ *   - `cwd`      → `cwd`      — `<cwd>/.agentworkforce/workforce/personas/`,
+ *                  the working-tree dir; both installed library packs and
+ *                  hand-authored team overrides live here. Kept as-is
+ *                  because it's a precise pointer to a real directory.
  *   - `dir:N`    → `dir:N`    — extra configurable persona dirs (passed
  *                  through unchanged so position is still legible).
  *
@@ -109,7 +109,6 @@ export type PersonaSource = string;
  */
 export function formatPersonaSourceLabel(source: PersonaSource): string {
   if (source === 'library') return 'built-in';
-  if (source === 'cwd') return 'repo';
   if (source === 'user') return 'personal';
   return source;
 }
