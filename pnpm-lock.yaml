@@ -42,15 +42,6 @@ importers:
         specifier: ^9.4.0
         version: 9.4.0
 
-  packages/harness-kit:
-    dependencies:
-      '@agentworkforce/persona-kit':
-        specifier: workspace:*
-        version: link:../persona-kit
-      '@agentworkforce/workload-router':
-        specifier: workspace:*
-        version: link:../workload-router
-
   packages/persona-kit:
     dependencies:
       '@relayfile/local-mount':

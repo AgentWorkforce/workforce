@@ -16,7 +16,6 @@ on:
         options:
           - '@agentworkforce/cli'
           - 'agentworkforce'
-          - '@agentworkforce/harness-kit'
           - '@agentworkforce/workload-router'
           - '@agentworkforce/persona-kit'
       version:
