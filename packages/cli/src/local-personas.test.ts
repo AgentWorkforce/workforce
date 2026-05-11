@@ -475,6 +475,47 @@ test('inputs are preserved on standalone local personas', () => {
   });
 });
 
+test('optional input flag is preserved on standalone local personas', () => {
+  withLayers(({ cwd, homeDir }) => {
+    writeJson(join(homeDir, 'standalone-scaffolder.json'), {
+      id: 'standalone-scaffolder',
+      intent: 'standalone-scaffolder',
+      tags: ['implementation'],
+      description: 'Scaffolds with an optional task description sentinel.',
+      inputs: {
+        TASK_DESCRIPTION: {
+          description: 'Optional natural-language task spec.',
+          optional: true
+        }
+      },
+      tiers: {
+        best: {
+          harness: 'codex',
+          model: 'openai-codex/gpt-5.3-codex',
+          systemPrompt: '$TASK_DESCRIPTION',
+          harnessSettings: { reasoning: 'high', timeoutSeconds: 30 }
+        },
+        'best-value': {
+          harness: 'opencode',
+          model: 'opencode/gpt-5-nano',
+          systemPrompt: '$TASK_DESCRIPTION',
+          harnessSettings: { reasoning: 'medium', timeoutSeconds: 30 }
+        },
+        minimum: {
+          harness: 'opencode',
+          model: 'opencode/minimax-m2.5-free',
+          systemPrompt: '$TASK_DESCRIPTION',
+          harnessSettings: { reasoning: 'low', timeoutSeconds: 30 }
+        }
+      }
+    });
+    const loaded = loadLocalPersonas({ cwd, homeDir });
+    assert.deepEqual(loaded.warnings, []);
+    const spec = loaded.byId.get('standalone-scaffolder');
+    assert.equal(spec?.inputs?.TASK_DESCRIPTION.optional, true);
+  });
+});
+
 test('standalone local personas accept arbitrary intent names', () => {
   withLayers(({ cwd, homeDir }) => {
     writeJson(join(homeDir, 'nextjs-web-steward.json'), {

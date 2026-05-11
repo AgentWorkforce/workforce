@@ -508,10 +508,17 @@ function parseInputsShape(
     if (spec.default !== undefined && (typeof spec.default !== 'string' || !spec.default)) {
       throw new Error(`${context}.${name}.default must be a non-empty string if provided`);
     }
+    if (spec.optional !== undefined && typeof spec.optional !== 'boolean') {
+      throw new Error(`${context}.${name}.optional must be a boolean if provided`);
+    }
+    if (spec.optional === true && spec.default !== undefined) {
+      throw new Error(`${context}.${name} cannot combine optional:true with a default`);
+    }
     out[name] = {
       ...(typeof spec.description === 'string' ? { description: spec.description } : {}),
       ...(typeof spec.env === 'string' ? { env: spec.env } : {}),
-      ...(typeof spec.default === 'string' ? { default: spec.default } : {})
+      ...(typeof spec.default === 'string' ? { default: spec.default } : {}),
+      ...(spec.optional === true ? { optional: true } : {})
     };
   }
   return Object.keys(out).length > 0 ? out : undefined;
