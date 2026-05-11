@@ -212,6 +212,23 @@ test('parseHarnessSettings rejects dangerouslyBypassApprovalsAndSandbox with con
   }
 });
 
+test('parseHarnessSettings rejects dangerouslyBypassApprovalsAndSandbox:false with conflicting fields', () => {
+  for (const conflict of ['sandboxMode', 'approvalPolicy', 'workspaceWriteNetworkAccess']) {
+    const overlay: Record<string, unknown> = {
+      reasoning: 'high',
+      timeoutSeconds: 60,
+      dangerouslyBypassApprovalsAndSandbox: false
+    };
+    if (conflict === 'sandboxMode') overlay.sandboxMode = 'workspace-write';
+    if (conflict === 'approvalPolicy') overlay.approvalPolicy = 'never';
+    if (conflict === 'workspaceWriteNetworkAccess') overlay.workspaceWriteNetworkAccess = true;
+    assert.throws(
+      () => parseHarnessSettings(overlay, 'rt'),
+      new RegExp(`mutually exclusive with: .*${conflict}`)
+    );
+  }
+});
+
 test('parseHarnessSettings rejects non-boolean dangerouslyBypassApprovalsAndSandbox', () => {
   assert.throws(
     () =>

@@ -87,9 +87,12 @@ function hasCodexLaunchSettings(settings: HarnessSettings | undefined): boolean 
       settings.approvalPolicy ||
       settings.workspaceWriteNetworkAccess !== undefined ||
       settings.webSearch ||
-      settings.dangerouslyBypassApprovalsAndSandbox
+      settings.dangerouslyBypassApprovalsAndSandbox !== undefined
   );
 }
+
+const CODEX_ONLY_WARNING =
+  'persona declares codex-only harnessSettings but the {harness} harness ignores sandboxMode, approvalPolicy, workspaceWriteNetworkAccess, webSearch, and dangerouslyBypassApprovalsAndSandbox.';
 
 
 function toTomlBasicString(value: string): string {
@@ -230,7 +233,7 @@ export function buildInteractiveSpec(input: BuildInteractiveSpecInput): Interact
       }
       if (hasCodexLaunchSettings(harnessSettings)) {
         warnings.push(
-          'persona declares codex-only harnessSettings but the claude harness ignores sandboxMode, approvalPolicy, workspaceWriteNetworkAccess, and webSearch.'
+          CODEX_ONLY_WARNING.replace('{harness}', 'claude')
         );
       }
       return { bin: 'claude', args, initialPrompt: null, warnings, configFiles: [] };
@@ -300,7 +303,7 @@ export function buildInteractiveSpec(input: BuildInteractiveSpecInput): Interact
       }
       if (hasCodexLaunchSettings(harnessSettings)) {
         warnings.push(
-          'persona declares codex-only harnessSettings but the opencode harness ignores sandboxMode, approvalPolicy, workspaceWriteNetworkAccess, and webSearch.'
+          CODEX_ONLY_WARNING.replace('{harness}', 'opencode')
         );
       }
       // opencode resolves a persona's system prompt + model through its own
