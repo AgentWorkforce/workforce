@@ -17,8 +17,8 @@
 - agent-assistant#91 — MERGED; `@agent-assistant/proactive@0.4.32` published. Track E4 picks this up.
 - workforce#97 (`feat/persona-integration-source`) — DRAFT, ready for rebase in Track E5 after Track D.
 - cloud#548 (now M1-M6, title stale) — open, +33k/-57. Trigger registration code VERIFIED (schedules → relaycron via `services/agent-gateway/src/relaycron-client.ts:registerCronSchedules()`; watches → gateway DO via `packages/agent-relay-agent/src/index.ts:registerWatches()` at agent startup). Missing piece for persona+bundle deploy: persona → watch-glob translation; lives in Track G below. **Track A must rebase on #548's migrations if #548 merges first; review showed #548 is additive on existing `agent_deployments`, so two-table split is layerable.**
-- relay#843 — open, +3.5k. Adds `agent-relay` CLI commands (login/workspaces/tokens/dlq/runtime) + new `@agent-relay/cloud` library. **Parallel to workforce CLI; no spec dependency.**
-- relaycron#5 — open, +2k. WS-delivery + cancel API + buffered ticks. **Track G dependency** — without this merged, schedule registration via the agent-gateway's `relaycron-client.ts` is half-wired. Preflight Track G to verify relaycron#5 is merged.
+- relay#843 — **MERGED 2026-05-12T21:30:54Z**; publish workflow run `25763431116` **completed 21:49:38 UTC**. All `@agent-relay/*` packages now at **`6.0.18`** (lockstep umbrella bump from `6.0.17`). Track L pins to `^6.0.18`.
+- relaycron#5 — **MERGED 2026-05-12T21:32:06Z**; `@relaycron/server@0.1.3` and `@relaycron/types@0.1.3` published 21:35 UTC. Track G's preflight on relaycron#5 already cleared; Track M (cloud `@relaycron/*` pin bump) targets `^0.1.3`.
 - relayauth#39 — open, docs-only +3/-1. No spec impact.
 - cloud#554 (Daytona meter) — draft, platform-team gates only.
 - cloud#555 (workflow-invocations shim) — draft, 2 follow-ups in Track J.
@@ -1123,20 +1123,186 @@ cloud#548 still has my three architectural items unaddressed (deploy payload sha
 
 ---
 
+## Track N — Cloud sandbox token path-scoping (use `POST /v1/tokens/path`)
+
+**Repo:** `$CLOUD_REPO.wt-token-paths` (worktree)
+**Implementer model:** codex (medium reasoning).
+**Working branch:** `feat/sandbox-token-path-scoped`
+**Base:** post-relayauth#39 merged `main` (officially documented contract). cloud#548 ideally merged so agent-gateway is the consumer; can ship against `main` if #548 still in flight.
+**Depends on:** relayauth#39 merged. Track G merged (Track N updates Track G's sandbox-provisioning flow to use path-scoped tokens).
+
+**Allowed-dirty regex:** `packages/core/src/relayfile/client\.ts|packages/web/lib/proactive-runtime/.*|packages/web/lib/.*sandbox.*|services/agent-gateway/.*`
+
+### Why this exists
+
+Today's `mintRelayfileToken` in `packages/core/src/relayfile/client.ts` issues sandbox tokens via the two-step `POST /v1/identities` + `POST /v1/tokens` flow with broad `relayfile:fs:read:*` / `relayfile:fs:write:*` scopes. Every deployed agent's sandbox can therefore read/write **the entire workspace VFS mount**, including paths unrelated to the persona's declared listeners.
+
+relayauth implemented `POST /v1/tokens/path` in M1 (relayauth#38) for path-scoped token issuance — workspace-token auth in, `relay_pa_*` token out with scopes intersected to the requested path list. Documentation lands in relayauth#39. Cloud doesn't consume it yet.
+
+This is **least-privilege hardening, not a functional blocker.** First deploy works without it; production hardening wants it.
+
+### Implementation
+
+1. **Add a new helper `mintPathScopedRelayfileToken`** in `packages/core/src/relayfile/client.ts`:
+
+   ```ts
+   export interface MintPathScopedRelayfileTokenOptions {
+     workspaceId: string;
+     relayAuthUrl: string;
+     workspaceToken: string;   // user/workspace token authorizing the mint (NOT the relayAuthApiKey)
+     paths: string[];          // e.g. ['/github/pull_requests/**', '/linear/issues/**']
+     ttlSeconds?: number;
+     agentName?: string;       // for token labeling/audit
+   }
+
+   export async function mintPathScopedRelayfileToken(
+     opts: MintPathScopedRelayfileTokenOptions,
+   ): Promise<string> {
+     const url = normalizeBaseUrl(opts.relayAuthUrl);
+     const res = await fetch(`${url}/v1/tokens/path`, {
+       method: 'POST',
+       headers: {
+         'content-type': 'application/json',
+         authorization: `Bearer ${opts.workspaceToken}`,
+       },
+       body: JSON.stringify({
+         workspaceId: opts.workspaceId,
+         paths: opts.paths,
+         ttlSeconds: opts.ttlSeconds ?? 3600,
+         agentName: opts.agentName ?? 'cloud-orchestrator',
+       }),
+     });
+     if (!res.ok) {
+       throw new Error(`relayauth path-token mint failed: ${res.status} ${await res.text()}`);
+     }
+     const { accessToken } = await res.json() as { accessToken: string };
+     if (!accessToken?.startsWith('relay_pa_')) {
+       throw new Error('relayauth returned token without expected relay_pa_ prefix');
+     }
+     return accessToken;
+   }
+   ```
+
+   Keep the existing `mintRelayfileToken` (broad-scoped) for legacy call sites — don't remove until all consumers migrated.
+
+2. **Update Track G's sandbox-provisioning flow** to use the new helper. When provisioning the Daytona sandbox in the persona+bundle endpoint:
+   - Derive `paths` from `persona.integrations.<provider>.triggers[]` → watch globs (the same translation Track G already does).
+   - Call `mintPathScopedRelayfileToken({ workspaceId, relayAuthUrl, workspaceToken, paths, agentName: persona.id })`.
+   - Inject the returned token as `RELAYFILE_TOKEN` (or whatever the runner expects) into the sandbox env vars instead of the broad-scoped token.
+
+3. **Migrate `services/agent-gateway/`** if it has its own minting path (verify via grep). The gateway likely uses `mintRelayfileToken` to bootstrap; if so, route through `mintPathScopedRelayfileToken` when the consumer is a deployed agent (not the workflow orchestrator).
+
+4. **Audit log** every path-token mint with `workspaceId`, `agentId`, `paths`, `requester`. Mirror the existing relayfile-token audit pattern.
+
+### Track N tests
+
+- [ ] `mintPathScopedRelayfileToken` happy path: paths array → 200 with `relay_pa_*` token.
+- [ ] Mock relayauth returning 403 / 4xx → wraps clean error.
+- [ ] Mock relayauth returning malformed token (no `relay_pa_` prefix) → throws.
+- [ ] Track G integration test: persona declaring `github.triggers[pull_request.opened]` results in a sandbox token whose scopes are `/github/pull_requests/**` only (not `*`).
+- [ ] Legacy `mintRelayfileToken` callers still work (no regression).
+
+### Track N acceptance
+
+- [ ] `mintPathScopedRelayfileToken` exported from `packages/core/src/relayfile/client.ts`.
+- [ ] Track G's sandbox provisioning uses path-scoped tokens.
+- [ ] Audit logging on mint.
+- [ ] Legacy broad-scope helper still works for orchestrator-internal calls.
+- [ ] PR title: `feat(security): mint path-scoped relayfile tokens for sandbox agents`.
+- [ ] Auto-merge on gates green.
+
+**Effort estimate:** ~2h.
+
+---
+
+## Track M — Cloud `@relaycron/*` pin bump (post-relaycron#5 merge)
+
+**Repo:** `$CLOUD_REPO.wt-relaycron-bump` (worktree)
+**Implementer model:** codex (low reasoning — pure dep bump).
+**Working branch:** `chore/bump-relaycron-packages`
+**Base:** post-relaycron#5 merged `main`.
+**Depends on:** relaycron#5 merged (✅ 2026-05-12T21:32:06Z); `@relaycron/server@0.1.3` and `@relaycron/types@0.1.3` published (✅ 21:35 UTC).
+
+### Why this exists
+
+Cloud's `packages/relaycron-cloud/` (workspace path `packages/relaycron/`) and `packages/relaycron-types/` consume `@relaycron/server` and `@relaycron/types` as npm deps pinned at `^0.1.0`. relaycron#5 merged at 21:32 UTC and published `0.1.3` of both packages with the WS-delivery + cancel API + buffered-ticks changes. The lockfile is pinned to the pre-#5 version, so the bump is needed for cloud to actually consume the new code.
+
+This is separate from cloud#548's agent-gateway consumption — agent-gateway talks to relaycron over WS/HTTP via `services/agent-gateway/src/relaycron-client.ts`, not via the npm package, so it doesn't need this bump.
+
+### Preflight (already cleared at spec authoring time)
+
+```bash
+# Both should pass; included for re-runs / future workflows.
+RC5_MERGED=$(gh pr view 5 --repo AgentWorkforce/relaycron --json mergedAt -q '.mergedAt')
+SERVER_VER=$(npm view @relaycron/server version)
+TYPES_VER=$(npm view @relaycron/types version)
+
+if [ -z "$RC5_MERGED" ] || [ "$RC5_MERGED" = "null" ]; then
+  echo "WAITING: relaycron#5 not merged"; exit 0
+fi
+if [ "$SERVER_VER" != "0.1.3" ]; then
+  echo "NOTE: @relaycron/server resolved to $SERVER_VER, expected 0.1.3 — proceed with $SERVER_VER";
+fi
+```
+
+### Implementation
+
+1. Bump these pins to `^0.1.3`:
+
+   | File | Pin | From | To |
+   |---|---|---|---|
+   | `packages/relaycron/package.json` | `@relaycron/server` | `^0.1.0` | `^0.1.3` |
+   | `packages/relaycron/package.json` | `@relaycron/types` | `^0.1.0` | `^0.1.3` |
+   | `packages/relaycron-types/package.json` (if pinned there too — verify via grep) | `@relaycron/types` | as-is | `^0.1.3` |
+   | root `package.json` (if pinned there — verify via grep) | both | as-is | `^0.1.3` |
+
+2. Run `npm install` to refresh `package-lock.json`.
+3. Run `npm run typecheck` — should stay clean (WS API additions are additive within `0.1.x`).
+4. Run `npm run relaycron:test` — passes.
+5. **Per workforce-publish-workflow memory: grep `.github/workflows/*.yml` for any references to `@relaycron/server` or `@relaycron/types` that need version bumps** (most likely none, but check).
+
+### Track M acceptance
+
+- [ ] All `@relaycron/*` pins on the new published version.
+- [ ] Lockfile refreshed.
+- [ ] Typecheck + tests green.
+- [ ] PR title: `chore(deps): bump @relaycron/{server,types} to <new-version>`.
+- [ ] Auto-merge on gates green.
+
+**Effort estimate:** ~20min (mechanical bump).
+
+---
+
 ## Track L — Cloud OSS-scope cleanup (post-#548 merge)
 
 **Repo:** `$CLOUD_REPO.wt-oss-cleanup` (worktree)
 **Implementer model:** codex (medium reasoning).
 **Working branch:** `chore/remove-agent-relay-packages`
-**Base:** post-cloud#548 + post-relay#843 merged `main`.
+**Base:** post-cloud#548 merged `main`.
+
+### Preflight — already cleared at spec authoring time
+
+```bash
+# relay#843 merged + publish run 25763431116 completed at 21:49:38 UTC.
+# All @agent-relay/* packages are at 6.0.18 on npm.
+# This block is left for re-runs / future workflows.
+
+LATEST=$(npm view @agent-relay/sdk version 2>/dev/null)
+if [ -z "$LATEST" ] || [ "$LATEST" = "6.0.17" ]; then
+  echo "WAITING: @agent-relay/sdk publish hasn't propagated"; exit 0
+fi
+echo "OK: @agent-relay/sdk at $LATEST"
+```
 
 ### Implementation
 
 1. Delete `cloud/packages/agent-relay-events/` and `cloud/packages/agent-relay-agent/` directories.
-2. Add `"@agent-relay/events": "^6.0.17"` and `"@agent-relay/agent": "^6.0.17"` to `services/agent-gateway/package.json` and any other consumer (verify via `grep -rln "agent-relay-events\|agent-relay-agent" services/ packages/`).
+2. Add `"@agent-relay/events": "^6.0.18"` and `"@agent-relay/agent": "^6.0.18"` to `services/agent-gateway/package.json` and any other consumer (verify via `grep -rln "agent-relay-events\|agent-relay-agent" services/ packages/`).
 3. Refresh `package-lock.json` via `npm install`.
-4. Run typecheck + tests; verify agent-gateway service still builds against the OSS packages.
-5. PR title: `chore: remove in-tree @agent-relay/{events,agent}; consume from npm`.
+4. **Also bump other `@agent-relay/*` pins** in the workspace to `^6.0.18` for umbrella alignment — `@agent-relay/{config,credential-proxy,sdk}` on `main` are at `^6.0.13`; the chain branch already moved them to `^6.0.17`. Take them to `^6.0.18` so the workspace is consistent.
+5. Run typecheck + tests; verify agent-gateway service still builds against the OSS packages.
+6. **Per workforce-publish-workflow memory: grep `.github/workflows/*.yml` + `Makefile`** for any references to `agent-relay-events` / `agent-relay-agent` that need cleanup.
+7. PR title: `chore: remove in-tree @agent-relay/{events,agent}; consume from npm @ ^6.0.18`.
 
 **Auto-merge?** YES on gates green.
 
@@ -1238,16 +1404,26 @@ The workflow's lead Claude walks this DAG topologically. Each node auto-merges w
 3. cloud#551 auto-merges (already unblocked; orthogonal)
 4. Track D opens + auto-merges (workforce persona-kit)
 5. Track E1–E5 (rebase #92, #93, #94, #96, #97) — parallel; each auto-merges on green
-6. cloud#548 + relaycron#5 + relay#843 + relayauth#39 — chain branch group merges (verify all on chain branch are green simultaneously, then merge in repo order: relayauth#39 → relay#843 → relaycron#5 → cloud#548)
+6. Chain branch group — most already merged; only cloud#548 + relayauth#39 remain.
+   - **relaycron#5** — ✅ **merged 2026-05-12T21:32:06Z**; `@relaycron/{server,types}@0.1.3` published 21:35 UTC. Skip.
+   - **relay#843** — ✅ **merged 2026-05-12T21:30:54Z**; publish workflow `25763431116` ✅ **completed 21:49:38 UTC** — `@agent-relay/*` lockstep-bumped to `6.0.18`. Track L's preflight already satisfied; skip the polling step.
+   - **relayauth#39** — still open, docs-only, +3/-1. Merge first (lowest risk).
+   - **cloud#548** — still open, last (highest blast radius).
+
+   **Release behavior of remaining merges:**
+   - relayauth#39: docs-only, no release.
+   - cloud#548: ⚠️ **merge triggers cloud's SST production deploy pipeline**. Lead Claude posts a `#wf-schema-cascade` confirmation **immediately before** merging #548 so Khaliq can intercept if awake. If no intercept within 5 minutes, proceed with merge. Post-merge, monitor the preview + production deploy job; if it fails, log the failure but don't try to revert (rollback is manual).
 7. Track G opens + auto-merges (cloud deploy endpoint; depends on Track A + cloud#548 + relaycron#5)
 8. Track B opens + auto-merges (cloud resolver)
 9. Track F opens + auto-merges (workforce runtime; depends on Track D + Track A)
 10. Track H opens + auto-merges (workforce --mode cloud; depends on Track D + Track G)
 11. Track I opens + auto-merges (workforce --input flags; depends on Track D + Track A)
-12. Track L opens + auto-merges (cloud OSS-scope cleanup; depends on cloud#548 + relay#843 merged)
-13. cloud#555 auto-merges if green + Track J's follow-ups open + auto-merge
-14. workforce#89 (README, nice-to-have) auto-merges last
-15. Track K runs (smoke test); reports result; does NOT block any merge.
+12. Track L opens + auto-merges (cloud OSS-scope cleanup; depends on cloud#548 + relay#843 merged + relay#843's npm publish settled)
+13. Track M opens + auto-merges (cloud `@relaycron/*` pin bump; depends on relaycron#5 merged + npm publish settled — waits ~5 min after relaycron#5 merge for npm propagation)
+14. Track N opens + auto-merges (cloud sandbox token path-scoping; depends on relayauth#39 merged + Track G merged)
+15. cloud#555 auto-merges if green + Track J's follow-ups open + auto-merge
+16. workforce#89 (README, nice-to-have) auto-merges last
+17. Track K runs (smoke test); reports result; does NOT block any merge.
 
 **Failure handling per step:** if any node breaks the cascade (CI red after fixer loop, conflict-resolution fails), the workflow:
 - Posts a loud failure to `#wf-schema-cascade`.
