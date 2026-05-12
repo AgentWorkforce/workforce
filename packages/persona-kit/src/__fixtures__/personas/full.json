@@ -1,0 +1,100 @@
+{
+  "id": "full-deploy",
+  "intent": "review",
+  "tags": ["review", "implementation"],
+  "description": "A full deploy-v1 persona fixture with every deploy field populated.",
+  "skills": [
+    {
+      "id": "review-rubric",
+      "source": "https://prpm.dev/packages/@agentworkforce/review-rubric",
+      "description": "Review code using the team rubric."
+    }
+  ],
+  "inputs": {
+    "TOPICS": {
+      "description": "Comma-separated topic list.",
+      "default": "runtime,deploy,integrations"
+    },
+    "OPTIONAL_CONTEXT": {
+      "description": "Optional context from the deploy caller.",
+      "optional": true
+    }
+  },
+  "cloud": true,
+  "useSubscription": true,
+  "integrations": {
+    "github": {
+      "scope": { "repo": "AgentWorkforce/workforce" },
+      "triggers": [
+        { "on": "pull_request.opened" },
+        { "on": "issue_comment.created", "match": "@mention" },
+        { "on": "check_run.completed", "where": "conclusion=failure" }
+      ]
+    },
+    "linear": { "triggers": [{ "on": "issue.created" }] },
+    "slack": { "triggers": [{ "on": "app_mention" }] },
+    "notion": {
+      "scope": { "database": "db_123" },
+      "triggers": [{ "on": "page.updated" }]
+    },
+    "jira": {
+      "scope": { "project": "ENG" },
+      "triggers": [{ "on": "issue.created" }]
+    }
+  },
+  "schedules": [{ "name": "daily-review", "cron": "0 14 * * 1-5", "tz": "UTC" }],
+  "sandbox": {
+    "enabled": true,
+    "timeoutSeconds": 1800,
+    "env": { "NODE_ENV": "production" }
+  },
+  "memory": {
+    "enabled": true,
+    "scopes": ["session", "user", "workspace"],
+    "ttlDays": 30,
+    "autoPromote": true,
+    "dedupMs": 300000
+  },
+  "traits": {
+    "voice": "professional-warm",
+    "formality": "low",
+    "proactivity": "medium",
+    "riskPosture": "conservative",
+    "domain": "engineering",
+    "vocabulary": ["PR", "diff", "CI"],
+    "preferMarkdown": true
+  },
+  "onEvent": "./agent.ts",
+  "env": { "BRAVE_API_KEY": "$BRAVE_API_KEY" },
+  "mcpServers": {
+    "docs": {
+      "type": "http",
+      "url": "https://example.com/mcp",
+      "headers": { "Authorization": "Bearer $DOCS_TOKEN" }
+    }
+  },
+  "permissions": {
+    "allow": ["Bash(git *)"],
+    "deny": ["Bash(rm -rf *)"],
+    "mode": "default"
+  },
+  "mount": {
+    "ignoredPatterns": ["node_modules/**"],
+    "readonlyPatterns": ["vendor/**"]
+  },
+  "claudeMd": "CLAUDE.md",
+  "claudeMdMode": "extend",
+  "agentsMd": "AGENTS.md",
+  "agentsMdMode": "overwrite",
+  "harness": "codex",
+  "model": "gpt-5",
+  "systemPrompt": "Review code and explain risks clearly.",
+  "harnessSettings": {
+    "reasoning": "medium",
+    "timeoutSeconds": 600,
+    "sandboxMode": "workspace-write",
+    "approvalPolicy": "on-request",
+    "workspaceWriteNetworkAccess": true,
+    "webSearch": true
+  }
+}

@@ -1,0 +1,18 @@
+{
+  "id": "cron-only",
+  "intent": "documentation",
+  "tags": ["documentation"],
+  "description": "A cloud persona with schedules and no integration triggers.",
+  "skills": [],
+  "cloud": true,
+  "schedules": [
+    { "name": "weekly-digest", "cron": "0 9 * * 6", "tz": "UTC" },
+    { "name": "weekday-check", "cron": "0 9 * * 1-5", "tz": "America/New_York" }
+  ],
+  "sandbox": true,
+  "onEvent": "./agent.ts",
+  "harness": "codex",
+  "model": "gpt-5",
+  "systemPrompt": "Summarize scheduled work.",
+  "harnessSettings": { "reasoning": "medium", "timeoutSeconds": 300 }
+}

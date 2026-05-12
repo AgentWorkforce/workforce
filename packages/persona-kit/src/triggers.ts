@@ -33,8 +33,15 @@ export type KnownTriggerName<P extends KnownProviderName> = (typeof KNOWN_TRIGGE
 
 export type TriggerLintLevel = 'warning';
 
+/**
+ * Machine-readable issue category, so callers can branch on
+ * `issue.code` without parsing the human-readable `message`.
+ */
+export type TriggerLintCode = 'unknown_provider' | 'unknown_trigger';
+
 export interface TriggerLintIssue {
   level: TriggerLintLevel;
+  code: TriggerLintCode;
   /** Provider slug the issue was raised under (`github`, `linear`, …). */
   provider: string;
   /** The trigger name that was flagged. */
@@ -69,6 +76,7 @@ export function lintTriggers(persona: PersonaSpec): TriggerLintIssue[] {
       // catalogued yet.
       issues.push({
         level: 'warning',
+        code: 'unknown_provider',
         provider,
         trigger: '*',
         path: `integrations.${provider}`,
@@ -81,6 +89,7 @@ export function lintTriggers(persona: PersonaSpec): TriggerLintIssue[] {
       if (!known.includes(trigger.on)) {
         issues.push({
           level: 'warning',
+          code: 'unknown_trigger',
           provider,
           trigger: trigger.on,
           path: `integrations.${provider}.triggers[${idx}].on`,
