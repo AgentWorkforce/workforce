@@ -89,7 +89,7 @@ jobs:
           # persona-kit is a leaf dep consumed by workload-router and cli, so it
           # must publish first. The top-level `agentworkforce` wrapper depends on
           # `@agentworkforce/cli`, so it must publish last.
-          echo "packages=persona-kit workload-router cli agentworkforce daytona-runner" >> "$GITHUB_OUTPUT"
+          echo "packages=persona-kit workload-router cli daytona-runner agentworkforce" >> "$GITHUB_OUTPUT"
 
       # Lockstep baseline heal. The workspace publishes every package at the
       # same version, so if any package's local version lags either its own
@@ -689,7 +689,7 @@ jobs:
           // didn't publish an umbrella stamp (e.g. version: none re-runs).
           const releaseVersion = process.env.RELEASE_VERSION || canonicalVersion;
 
-          const packageOrder = ['persona-kit', 'workload-router', 'cli', 'agentworkforce'];
+          const packageOrder = ['persona-kit', 'workload-router', 'cli', 'daytona-runner', 'agentworkforce'];
           const entries = versionsRaw.trim().split(/\s+/).filter(Boolean).map((entry) => {
             const idx = entry.indexOf(':');
             return { pkg: entry.slice(0, idx), ver: entry.slice(idx + 1) };
