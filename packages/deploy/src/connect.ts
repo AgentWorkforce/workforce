@@ -157,6 +157,9 @@ export async function connectIntegrations(input: ConnectAllInput): Promise<Conne
     }
   }
 
+  // Track the subscription provider only when this deploy actually
+  // connected one — already-connected cases stay logged but do not
+  // leak a sentinel string up to callers reading `subscriptionProvider`.
   let subscriptionProvider: string | undefined;
   if (input.persona.useSubscription) {
     if (!input.subscription) {
@@ -184,7 +187,6 @@ export async function connectIntegrations(input: ConnectAllInput): Promise<Conne
       subscriptionProvider = result.provider;
       input.io.info(`subscription: connected (${result.provider})`);
     } else {
-      subscriptionProvider = '(already-connected)';
       input.io.info('subscription: already connected');
     }
   }

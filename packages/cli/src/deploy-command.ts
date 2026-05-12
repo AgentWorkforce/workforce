@@ -161,6 +161,12 @@ function expectValue(flag: string, value: string | undefined): string {
   if (typeof value !== 'string' || !value.trim()) {
     die(`${flag}: missing value`);
   }
+  // Reject the next token if it looks like a flag — `--workspace --detach`
+  // should fail loudly rather than silently treating `--detach` as the
+  // workspace name.
+  if (value.startsWith('-')) {
+    die(`${flag}: missing value (got "${value}", which looks like a flag)`);
+  }
   return value;
 }
 

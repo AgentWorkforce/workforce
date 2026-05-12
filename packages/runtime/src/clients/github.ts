@@ -72,14 +72,17 @@ export function createGithubClient(opts: GithubClientOptions): GithubClient {
   const apiUrl = (opts.apiUrl ?? 'https://api.github.com').replace(/\/$/, '');
   const fetchImpl = opts.fetchImpl ?? fetch;
 
-  async function request<T>(operation: string, init: { method: string; pathname: string; body?: unknown }): Promise<T> {
+  async function request<T>(
+    operation: string,
+    init: { method: string; pathname: string; body?: unknown; accept?: string; responseType?: 'json' | 'text' }
+  ): Promise<T> {
     const url = `${apiUrl}${init.pathname}`;
     let response: Response;
     try {
       response = await fetchImpl(url, {
         method: init.method,
         headers: {
-          accept: 'application/vnd.github+json',
+          accept: init.accept ?? 'application/vnd.github+json',
           authorization: `Bearer ${opts.token}`,
           'x-github-api-version': '2022-11-28',
           ...(init.body !== undefined ? { 'content-type': 'application/json' } : {}),
@@ -109,6 +112,7 @@ export function createGithubClient(opts: GithubClientOptions): GithubClient {
     }
 
     if (response.status === 204) return undefined as T;
+    if (init.responseType === 'text') return (await response.text()) as unknown as T;
     return (await response.json()) as T;
   }
 
@@ -174,12 +178,20 @@ export function createGithubClient(opts: GithubClientOptions): GithubClient {
         head: { ref: string };
         base: { ref: string };
         user: { login: string } | null;
-        diff_url: string;
       }>('getPr.metadata', {
         method: 'GET',
         pathname: `/repos/${target.owner}/${target.repo}/pulls/${target.number}`
       });
-      const diff = await fetchDiff(fetchImpl, opts.token, pr.diff_url);
+      // Fetch the diff through the canonical API endpoint with the same
+      // configured host + auth pipeline, not whatever URL the previous
+      // response handed us. Using `request` keeps the bearer token scoped
+      // to `apiUrl` and reuses the WorkforceIntegrationError mapping.
+      const diff = await request<string>('getPr.diff', {
+        method: 'GET',
+        pathname: `/repos/${target.owner}/${target.repo}/pulls/${target.number}`,
+        accept: 'application/vnd.github.v3.diff',
+        responseType: 'text'
+      });
       return {
         title: pr.title,
         body: pr.body ?? '',
@@ -205,26 +217,6 @@ export function createGithubClient(opts: GithubClientOptions): GithubClient {
       });
     }
   };
-}
-
-async function fetchDiff(fetchImpl: typeof fetch, token: string, diffUrl: string): Promise<string> {
-  const response = await fetchImpl(diffUrl, {
-    headers: {
-      accept: 'application/vnd.github.v3.diff',
-      authorization: `Bearer ${token}`,
-      'user-agent': 'workforce-runtime'
-    }
-  });
-  if (!response.ok) {
-    throw new WorkforceIntegrationError({
-      provider: 'github',
-      operation: 'getPr.diff',
-      message: `${response.status} ${response.statusText}`,
-      status: response.status,
-      retryable: isRetryableStatus(response.status)
-    });
-  }
-  return response.text();
 }
 
 function truncate(s: string, n: number): string {

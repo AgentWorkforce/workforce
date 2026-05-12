@@ -480,11 +480,18 @@ const ONEVENT_EXT_RE = /\.(?:ts|tsx|mts|cts|js|mjs|cjs)$/i;
 // runtime errors rather than silently passing through here.
 const CRON_FIELD_RE = /^(?:\*|(?:\d+(?:-\d+)?)(?:,\d+(?:-\d+)?)*)(?:\/\d+)?$/;
 
+// Windows absolute path shapes the parser must reject in addition to
+// the POSIX "/abs" form. Drive-letter (`C:\…`, `C:/…`) and UNC
+// (`\\server\share`, `//server/share`) forms both qualify as absolute
+// for our purposes — personas need to stay portable, so onEvent paths
+// must be relative to the persona JSON's directory.
+const WIN_ABSOLUTE_RE = /^(?:[A-Za-z]:[\\/]|[\\/]{2})/;
+
 function assertOnEventPath(value: unknown, context: string): string {
   if (typeof value !== 'string' || !value.trim()) {
     throw new Error(`${context} must be a non-empty string`);
   }
-  if (value.startsWith('/')) {
+  if (value.startsWith('/') || WIN_ABSOLUTE_RE.test(value)) {
     throw new Error(`${context} must be a relative POSIX path; got absolute "${value}"`);
   }
   const segments = value.split(/[\\/]+/);
@@ -601,6 +608,9 @@ export function parseSchedules(
   }
   if (value.length === 0) return undefined;
 
+  // Trim every field before validating + deduping so stray whitespace
+  // does not leak into schedule ids (used as `event.name`) or bypass
+  // the duplicate-name guard (e.g. `"weekly"` vs `"weekly "`).
   const seenNames = new Set<string>();
   const out: PersonaSchedule[] = [];
   for (const [idx, entry] of value.entries()) {
@@ -612,21 +622,23 @@ export function parseSchedules(
     if (typeof name !== 'string' || !name.trim()) {
       throw new Error(`${entryContext}.name must be a non-empty string`);
     }
-    if (seenNames.has(name)) {
-      throw new Error(`${entryContext}.name "${name}" duplicates an earlier schedule`);
+    const trimmedName = name.trim();
+    if (seenNames.has(trimmedName)) {
+      throw new Error(`${entryContext}.name "${trimmedName}" duplicates an earlier schedule`);
     }
-    seenNames.add(name);
+    seenNames.add(trimmedName);
     if (typeof cron !== 'string' || !cron.trim()) {
       throw new Error(`${entryContext}.cron must be a non-empty string`);
     }
-    assertCronExpression(cron, `${entryContext}.cron`);
+    const trimmedCron = cron.trim();
+    assertCronExpression(trimmedCron, `${entryContext}.cron`);
     if (tz !== undefined && (typeof tz !== 'string' || !tz.trim())) {
       throw new Error(`${entryContext}.tz must be a non-empty string if provided`);
     }
     out.push({
-      name,
-      cron,
-      ...(typeof tz === 'string' ? { tz } : {})
+      name: trimmedName,
+      cron: trimmedCron,
+      ...(typeof tz === 'string' ? { tz: tz.trim() } : {})
     });
   }
   return out;

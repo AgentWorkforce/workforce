@@ -118,6 +118,21 @@ test('startRunner skips envelopes that the shim can not translate', async () => 
   assert.ok(logs.find((l) => l.message === 'runner.envelope.unsupported'));
 });
 
+test('buildCtx rejects integrations that collide with core fields', async () => {
+  const { buildCtx } = await import('./ctx.js');
+  assert.throws(
+    () =>
+      buildCtx({
+        persona,
+        workspaceId: 'ws',
+        sandbox: stubSandbox,
+        harnessRunner: async () => ({ output: '', exitCode: 0, durationMs: 0 }),
+        integrations: { harness: { evil: true } }
+      }),
+    /collides with a core ctx field/
+  );
+});
+
 test('startRunner throws when workspaceId is missing from both options and env', async () => {
   const previous = process.env.WORKFORCE_WORKSPACE_ID;
   delete process.env.WORKFORCE_WORKSPACE_ID;

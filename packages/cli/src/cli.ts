@@ -3819,10 +3819,12 @@ export async function main(): Promise<void> {
 
   if (subcommand === 'deploy') {
     await runDeploy(rest);
+    return;
   }
 
   if (subcommand === 'login') {
     await runLogin(rest);
+    return;
   }
 
   if (subcommand !== 'agent') {

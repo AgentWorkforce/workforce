@@ -5,9 +5,7 @@
   "description": "Weekly competitive-intel digest. Searches the web for mentions of configured topics, dedupes and clusters by source domain, and upserts a single GitHub issue per ISO week.",
   "cloud": true,
   "integrations": {
-    "github": {
-      "scope": { "repo": "AgentWorkforce/weekly-digest" }
-    }
+    "github": {}
   },
   "schedules": [
     { "name": "weekly", "cron": "0 9 * * 6", "tz": "UTC" }

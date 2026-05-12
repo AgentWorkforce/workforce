@@ -197,13 +197,20 @@ async function* readEnvelopesFromStdin(): AsyncGenerator<RawGatewayEnvelope> {
     }
   }
 
-  // Drain any trailing line that lacked a terminating newline.
+  // Drain any trailing line that lacked a terminating newline. Log
+  // parse failures with the same warning shape the per-line path uses,
+  // so a stuck producer doesn't silently swallow envelopes.
   const tail = buffer.trim();
   if (tail.length > 0) {
     try {
       yield JSON.parse(tail) as RawGatewayEnvelope;
-    } catch {
-      /* ignore */
+    } catch (err) {
+      const excerpt = tail.length > 200 ? `${tail.slice(0, 200)}…` : tail;
+      process.stderr.write(
+        `[workforce-runtime] failed to parse trailing envelope line: ${
+          err instanceof Error ? err.message : String(err)
+        } — excerpt: ${excerpt}\n`
+      );
     }
   }
 }

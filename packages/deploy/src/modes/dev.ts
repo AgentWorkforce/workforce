@@ -83,8 +83,14 @@ export const devLauncher: ModeLauncher = {
       stopping = true;
       child.stdin?.end();
       child.kill('SIGTERM');
+      // `child.killed` flips true the moment `kill()` delivers the signal,
+      // regardless of whether the child has actually exited. To detect a
+      // stuck child we have to look at the real lifecycle markers — both
+      // exitCode and signalCode stay null until the OS reaps the process.
       const escalation = setTimeout(() => {
-        if (!child.killed) child.kill('SIGKILL');
+        if (child.exitCode === null && child.signalCode === null) {
+          child.kill('SIGKILL');
+        }
       }, SIGTERM_TO_SIGKILL_MS).unref();
       try {
         await done;

@@ -22,8 +22,12 @@ export interface WorkspaceAuth {
 export function envWorkspaceAuth(): WorkspaceAuth {
   return {
     async resolveWorkspace({ override, io }) {
-      const workspace = override ?? process.env.WORKFORCE_WORKSPACE_ID;
-      const token = process.env.WORKFORCE_WORKSPACE_TOKEN;
+      // Normalize whitespace-only values to "missing" — a token of `"  "`
+      // is no more usable than an empty string, and silently passing one
+      // through produces a confusing 401 later instead of a clear setup
+      // error here.
+      const workspace = (override ?? process.env.WORKFORCE_WORKSPACE_ID ?? '').trim();
+      const token = (process.env.WORKFORCE_WORKSPACE_TOKEN ?? '').trim();
       if (!workspace) {
         io.error(
           'no workspace resolved: pass --workspace, set WORKFORCE_WORKSPACE_ID, or run `workforce login`'

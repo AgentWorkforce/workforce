@@ -67,6 +67,13 @@ test('shimEnvelope returns null for unknown sources and malformed envelopes', ()
   assert.equal(shimEnvelope({ id: 'e', workspace: 'w', type: '', occurredAt: 'x' }), null);
 });
 
+test('shimEnvelope returns null when provider event has no event-name suffix', () => {
+  assert.equal(
+    shimEnvelope({ id: 'e', workspace: 'w', type: 'github.', occurredAt: 'x' }),
+    null
+  );
+});
+
 test('handler() brands a function and round-trips identity', () => {
   let called = false;
   const fn = handler(async () => {

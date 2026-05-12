@@ -144,12 +144,12 @@ async function uploadBundle(sandbox: Sandbox, input: ModeLaunchInput): Promise<v
   await sandbox.fs.uploadFiles(files);
 
   // The bundle's package.json declares `@agentworkforce/runtime` as a
-  // dependency. The sandbox starts from a clean tsx baseline, so we
-  // resolve the runtime via `npm install` before the runner can import
-  // it. Install runs once per sandbox lifetime; long-lived agents
-  // pay the cost only at cold-start.
+  // dependency. We let npm resolve the version *from the staged bundle's
+  // package.json* rather than pinning `@latest` here — pinning `@latest`
+  // would silently drift away from the runtime version the bundle was
+  // tested against.
   const install = await sandbox.process.executeCommand(
-    'npm install --prefer-offline --no-audit --no-fund --loglevel=error @agentworkforce/runtime@latest',
+    'npm install --prefer-offline --no-audit --no-fund --loglevel=error',
     SANDBOX_BUNDLE_DIR,
     undefined,
     600

@@ -1,7 +1,15 @@
 {
   "extends": "../tsconfig.base.json",
   "compilerOptions": {
-    "noEmit": true
+    "noEmit": true,
+    "baseUrl": ".",
+    "paths": {
+      "@agentworkforce/runtime": ["../packages/runtime/src/index.ts"],
+      "@agentworkforce/runtime/runner": ["../packages/runtime/src/runner.ts"],
+      "@agentworkforce/runtime/clients": ["../packages/runtime/src/clients/index.ts"],
+      "@agentworkforce/runtime/raw": ["../packages/runtime/src/raw.ts"],
+      "@agentworkforce/persona-kit": ["../packages/persona-kit/src/index.ts"]
+    }
   },
   "include": ["./**/*.ts"]
 }

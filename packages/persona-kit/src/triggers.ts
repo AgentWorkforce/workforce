@@ -7,10 +7,9 @@ import type { PersonaSpec } from './types.js';
  * not a failure, so adding a new event upstream doesn't gate workforce
  * releases.
  *
- * This file ships intentionally sparse in v1 (see
- * `docs/plans/deploy-v1-codex-spec.md` Task 6). Codex fills it out from the
- * Relayfile adapter sources at `/Users/khaliqgant/Projects/AgentWorkforce/
- * relayfile-adapters/` plus the per-provider docs.
+ * This file ships intentionally sparse in v1; the full per-provider list
+ * lands when the Relayfile adapter packages publish their normalized
+ * event catalogs.
  */
 export const KNOWN_TRIGGERS = {
   github: [

@@ -7,13 +7,17 @@ import type { DeployIO } from './types.js';
  * supply a deterministic in-memory IO via `DeployOptions.io`.
  */
 export function createTerminalIO(): DeployIO {
-  let rl: readline.Interface | undefined;
-
-  function ensureReadline(): readline.Interface {
-    if (!rl) {
-      rl = readline.createInterface({ input: process.stdin, output: process.stdout });
+  // One short-lived readline interface per question. Holding a long-
+  // lived interface keeps stdin in raw mode and pins the event loop
+  // open, so non-interactive callers (`workforce deploy --no-connect`
+  // in CI) see `process.exit(0)` hang or get phantom keystrokes.
+  async function ask(question: string): Promise<string> {
+    const rl = readline.createInterface({ input: process.stdin, output: process.stdout });
+    try {
+      return await rl.question(question);
+    } finally {
+      rl.close();
     }
-    return rl;
   }
 
   return {
@@ -28,13 +32,13 @@ export function createTerminalIO(): DeployIO {
     },
     async prompt(question, opts = {}) {
       const suffix = opts.defaultValue !== undefined ? ` [${opts.defaultValue}]` : '';
-      const answer = (await ensureReadline().question(`${question}${suffix} `)).trim();
+      const answer = (await ask(`${question}${suffix} `)).trim();
       return answer.length > 0 ? answer : opts.defaultValue ?? '';
     },
     async confirm(question, opts = {}) {
       const def = opts.defaultValue ?? false;
       const suffix = def ? ' [Y/n]' : ' [y/N]';
-      const answer = (await ensureReadline().question(`${question}${suffix} `)).trim().toLowerCase();
+      const answer = (await ask(`${question}${suffix} `)).trim().toLowerCase();
       if (answer === '') return def;
       return answer === 'y' || answer === 'yes';
     }

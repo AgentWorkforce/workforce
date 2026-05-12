@@ -79,6 +79,12 @@ export function shimEnvelope(env: RawGatewayEnvelope): WorkforceEvent | null {
   if (firstDot <= 0) return null;
   const providerCandidate = env.type.slice(0, firstDot);
   if (!isProviderSource(providerCandidate)) return null;
+  const eventType = env.type.slice(firstDot + 1);
+  // Guard against envelopes like `github.` where the source is valid but
+  // the event-name suffix is missing. The runtime should not dispatch an
+  // empty `event.type` to handlers — better to drop the envelope and let
+  // it surface in the unsupported-envelope log.
+  if (!eventType) return null;
 
   const providerEvent: WorkforceProviderEvent = {
     source: providerCandidate,
@@ -86,7 +92,7 @@ export function shimEnvelope(env: RawGatewayEnvelope): WorkforceEvent | null {
     occurredAt,
     attempt,
     workspaceId: env.workspace,
-    type: env.type.slice(firstDot + 1),
+    type: eventType,
     payload: env.resource ?? null,
     ...(env.summary ? { summary: env.summary } : {})
   };

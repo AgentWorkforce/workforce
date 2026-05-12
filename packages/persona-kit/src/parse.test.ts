@@ -519,6 +519,43 @@ test('parseOnEvent enforces relative path with a supported extension', () => {
   assert.throws(() => parseOnEvent('', 'onEvent'), /must be a non-empty string/);
 });
 
+test('parseOnEvent rejects Windows-absolute path shapes too', () => {
+  assert.throws(
+    () => parseOnEvent('C:\\handlers\\agent.ts', 'onEvent'),
+    /must be a relative POSIX path/
+  );
+  assert.throws(
+    () => parseOnEvent('C:/handlers/agent.ts', 'onEvent'),
+    /must be a relative POSIX path/
+  );
+  assert.throws(
+    () => parseOnEvent('\\\\server\\share\\agent.ts', 'onEvent'),
+    /must be a relative POSIX path/
+  );
+});
+
+test('parseSchedules trims name/cron/tz before validation and dedupe', () => {
+  // Whitespace variants of the same name should collapse so dedupe works.
+  assert.throws(
+    () =>
+      parseSchedules(
+        [
+          { name: 'weekly', cron: '0 9 * * 6' },
+          { name: ' weekly ', cron: '0 10 * * 6' }
+        ],
+        'schedules'
+      ),
+    /duplicates an earlier schedule/
+  );
+  const s = parseSchedules(
+    [{ name: '  morning  ', cron: '  0 9 * * 1-5  ', tz: '  America/New_York  ' }],
+    'schedules'
+  );
+  assert.deepEqual(s, [
+    { name: 'morning', cron: '0 9 * * 1-5', tz: 'America/New_York' }
+  ]);
+});
+
 test('parsePersonaSpec rejects non-boolean cloud / useSubscription', () => {
   assert.throws(
     () => parsePersonaSpec(validSpec({ cloud: 'yes' }), 'documentation'),

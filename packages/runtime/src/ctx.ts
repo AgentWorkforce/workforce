@@ -109,11 +109,34 @@ export function buildCtx(options: CtxBuildOptions): WorkforceCtx {
   // `GithubClient`, others are `unknown` until they ship. Handlers
   // narrow with a runtime check (`if (ctx.linear)`) and cast against
   // the future client interface.
+  //
+  // Reserved fields are guarded so a malformed persona that declares
+  // an integration named `harness` or `sandbox` cannot clobber core
+  // ctx subsystems — that would silently turn `ctx.harness.run(...)`
+  // into a call against an attacker-controlled object.
   if (options.integrations) {
     for (const [provider, client] of Object.entries(options.integrations)) {
+      if (CORE_CTX_FIELDS.has(provider)) {
+        throw new Error(
+          `runtime: integration provider "${provider}" collides with a core ctx field; rename the integration in your persona JSON`
+        );
+      }
       Object.assign(ctx, { [provider]: client });
     }
   }
 
   return ctx;
 }
+
+const CORE_CTX_FIELDS: ReadonlySet<string> = new Set([
+  'persona',
+  'workspaceId',
+  'agentName',
+  'llm',
+  'harness',
+  'sandbox',
+  'memory',
+  'workflow',
+  'schedule',
+  'log'
+]);

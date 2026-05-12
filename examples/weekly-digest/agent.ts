@@ -57,10 +57,13 @@ export default handler(async (ctx, event) => {
   }
 
   const body = renderDigest({ week: isoWeek, fetchedAt, topics, clusters });
-  const [owner, repo] = config.repo.split('/');
-  if (!owner || !repo) {
-    throw new Error(`weekly-digest: WEEKLY_DIGEST_REPO must be "owner/repo"; got "${config.repo}"`);
+  const repoSegments = config.repo.split('/');
+  if (repoSegments.length !== 2 || !repoSegments[0].trim() || !repoSegments[1].trim()) {
+    throw new Error(
+      `weekly-digest: WEEKLY_DIGEST_REPO must be exactly "owner/repo"; got "${config.repo}"`
+    );
   }
+  const [owner, repo] = repoSegments as [string, string];
 
   const result = await github.upsertIssue({
     owner,

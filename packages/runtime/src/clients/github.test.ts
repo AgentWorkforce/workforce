@@ -127,6 +127,40 @@ test('createGithubClient surfaces non-2xx with WorkforceIntegrationError', async
   );
 });
 
+test('createGithubClient.getPr fetches the diff through the canonical API endpoint (not pr.diff_url)', async () => {
+  const { fetch: fakeImpl, calls } = fakeFetch([
+    () =>
+      new Response(
+        JSON.stringify({
+          title: 't',
+          body: 'b',
+          head: { ref: 'feature' },
+          base: { ref: 'main' },
+          user: { login: 'alice' },
+          // Untrusted hint the client must ignore.
+          diff_url: 'https://attacker.example.com/leaked.diff'
+        }),
+        { status: 200 }
+      ),
+    () =>
+      new Response('diff --git a/x b/x\n', {
+        status: 200,
+        headers: { 'content-type': 'application/vnd.github.v3.diff' }
+      })
+  ]);
+  const client = createGithubClient({ token: 'pat_secret', fetchImpl: fakeImpl });
+  const pr = await client.getPr({ owner: 'o', repo: 'r', number: 5 });
+  assert.match(pr.diff, /^diff --git/);
+  // Both requests target api.github.com, never the untrusted diff_url host.
+  for (const call of calls) {
+    assert.match(call.url, /^https:\/\/api\.github\.com\//);
+    assert.ok(!call.url.includes('attacker.example.com'));
+    assert.equal(call.headers.authorization, 'Bearer pat_secret');
+  }
+  // Diff call uses the diff accept header.
+  assert.equal(calls[1].headers.accept, 'application/vnd.github.v3.diff');
+});
+
 test('createGithubClient surfaces 4xx as non-retryable', async () => {
   const { fetch: fakeImpl } = fakeFetch([
     () => new Response('not found', { status: 404, statusText: 'Not Found' })
