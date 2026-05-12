@@ -25,7 +25,7 @@ npx tsx workflows/workforce-deploy-v1.ts
 
 Resolve these as env vars with the defaults shown. Ricky should set these to absolute paths inside its sandbox.
 
-```
+```sh
 HOME=/Users/khaliqgant
 ROOT=$HOME/Projects/AgentWorkforce
 
@@ -38,7 +38,7 @@ RELAY_REPO=$ROOT/relay                   # read-only reference
 
 ### Required secrets
 
-```
+```sh
 DAYTONA_API_KEY                          # for cloud-side endpoint smoke test
 GITHUB_TOKEN                             # for opening PRs
 WORKFORCE_E2E_STAGING_TOKEN              # set in CI for the E2E job; not needed for the workflow itself
@@ -69,7 +69,7 @@ Hub-spoke / Conversation. A lead Claude Opus stays on `#wf-workforce-deploy-v1` 
 - `$CLOUD_REPO` is used by Track A only → no worktree needed; operate in place on the branch.
 - `$WORKFORCE_REPO` is shared by Tracks B, C, and INT → **each track operates in its own git worktree**. Path conventions:
 
-  ```
+  ```text
   $WORKFORCE_REPO                                # Track B (consume Daytona)   → branch feat/deploy-v1-daytona-consume
   $WORKFORCE_REPO.wt-mcp                         # Track C (MCP server)        → branch feat/mcp-workforce
   $WORKFORCE_REPO.wt-e2e                         # Track INT (E2E test)        → branch feat/deploy-v1-e2e

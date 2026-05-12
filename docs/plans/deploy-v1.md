@@ -13,7 +13,7 @@ A workforce **persona is a deployable agent**. Today a persona JSON describes ho
 
 The user-facing command is one line:
 
-```
+```sh
 workforce deploy ./review-agent.json
 ```
 
@@ -274,7 +274,7 @@ case 'login':  await runLogin(argv);  break;   // small new helper for cloud aut
 
 `runDeploy` is a ~150-line orchestrator over the deploy package. Public flags:
 
-```
+```sh
 workforce deploy <persona-path>
     [--mode dev|sandbox|cloud]            # default: sandbox if Daytona creds present, else dev
     [--workspace <name>]                  # workforce workspace; defaults to active
@@ -403,7 +403,7 @@ Direct port of the proactive-agents weekly-digest pattern.
 
 ## 8. Package layout — diff
 
-```
+```text
 workforce/
 ├── packages/
 │   ├── cli/                          # add `deploy`, `login` cases
@@ -606,7 +606,7 @@ A user with:
 
 Can run:
 
-```
+```sh
 workforce login
 workforce deploy ./examples/weekly-digest/persona.json --mode dev
 ```
