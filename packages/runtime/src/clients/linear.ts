@@ -1,5 +1,10 @@
-import { WorkforceIntegrationError } from '../errors.js';
-import { providerRequest, type IntegrationClientOptions } from './request.js';
+import {
+  draftFile,
+  encodeSegment,
+  type IntegrationClientOptions,
+  readJsonFile,
+  writeJsonFile
+} from './request.js';
 
 export interface LinearClient {
   createIssue(args: {
@@ -26,80 +31,48 @@ export interface LinearClient {
   }>;
 }
 
-const linearEndpoint = '/graphql';
-
-interface LinearResponse<T> {
-  data?: T;
-  errors?: Array<{ message: string }>;
-}
-
-function unwrapLinear<T>(response: LinearResponse<T>, operation: string): T {
-  if (!response.data || response.errors?.length) {
-    throw new WorkforceIntegrationError({
-      provider: 'linear',
-      operation,
-      cause: new Error(response.errors?.map((error) => error.message).join('; ') ?? 'Missing GraphQL data'),
-      retryable: false
-    });
-  }
-  return response.data;
-}
+type LinearIssue = Awaited<ReturnType<LinearClient['getIssue']>>;
 
 export function createLinearClient(opts: IntegrationClientOptions): LinearClient {
-  const graphql = async <T>(operation: string, query: string, variables: Record<string, unknown>) => {
-    const response = await providerRequest<LinearResponse<T>>({
-      provider: 'linear',
-      operation,
-      client: opts,
-      endpoint: linearEndpoint,
-      body: { query, variables }
-    });
-    return unwrapLinear(response, operation);
-  };
-
   return {
     async createIssue(args) {
-      const data = await graphql<{ issueCreate: { issue: { id: string; identifier: string; url: string } } }>(
+      const result = await writeJsonFile(
+        opts,
+        'linear',
         'createIssue',
-        `mutation CreateIssue($input: IssueCreateInput!) {
-          issueCreate(input: $input) { issue { id identifier url } }
-        }`,
-        { input: args }
+        `/linear/issues/${draftFile('create issue')}`,
+        args
       );
-      return data.issueCreate.issue;
+      return {
+        id: result.receipt?.created ?? result.receipt?.id ?? '',
+        identifier: typeof result.receipt?.identifier === 'string' ? result.receipt.identifier : '',
+        url: result.receipt?.url ?? ''
+      };
     },
 
     async updateIssue(issueId, args) {
-      const data = await graphql<{ issueUpdate: { issue: { id: string; identifier: string; url: string } } }>(
-        'updateIssue',
-        `mutation UpdateIssue($id: String!, $input: IssueUpdateInput!) {
-          issueUpdate(id: $id, input: $input) { issue { id identifier url } }
-        }`,
-        { id: issueId, input: args }
-      );
-      return data.issueUpdate.issue;
+      await writeJsonFile(opts, 'linear', 'updateIssue', `/linear/issues/${encodeSegment(issueId)}.json`, args);
+      const issue = await this.getIssue(issueId).catch(() => undefined);
+      return {
+        id: issue?.id ?? issueId,
+        identifier: issue?.identifier ?? '',
+        url: issue?.url ?? ''
+      };
     },
 
     async comment(issueId, body) {
-      const data = await graphql<{ commentCreate: { comment: { id: string; url: string } } }>(
+      const result = await writeJsonFile(
+        opts,
+        'linear',
         'comment',
-        `mutation Comment($input: CommentCreateInput!) {
-          commentCreate(input: $input) { comment { id url } }
-        }`,
-        { input: { issueId, body } }
+        `/linear/issues/${encodeSegment(issueId)}/comments/${draftFile('create comment')}`,
+        { body }
       );
-      return data.commentCreate.comment;
+      return { id: result.receipt?.created ?? result.receipt?.id ?? '', url: result.receipt?.url ?? '' };
     },
 
-    async getIssue(issueId) {
-      const data = await graphql<{ issue: Awaited<ReturnType<LinearClient['getIssue']>> }>(
-        'getIssue',
-        `query Issue($id: String!) {
-          issue(id: $id) { id identifier title description url state { name } }
-        }`,
-        { id: issueId }
-      );
-      return data.issue;
+    getIssue(issueId) {
+      return readJsonFile<LinearIssue>(opts, 'linear', 'getIssue', `/linear/issues/${encodeSegment(issueId)}.json`);
     }
   };
 }

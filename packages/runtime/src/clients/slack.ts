@@ -1,5 +1,10 @@
 import { WorkforceIntegrationError } from '../errors.js';
-import { providerRequest, type IntegrationClientOptions } from './request.js';
+import {
+  draftFile,
+  encodeSegment,
+  type IntegrationClientOptions,
+  writeJsonFile
+} from './request.js';
 
 export type SlackThreadRef = string | { channel: string; ts: string };
 
@@ -7,14 +12,6 @@ export interface SlackClient {
   post(channel: string, text: string): Promise<{ channel: string; ts: string }>;
   reply(threadTs: SlackThreadRef, text: string): Promise<{ channel: string; ts: string }>;
   dm(user: string, text: string): Promise<{ channel: string; ts: string }>;
-}
-
-interface SlackResponse<T> {
-  ok: boolean;
-  error?: string;
-  channel?: string | { id: string };
-  ts?: string;
-  message?: T;
 }
 
 function parseThreadRef(threadTs: SlackThreadRef): { channel: string; ts: string } {
@@ -35,49 +32,44 @@ function parseThreadRef(threadTs: SlackThreadRef): { channel: string; ts: string
   return { channel, ts };
 }
 
-function unwrapSlack(
-  response: SlackResponse<unknown>,
-  operation: string
-): { channel: string; ts: string } {
-  if (!response.ok || typeof response.channel !== 'string' || !response.ts) {
-    throw new WorkforceIntegrationError({
-      provider: 'slack',
-      operation,
-      cause: new Error(response.error ?? 'Slack response was missing channel or ts'),
-      retryable: false
-    });
-  }
-  return { channel: response.channel, ts: response.ts };
+function tsPathSegment(ts: string): string {
+  return encodeSegment(ts.replace(/\./g, '_'));
 }
 
 export function createSlackClient(opts: IntegrationClientOptions): SlackClient {
-  const request = (operation: string, endpoint: string, body: unknown) => providerRequest<SlackResponse<{ id: string }>>({
-    provider: 'slack',
-    operation,
-    client: opts,
-    endpoint,
-    body
-  });
-
   return {
     async post(channel, text) {
-      return unwrapSlack(await request('post', '/chat.postMessage', { channel, text }), 'post');
+      const result = await writeJsonFile(
+        opts,
+        'slack',
+        'post',
+        `/slack/channels/${encodeSegment(channel)}/messages/${draftFile('create message')}`,
+        { text }
+      );
+      return { channel, ts: result.receipt?.created ?? result.receipt?.id ?? '' };
     },
 
     async reply(threadTs, text) {
       const thread = parseThreadRef(threadTs);
-      return unwrapSlack(
-        await request('reply', '/chat.postMessage', {
-          channel: thread.channel,
-          thread_ts: thread.ts,
-          text
-        }),
-        'reply'
+      const result = await writeJsonFile(
+        opts,
+        'slack',
+        'reply',
+        `/slack/channels/${encodeSegment(thread.channel)}/messages/${tsPathSegment(thread.ts)}/replies/${draftFile('create reply')}`,
+        { text }
       );
+      return { channel: thread.channel, ts: result.receipt?.created ?? result.receipt?.id ?? '' };
     },
 
     async dm(user, text) {
-      return unwrapSlack(await request('dm', '/chat.postMessage', { channel: user, text }), 'dm');
+      const result = await writeJsonFile(
+        opts,
+        'slack',
+        'dm',
+        `/slack/users/${encodeSegment(user)}/messages/${draftFile('create dm')}`,
+        { text }
+      );
+      return { channel: user, ts: result.receipt?.created ?? result.receipt?.id ?? '' };
     }
   };
 }

@@ -1,4 +1,10 @@
-import { providerRequest, type IntegrationClientOptions } from './request.js';
+import {
+  draftFile,
+  encodeSegment,
+  type IntegrationClientOptions,
+  readJsonFile,
+  writeJsonFile
+} from './request.js';
 
 export interface NotionPage {
   id: string;
@@ -20,35 +26,39 @@ export interface NotionClient {
   getPage(pageId: string): Promise<NotionPage>;
 }
 
-const notionHeaders = { 'notion-version': '2022-06-28' };
+function readDatabaseId(parent: Record<string, unknown>): string {
+  const databaseId = parent.database_id ?? parent.databaseId;
+  if (typeof databaseId !== 'string' || databaseId.trim().length === 0) {
+    throw new Error('Notion createPage file writeback requires parent.database_id');
+  }
+  return databaseId.trim();
+}
 
 export function createNotionClient(opts: IntegrationClientOptions): NotionClient {
-  const request = <T>(operation: string, path: string, init: { method?: string; body?: unknown } = {}) =>
-    providerRequest<T>({
-      provider: 'notion',
-      operation,
-      client: opts,
-      endpoint: `/v1/${path}`,
-      headers: notionHeaders,
-      ...init
-    });
-
   return {
-    createPage(parent, properties, content) {
-      return request<NotionPage>('createPage', 'pages', {
-        body: { parent, properties, children: content }
-      });
+    async createPage(parent, properties, content) {
+      const databaseId = readDatabaseId(parent);
+      const result = await writeJsonFile(
+        opts,
+        'notion',
+        'createPage',
+        `/notion/databases/${encodeSegment(databaseId)}/pages/${draftFile('create page')}`,
+        { properties, children: content }
+      );
+      return {
+        id: result.receipt?.created ?? result.receipt?.id ?? '',
+        url: result.receipt?.url,
+        properties
+      };
     },
 
-    updatePage(pageId, args) {
-      return request<NotionPage>('updatePage', `pages/${encodeURIComponent(pageId)}`, {
-        method: 'PATCH',
-        body: args
-      });
+    async updatePage(pageId, args) {
+      await writeJsonFile(opts, 'notion', 'updatePage', `/notion/pages/${encodeSegment(pageId)}.json`, args);
+      return this.getPage(pageId).catch(() => ({ id: pageId, ...args }));
     },
 
     getPage(pageId) {
-      return request<NotionPage>('getPage', `pages/${encodeURIComponent(pageId)}`);
+      return readJsonFile<NotionPage>(opts, 'notion', 'getPage', `/notion/pages/${encodeSegment(pageId)}.json`);
     }
   };
 }

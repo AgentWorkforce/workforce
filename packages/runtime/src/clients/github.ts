@@ -1,4 +1,11 @@
-import { providerRequest, type IntegrationClientOptions } from './request.js';
+import {
+  draftFile,
+  encodeSegment,
+  type IntegrationClientOptions,
+  listJsonFiles,
+  readJsonFile,
+  writeJsonFile
+} from './request.js';
 
 export interface GithubClient {
   comment(
@@ -35,104 +42,111 @@ export interface GithubClient {
   ): Promise<void>;
 }
 
-interface GithubIssue {
-  id?: number | string;
-  number: number;
-  html_url: string;
+interface GithubIssueFile {
+  number?: number;
+  html_url?: string;
+  url?: string;
   title?: string;
 }
 
-interface GithubPullRequest {
-  title: string;
-  body: string | null;
-  head: { ref: string };
-  base: { ref: string };
-  user: { login: string };
+interface GithubPullRequestFile {
+  title?: string;
+  body?: string | null;
+  head?: { ref?: string } | string;
+  base?: { ref?: string } | string;
+  user?: { login?: string } | string;
+  author?: string;
+  diff?: string;
 }
 
-function repoPath(owner: string, repo: string): string {
-  return `/repos/${encodeURIComponent(owner)}/${encodeURIComponent(repo)}`;
+function repoRoot(owner: string, repo: string): string {
+  return `/github/repos/${encodeSegment(owner)}/${encodeSegment(repo)}`;
+}
+
+function readRef(value: GithubPullRequestFile['head']): string {
+  if (typeof value === 'string') return value;
+  return value?.ref ?? '';
+}
+
+function readAuthor(value: GithubPullRequestFile): string {
+  if (typeof value.user === 'string') return value.user;
+  return value.user?.login ?? value.author ?? '';
 }
 
 export function createGithubClient(opts: IntegrationClientOptions): GithubClient {
-  const request = <T>(operation: string, endpoint: string, init: {
-    method?: string;
-    body?: unknown;
-    headers?: Record<string, string>;
-    parseAs?: 'json' | 'text' | 'void';
-  } = {}) => providerRequest<T>({
-    provider: 'github',
-    operation,
-    client: opts,
-    endpoint,
-    ...init
-  });
-
   return {
     async comment(target, body) {
-      const issue = await request<GithubIssue>(
+      const result = await writeJsonFile(
+        opts,
+        'github',
         'comment',
-        `${repoPath(target.owner, target.repo)}/issues/${target.number}/comments`,
-        { body: { body } }
+        `${repoRoot(target.owner, target.repo)}/issues/${encodeSegment(target.number)}/comments/${draftFile('create comment')}`,
+        { body }
       );
-      return { id: String(issue.id), url: issue.html_url };
+      return {
+        id: result.receipt?.created ?? result.receipt?.id ?? '',
+        url: result.receipt?.url ?? ''
+      };
     },
 
     async createIssue(args) {
-      const issue = await request<GithubIssue>(
+      const result = await writeJsonFile(
+        opts,
+        'github',
         'createIssue',
-        `${repoPath(args.owner, args.repo)}/issues`,
-        { body: { title: args.title, body: args.body, labels: args.labels } }
+        `${repoRoot(args.owner, args.repo)}/issues/${draftFile('create issue')}`,
+        { title: args.title, body: args.body, labels: args.labels }
       );
-      return { number: issue.number, url: issue.html_url };
+      const number = Number(result.receipt?.created ?? result.receipt?.id ?? 0);
+      return { number: Number.isFinite(number) ? number : 0, url: result.receipt?.url ?? '' };
     },
 
     async upsertIssue(args) {
-      const issues = await request<GithubIssue[]>(
-        'upsertIssue.find',
-        `${repoPath(args.owner, args.repo)}/issues?state=open&per_page=100`
-      );
-      const existing = issues.find((issue) => issue.title === args.matchTitle);
-      if (!existing) {
-        const created = await this.createIssue(args);
-        return { ...created, created: true };
+      const issueDir = `${repoRoot(args.owner, args.repo)}/issues`;
+      const issues = await listJsonFiles<GithubIssueFile>(opts, 'github', 'upsertIssue.find', issueDir);
+      const existing = issues.find((issue) => issue.value.title === args.matchTitle && issue.value.number);
+      if (existing?.value.number) {
+        await writeJsonFile(
+          opts,
+          'github',
+          'upsertIssue.update',
+          `${issueDir}/${encodeSegment(existing.value.number)}.json`,
+          { title: args.title, body: args.body, labels: args.labels }
+        );
+        return {
+          number: existing.value.number,
+          url: existing.value.html_url ?? existing.value.url ?? '',
+          created: false
+        };
       }
-
-      const updated = await request<GithubIssue>(
-        'upsertIssue.update',
-        `${repoPath(args.owner, args.repo)}/issues/${existing.number}`,
-        {
-          method: 'PATCH',
-          body: { title: args.title, body: args.body, labels: args.labels }
-        }
-      );
-      return { number: updated.number, url: updated.html_url, created: false };
+      const created = await this.createIssue(args);
+      return { ...created, created: true };
     },
 
     async getPr(target) {
-      const url = `${repoPath(target.owner, target.repo)}/pulls/${target.number}`;
-      const [pr, diff] = await Promise.all([
-        request<GithubPullRequest>('getPr', url),
-        request<string>('getPr.diff', url, {
-          headers: { accept: 'application/vnd.github.v3.diff' },
-          parseAs: 'text'
-        })
-      ]);
+      const pr = await readJsonFile<GithubPullRequestFile>(
+        opts,
+        'github',
+        'getPr',
+        `${repoRoot(target.owner, target.repo)}/pulls/${encodeSegment(target.number)}/metadata.json`
+      );
       return {
-        title: pr.title,
+        title: pr.title ?? '',
         body: pr.body ?? '',
-        diff,
-        head: pr.head.ref,
-        base: pr.base.ref,
-        author: pr.user.login
+        diff: pr.diff ?? '',
+        head: readRef(pr.head),
+        base: readRef(pr.base),
+        author: readAuthor(pr)
       };
     },
 
     async postReview(target, args) {
-      await request<void>(
+      await writeJsonFile(
+        opts,
+        'github',
         'postReview',
-        `${repoPath(target.owner, target.repo)}/pulls/${target.number}/reviews`,
-        { body: args, parseAs: 'void' }
+        `${repoRoot(target.owner, target.repo)}/pulls/${encodeSegment(target.number)}/reviews/${draftFile('create review')}`,
+        { ...args, comments: args.comments ?? [] }
       );
     }
   };

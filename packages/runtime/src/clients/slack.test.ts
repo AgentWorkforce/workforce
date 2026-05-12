@@ -1,72 +1,53 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
+import { mkdtemp, readFile, readdir, rm } from 'node:fs/promises';
+import { tmpdir } from 'node:os';
+import path from 'node:path';
 import { WorkforceIntegrationError } from '../errors.js';
 import { createSlackClient } from './slack.js';
 
-function mockFetch(responses: Array<{ status?: number; json?: unknown; text?: string }>) {
-  const original = globalThis.fetch;
-  const calls: Array<{ url: string; init?: RequestInit }> = [];
-  globalThis.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
-    calls.push({ url: String(input), init });
-    const response = responses.shift();
-    assert.ok(response, `unexpected fetch call to ${String(input)}`);
-    const status = response.status ?? 200;
-    return {
-      ok: status >= 200 && status < 300,
-      status,
-      statusText: status >= 200 && status < 300 ? 'OK' : 'Error',
-      json: async () => response.json,
-      text: async () => response.text ?? JSON.stringify(response.json ?? {})
-    } as Response;
-  }) as typeof fetch;
-  return { calls, restore: () => { globalThis.fetch = original; } };
+async function tempMount(): Promise<string> {
+  return mkdtemp(path.join(tmpdir(), 'workforce-runtime-'));
 }
 
-test('slack post sends a cloud-proxied chat message', async () => {
-  const fetchMock = mockFetch([
-    { json: { ok: true, data: { ok: true, channel: 'C123', ts: '1710000000.000100' } } }
-  ]);
-
+test('slack post writes a channel message draft', async () => {
+  const root = await tempMount();
   try {
-    const client = createSlackClient({
-      slackTeamId: 'T123',
-      relayfileBaseUrl: 'https://relay.test',
-      cloudApiToken: 'cloud-token'
-    });
-    const message = await client.post('C123', 'hello');
+    const client = createSlackClient({ relayfileMountRoot: root });
+    await client.post('C123', 'hello');
 
-    assert.deepEqual(message, { channel: 'C123', ts: '1710000000.000100' });
-    assert.equal(fetchMock.calls[0].url, 'https://relay.test/api/v1/proxy/slack');
-    assert.equal((fetchMock.calls[0].init?.headers as Record<string, string>).authorization, 'Bearer cloud-token');
-    assert.deepEqual(JSON.parse(String(fetchMock.calls[0].init?.body)), {
-      slackTeamId: 'T123',
-      endpoint: '/chat.postMessage',
-      method: 'POST',
-      data: { channel: 'C123', text: 'hello' }
+    const dir = path.join(root, 'slack/channels/C123/messages');
+    const files = await readdir(dir);
+    assert.equal(files.length, 1);
+    assert.deepEqual(JSON.parse(await readFile(path.join(dir, files[0] ?? ''), 'utf8')), {
+      text: 'hello'
     });
   } finally {
-    fetchMock.restore();
+    await rm(root, { recursive: true, force: true });
   }
 });
 
-test('slack errors are retryable for provider 5xx responses', async () => {
-  const fetchMock = mockFetch([
-    { status: 503, text: 'unavailable' }
-  ]);
-
+test('slack dm writes a user direct-message draft', async () => {
+  const root = await tempMount();
   try {
-    const client = createSlackClient({ slackTeamId: 'T123', relayfileBaseUrl: 'https://relay.test' });
-    await assert.rejects(
-      () => client.post('C123', 'hello'),
-      (error) => {
-        assert.ok(error instanceof WorkforceIntegrationError);
-        assert.equal(error.provider, 'slack');
-        assert.equal(error.operation, 'post');
-        assert.equal(error.retryable, true);
-        return true;
-      }
-    );
+    const client = createSlackClient({ relayfileMountRoot: root });
+    await client.dm('U123', 'ping');
+
+    const dir = path.join(root, 'slack/users/U123/messages');
+    const files = await readdir(dir);
+    assert.equal(files.length, 1);
+    assert.deepEqual(JSON.parse(await readFile(path.join(dir, files[0] ?? ''), 'utf8')), {
+      text: 'ping'
+    });
   } finally {
-    fetchMock.restore();
+    await rm(root, { recursive: true, force: true });
   }
+});
+
+test('slack reply rejects malformed string thread refs', async () => {
+  const client = createSlackClient({ relayfileMountRoot: '/tmp/unused' });
+  await assert.rejects(
+    () => client.reply('missing-ts', 'hello'),
+    (error) => error instanceof WorkforceIntegrationError && error.provider === 'slack'
+  );
 });

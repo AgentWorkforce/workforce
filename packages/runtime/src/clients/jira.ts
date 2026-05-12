@@ -1,4 +1,9 @@
-import { providerRequest, type IntegrationClientOptions } from './request.js';
+import {
+  draftFile,
+  encodeSegment,
+  type IntegrationClientOptions,
+  writeJsonFile
+} from './request.js';
 
 export interface JiraClient {
   createIssue(args: {
@@ -15,46 +20,45 @@ export interface JiraClient {
   ): Promise<void>;
 }
 
-function jiraApi(cloudId: string): string {
-  return `/ex/jira/${encodeURIComponent(cloudId)}/rest/api/3`;
-}
-
 export function createJiraClient(opts: IntegrationClientOptions): JiraClient {
-  const request = <T>(operation: string, cloudId: string, path: string, init: {
-    method?: string;
-    body?: unknown;
-    parseAs?: 'json' | 'void';
-  } = {}) => providerRequest<T>({
-    provider: 'jira',
-    operation,
-    client: opts,
-    endpoint: `${jiraApi(cloudId)}/${path}`,
-    ...init
-  });
-
   return {
-    createIssue(args) {
-      return request<{ id: string; key: string; self: string }>('createIssue', args.cloudId, 'issue', {
-        body: { fields: args.fields }
-      });
+    async createIssue(args) {
+      const result = await writeJsonFile(
+        opts,
+        'jira',
+        'createIssue',
+        `/jira/issues/${draftFile('create issue')}`,
+        { fields: args.fields }
+      );
+      return {
+        id: result.receipt?.created ?? result.receipt?.id ?? '',
+        key: typeof result.receipt?.key === 'string' ? result.receipt.key : '',
+        self: typeof result.receipt?.self === 'string' ? result.receipt.self : ''
+      };
     },
 
-    comment(target, body) {
-      return request<{ id: string; self: string }>(
+    async comment(target, body) {
+      const result = await writeJsonFile(
+        opts,
+        'jira',
         'comment',
-        target.cloudId,
-        `issue/${encodeURIComponent(target.issueIdOrKey)}/comment`,
-        { body: { body } }
+        `/jira/issues/${encodeSegment(target.issueIdOrKey)}/comments/${draftFile('create comment')}`,
+        { body }
       );
+      return {
+        id: result.receipt?.created ?? result.receipt?.id ?? '',
+        self: typeof result.receipt?.self === 'string' ? result.receipt.self : ''
+      };
     },
 
     async transition(target, transition) {
       const id = typeof transition === 'string' ? transition : transition.id;
-      await request<void>(
+      await writeJsonFile(
+        opts,
+        'jira',
         'transition',
-        target.cloudId,
-        `issue/${encodeURIComponent(target.issueIdOrKey)}/transitions`,
-        { body: { transition: { id } }, parseAs: 'void' }
+        `/jira/issues/${encodeSegment(target.issueIdOrKey)}/transitions/${draftFile('create transition')}`,
+        { transition: { id } }
       );
     }
   };

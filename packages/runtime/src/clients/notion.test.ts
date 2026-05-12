@@ -1,76 +1,40 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { WorkforceIntegrationError } from '../errors.js';
+import { mkdtemp, readFile, readdir, rm } from 'node:fs/promises';
+import { tmpdir } from 'node:os';
+import path from 'node:path';
 import { createNotionClient } from './notion.js';
 
-function mockFetch(responses: Array<{ status?: number; json?: unknown; text?: string }>) {
-  const original = globalThis.fetch;
-  const calls: Array<{ url: string; init?: RequestInit }> = [];
-  globalThis.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
-    calls.push({ url: String(input), init });
-    const response = responses.shift();
-    assert.ok(response, `unexpected fetch call to ${String(input)}`);
-    const status = response.status ?? 200;
-    return {
-      ok: status >= 200 && status < 300,
-      status,
-      statusText: status >= 200 && status < 300 ? 'OK' : 'Error',
-      json: async () => response.json,
-      text: async () => response.text ?? JSON.stringify(response.json ?? {})
-    } as Response;
-  }) as typeof fetch;
-  return { calls, restore: () => { globalThis.fetch = original; } };
+async function tempMount(): Promise<string> {
+  return mkdtemp(path.join(tmpdir(), 'workforce-runtime-'));
 }
 
-test('notion createPage posts parent, properties, and children', async () => {
-  const fetchMock = mockFetch([
-    { json: { ok: true, data: { id: 'page_1', url: 'https://notion.so/page_1' } } }
-  ]);
-
+test('notion createPage writes a database page draft', async () => {
+  const root = await tempMount();
   try {
-    const client = createNotionClient({ connectionId: 'notion_conn', relayfileBaseUrl: 'https://relay.test' });
-    const page = await client.createPage(
+    const client = createNotionClient({ relayfileMountRoot: root });
+    await client.createPage(
       { database_id: 'db_1' },
       { Name: { title: [{ text: { content: 'Digest' } }] } },
       [{ object: 'block', type: 'paragraph' }]
     );
 
-    assert.deepEqual(page, { id: 'page_1', url: 'https://notion.so/page_1' });
-    assert.equal(fetchMock.calls[0].url, 'https://relay.test/api/v1/proxy/notion');
-    assert.deepEqual(JSON.parse(String(fetchMock.calls[0].init?.body)), {
-      connectionId: 'notion_conn',
-      endpoint: '/v1/pages',
-      method: 'POST',
-      data: {
-        parent: { database_id: 'db_1' },
-        properties: { Name: { title: [{ text: { content: 'Digest' } }] } },
-        children: [{ object: 'block', type: 'paragraph' }]
-      },
-      headers: { 'notion-version': '2022-06-28' }
+    const dir = path.join(root, 'notion/databases/db_1/pages');
+    const files = await readdir(dir);
+    assert.equal(files.length, 1);
+    assert.deepEqual(JSON.parse(await readFile(path.join(dir, files[0] ?? ''), 'utf8')), {
+      properties: { Name: { title: [{ text: { content: 'Digest' } }] } },
+      children: [{ object: 'block', type: 'paragraph' }]
     });
   } finally {
-    fetchMock.restore();
+    await rm(root, { recursive: true, force: true });
   }
 });
 
-test('notion errors are retryable for provider 429 responses', async () => {
-  const fetchMock = mockFetch([
-    { status: 429, text: 'rate limited' }
-  ]);
-
-  try {
-    const client = createNotionClient({ connectionId: 'notion_conn', relayfileBaseUrl: 'https://relay.test' });
-    await assert.rejects(
-      () => client.getPage('page_1'),
-      (error) => {
-        assert.ok(error instanceof WorkforceIntegrationError);
-        assert.equal(error.provider, 'notion');
-        assert.equal(error.operation, 'getPage');
-        assert.equal(error.retryable, true);
-        return true;
-      }
-    );
-  } finally {
-    fetchMock.restore();
-  }
+test('notion createPage requires a database parent for file writeback', async () => {
+  const client = createNotionClient({ relayfileMountRoot: '/tmp/unused' });
+  await assert.rejects(
+    () => client.createPage({}, {}, []),
+    /parent\.database_id/
+  );
 });

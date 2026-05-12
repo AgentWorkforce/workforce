@@ -1,156 +1,154 @@
+import { randomUUID } from 'node:crypto';
+import { mkdir, readFile, readdir, rename, writeFile } from 'node:fs/promises';
+import path from 'node:path';
 import { WorkforceIntegrationError } from '../errors.js';
 
 export interface IntegrationClientOptions {
+  relayfileMountRoot?: string;
+  relayfileRoot?: string;
+  mountRoot?: string;
+  workspaceCwd?: string;
+  writebackTimeoutMs?: number;
+  writebackPollMs?: number;
   connectionId?: string;
-  relayfileBaseUrl: string;
+  relayfileBaseUrl?: string;
   relayfileApiToken?: string;
   cloudApiToken?: string;
   workspaceId?: string;
   slackTeamId?: string;
 }
 
-export interface ProviderRequestOptions<TBody = unknown> {
-  provider: string;
-  operation: string;
-  client: IntegrationClientOptions;
-  endpoint: string;
-  method?: string;
-  body?: TBody;
-  params?: Record<string, string>;
-  headers?: Record<string, string>;
-  parseAs?: 'json' | 'text' | 'void';
+export interface WritebackReceipt {
+  created?: string;
+  path?: string;
+  url?: string;
+  id?: string;
+  [key: string]: unknown;
 }
 
-interface HttpFailure {
-  status: number;
-  statusText: string;
-  body: string;
-  code?: string;
-}
-
-function retryableStatus(status: number): boolean {
-  return status === 429 || status >= 500;
+export interface WritebackResult {
+  path: string;
+  absolutePath: string;
+  receipt?: WritebackReceipt;
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === 'object' && value !== null && !Array.isArray(value);
 }
 
-function readString(value: unknown): string | undefined {
-  return typeof value === 'string' && value.trim().length > 0 ? value.trim() : undefined;
+export function encodeSegment(value: string | number): string {
+  return encodeURIComponent(String(value));
 }
 
-function retryableFailure(cause: unknown): boolean {
-  if (isRecord(cause) && 'status' in cause) {
-    return retryableStatus(Number(cause.status));
-  }
-  return false;
+export function draftFile(prefix: string): string {
+  return `${prefix} ${randomUUID()}.json`;
 }
 
-function proxyPath(provider: string): string {
-  return `/api/v1/proxy/${encodeURIComponent(provider)}`;
+export function resolveMountRoot(client: IntegrationClientOptions): string {
+  return path.resolve(
+    client.relayfileMountRoot ??
+      client.relayfileRoot ??
+      client.mountRoot ??
+      process.env.RELAYFILE_MOUNT_ROOT ??
+      process.env.RELAYFILE_ROOT ??
+      client.workspaceCwd ??
+      process.cwd()
+  );
 }
 
-function normalizeEndpoint(endpoint: string): string {
-  const trimmed = endpoint.trim();
-  return trimmed.startsWith('/') ? trimmed : `/${trimmed}`;
+function toAbsolutePath(client: IntegrationClientOptions, relayPath: string): string {
+  const root = resolveMountRoot(client);
+  const normalized = relayPath.startsWith('/') ? relayPath.slice(1) : relayPath;
+  const absolute = path.resolve(root, normalized);
+  const relative = path.relative(root, absolute);
+  if (relative.startsWith('..') || path.isAbsolute(relative)) {
+    throw new Error(`Relayfile path escapes mount root: ${relayPath}`);
+  }
+  return absolute;
 }
 
-function buildProxyBody<TBody>(options: ProviderRequestOptions<TBody>): Record<string, unknown> {
-  const body: Record<string, unknown> = {
-    endpoint: normalizeEndpoint(options.endpoint),
-    method: options.method ?? (options.body === undefined ? 'GET' : 'POST')
-  };
-
-  const workspaceId = readString(options.client.workspaceId);
-  const slackTeamId = readString(options.client.slackTeamId);
-  const connectionId = readString(options.client.connectionId);
-
-  if (workspaceId) {
-    body.workspaceId = workspaceId;
-  }
-  if (slackTeamId) {
-    body.slackTeamId = slackTeamId;
-  }
-  if (options.provider !== 'slack' && connectionId) {
-    body.connectionId = connectionId;
-  }
-  if (options.body !== undefined) {
-    body.data = options.body;
-  }
-  if (options.params !== undefined) {
-    body.params = options.params;
-  }
-  if (options.provider !== 'slack' && options.headers !== undefined) {
-    body.headers = options.headers;
-  }
-
-  return body;
-}
-
-function unwrapProxyPayload<TResult>(payload: unknown): TResult {
-  if (!isRecord(payload) || typeof payload.ok !== 'boolean') {
-    return payload as TResult;
-  }
-
-  if (!payload.ok) {
-    const code = readString(payload.code);
-    throw {
-      status: code === 'rate_limited' ? 429 : code === 'upstream_error' ? 502 : 400,
-      statusText: 'Proxy Error',
-      body: readString(payload.error) ?? 'Provider proxy request failed',
-      code
-    } satisfies HttpFailure;
-  }
-
-  return ('data' in payload ? payload.data : undefined) as TResult;
-}
-
-export async function providerRequest<TResult = unknown, TBody = unknown>(
-  options: ProviderRequestOptions<TBody>
-): Promise<TResult> {
-  const baseUrl = options.client.relayfileBaseUrl.replace(/\/+$/, '');
-  const proxyUrl = `${baseUrl}${proxyPath(options.provider)}`;
-  const apiToken = options.client.cloudApiToken ?? options.client.relayfileApiToken;
-
+export async function readJsonFile<T>(
+  client: IntegrationClientOptions,
+  provider: string,
+  operation: string,
+  relayPath: string
+): Promise<T> {
   try {
-    const response = await fetch(proxyUrl, {
-      method: 'POST',
-      headers: {
-        accept: 'application/json',
-        'content-type': 'application/json',
-        ...(apiToken ? { authorization: `Bearer ${apiToken}` } : {})
-      },
-      body: JSON.stringify(buildProxyBody(options))
-    });
-
-    if (!response.ok) {
-      const body = await response.text();
-      throw {
-        status: response.status,
-        statusText: response.statusText,
-        body
-      } satisfies HttpFailure;
-    }
-
-    if (options.parseAs === 'void' || response.status === 204) {
-      return undefined as TResult;
-    }
-    const payload = await response.json();
-    const data = unwrapProxyPayload<TResult>(payload);
-    if (options.parseAs === 'text' && typeof data !== 'string') {
-      return JSON.stringify(data) as TResult;
-    }
-    return data;
+    const absolutePath = toAbsolutePath(client, relayPath);
+    return JSON.parse(await readFile(absolutePath, 'utf8')) as T;
   } catch (cause) {
-    if (cause instanceof WorkforceIntegrationError) {
-      throw cause;
+    throw new WorkforceIntegrationError({ provider, operation, cause, retryable: false });
+  }
+}
+
+export async function listJsonFiles<T>(
+  client: IntegrationClientOptions,
+  provider: string,
+  operation: string,
+  relayDir: string
+): Promise<Array<{ path: string; value: T }>> {
+  try {
+    const absoluteDir = toAbsolutePath(client, relayDir);
+    const entries = await readdir(absoluteDir).catch(() => []);
+    const out: Array<{ path: string; value: T }> = [];
+    for (const entry of entries) {
+      if (!entry.endsWith('.json')) continue;
+      const relayPath = `${relayDir.replace(/\/+$/, '')}/${entry}`;
+      const value = JSON.parse(await readFile(path.join(absoluteDir, entry), 'utf8')) as T;
+      out.push({ path: relayPath, value });
     }
-    throw new WorkforceIntegrationError({
-      provider: options.provider,
-      operation: options.operation,
-      cause,
-      retryable: retryableFailure(cause)
-    });
+    return out;
+  } catch (cause) {
+    throw new WorkforceIntegrationError({ provider, operation, cause, retryable: false });
+  }
+}
+
+export async function writeJsonFile(
+  client: IntegrationClientOptions,
+  provider: string,
+  operation: string,
+  relayPath: string,
+  body: unknown
+): Promise<WritebackResult> {
+  try {
+    const absolutePath = toAbsolutePath(client, relayPath);
+    await mkdir(path.dirname(absolutePath), { recursive: true });
+    const tempPath = `${absolutePath}.tmp-${randomUUID()}`;
+    await writeFile(tempPath, `${JSON.stringify(body, null, 2)}\n`, 'utf8');
+    await rename(tempPath, absolutePath);
+    const receipt = await waitForReceipt(absolutePath, client);
+    return { path: relayPath, absolutePath, ...(receipt ? { receipt } : {}) };
+  } catch (cause) {
+    throw new WorkforceIntegrationError({ provider, operation, cause, retryable: false });
+  }
+}
+
+async function waitForReceipt(
+  absolutePath: string,
+  client: IntegrationClientOptions
+): Promise<WritebackReceipt | undefined> {
+  const timeoutMs = client.writebackTimeoutMs ?? 0;
+  const deadline = Date.now() + timeoutMs;
+  do {
+    const parsed = await readCurrentJson(absolutePath);
+    if (
+      isRecord(parsed) &&
+      (typeof parsed.created === 'string' ||
+        typeof parsed.path === 'string' ||
+        typeof parsed.id === 'string')
+    ) {
+      return parsed as WritebackReceipt;
+    }
+    if (timeoutMs <= 0) return undefined;
+    await new Promise((resolve) => setTimeout(resolve, client.writebackPollMs ?? 250));
+  } while (Date.now() < deadline);
+  return undefined;
+}
+
+async function readCurrentJson(absolutePath: string): Promise<unknown> {
+  try {
+    return JSON.parse(await readFile(absolutePath, 'utf8')) as unknown;
+  } catch {
+    return undefined;
   }
 }
