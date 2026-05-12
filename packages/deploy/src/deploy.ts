@@ -179,7 +179,8 @@ export async function deploy(opts: DeployOptions, resolvers: DeployResolvers = {
     bundle,
     workspace,
     io,
-    ...(opts.detach ? { detach: true } : {})
+    ...(opts.detach ? { detach: true } : {}),
+    ...(opts.byoSandbox ? { byoSandbox: true } : {})
   });
   io.info(`launched: ${mode}/${handle.id}`);
 

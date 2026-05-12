@@ -101,6 +101,11 @@ export interface ModeLaunchInput {
   env?: Record<string, string>;
   io: DeployIO;
   detach?: boolean;
+  /**
+   * Force BYO Daytona auth even when the user is logged in to workforce
+   * cloud. Mode-specific (sandbox launcher only); other modes ignore.
+   */
+  byoSandbox?: boolean;
 }
 
 export interface ModeLaunchHandle {

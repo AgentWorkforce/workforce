@@ -1,74 +1,48 @@
-import { readFile } from 'node:fs/promises';
-import path from 'node:path';
-import { Daytona, type Sandbox } from '@daytonaio/sdk';
 import type {
   ModeLaunchInput,
   ModeLaunchHandle,
   ModeLauncher
 } from '../types.js';
+import {
+  SANDBOX_BUNDLE_DIR,
+  createByoSandboxClient,
+  createProxySandboxClient,
+  type SandboxClient,
+  type SandboxHandle
+} from './sandbox-client.js';
+
+const DEFAULT_CLOUD_URL = 'https://cloud.agentworkforce.com';
 
 /**
- * Working directory the runner is invoked from inside the sandbox. Same
- * mount root cloud's DaytonaRuntime defaults to, so persona authors get
- * consistent paths whether they run under workforce or cloud workflows.
- */
-const SANDBOX_BUNDLE_DIR = '/home/daytona/bundle';
-
-/**
- * Daytona authentication resolved before sandbox creation. Workforce
- * supports two paths:
+ * Daytona-backed sandbox launcher with two auth paths:
  *
- *   - BYO  — `DAYTONA_API_KEY` (+ optional `DAYTONA_ORGANIZATION_ID`)
- *            in the user's env. Zero workforce-cloud roundtrips.
- *   - Workforce-managed — a workspace token mints a Daytona JWT against
- *            the workforce cloud API (`POST /workspaces/:id/sandboxes`).
- *            Lights up once the cloud endpoint ships.
- */
-export interface SandboxAuth {
-  apiKey?: string;
-  jwtToken?: string;
-  organizationId?: string;
-}
-
-export function resolveSandboxAuth(): SandboxAuth | undefined {
-  const apiKey = process.env.DAYTONA_API_KEY;
-  const jwtToken = process.env.DAYTONA_JWT_TOKEN;
-  const organizationId = process.env.DAYTONA_ORGANIZATION_ID;
-  if (!apiKey && !jwtToken) return undefined;
-  return {
-    ...(apiKey ? { apiKey } : {}),
-    ...(jwtToken ? { jwtToken } : {}),
-    ...(organizationId ? { organizationId } : {})
-  };
-}
-
-/**
- * Daytona-backed sandbox launcher. Creates a TypeScript sandbox, uploads
- * the bundle, and starts the runner with a long timeout (effectively
- * unlimited for cron-driven agents). The sandbox stays alive after the
- * exec call returns so subsequent envelopes the runner expects on stdin
- * have a place to land — see `stop()` for the explicit teardown contract.
+ *   - **BYO** — `DAYTONA_API_KEY` (or `DAYTONA_JWT_TOKEN` +
+ *     `DAYTONA_ORGANIZATION_ID`) is present in env. The launcher talks
+ *     directly to Daytona via `@daytonaio/sdk`. Zero workforce-cloud
+ *     round-trips; useful in CI or for power users with their own
+ *     Daytona accounts.
+ *   - **Workforce-managed** — `DAYTONA_API_KEY` is absent but
+ *     `WORKFORCE_WORKSPACE_TOKEN` is set (either via `workforce login`
+ *     or exported manually). The launcher POSTs the cloud sandboxes
+ *     endpoint to mint a proxy handle and routes all exec/upload
+ *     traffic through cloud's per-sandbox `/exec` and `/files` URLs.
+ *     Cloud holds the org Daytona credentials so users never see them.
  *
- * Streaming: Daytona's `executeCommand` is final-result-only. The runner
- * exits when its envelope stream ends, and the resulting stdout/stderr
- * blob is forwarded to the DeployIO at that point. Live tail support
- * would require `process.createSession`, which is gated on a future
- * iteration.
+ * Mode picking is purely env-based today. Pass `--byo-sandbox` on the
+ * deploy CLI to force BYO when both are configured (handled in
+ * `resolveLauncher`, not here).
+ *
+ * Streaming: cloud's `/exec` endpoint and Daytona's `executeCommand` are
+ * both final-result-only. The runner exits when its envelope stream
+ * ends, and the resulting output is forwarded to DeployIO at that
+ * point. Live tail support is gated on a future iteration.
  */
 export const sandboxLauncher: ModeLauncher = {
   async launch(input: ModeLaunchInput): Promise<ModeLaunchHandle> {
-    const auth = resolveSandboxAuth();
-    if (!auth) {
-      throw new Error(
-        'sandbox launcher: no Daytona credentials resolved. Either export DAYTONA_API_KEY (BYO) or run `workforce login` to mint a workforce-managed Daytona token.'
-      );
-    }
-
-    const daytona = new Daytona(auth);
-    const sandbox = await daytona.create({
-      language: 'typescript',
-      name: `wf-${input.persona.id}`,
-      envVars: {
+    const client = resolveSandboxClient(input, input.byoSandbox ? { forceByo: true } : {});
+    const handle = await client.mint({
+      label: `wf-${input.persona.id}`,
+      env: {
         ...(input.env ?? {}),
         WORKFORCE_WORKSPACE_ID: input.workspace,
         WORKFORCE_PERSONA_ID: input.persona.id
@@ -76,24 +50,23 @@ export const sandboxLauncher: ModeLauncher = {
     });
 
     try {
-      await uploadBundle(sandbox, input);
+      await client.uploadBundle(handle, input.bundle);
     } catch (err) {
-      // If upload fails, the sandbox is unrecoverable for this deploy.
-      // Tear it down so we don't leak Daytona resources.
-      await sandbox.delete().catch(() => undefined);
+      // If upload fails the sandbox is unrecoverable for this deploy.
+      // Tear it down so we don't leak Daytona resources or charge for
+      // an idle workforce-managed sandbox.
+      await client.destroy(handle).catch(() => undefined);
       throw err;
     }
 
     const sandboxTimeoutSeconds = resolveTimeoutSeconds(input.persona.sandbox);
 
     let stopping = false;
-    let runner: Promise<{ code: number }> | undefined;
-
     const stop = async (): Promise<void> => {
       if (stopping) return;
       stopping = true;
       try {
-        await sandbox.delete();
+        await client.destroy(handle);
       } catch (err) {
         input.io.warn(
           `sandbox: cleanup failed: ${err instanceof Error ? err.message : String(err)}`
@@ -101,18 +74,15 @@ export const sandboxLauncher: ModeLauncher = {
       }
     };
 
-    runner = (async () => {
+    const done = (async () => {
       try {
-        const result = await sandbox.process.executeCommand(
-          'node runner.mjs',
-          SANDBOX_BUNDLE_DIR,
-          undefined,
-          sandboxTimeoutSeconds
-        );
-        const output = (result.result ?? '').trim();
+        const result = await client.exec(handle, 'node runner.mjs', {
+          cwd: SANDBOX_BUNDLE_DIR,
+          timeoutSeconds: sandboxTimeoutSeconds
+        });
+        const output = result.output.trim();
         if (output.length > 0) input.io.info(`[sandbox] ${output}`);
-        const exitCode = result.exitCode ?? 0;
-        return { code: exitCode };
+        return { code: result.exitCode };
       } catch (err) {
         if (!stopping) {
           input.io.error(
@@ -124,46 +94,59 @@ export const sandboxLauncher: ModeLauncher = {
     })();
 
     return {
-      id: `sandbox:${sandbox.id}`,
+      id: handle.id,
       stop,
-      done: runner
+      done
     };
   }
 };
 
-async function uploadBundle(sandbox: Sandbox, input: ModeLaunchInput): Promise<void> {
-  // Bundle artifacts are tiny (KB-range), so reading them into Buffers
-  // before upload is the simplest correct shape. If/when bundles grow to
-  // the MB range we revisit streaming.
-  const files = await Promise.all([
-    fileUpload(input.bundle.runnerPath, `${SANDBOX_BUNDLE_DIR}/runner.mjs`),
-    fileUpload(input.bundle.bundlePath, `${SANDBOX_BUNDLE_DIR}/agent.bundle.mjs`),
-    fileUpload(input.bundle.personaCopyPath, `${SANDBOX_BUNDLE_DIR}/persona.json`),
-    fileUpload(input.bundle.packageJsonPath, `${SANDBOX_BUNDLE_DIR}/package.json`)
-  ]);
-  await sandbox.fs.uploadFiles(files);
+/**
+ * Pick the sandbox client implementation based on env. Public so the
+ * deploy orchestrator (and tests) can plug in an explicit choice.
+ */
+export function resolveSandboxClient(
+  input: Pick<ModeLaunchInput, 'workspace' | 'persona' | 'env'> & Partial<Pick<ModeLaunchInput, 'io'>>,
+  overrides: {
+    /** Force BYO even when both BYO and workforce-managed are configured. */
+    forceByo?: boolean;
+    /** Inject a custom client (tests). */
+    client?: SandboxClient;
+  } = {}
+): SandboxClient {
+  if (overrides.client) return overrides.client;
 
-  // The bundle's package.json declares `@agentworkforce/runtime` as a
-  // dependency. We let npm resolve the version *from the staged bundle's
-  // package.json* rather than pinning `@latest` here — pinning `@latest`
-  // would silently drift away from the runtime version the bundle was
-  // tested against.
-  const install = await sandbox.process.executeCommand(
-    'npm install --prefer-offline --no-audit --no-fund --loglevel=error',
-    SANDBOX_BUNDLE_DIR,
-    undefined,
-    600
-  );
-  if ((install.exitCode ?? 0) !== 0) {
+  const apiKey = process.env.DAYTONA_API_KEY?.trim();
+  const jwtToken = process.env.DAYTONA_JWT_TOKEN?.trim();
+  const organizationId = process.env.DAYTONA_ORGANIZATION_ID?.trim();
+  const byoAvailable = Boolean(apiKey || jwtToken);
+
+  if (overrides.forceByo || byoAvailable) {
+    if (!byoAvailable) {
+      throw new Error(
+        'sandbox launcher: --byo-sandbox requested but no Daytona credentials are in env. Set DAYTONA_API_KEY (or DAYTONA_JWT_TOKEN + DAYTONA_ORGANIZATION_ID).'
+      );
+    }
+    return createByoSandboxClient({
+      ...(apiKey ? { apiKey } : {}),
+      ...(jwtToken ? { jwtToken } : {}),
+      ...(organizationId ? { organizationId } : {})
+    });
+  }
+
+  const workspaceToken = process.env.WORKFORCE_WORKSPACE_TOKEN?.trim();
+  if (!workspaceToken) {
     throw new Error(
-      `sandbox: npm install failed (exit ${install.exitCode}): ${install.result?.slice(0, 400) ?? ''}`
+      'sandbox launcher: no Daytona credentials and no workforce workspace token. Either export DAYTONA_API_KEY, or run `workforce login` (sets WORKFORCE_WORKSPACE_TOKEN) so we can mint a workforce-managed sandbox.'
     );
   }
-}
-
-async function fileUpload(localPath: string, remotePath: string): Promise<{ source: Buffer; destination: string }> {
-  const source = await readFile(localPath);
-  return { source, destination: remotePath };
+  const cloudUrl = (process.env.WORKFORCE_CLOUD_URL?.trim() || DEFAULT_CLOUD_URL).replace(/\/$/, '');
+  return createProxySandboxClient({
+    cloudUrl,
+    workspaceId: input.workspace,
+    workspaceToken,
+    personaId: input.persona.id
+  });
 }
 
 function resolveTimeoutSeconds(sandbox: ModeLaunchInput['persona']['sandbox']): number | undefined {
@@ -172,4 +155,36 @@ function resolveTimeoutSeconds(sandbox: ModeLaunchInput['persona']['sandbox']): 
     return sandbox.timeoutSeconds;
   }
   return undefined;
+}
+
+// Re-exported for tests + power users wanting to compose the client manually.
+export {
+  SANDBOX_BUNDLE_DIR,
+  createByoSandboxClient,
+  createProxySandboxClient,
+  type SandboxClient,
+  type SandboxHandle
+} from './sandbox-client.js';
+
+/**
+ * Legacy alias for the env-resolved Daytona credentials surface. Kept so
+ * existing imports of `resolveSandboxAuth` continue to compile; new code
+ * should use `resolveSandboxClient` instead.
+ */
+export interface SandboxAuth {
+  apiKey?: string;
+  jwtToken?: string;
+  organizationId?: string;
+}
+
+export function resolveSandboxAuth(): SandboxAuth | undefined {
+  const apiKey = process.env.DAYTONA_API_KEY?.trim();
+  const jwtToken = process.env.DAYTONA_JWT_TOKEN?.trim();
+  const organizationId = process.env.DAYTONA_ORGANIZATION_ID?.trim();
+  if (!apiKey && !jwtToken) return undefined;
+  return {
+    ...(apiKey ? { apiKey } : {}),
+    ...(jwtToken ? { jwtToken } : {}),
+    ...(organizationId ? { organizationId } : {})
+  };
 }
