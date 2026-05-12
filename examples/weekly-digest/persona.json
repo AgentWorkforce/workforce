@@ -1,0 +1,77 @@
+{
+  "id": "weekly-digest",
+  "intent": "research",
+  "tags": ["analytics"],
+  "description": "Weekly competitive intel digest that searches the web, dedupes findings, and posts a single GitHub issue.",
+  "cloud": true,
+  "integrations": {
+    "github": {
+      "scope": {
+        "repo": "AgentWorkforce/weekly-digest"
+      }
+    }
+  },
+  "schedules": [
+    {
+      "name": "weekly",
+      "cron": "0 9 * * 6",
+      "tz": "UTC"
+    }
+  ],
+  "sandbox": true,
+  "memory": {
+    "enabled": true,
+    "scopes": ["workspace"],
+    "ttlDays": 90
+  },
+  "inputs": {
+    "TOPICS": {
+      "description": "Comma-separated topics to include in the weekly digest.",
+      "default": "AgentWorkforce,AI coding agents,developer productivity"
+    },
+    "GITHUB_OWNER": {
+      "description": "GitHub owner for the digest issue.",
+      "default": "AgentWorkforce"
+    },
+    "GITHUB_REPO": {
+      "description": "GitHub repository for the digest issue.",
+      "default": "weekly-digest"
+    }
+  },
+  "onEvent": "./agent.ts",
+  "tiers": {
+    "best": {
+      "harness": "codex",
+      "model": "gpt-5.5",
+      "systemPrompt": "Prepare concise, sourced competitive intelligence digests for engineering teams.",
+      "harnessSettings": {
+        "reasoning": "high",
+        "timeoutSeconds": 1200,
+        "sandboxMode": "workspace-write",
+        "workspaceWriteNetworkAccess": true
+      }
+    },
+    "best-value": {
+      "harness": "codex",
+      "model": "gpt-5.4",
+      "systemPrompt": "Prepare concise, sourced competitive intelligence digests for engineering teams.",
+      "harnessSettings": {
+        "reasoning": "medium",
+        "timeoutSeconds": 900,
+        "sandboxMode": "workspace-write",
+        "workspaceWriteNetworkAccess": true
+      }
+    },
+    "minimum": {
+      "harness": "codex",
+      "model": "gpt-5.4-mini",
+      "systemPrompt": "Prepare concise, sourced competitive intelligence digests for engineering teams.",
+      "harnessSettings": {
+        "reasoning": "low",
+        "timeoutSeconds": 600,
+        "sandboxMode": "workspace-write",
+        "workspaceWriteNetworkAccess": true
+      }
+    }
+  }
+}

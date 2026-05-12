@@ -16,6 +16,6 @@
     "typecheck:examples": "tsc -p examples/tsconfig.json --noEmit",
     "test": "corepack pnpm -r test",
     "lint": "corepack pnpm -r lint",
-    "check": "corepack pnpm run lint && corepack pnpm run typecheck && corepack pnpm run test"
+    "check": "corepack pnpm run build && corepack pnpm run lint && corepack pnpm run typecheck && corepack pnpm run test"
   }
 }

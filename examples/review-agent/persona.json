@@ -1,0 +1,71 @@
+{
+  "id": "review-agent",
+  "intent": "review",
+  "tags": ["review"],
+  "description": "Reviews opened PRs, responds to @mentions in comments, attempts autofix on red CI.",
+  "cloud": true,
+  "useSubscription": true,
+  "integrations": {
+    "github": {
+      "triggers": [
+        { "on": "pull_request.opened" },
+        { "on": "issue_comment.created", "match": "@mention" },
+        { "on": "pull_request_review_comment.created" },
+        { "on": "check_run.completed", "where": "conclusion=failure" }
+      ]
+    },
+    "slack": {
+      "triggers": [{ "on": "app_mention" }]
+    }
+  },
+  "sandbox": true,
+  "memory": {
+    "enabled": true,
+    "scopes": ["session", "workspace"]
+  },
+  "traits": {
+    "voice": "professional-warm",
+    "formality": "low",
+    "proactivity": "medium",
+    "riskPosture": "conservative",
+    "domain": "engineering",
+    "vocabulary": ["PR", "diff", "CI"],
+    "preferMarkdown": true
+  },
+  "onEvent": "./agent.ts",
+  "tiers": {
+    "best": {
+      "harness": "codex",
+      "model": "gpt-5.5",
+      "systemPrompt": "Review pull requests for correctness, regression risk, security concerns, and missing tests. Be concise and concrete.",
+      "harnessSettings": {
+        "reasoning": "high",
+        "timeoutSeconds": 1800,
+        "sandboxMode": "workspace-write",
+        "workspaceWriteNetworkAccess": true
+      }
+    },
+    "best-value": {
+      "harness": "codex",
+      "model": "gpt-5.4",
+      "systemPrompt": "Review pull requests for correctness, regression risk, security concerns, and missing tests. Be concise and concrete.",
+      "harnessSettings": {
+        "reasoning": "medium",
+        "timeoutSeconds": 1200,
+        "sandboxMode": "workspace-write",
+        "workspaceWriteNetworkAccess": true
+      }
+    },
+    "minimum": {
+      "harness": "codex",
+      "model": "gpt-5.4-mini",
+      "systemPrompt": "Review pull requests for correctness, regression risk, security concerns, and missing tests. Be concise and concrete.",
+      "harnessSettings": {
+        "reasoning": "low",
+        "timeoutSeconds": 900,
+        "sandboxMode": "workspace-write",
+        "workspaceWriteNetworkAccess": true
+      }
+    }
+  }
+}

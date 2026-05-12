@@ -1,5 +1,5 @@
 {
-  "name": "@agentworkforce/persona-kit",
+  "name": "@agentworkforce/runtime",
   "version": "2.1.4",
   "private": false,
   "type": "module",
@@ -9,34 +9,38 @@
     ".": {
       "types": "./dist/index.d.ts",
       "default": "./dist/index.js"
+    },
+    "./clients": {
+      "types": "./dist/clients/index.d.ts",
+      "default": "./dist/clients/index.js"
+    },
+    "./raw": {
+      "types": "./dist/raw.d.ts",
+      "default": "./dist/raw.js"
+    },
+    "./runner": {
+      "types": "./dist/runner.d.ts",
+      "default": "./dist/runner.js"
     }
   },
   "files": [
     "dist",
-    "schemas",
     "README.md",
     "package.json"
   ],
   "repository": {
     "type": "git",
     "url": "https://github.com/AgentWorkforce/workforce",
-    "directory": "packages/persona-kit"
+    "directory": "packages/runtime"
   },
   "publishConfig": {
     "access": "public"
   },
   "scripts": {
-    "prebuild": "node scripts/emit-schema.mjs",
     "build": "tsc -p tsconfig.json",
     "dev": "tsc -p tsconfig.json --watch --preserveWatchOutput",
     "typecheck": "tsc -p tsconfig.json --noEmit",
-    "test": "tsc -p tsconfig.json && node --test dist/*.test.js && node --experimental-strip-types --test scripts/emit-schema.test.ts",
+    "test": "tsc -p tsconfig.json && node --test dist/**/*.test.js",
     "lint": "tsc -p tsconfig.json --noEmit"
-  },
-  "dependencies": {
-    "@relayfile/local-mount": "^0.7.0"
-  },
-  "devDependencies": {
-    "ts-json-schema-generator": "^2.9.0"
   }
 }

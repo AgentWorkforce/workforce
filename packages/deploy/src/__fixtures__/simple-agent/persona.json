@@ -1,0 +1,10 @@
+{
+  "id": "deploy-fixture",
+  "intent": "documentation",
+  "tags": ["documentation"],
+  "description": "Deploy fixture persona.",
+  "skills": [],
+  "tiers": {},
+  "cloud": true,
+  "onEvent": "./agent.ts"
+}

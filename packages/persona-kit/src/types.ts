@@ -145,6 +145,49 @@ export interface PersonaMount {
   readonlyPatterns?: string[];
 }
 
+export interface TriggerConfig {
+  on: string;
+  match?: string;
+  where?: string;
+}
+
+export interface IntegrationConfig {
+  scope?: Record<string, unknown>;
+  triggers?: TriggerConfig[];
+}
+
+export interface Schedule {
+  name: string;
+  cron: string;
+  tz?: string;
+}
+
+export interface SandboxConfig {
+  enabled?: boolean;
+  timeoutSeconds?: number;
+  env?: Record<string, string>;
+}
+
+export type MemoryScope = 'session' | 'user' | 'workspace';
+
+export interface MemoryConfig {
+  enabled?: boolean;
+  scopes?: MemoryScope[];
+  ttlDays?: number;
+  autoPromote?: boolean;
+  dedupMs?: number;
+}
+
+export interface Traits {
+  voice?: string;
+  formality?: string;
+  proactivity?: string;
+  riskPosture?: string;
+  domain?: string;
+  vocabulary?: string[];
+  preferMarkdown?: boolean;
+}
+
 /**
  * MCP server config, structured to match Claude Code's `--mcp-config` JSON
  * verbatim so the whole object can be passed through untouched. Values inside
@@ -215,6 +258,25 @@ export interface PersonaSpec {
    * launchers that run the harness inside `@relayfile/local-mount`.
    */
   mount?: PersonaMount;
+  /** Deploy-v1 opt-in: this persona can be run by `workforce deploy`. */
+  cloud?: boolean;
+  /**
+   * Use the user's connected LLM subscription via Agent Relay instead of
+   * workforce-billed inference.
+   */
+  useSubscription?: boolean;
+  /** Relayfile provider triggers consumed by the deploy runtime. */
+  integrations?: Record<string, IntegrationConfig>;
+  /** Cron schedules consumed by the deploy runtime. */
+  schedules?: Schedule[];
+  /** Daytona sandbox policy for deployed agents. */
+  sandbox?: boolean | SandboxConfig;
+  /** Agent memory policy for deployed agents. */
+  memory?: boolean | MemoryConfig;
+  /** Conversational rendering traits for interactive deployed agents. */
+  traits?: Traits;
+  /** Path to the deployed event handler, relative to the persona JSON. */
+  onEvent?: string;
   /**
    * Author-supplied path to a `CLAUDE.md` sidecar that should be applied
    * when the persona runs under the claude harness. The path is relative

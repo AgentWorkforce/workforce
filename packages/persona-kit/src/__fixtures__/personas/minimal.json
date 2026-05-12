@@ -1,0 +1,27 @@
+{
+  "id": "minimal",
+  "intent": "documentation",
+  "tags": ["documentation"],
+  "description": "A minimal persona fixture without deploy fields.",
+  "skills": [],
+  "tiers": {
+    "best": {
+      "harness": "claude",
+      "model": "anthropic/claude-3-5-sonnet",
+      "systemPrompt": "Write clear documentation.",
+      "harnessSettings": { "reasoning": "medium", "timeoutSeconds": 300 }
+    },
+    "best-value": {
+      "harness": "codex",
+      "model": "gpt-5",
+      "systemPrompt": "Write clear documentation.",
+      "harnessSettings": { "reasoning": "medium", "timeoutSeconds": 300 }
+    },
+    "minimum": {
+      "harness": "opencode",
+      "model": "qwen/qwen3-coder",
+      "systemPrompt": "Write clear documentation.",
+      "harnessSettings": { "reasoning": "low", "timeoutSeconds": 300 }
+    }
+  }
+}

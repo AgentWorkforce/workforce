@@ -1,0 +1,37 @@
+{
+  "id": "invalid-unknown-trigger",
+  "intent": "review",
+  "tags": ["review"],
+  "description": "A schema-valid persona fixture with one trigger lint warning.",
+  "skills": [],
+  "cloud": true,
+  "integrations": {
+    "github": {
+      "triggers": [
+        { "on": "pull_request.opened" },
+        { "on": "pull_request.evaporated" }
+      ]
+    }
+  },
+  "onEvent": "./agent.ts",
+  "tiers": {
+    "best": {
+      "harness": "claude",
+      "model": "anthropic/claude-3-5-sonnet",
+      "systemPrompt": "Review code.",
+      "harnessSettings": { "reasoning": "medium", "timeoutSeconds": 300 }
+    },
+    "best-value": {
+      "harness": "codex",
+      "model": "gpt-5",
+      "systemPrompt": "Review code.",
+      "harnessSettings": { "reasoning": "medium", "timeoutSeconds": 300 }
+    },
+    "minimum": {
+      "harness": "opencode",
+      "model": "qwen/qwen3-coder",
+      "systemPrompt": "Review code.",
+      "harnessSettings": { "reasoning": "low", "timeoutSeconds": 300 }
+    }
+  }
+}

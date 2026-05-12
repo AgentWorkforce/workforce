@@ -18,6 +18,8 @@ export const PERSONA_INTENTS = [
   'review',
   'architecture-plan',
   'requirements-analysis',
+  'research',
+  'implementation',
   'debugging',
   'security-review',
   'documentation',

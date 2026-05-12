@@ -5,15 +5,20 @@ import {
   assertSidecarPath,
   INPUT_NAME_RE,
   parseHarnessSettings,
+  parseIntegrations,
   parseInputs,
+  parseMemory,
   parseMcpServers,
   parseMount,
   parsePermissions,
   parsePersonaSpec,
+  parseSandbox,
+  parseSchedules,
   parseSkills,
   parseStringList,
   parseStringMap,
-  parseTags
+  parseTags,
+  parseTraits
 } from './parse.js';
 
 const baseRuntime = {
@@ -47,6 +52,39 @@ test('parsePersonaSpec strips unknown top-level fields silently', () => {
   const spec = parsePersonaSpec(raw, 'documentation');
   assert.ok(!('unknownField' in spec), 'unknown fields are not preserved on the parsed spec');
   assert.ok(!('extra' in spec));
+});
+
+test('parsePersonaSpec accepts deploy-v1 optional fields', () => {
+  const spec = parsePersonaSpec(
+    validSpec({
+      cloud: true,
+      useSubscription: true,
+      integrations: {
+        github: {
+          scope: { repo: 'AgentWorkforce/workforce' },
+          triggers: [{ on: 'pull_request.opened' }]
+        }
+      },
+      schedules: [{ name: 'weekly', cron: '0 9 * * 6', tz: 'UTC' }],
+      sandbox: { enabled: true, timeoutSeconds: 1800, env: { NODE_ENV: 'production' } },
+      memory: { enabled: true, scopes: ['workspace'], ttlDays: 30 },
+      traits: { voice: 'professional-warm', preferMarkdown: true },
+      onEvent: './agent.ts'
+    }),
+    'documentation'
+  );
+
+  assert.equal(spec.cloud, true);
+  assert.equal(spec.integrations?.github.triggers?.[0].on, 'pull_request.opened');
+  assert.equal(spec.schedules?.[0].name, 'weekly');
+  assert.deepEqual(spec.sandbox, {
+    enabled: true,
+    timeoutSeconds: 1800,
+    env: { NODE_ENV: 'production' }
+  });
+  assert.deepEqual(spec.memory, { enabled: true, scopes: ['workspace'], ttlDays: 30 });
+  assert.equal(spec.traits?.preferMarkdown, true);
+  assert.equal(spec.onEvent, './agent.ts');
 });
 
 test('parsePersonaSpec throws when intent does not match the expected intent', () => {

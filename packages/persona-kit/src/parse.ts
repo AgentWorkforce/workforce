@@ -13,7 +13,10 @@ import type {
   CodexSandboxMode,
   Harness,
   HarnessSettings,
+  IntegrationConfig,
   McpServerSpec,
+  MemoryConfig,
+  MemoryScope,
   PermissionMode,
   PersonaInputSpec,
   PersonaIntent,
@@ -25,7 +28,10 @@ import type {
   PersonaSpec,
   PersonaTag,
   PersonaTier,
-  SidecarMdMode
+  SandboxConfig,
+  Schedule,
+  SidecarMdMode,
+  Traits
 } from './types.js';
 
 export function isObject(value: unknown): value is Record<string, unknown> {
@@ -450,6 +456,204 @@ export function parseMcpServers(
   return out;
 }
 
+export function parseIntegrations(
+  value: unknown,
+  context: string
+): Record<string, IntegrationConfig> | undefined {
+  if (value === undefined) return undefined;
+  if (!isObject(value)) {
+    throw new Error(`${context} must be an object if provided`);
+  }
+  const out: Record<string, IntegrationConfig> = {};
+  for (const [provider, raw] of Object.entries(value)) {
+    if (typeof provider !== 'string' || !provider.trim()) {
+      throw new Error(`${context} provider names must be non-empty strings`);
+    }
+    if (!isObject(raw)) {
+      throw new Error(`${context}.${provider} must be an object`);
+    }
+    const integration: IntegrationConfig = {};
+    if (raw.scope !== undefined) {
+      if (!isObject(raw.scope)) {
+        throw new Error(`${context}.${provider}.scope must be an object if provided`);
+      }
+      integration.scope = { ...raw.scope };
+    }
+    if (raw.triggers !== undefined) {
+      if (!Array.isArray(raw.triggers)) {
+        throw new Error(`${context}.${provider}.triggers must be an array if provided`);
+      }
+      integration.triggers = raw.triggers.map((trigger, idx) => {
+        const triggerContext = `${context}.${provider}.triggers[${idx}]`;
+        if (!isObject(trigger)) {
+          throw new Error(`${triggerContext} must be an object`);
+        }
+        if (typeof trigger.on !== 'string' || !trigger.on.trim()) {
+          throw new Error(`${triggerContext}.on must be a non-empty string`);
+        }
+        const parsed: NonNullable<IntegrationConfig['triggers']>[number] = {
+          on: trigger.on
+        };
+        if (trigger.match !== undefined) {
+          if (typeof trigger.match !== 'string' || !trigger.match.trim()) {
+            throw new Error(`${triggerContext}.match must be a non-empty string if provided`);
+          }
+          parsed.match = trigger.match;
+        }
+        if (trigger.where !== undefined) {
+          if (typeof trigger.where !== 'string' || !trigger.where.trim()) {
+            throw new Error(`${triggerContext}.where must be a non-empty string if provided`);
+          }
+          parsed.where = trigger.where;
+        }
+        return parsed;
+      });
+    }
+    out[provider] = integration;
+  }
+  return Object.keys(out).length > 0 ? out : undefined;
+}
+
+export function parseSchedules(value: unknown, context: string): Schedule[] | undefined {
+  if (value === undefined) return undefined;
+  if (!Array.isArray(value)) {
+    throw new Error(`${context} must be an array if provided`);
+  }
+  const names = new Set<string>();
+  const schedules = value.map((entry, idx) => {
+    const entryContext = `${context}[${idx}]`;
+    if (!isObject(entry)) {
+      throw new Error(`${entryContext} must be an object`);
+    }
+    if (typeof entry.name !== 'string' || !entry.name.trim()) {
+      throw new Error(`${entryContext}.name must be a non-empty string`);
+    }
+    if (names.has(entry.name)) {
+      throw new Error(`${entryContext}.name must be unique within schedules`);
+    }
+    names.add(entry.name);
+    if (typeof entry.cron !== 'string' || !entry.cron.trim()) {
+      throw new Error(`${entryContext}.cron must be a non-empty string`);
+    }
+    if (entry.tz !== undefined && (typeof entry.tz !== 'string' || !entry.tz.trim())) {
+      throw new Error(`${entryContext}.tz must be a non-empty string if provided`);
+    }
+    return {
+      name: entry.name,
+      cron: entry.cron,
+      ...(typeof entry.tz === 'string' ? { tz: entry.tz } : {})
+    };
+  });
+  return schedules.length > 0 ? schedules : undefined;
+}
+
+export function parseSandbox(
+  value: unknown,
+  context: string
+): boolean | SandboxConfig | undefined {
+  if (value === undefined) return undefined;
+  if (typeof value === 'boolean') return value;
+  if (!isObject(value)) {
+    throw new Error(`${context} must be a boolean or object if provided`);
+  }
+  const out: SandboxConfig = {};
+  if (value.enabled !== undefined) {
+    if (typeof value.enabled !== 'boolean') {
+      throw new Error(`${context}.enabled must be a boolean if provided`);
+    }
+    out.enabled = value.enabled;
+  }
+  if (value.timeoutSeconds !== undefined) {
+    if (
+      typeof value.timeoutSeconds !== 'number' ||
+      !Number.isFinite(value.timeoutSeconds) ||
+      value.timeoutSeconds <= 0
+    ) {
+      throw new Error(`${context}.timeoutSeconds must be a positive number if provided`);
+    }
+    out.timeoutSeconds = value.timeoutSeconds;
+  }
+  const env = parseStringMap(value.env, `${context}.env`);
+  if (env) out.env = env;
+  return out;
+}
+
+export function parseMemory(
+  value: unknown,
+  context: string
+): boolean | MemoryConfig | undefined {
+  if (value === undefined) return undefined;
+  if (typeof value === 'boolean') return value;
+  if (!isObject(value)) {
+    throw new Error(`${context} must be a boolean or object if provided`);
+  }
+  const out: MemoryConfig = {};
+  if (value.enabled !== undefined) {
+    if (typeof value.enabled !== 'boolean') {
+      throw new Error(`${context}.enabled must be a boolean if provided`);
+    }
+    out.enabled = value.enabled;
+  }
+  if (value.scopes !== undefined) {
+    if (!Array.isArray(value.scopes) || value.scopes.length === 0) {
+      throw new Error(`${context}.scopes must be a non-empty array if provided`);
+    }
+    const allowedScopes: MemoryScope[] = ['session', 'user', 'workspace'];
+    const scopes = value.scopes.map((scope, idx) => {
+      if (!allowedScopes.includes(scope as MemoryScope)) {
+        throw new Error(`${context}.scopes[${idx}] must be one of: ${allowedScopes.join(', ')}`);
+      }
+      return scope as MemoryScope;
+    });
+    out.scopes = [...new Set(scopes)];
+  }
+  if (value.ttlDays !== undefined) {
+    if (typeof value.ttlDays !== 'number' || !Number.isFinite(value.ttlDays) || value.ttlDays <= 0) {
+      throw new Error(`${context}.ttlDays must be a positive number if provided`);
+    }
+    out.ttlDays = value.ttlDays;
+  }
+  if (value.autoPromote !== undefined) {
+    if (typeof value.autoPromote !== 'boolean') {
+      throw new Error(`${context}.autoPromote must be a boolean if provided`);
+    }
+    out.autoPromote = value.autoPromote;
+  }
+  if (value.dedupMs !== undefined) {
+    if (typeof value.dedupMs !== 'number' || !Number.isFinite(value.dedupMs) || value.dedupMs <= 0) {
+      throw new Error(`${context}.dedupMs must be a positive number if provided`);
+    }
+    out.dedupMs = value.dedupMs;
+  }
+  return out;
+}
+
+export function parseTraits(value: unknown, context: string): Traits | undefined {
+  if (value === undefined) return undefined;
+  if (!isObject(value)) {
+    throw new Error(`${context} must be an object if provided`);
+  }
+  const out: Traits = {};
+  for (const key of ['voice', 'formality', 'proactivity', 'riskPosture', 'domain'] as const) {
+    const raw = value[key];
+    if (raw !== undefined) {
+      if (typeof raw !== 'string' || !raw.trim()) {
+        throw new Error(`${context}.${key} must be a non-empty string if provided`);
+      }
+      out[key] = raw;
+    }
+  }
+  const vocabulary = parseStringList(value.vocabulary, `${context}.vocabulary`);
+  if (vocabulary) out.vocabulary = vocabulary;
+  if (value.preferMarkdown !== undefined) {
+    if (typeof value.preferMarkdown !== 'boolean') {
+      throw new Error(`${context}.preferMarkdown must be a boolean if provided`);
+    }
+    out.preferMarkdown = value.preferMarkdown;
+  }
+  return Object.keys(out).length > 0 ? out : undefined;
+}
+
 export function parsePersonaSpec(value: unknown, expectedIntent: PersonaIntent): PersonaSpec {
   if (!isObject(value)) {
     throw new Error(`persona[${expectedIntent}] must be an object`);
@@ -468,6 +672,14 @@ export function parsePersonaSpec(value: unknown, expectedIntent: PersonaIntent):
     mcpServers,
     permissions,
     mount,
+    cloud,
+    useSubscription,
+    integrations,
+    schedules,
+    sandbox,
+    memory,
+    traits,
+    onEvent,
     claudeMd,
     claudeMdMode,
     agentsMd,
@@ -517,6 +729,23 @@ export function parsePersonaSpec(value: unknown, expectedIntent: PersonaIntent):
     `persona[${expectedIntent}].permissions`
   );
   const parsedMount = parseMount(mount, `persona[${expectedIntent}].mount`);
+  if (cloud !== undefined && typeof cloud !== 'boolean') {
+    throw new Error(`persona[${expectedIntent}].cloud must be a boolean if provided`);
+  }
+  if (useSubscription !== undefined && typeof useSubscription !== 'boolean') {
+    throw new Error(`persona[${expectedIntent}].useSubscription must be a boolean if provided`);
+  }
+  const parsedIntegrations = parseIntegrations(
+    integrations,
+    `persona[${expectedIntent}].integrations`
+  );
+  const parsedSchedules = parseSchedules(schedules, `persona[${expectedIntent}].schedules`);
+  const parsedSandbox = parseSandbox(sandbox, `persona[${expectedIntent}].sandbox`);
+  const parsedMemory = parseMemory(memory, `persona[${expectedIntent}].memory`);
+  const parsedTraits = parseTraits(traits, `persona[${expectedIntent}].traits`);
+  if (onEvent !== undefined && (typeof onEvent !== 'string' || !onEvent.trim())) {
+    throw new Error(`persona[${expectedIntent}].onEvent must be a non-empty string if provided`);
+  }
 
   if (claudeMd !== undefined) assertSidecarPath(claudeMd, `persona[${expectedIntent}].claudeMd`);
   if (agentsMd !== undefined) assertSidecarPath(agentsMd, `persona[${expectedIntent}].agentsMd`);
@@ -558,6 +787,14 @@ export function parsePersonaSpec(value: unknown, expectedIntent: PersonaIntent):
     ...(parsedMcpServers ? { mcpServers: parsedMcpServers } : {}),
     ...(parsedPermissions ? { permissions: parsedPermissions } : {}),
     ...(parsedMount ? { mount: parsedMount } : {}),
+    ...(typeof cloud === 'boolean' ? { cloud } : {}),
+    ...(typeof useSubscription === 'boolean' ? { useSubscription } : {}),
+    ...(parsedIntegrations ? { integrations: parsedIntegrations } : {}),
+    ...(parsedSchedules ? { schedules: parsedSchedules } : {}),
+    ...(parsedSandbox !== undefined ? { sandbox: parsedSandbox } : {}),
+    ...(parsedMemory !== undefined ? { memory: parsedMemory } : {}),
+    ...(parsedTraits ? { traits: parsedTraits } : {}),
+    ...(typeof onEvent === 'string' ? { onEvent } : {}),
     ...(typeof claudeMd === 'string' ? { claudeMd } : {}),
     ...(claudeMdMode ? { claudeMdMode: claudeMdMode as SidecarMdMode } : {}),
     ...(typeof agentsMd === 'string' ? { agentsMd } : {}),

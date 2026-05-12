@@ -20,7 +20,10 @@ export type {
   Harness,
   HarnessSettings,
   HarnessSkillTarget,
+  IntegrationConfig,
   McpServerSpec,
+  MemoryConfig,
+  MemoryScope,
   PermissionMode,
   PersonaContext,
   PersonaInputSpec,
@@ -34,11 +37,15 @@ export type {
   PersonaSpec,
   PersonaTag,
   PersonaTier,
+  SandboxConfig,
+  Schedule,
   SidecarMdMode,
   SkillInstall,
   SkillMaterializationOptions,
   SkillMaterializationPlan,
-  SkillSourceKind
+  SkillSourceKind,
+  Traits,
+  TriggerConfig
 } from './types.js';
 
 // Parsers + sidecar resolver
@@ -54,19 +61,33 @@ export {
   isTag,
   isTier,
   parseHarnessSettings,
+  parseIntegrations,
   parseInputs,
+  parseMemory,
   parseMcpServers,
   parseMount,
   parsePermissions,
   parsePersonaSpec,
   parseRuntime,
+  parseSandbox,
+  parseSchedules,
   parseSkills,
   parseStringList,
   parseStringMap,
   parseTags,
+  parseTraits,
   resolveSidecar,
   sidecarSelectionFields
 } from './parse.js';
+
+export {
+  isKnownProvider,
+  KNOWN_TRIGGERS,
+  lintTriggers,
+  type ProviderName,
+  type TriggerLintIssue,
+  type TriggerOf
+} from './triggers.js';
 
 // Skill materialization
 export {

@@ -1,0 +1,34 @@
+{
+  "id": "cron-only",
+  "intent": "documentation",
+  "tags": ["documentation"],
+  "description": "A cloud persona with schedules and no integration triggers.",
+  "skills": [],
+  "cloud": true,
+  "schedules": [
+    { "name": "weekly-digest", "cron": "0 9 * * 6", "tz": "UTC" },
+    { "name": "weekday-check", "cron": "0 9 * * 1-5", "tz": "America/New_York" }
+  ],
+  "sandbox": true,
+  "onEvent": "./agent.ts",
+  "tiers": {
+    "best": {
+      "harness": "claude",
+      "model": "anthropic/claude-3-5-sonnet",
+      "systemPrompt": "Summarize scheduled work.",
+      "harnessSettings": { "reasoning": "medium", "timeoutSeconds": 300 }
+    },
+    "best-value": {
+      "harness": "codex",
+      "model": "gpt-5",
+      "systemPrompt": "Summarize scheduled work.",
+      "harnessSettings": { "reasoning": "medium", "timeoutSeconds": 300 }
+    },
+    "minimum": {
+      "harness": "opencode",
+      "model": "qwen/qwen3-coder",
+      "systemPrompt": "Summarize scheduled work.",
+      "harnessSettings": { "reasoning": "low", "timeoutSeconds": 300 }
+    }
+  }
+}

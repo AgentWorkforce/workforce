@@ -1,0 +1,589 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$ref": "#/definitions/PersonaSpec",
+  "definitions": {
+    "PersonaSpec": {
+      "type": "object",
+      "properties": {
+        "id": {
+          "type": "string"
+        },
+        "intent": {
+          "type": "string"
+        },
+        "tags": {
+          "type": "array",
+          "items": {
+            "$ref": "#/definitions/PersonaTag"
+          },
+          "description": "Free-form classification labels (from  {@link  PERSONA_TAGS } ). Every persona has at least one; a persona may carry multiple tags when it spans concerns (e.g. `['testing', 'implementation']`)."
+        },
+        "description": {
+          "type": "string"
+        },
+        "skills": {
+          "type": "array",
+          "items": {
+            "$ref": "#/definitions/PersonaSkill"
+          }
+        },
+        "inputs": {
+          "type": "object",
+          "additionalProperties": {
+            "$ref": "#/definitions/PersonaInputSpec"
+          },
+          "description": "Prompt-visible runtime inputs. Keys must be env-style names (`OUTPUT_PATH`, `TARGET_DIR`, etc.). Never put secrets here; resolved values are substituted into the persona's system prompt."
+        },
+        "tiers": {
+          "type": "object",
+          "properties": {
+            "best": {
+              "$ref": "#/definitions/PersonaRuntime"
+            },
+            "best-value": {
+              "$ref": "#/definitions/PersonaRuntime"
+            },
+            "minimum": {
+              "$ref": "#/definitions/PersonaRuntime"
+            }
+          },
+          "required": [
+            "best",
+            "best-value",
+            "minimum"
+          ]
+        },
+        "defaultTier": {
+          "$ref": "#/definitions/PersonaTier",
+          "description": "Persona-author's preferred tier when a caller does not request one explicitly. Selectors like `agentworkforce agent <persona>` (no `@<tier>` suffix) resolve to this value before falling back to `'best-value'`. Routing-profile rules continue to override this for built-in personas resolved through  {@link  resolvePersona  } ."
+        },
+        "env": {
+          "type": "object",
+          "additionalProperties": {
+            "type": "string"
+          },
+          "description": "Environment variables injected into the harness child process. Values may be literal strings or `$VAR` references resolved from the caller's environment at spawn time."
+        },
+        "mcpServers": {
+          "type": "object",
+          "additionalProperties": {
+            "$ref": "#/definitions/McpServerSpec"
+          },
+          "description": "MCP servers to attach to the harness session.\n- `claude`: passed via `--mcp-config`\n- `codex`: translated into `--config mcp_servers.<name>...` overrides\n- `opencode`: currently warns and skips"
+        },
+        "permissions": {
+          "$ref": "#/definitions/PersonaPermissions",
+          "description": "Permission policy (allow/deny lists, mode) for the harness session. Only wired for `claude` today (via `--allowedTools`, `--disallowedTools`, `--permission-mode`); other harnesses warn and skip."
+        },
+        "mount": {
+          "$ref": "#/definitions/PersonaMount",
+          "description": "Relayfile mount policy for file visibility and writability. Applied by launchers that run the harness inside `@relayfile/local-mount`."
+        },
+        "cloud": {
+          "type": "boolean",
+          "description": "Deploy-v1 opt-in: this persona can be run by `workforce deploy`."
+        },
+        "useSubscription": {
+          "type": "boolean",
+          "description": "Use the user's connected LLM subscription via Agent Relay instead of workforce-billed inference."
+        },
+        "integrations": {
+          "type": "object",
+          "additionalProperties": {
+            "$ref": "#/definitions/IntegrationConfig"
+          },
+          "description": "Relayfile provider triggers consumed by the deploy runtime."
+        },
+        "schedules": {
+          "type": "array",
+          "items": {
+            "$ref": "#/definitions/Schedule"
+          },
+          "description": "Cron schedules consumed by the deploy runtime."
+        },
+        "sandbox": {
+          "anyOf": [
+            {
+              "type": "boolean"
+            },
+            {
+              "$ref": "#/definitions/SandboxConfig"
+            }
+          ],
+          "description": "Daytona sandbox policy for deployed agents."
+        },
+        "memory": {
+          "anyOf": [
+            {
+              "type": "boolean"
+            },
+            {
+              "$ref": "#/definitions/MemoryConfig"
+            }
+          ],
+          "description": "Agent memory policy for deployed agents."
+        },
+        "traits": {
+          "$ref": "#/definitions/Traits",
+          "description": "Conversational rendering traits for interactive deployed agents."
+        },
+        "onEvent": {
+          "type": "string",
+          "description": "Path to the deployed event handler, relative to the persona JSON."
+        },
+        "claudeMd": {
+          "type": "string",
+          "description": "Author-supplied path to a `CLAUDE.md` sidecar that should be applied when the persona runs under the claude harness. The path is relative to the JSON file that declared the field; the loader resolves it to an already-absolute path on the parsed spec. Built-in personas inline the content into  {@link  PersonaRuntime.claudeMdContent }  at build time."
+        },
+        "claudeMdMode": {
+          "$ref": "#/definitions/SidecarMdMode",
+          "description": "Defaults to `overwrite`. See  {@link  SidecarMdMode } ."
+        },
+        "agentsMd": {
+          "type": "string",
+          "description": "Author-supplied path to an `AGENTS.md` sidecar that should be applied when the persona runs under the opencode harness. Same resolution rules as  {@link  claudeMd } ."
+        },
+        "agentsMdMode": {
+          "$ref": "#/definitions/SidecarMdMode",
+          "description": "Defaults to `overwrite`. See  {@link  SidecarMdMode } ."
+        },
+        "claudeMdContent": {
+          "type": "string",
+          "description": "Inlined `CLAUDE.md` content for built-in personas (see  {@link  PersonaRuntime.claudeMdContent } )."
+        },
+        "agentsMdContent": {
+          "type": "string",
+          "description": "Inlined `AGENTS.md` content for built-in personas."
+        }
+      },
+      "required": [
+        "id",
+        "intent",
+        "tags",
+        "description",
+        "skills",
+        "tiers"
+      ]
+    },
+    "PersonaTag": {
+      "type": "string",
+      "enum": [
+        "planning",
+        "implementation",
+        "review",
+        "testing",
+        "debugging",
+        "documentation",
+        "release",
+        "discovery",
+        "analytics"
+      ]
+    },
+    "PersonaSkill": {
+      "type": "object",
+      "properties": {
+        "id": {
+          "type": "string"
+        },
+        "source": {
+          "type": "string"
+        },
+        "description": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "id",
+        "source",
+        "description"
+      ],
+      "description": "A skill is a named, reusable capability attached to a persona. `source` points to canonical guidance the persona should apply (e.g. a prpm.dev package URL, an internal runbook, a docs page)."
+    },
+    "PersonaInputSpec": {
+      "type": "object",
+      "properties": {
+        "description": {
+          "type": "string",
+          "description": "Human-readable explanation shown in docs/catalog UIs."
+        },
+        "env": {
+          "type": "string",
+          "description": "Environment variable to read when the launcher did not provide an explicit value. Defaults to the input key itself."
+        },
+        "default": {
+          "type": "string",
+          "description": "Literal fallback used when neither an explicit value nor env var exists."
+        },
+        "optional": {
+          "type": "boolean",
+          "description": "When true, the input is allowed to resolve to an empty string. The launcher substitutes `$NAME` with `''` rather than throwing `MissingPersonaInputError`. Use for inputs whose absence is meaningful — e.g. an upstream task description that may or may not be forwarded — and prefer non-optional inputs with a `default` for everything else so misconfigured launches surface loudly."
+        }
+      },
+      "description": "Prompt-visible runtime input declared by a persona. Inputs are for non-secret run configuration such as output paths, target package names, or mode switches. Launchers resolve each input from explicit values, the process environment, or `default`, then substitute `$NAME` / `${NAME}` in the system prompt before spawning the harness."
+    },
+    "PersonaRuntime": {
+      "type": "object",
+      "properties": {
+        "harness": {
+          "$ref": "#/definitions/Harness"
+        },
+        "model": {
+          "type": "string"
+        },
+        "systemPrompt": {
+          "type": "string"
+        },
+        "harnessSettings": {
+          "$ref": "#/definitions/HarnessSettings"
+        },
+        "claudeMd": {
+          "type": "string",
+          "description": "Per-tier override of the persona's `claudeMd` path. Resolves to an absolute filesystem path on the parsed spec — for built-ins, the value comes from `claudeMdContent` instead of a path. Materialized into the sandbox mount as `/CLAUDE.md` when running under the claude harness."
+        },
+        "claudeMdMode": {
+          "$ref": "#/definitions/SidecarMdMode",
+          "description": "Per-tier override of  {@link  PersonaSpec.claudeMdMode } ."
+        },
+        "agentsMd": {
+          "type": "string",
+          "description": "Per-tier override of the persona's `agentsMd` path."
+        },
+        "agentsMdMode": {
+          "$ref": "#/definitions/SidecarMdMode",
+          "description": "Per-tier override of  {@link  PersonaSpec.agentsMdMode } ."
+        },
+        "claudeMdContent": {
+          "type": "string",
+          "description": "Inlined sidecar content for built-in personas. The catalog generator reads the sibling `.md` at build time and emits its body here so the installed package does not need to ship the file separately. Runtime code prefers this over `claudeMd` when both are set."
+        },
+        "agentsMdContent": {
+          "type": "string",
+          "description": "Inlined `AGENTS.md` content for built-in personas (see  {@link  claudeMdContent } )."
+        }
+      },
+      "required": [
+        "harness",
+        "model",
+        "systemPrompt",
+        "harnessSettings"
+      ]
+    },
+    "Harness": {
+      "type": "string",
+      "enum": [
+        "opencode",
+        "codex",
+        "claude"
+      ]
+    },
+    "HarnessSettings": {
+      "type": "object",
+      "properties": {
+        "reasoning": {
+          "type": "string",
+          "enum": [
+            "low",
+            "medium",
+            "high"
+          ]
+        },
+        "timeoutSeconds": {
+          "type": "number"
+        },
+        "sandboxMode": {
+          "$ref": "#/definitions/CodexSandboxMode",
+          "description": "Codex CLI sandbox mode for model-generated shell commands. Prefer `workspace-write` with `workspaceWriteNetworkAccess` when network is the only missing capability; `danger-full-access` is the fully unsandboxed fallback."
+        },
+        "approvalPolicy": {
+          "$ref": "#/definitions/CodexApprovalPolicy",
+          "description": "Codex CLI approval policy (`--ask-for-approval`)."
+        },
+        "workspaceWriteNetworkAccess": {
+          "type": "boolean",
+          "description": "Allow outbound network access inside Codex's workspace-write sandbox (`sandbox_workspace_write.network_access`)."
+        },
+        "webSearch": {
+          "type": "boolean",
+          "description": "Enable the Codex live web-search tool for this runtime."
+        },
+        "dangerouslyBypassApprovalsAndSandbox": {
+          "type": "boolean",
+          "description": "Emit codex's single `--dangerously-bypass-approvals-and-sandbox` flag, which collapses \"no sandbox + never ask for approval\" and also suppresses codex's interactive \"are you sure?\" startup confirmation. Mutually exclusive with `sandboxMode`, `approvalPolicy`, and `workspaceWriteNetworkAccess` — those translate to the two-flag form which still prompts."
+        }
+      },
+      "required": [
+        "reasoning",
+        "timeoutSeconds"
+      ]
+    },
+    "CodexSandboxMode": {
+      "type": "string",
+      "enum": [
+        "read-only",
+        "workspace-write",
+        "danger-full-access"
+      ]
+    },
+    "CodexApprovalPolicy": {
+      "type": "string",
+      "enum": [
+        "untrusted",
+        "on-failure",
+        "on-request",
+        "never"
+      ]
+    },
+    "SidecarMdMode": {
+      "type": "string",
+      "enum": [
+        "overwrite",
+        "extend"
+      ]
+    },
+    "PersonaTier": {
+      "type": "string",
+      "enum": [
+        "best",
+        "best-value",
+        "minimum"
+      ]
+    },
+    "McpServerSpec": {
+      "anyOf": [
+        {
+          "type": "object",
+          "properties": {
+            "type": {
+              "type": "string",
+              "enum": [
+                "http",
+                "sse"
+              ]
+            },
+            "url": {
+              "type": "string"
+            },
+            "headers": {
+              "type": "object",
+              "additionalProperties": {
+                "type": "string"
+              }
+            }
+          },
+          "required": [
+            "type",
+            "url"
+          ]
+        },
+        {
+          "type": "object",
+          "properties": {
+            "type": {
+              "type": "string",
+              "const": "stdio"
+            },
+            "command": {
+              "type": "string"
+            },
+            "args": {
+              "type": "array",
+              "items": {
+                "type": "string"
+              }
+            },
+            "env": {
+              "type": "object",
+              "additionalProperties": {
+                "type": "string"
+              }
+            }
+          },
+          "required": [
+            "type",
+            "command"
+          ]
+        }
+      ],
+      "description": "MCP server config, structured to match Claude Code's `--mcp-config` JSON verbatim so the whole object can be passed through untouched. Values inside `headers` / `env` / `args` / `url` / `command` may be literal strings or `$VAR` / `${VAR}` references. Resolution happens in the runner/CLI at spawn time — this package only defines the shape, not the interpolation policy."
+    },
+    "PersonaPermissions": {
+      "type": "object",
+      "properties": {
+        "allow": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          },
+          "description": "Tool names/patterns to auto-approve."
+        },
+        "deny": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          },
+          "description": "Tool names/patterns to always block."
+        },
+        "mode": {
+          "$ref": "#/definitions/PermissionMode",
+          "description": "Permission mode for the session."
+        }
+      },
+      "description": "Persona-level permission policy for the harness session. Translates to the harness's native allow/deny/mode flags at spawn time. Tool-pattern syntax is passed through verbatim — `\"mcp__posthog\"` to allow every posthog MCP tool, `\"mcp__posthog__projects-get\"` for a specific one, `\"Bash(git *)\"` for a shell pattern. See the target harness's docs for the exact grammar."
+    },
+    "PermissionMode": {
+      "type": "string",
+      "enum": [
+        "default",
+        "acceptEdits",
+        "bypassPermissions",
+        "plan"
+      ]
+    },
+    "PersonaMount": {
+      "type": "object",
+      "properties": {
+        "ignoredPatterns": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "readonlyPatterns": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        }
+      },
+      "description": "Relayfile mount policy for interactive sessions. Patterns use gitignore syntax. `ignoredPatterns` are omitted from the mount entirely; `readonlyPatterns` are copied into the mount but edits do not sync back. Launchers may merge these with project-level `.agentignore` / `.agentreadonly` dotfiles."
+    },
+    "IntegrationConfig": {
+      "type": "object",
+      "properties": {
+        "scope": {
+          "type": "object",
+          "additionalProperties": {}
+        },
+        "triggers": {
+          "type": "array",
+          "items": {
+            "$ref": "#/definitions/TriggerConfig"
+          }
+        }
+      }
+    },
+    "TriggerConfig": {
+      "type": "object",
+      "properties": {
+        "on": {
+          "type": "string"
+        },
+        "match": {
+          "type": "string"
+        },
+        "where": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "on"
+      ]
+    },
+    "Schedule": {
+      "type": "object",
+      "properties": {
+        "name": {
+          "type": "string"
+        },
+        "cron": {
+          "type": "string"
+        },
+        "tz": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "name",
+        "cron"
+      ]
+    },
+    "SandboxConfig": {
+      "type": "object",
+      "properties": {
+        "enabled": {
+          "type": "boolean"
+        },
+        "timeoutSeconds": {
+          "type": "number"
+        },
+        "env": {
+          "type": "object",
+          "additionalProperties": {
+            "type": "string"
+          }
+        }
+      }
+    },
+    "MemoryConfig": {
+      "type": "object",
+      "properties": {
+        "enabled": {
+          "type": "boolean"
+        },
+        "scopes": {
+          "type": "array",
+          "items": {
+            "$ref": "#/definitions/MemoryScope"
+          }
+        },
+        "ttlDays": {
+          "type": "number"
+        },
+        "autoPromote": {
+          "type": "boolean"
+        },
+        "dedupMs": {
+          "type": "number"
+        }
+      }
+    },
+    "MemoryScope": {
+      "type": "string",
+      "enum": [
+        "session",
+        "user",
+        "workspace"
+      ]
+    },
+    "Traits": {
+      "type": "object",
+      "properties": {
+        "voice": {
+          "type": "string"
+        },
+        "formality": {
+          "type": "string"
+        },
+        "proactivity": {
+          "type": "string"
+        },
+        "riskPosture": {
+          "type": "string"
+        },
+        "domain": {
+          "type": "string"
+        },
+        "vocabulary": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "preferMarkdown": {
+          "type": "boolean"
+        }
+      }
+    }
+  },
+  "$id": "https://agentworkforce.dev/schemas/persona.schema.json"
+}

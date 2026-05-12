@@ -10,12 +10,14 @@
     "intents": {
       "type": "object",
       "additionalProperties": false,
-      "required": ["implement-frontend", "review", "architecture-plan", "requirements-analysis", "debugging", "security-review", "documentation", "verification", "test-strategy", "tdd-enforcement", "flake-investigation", "opencode-workflow-correctness", "npm-provenance", "cloud-sandbox-infra", "sage-slack-egress-migration", "sage-proactive-rewire", "cloud-slack-proxy-guard", "sage-cloud-e2e-conduction", "capability-discovery", "npm-package-compat", "posthog", "persona-authoring", "agent-relay-workflow", "slop-audit", "api-contract-review", "local-stack-orchestration", "e2e-validation", "write-integration-tests"],
+      "required": ["implement-frontend", "review", "architecture-plan", "requirements-analysis", "research", "implementation", "debugging", "security-review", "documentation", "verification", "test-strategy", "tdd-enforcement", "flake-investigation", "opencode-workflow-correctness", "npm-provenance", "cloud-sandbox-infra", "sage-slack-egress-migration", "sage-proactive-rewire", "cloud-slack-proxy-guard", "sage-cloud-e2e-conduction", "capability-discovery", "npm-package-compat", "posthog", "persona-authoring", "agent-relay-workflow", "slop-audit", "api-contract-review", "local-stack-orchestration", "e2e-validation", "write-integration-tests"],
       "properties": {
         "implement-frontend": { "$ref": "#/definitions/rule" },
         "review": { "$ref": "#/definitions/rule" },
         "architecture-plan": { "$ref": "#/definitions/rule" },
         "requirements-analysis": { "$ref": "#/definitions/rule" },
+        "research": { "$ref": "#/definitions/rule" },
+        "implementation": { "$ref": "#/definitions/rule" },
         "debugging": { "$ref": "#/definitions/rule" },
         "security-review": { "$ref": "#/definitions/rule" },
         "documentation": { "$ref": "#/definitions/rule" },

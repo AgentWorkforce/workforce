@@ -1,6 +1,12 @@
 {
   "extends": "../tsconfig.base.json",
   "compilerOptions": {
+    "baseUrl": "..",
+    "paths": {
+      "@agentworkforce/persona-kit": ["packages/persona-kit/src/index.ts"],
+      "@agentworkforce/runtime": ["packages/runtime/src/index.ts"],
+      "@agentworkforce/workload-router": ["packages/workload-router/src/index.ts"]
+    },
     "noEmit": true
   },
   "include": ["./**/*.ts"]

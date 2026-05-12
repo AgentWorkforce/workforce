@@ -1,5 +1,5 @@
 {
-  "name": "@agentworkforce/persona-kit",
+  "name": "@agentworkforce/deploy",
   "version": "2.1.4",
   "private": false,
   "type": "module",
@@ -9,34 +9,43 @@
     ".": {
       "types": "./dist/index.d.ts",
       "default": "./dist/index.js"
+    },
+    "./bundle": {
+      "types": "./dist/bundle.d.ts",
+      "default": "./dist/bundle.js"
+    },
+    "./modes/dev": {
+      "types": "./dist/modes/dev.d.ts",
+      "default": "./dist/modes/dev.js"
+    },
+    "./modes/sandbox": {
+      "types": "./dist/modes/sandbox.d.ts",
+      "default": "./dist/modes/sandbox.js"
     }
   },
   "files": [
     "dist",
-    "schemas",
     "README.md",
     "package.json"
   ],
   "repository": {
     "type": "git",
     "url": "https://github.com/AgentWorkforce/workforce",
-    "directory": "packages/persona-kit"
+    "directory": "packages/deploy"
   },
   "publishConfig": {
     "access": "public"
   },
   "scripts": {
-    "prebuild": "node scripts/emit-schema.mjs",
     "build": "tsc -p tsconfig.json",
     "dev": "tsc -p tsconfig.json --watch --preserveWatchOutput",
     "typecheck": "tsc -p tsconfig.json --noEmit",
-    "test": "tsc -p tsconfig.json && node --test dist/*.test.js && node --experimental-strip-types --test scripts/emit-schema.test.ts",
+    "test": "tsc -p tsconfig.json && node --test dist/*.test.js dist/modes/*.test.js",
     "lint": "tsc -p tsconfig.json --noEmit"
   },
   "dependencies": {
-    "@relayfile/local-mount": "^0.7.0"
-  },
-  "devDependencies": {
-    "ts-json-schema-generator": "^2.9.0"
+    "@agentworkforce/persona-kit": "workspace:*",
+    "@daytonaio/sdk": "^0.148.0",
+    "esbuild": "^0.25.0"
   }
 }

@@ -7,6 +7,8 @@
     "review": {"tier": "best-value", "rationale": "Code review usually needs careful reasoning without always requiring max-cost models."},
     "architecture-plan": {"tier": "best", "rationale": "Architecture decisions are high leverage; prioritize depth and stronger reasoning."},
     "requirements-analysis": {"tier": "best-value", "rationale": "Most scope clarification work benefits from careful synthesis without needing the slowest tier by default."},
+    "research": {"tier": "best-value", "rationale": "Research agents gather and synthesize external context; best-value provides enough depth while keeping scheduled runs economical."},
+    "implementation": {"tier": "best-value", "rationale": "General implementation work benefits from balanced reasoning and fast iteration before escalating to deeper tiers for ambiguous changes."},
     "debugging": {"tier": "best", "rationale": "Root-cause debugging is expensive when wrong; default to deeper reasoning and stronger verification."},
     "security-review": {"tier": "best", "rationale": "Security review has asymmetric downside; favor deeper analysis on default policy."},
     "documentation": {"tier": "best-value", "rationale": "Most docs work benefits from solid code-grounded synthesis without always needing the top tier."},
