@@ -3,6 +3,30 @@ import assert from 'node:assert/strict';
 import { createWorkforceMcpServer } from './server.js';
 import { loadConfig } from './config.js';
 
+test('jsonResult normalizes a void return so MCP text content is always valid JSON', async () => {
+  const { jsonResult } = await import('./server.js');
+  // `JSON.stringify(undefined)` is itself `undefined`, not a string — a
+  // CallToolResult with text:undefined fails the MCP content-shape check.
+  // jsonResult substitutes a sentinel so void-returning tools (e.g.
+  // integration.github.postReview) still emit parseable JSON.
+  const fromUndefined = jsonResult(undefined);
+  assert.equal(fromUndefined.content[0].type, 'text');
+  assert.equal(typeof fromUndefined.content[0].text, 'string');
+  assert.deepEqual(JSON.parse(fromUndefined.content[0].text), { ok: true });
+
+  // Non-void values pass through verbatim.
+  const fromObject = jsonResult({ runId: 'r1', status: 'pending' });
+  assert.deepEqual(JSON.parse(fromObject.content[0].text), {
+    runId: 'r1',
+    status: 'pending'
+  });
+
+  // `null` is a legitimate JSON value and should round-trip as such,
+  // not be coerced to the void sentinel.
+  const fromNull = jsonResult(null);
+  assert.equal(fromNull.content[0].text, 'null');
+});
+
 test('createWorkforceMcpServer registers the documented tool set', () => {
   const config = loadConfig({
     WORKFORCE_WORKSPACE_ID: 'ws-demo',

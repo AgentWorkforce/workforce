@@ -208,13 +208,20 @@ function registerGithubTools(server: McpServer, config: WorkforceMcpConfig): voi
  * Wrap a tool's return value in the MCP `CallToolResult` shape. We use
  * JSON-text encoding so any client can read it; structured-output schemas
  * are a follow-up if real consumers want them.
+ *
+ * Void-returning tools (e.g. `integration.github.postReview`) must still
+ * produce a real text payload — `JSON.stringify(undefined)` returns
+ * `undefined`, not a valid JSON string, so the MCP response would fail
+ * its content-shape check. Normalize `undefined` to a sentinel `{ ok:
+ * true }` so consumers see a stable response.
  */
-function jsonResult(value: unknown): { content: Array<{ type: 'text'; text: string }>; [key: string]: unknown } {
+export function jsonResult(value: unknown): { content: Array<{ type: 'text'; text: string }>; [key: string]: unknown } {
+  const payload = value === undefined ? { ok: true } : value;
   return {
     content: [
       {
         type: 'text' as const,
-        text: JSON.stringify(value)
+        text: JSON.stringify(payload)
       }
     ]
   };
