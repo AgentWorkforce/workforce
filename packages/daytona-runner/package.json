@@ -1,6 +1,6 @@
 {
   "name": "@agentworkforce/daytona-runner",
-  "version": "0.1.0",
+  "version": "3.0.1",
   "description": "Daytona-backed WorkflowRuntime adapter for AgentWorkforce deploy workflows.",
   "private": false,
   "type": "module",
