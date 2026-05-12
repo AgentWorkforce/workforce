@@ -771,6 +771,7 @@ export function parsePersonaSpec(value: unknown, expectedIntent: PersonaIntent):
   if (typeof model !== 'string' || !model.trim()) {
     throw new Error(`persona[${expectedIntent}].model must be a non-empty string`);
   }
+  const trimmedModel = model.trim();
   if (typeof systemPrompt !== 'string' || !systemPrompt.trim()) {
     throw new Error(`persona[${expectedIntent}].systemPrompt must be a non-empty string`);
   }
@@ -838,7 +839,7 @@ export function parsePersonaSpec(value: unknown, expectedIntent: PersonaIntent):
     skills: parsedSkills,
     ...(parsedInputs ? { inputs: parsedInputs } : {}),
     harness,
-    model,
+    model: trimmedModel,
     systemPrompt,
     harnessSettings: parsedHarnessSettings,
     ...(parsedEnv ? { env: parsedEnv } : {}),
