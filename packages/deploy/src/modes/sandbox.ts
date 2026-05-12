@@ -3,6 +3,7 @@ import type {
   ModeLaunchHandle,
   ModeLauncher
 } from '../types.js';
+import { runtimeContextEnv } from '../runtime-context.js';
 import {
   SANDBOX_BUNDLE_DIR,
   createByoSandboxClient,
@@ -44,6 +45,7 @@ export const sandboxLauncher: ModeLauncher = {
       label: `wf-${input.persona.id}`,
       env: {
         ...(input.env ?? {}),
+        ...runtimeContextEnv(input.persona, input.env),
         WORKFORCE_WORKSPACE_ID: input.workspace,
         WORKFORCE_PERSONA_ID: input.persona.id
       }
