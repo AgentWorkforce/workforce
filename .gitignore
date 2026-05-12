@@ -3,3 +3,5 @@ packages/*/dist/
 *.tsbuildinfo
 .npm-cache
 .agent-relay
+# workforce deploy bundle output (staged per-persona by `workforce deploy`)
+**/.workforce/
