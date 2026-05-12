@@ -44,9 +44,9 @@ export function createLinearClient(opts: IntegrationClientOptions): LinearClient
         args
       );
       return {
-        id: result.receipt?.created ?? result.receipt?.id ?? '',
+        id: result.receipt?.created ?? result.receipt?.id ?? result.path,
         identifier: typeof result.receipt?.identifier === 'string' ? result.receipt.identifier : '',
-        url: result.receipt?.url ?? ''
+        url: result.receipt?.url ?? result.path
       };
     },
 
@@ -68,7 +68,10 @@ export function createLinearClient(opts: IntegrationClientOptions): LinearClient
         `/linear/issues/${encodeSegment(issueId)}/comments/${draftFile('create comment')}`,
         { body }
       );
-      return { id: result.receipt?.created ?? result.receipt?.id ?? '', url: result.receipt?.url ?? '' };
+      return {
+        id: result.receipt?.created ?? result.receipt?.id ?? result.path,
+        url: result.receipt?.url ?? result.path
+      };
     },
 
     getIssue(issueId) {

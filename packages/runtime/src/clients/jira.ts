@@ -31,9 +31,9 @@ export function createJiraClient(opts: IntegrationClientOptions): JiraClient {
         { fields: args.fields }
       );
       return {
-        id: result.receipt?.created ?? result.receipt?.id ?? '',
+        id: result.receipt?.created ?? result.receipt?.id ?? result.path,
         key: typeof result.receipt?.key === 'string' ? result.receipt.key : '',
-        self: typeof result.receipt?.self === 'string' ? result.receipt.self : ''
+        self: typeof result.receipt?.self === 'string' ? result.receipt.self : result.path
       };
     },
 
@@ -46,13 +46,13 @@ export function createJiraClient(opts: IntegrationClientOptions): JiraClient {
         { body }
       );
       return {
-        id: result.receipt?.created ?? result.receipt?.id ?? '',
-        self: typeof result.receipt?.self === 'string' ? result.receipt.self : ''
+        id: result.receipt?.created ?? result.receipt?.id ?? result.path,
+        self: typeof result.receipt?.self === 'string' ? result.receipt.self : result.path
       };
     },
 
     async transition(target, transition) {
-      const id = typeof transition === 'string' ? transition : transition.id;
+      const id = typeof transition === 'string' ? transition.trim() : transition.id.trim();
       await writeJsonFile(
         opts,
         'jira',

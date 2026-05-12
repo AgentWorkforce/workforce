@@ -2,8 +2,10 @@ import {
   draftFile,
   encodeSegment,
   type IntegrationClientOptions,
+  listDirectoryEntries,
   listJsonFiles,
   readJsonFile,
+  readTextFile,
   writeJsonFile
 } from './request.js';
 
@@ -63,6 +65,19 @@ function repoRoot(owner: string, repo: string): string {
   return `/github/repos/${encodeSegment(owner)}/${encodeSegment(repo)}`;
 }
 
+async function findNumberSegment(
+  opts: IntegrationClientOptions,
+  kind: 'issues' | 'pulls',
+  owner: string,
+  repo: string,
+  number: number
+): Promise<string> {
+  const dir = `${repoRoot(owner, repo)}/${kind}`;
+  const prefix = `${number}__`;
+  const entries = await listDirectoryEntries(opts, 'github', `find.${kind}`, dir).catch(() => []);
+  return entries.find((entry) => entry === String(number) || entry.startsWith(prefix)) ?? String(number);
+}
+
 function readRef(value: GithubPullRequestFile['head']): string {
   if (typeof value === 'string') return value;
   return value?.ref ?? '';
@@ -84,8 +99,8 @@ export function createGithubClient(opts: IntegrationClientOptions): GithubClient
         { body }
       );
       return {
-        id: result.receipt?.created ?? result.receipt?.id ?? '',
-        url: result.receipt?.url ?? ''
+        id: result.receipt?.created ?? result.receipt?.id ?? result.path,
+        url: result.receipt?.url ?? result.path
       };
     },
 
@@ -98,12 +113,31 @@ export function createGithubClient(opts: IntegrationClientOptions): GithubClient
         { title: args.title, body: args.body, labels: args.labels }
       );
       const number = Number(result.receipt?.created ?? result.receipt?.id ?? 0);
-      return { number: Number.isFinite(number) ? number : 0, url: result.receipt?.url ?? '' };
+      return { number: Number.isFinite(number) ? number : 0, url: result.receipt?.url ?? result.path };
     },
 
     async upsertIssue(args) {
       const issueDir = `${repoRoot(args.owner, args.repo)}/issues`;
-      const issues = await listJsonFiles<GithubIssueFile>(opts, 'github', 'upsertIssue.find', issueDir);
+      const flatIssues = await listJsonFiles<GithubIssueFile>(opts, 'github', 'upsertIssue.find.flat', issueDir);
+      const entries = await listDirectoryEntries(opts, 'github', 'upsertIssue.find.dirs', issueDir).catch(() => []);
+      const nestedIssueCandidates = await Promise.all(
+        entries
+          .filter((entry) => /^[1-9]\d*(?:__.*)?$/.test(entry))
+          .map(async (entry) =>
+            readJsonFile<GithubIssueFile>(
+              opts,
+              'github',
+              'upsertIssue.find.meta',
+              `${issueDir}/${entry}/meta.json`
+            )
+              .then((value) => ({ path: `${issueDir}/${entry}/meta.json`, value }))
+              .catch(() => undefined)
+          )
+      );
+      const nestedIssues = nestedIssueCandidates.filter((result): result is { path: string; value: GithubIssueFile } =>
+        Boolean(result?.value.title)
+      );
+      const issues = [...flatIssues, ...nestedIssues];
       const existing = issues.find((issue) => issue.value.title === args.matchTitle && issue.value.number);
       if (existing?.value.number) {
         await writeJsonFile(
@@ -124,16 +158,25 @@ export function createGithubClient(opts: IntegrationClientOptions): GithubClient
     },
 
     async getPr(target) {
+      const pullSegment = await findNumberSegment(opts, 'pulls', target.owner, target.repo, target.number);
+      const pullRoot = `${repoRoot(target.owner, target.repo)}/pulls/${encodeSegment(pullSegment)}`;
       const pr = await readJsonFile<GithubPullRequestFile>(
         opts,
         'github',
         'getPr',
+        `${pullRoot}/meta.json`
+      ).catch(() => readJsonFile<GithubPullRequestFile>(
+        opts,
+        'github',
+        'getPr',
         `${repoRoot(target.owner, target.repo)}/pulls/${encodeSegment(target.number)}/metadata.json`
+      )
       );
+      const diff = await readTextFile(opts, 'github', 'getPr.diff', `${pullRoot}/diff.patch`).catch(() => '');
       return {
         title: pr.title ?? '',
         body: pr.body ?? '',
-        diff: pr.diff ?? '',
+        diff: pr.diff ?? diff,
         head: readRef(pr.head),
         base: readRef(pr.base),
         author: readAuthor(pr)

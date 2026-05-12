@@ -81,6 +81,19 @@ export async function readJsonFile<T>(
   }
 }
 
+export async function readTextFile(
+  client: IntegrationClientOptions,
+  provider: string,
+  operation: string,
+  relayPath: string
+): Promise<string> {
+  try {
+    return await readFile(toAbsolutePath(client, relayPath), 'utf8');
+  } catch (cause) {
+    throw new WorkforceIntegrationError({ provider, operation, cause, retryable: false });
+  }
+}
+
 export async function listJsonFiles<T>(
   client: IntegrationClientOptions,
   provider: string,
@@ -98,6 +111,19 @@ export async function listJsonFiles<T>(
       out.push({ path: relayPath, value });
     }
     return out;
+  } catch (cause) {
+    throw new WorkforceIntegrationError({ provider, operation, cause, retryable: false });
+  }
+}
+
+export async function listDirectoryEntries(
+  client: IntegrationClientOptions,
+  provider: string,
+  operation: string,
+  relayDir: string
+): Promise<string[]> {
+  try {
+    return await readdir(toAbsolutePath(client, relayDir));
   } catch (cause) {
     throw new WorkforceIntegrationError({ provider, operation, cause, retryable: false });
   }
