@@ -1,0 +1,70 @@
+name: Deploy E2E Smoke
+
+on:
+  workflow_dispatch:
+  schedule:
+    - cron: '17 8 * * *'
+
+permissions:
+  contents: read
+  issues: write
+
+concurrency:
+  group: deploy-e2e-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  weekly-digest:
+    name: weekly-digest cloud deploy
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    env:
+      WORKFORCE_E2E_STAGING_TOKEN: ${{ secrets.WORKFORCE_E2E_STAGING_TOKEN }}
+      WORKFORCE_E2E_STAGING_URL: ${{ vars.WORKFORCE_E2E_STAGING_URL }}
+      WORKFORCE_E2E_STAGING_WORKSPACE_ID: ${{ vars.WORKFORCE_E2E_STAGING_WORKSPACE_ID }}
+      WORKFORCE_E2E_GITHUB_TOKEN: ${{ secrets.WORKFORCE_E2E_GITHUB_TOKEN || github.token }}
+      WORKFORCE_E2E_FIXTURE_REPO: AgentWorkforce/deploy-e2e-fixtures
+      SLACK_WEBHOOK_URL: ${{ secrets.WORKFORCE_ALERTS_SLACK_WEBHOOK_URL }}
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup pnpm
+        uses: pnpm/action-setup@v4
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: '22.14.0'
+          cache: 'pnpm'
+
+      - name: Install deps
+        run: pnpm install --frozen-lockfile
+
+      - name: Build workspace
+        run: pnpm -r run build
+
+      - name: Run weekly-digest smoke
+        id: smoke
+        continue-on-error: true
+        run: node --test packages/deploy/test/e2e/weekly-digest.smoke.test.ts
+
+      - name: Report smoke result
+        if: always()
+        run: |
+          if [ "${{ steps.smoke.outcome }}" = "success" ]; then
+            echo "SMOKE_TEST: PASS"
+          else
+            echo "SMOKE_TEST: FAIL — see logs"
+          fi
+
+      - name: Notify #workforce-alerts
+        if: steps.smoke.outcome == 'failure'
+        run: |
+          if [ -z "${SLACK_WEBHOOK_URL}" ]; then
+            echo "No Slack webhook configured; skipping #workforce-alerts notification."
+            exit 0
+          fi
+          payload=$(node -e "console.log(JSON.stringify({text: 'SMOKE_TEST: FAIL — weekly-digest deploy E2E failed. See ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}'}))")
+          curl -sS -X POST -H 'content-type: application/json' --data "$payload" "$SLACK_WEBHOOK_URL"
