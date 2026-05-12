@@ -10,6 +10,7 @@
     "package.json"
   ],
   "dependencies": {
+    "@agentworkforce/deploy": "workspace:*",
     "@agentworkforce/persona-kit": "workspace:*",
     "@agentworkforce/workload-router": "workspace:*",
     "@relayburn/sdk": "^2.5.2",

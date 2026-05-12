@@ -165,6 +165,106 @@ export type McpServerSpec =
       env?: Record<string, string>;
     };
 
+/**
+ * A single event trigger declared by an integration. `on` is a Relayfile-
+ * adapter-normalized event name (e.g. `pull_request.opened`,
+ * `issue.created`, `app_mention`). `match` and `where` are filter sugars
+ * the deploy CLI lints against a known registry; unknown values warn but
+ * do not fail parse, so the cloud runtime stays the source of truth.
+ *
+ * Examples:
+ *   { on: "pull_request.opened" }
+ *   { on: "issue_comment.created", match: "@mention" }
+ *   { on: "check_run.completed", where: "conclusion=failure" }
+ */
+export interface PersonaIntegrationTrigger {
+  on: string;
+  match?: string;
+  where?: string;
+}
+
+/**
+ * Per-provider integration configuration. The map key is the Relayfile
+ * provider slug (`github`, `linear`, `slack`, `notion`, `jira`). `scope`
+ * is provider-specific filter metadata (e.g. `{ repo: "org/repo" }` for
+ * github, `{ database: "<id>" }` for notion). `triggers` are flat — all
+ * trigger events for this provider fan into the same `onEvent` handler,
+ * which discriminates on `event.source` + `event.type`.
+ */
+export interface PersonaIntegrationConfig {
+  scope?: Record<string, string>;
+  triggers?: PersonaIntegrationTrigger[];
+}
+
+/**
+ * A cron-style schedule. `name` is unique within the persona and surfaces
+ * to the handler as `event.name`. `cron` is a standard 5-field expression.
+ * `tz` defaults to `UTC` at the runtime layer (the parser keeps it
+ * optional so the spec stays close to what the author wrote).
+ */
+export interface PersonaSchedule {
+  name: string;
+  cron: string;
+  tz?: string;
+}
+
+/**
+ * Long-form sandbox configuration. `enabled` defaults to true when the
+ * object form is present; supply the boolean shorthand `sandbox: false`
+ * to opt out entirely. `timeoutSeconds` caps a single handler invocation
+ * (default 1800s in the runtime). `env` is merged on top of auto-injected
+ * secrets at sandbox-create time.
+ *
+ * Image selection is intentionally not user-configurable in v1 — workforce
+ * picks a standard image. Add `image` later if a real demand surfaces.
+ */
+export interface PersonaSandboxConfig {
+  enabled?: boolean;
+  timeoutSeconds?: number;
+  env?: Record<string, string>;
+}
+
+/**
+ * Sandbox can be specified as `true` / `false` shorthand or as the full
+ * config object. The parser preserves whichever form the author wrote so
+ * round-trips stay lossless; consumers normalize when reading.
+ */
+export type PersonaSandbox = boolean | PersonaSandboxConfig;
+
+/** Memory scope semantics, mirroring @agent-assistant/memory. */
+export type PersonaMemoryScope = 'session' | 'user' | 'workspace' | 'org' | 'object';
+
+/**
+ * Long-form memory configuration. Defaults are applied by the runtime,
+ * not the parser — the spec keeps only what the author actually wrote.
+ * `enabled` defaults to true when the object form is present.
+ */
+export interface PersonaMemoryConfig {
+  enabled?: boolean;
+  scopes?: PersonaMemoryScope[];
+  ttlDays?: number;
+  autoPromote?: boolean;
+  dedupMs?: number;
+}
+
+export type PersonaMemory = boolean | PersonaMemoryConfig;
+
+/**
+ * Conversational traits, applied only when the agent posts to a chat
+ * surface (Slack, Relaycast, GitHub PR comment). Headless agents — the
+ * paraglide "Linear issue → PR" pattern — should omit this field. Mirrors
+ * the trait shape in `@agent-assistant/traits`.
+ */
+export interface PersonaTraits {
+  voice?: string;
+  formality?: 'low' | 'medium' | 'high';
+  proactivity?: 'low' | 'medium' | 'high';
+  riskPosture?: 'conservative' | 'balanced' | 'aggressive';
+  domain?: string;
+  vocabulary?: string[];
+  preferMarkdown?: boolean;
+}
+
 export interface PersonaSpec {
   id: string;
   intent: string;
@@ -237,6 +337,57 @@ export interface PersonaSpec {
   claudeMdContent?: string;
   /** Inlined `AGENTS.md` content for built-in personas. */
   agentsMdContent?: string;
+  /**
+   * Opt this persona into the `workforce deploy` cloud-agent surface.
+   * When `true`, the deploy CLI considers this persona a deployable agent
+   * (validates {@link integrations} / {@link schedules}, prompts for
+   * integration connect, bundles {@link onEvent}, hands off to the runtime).
+   * Local `workforce agent <id>` flows ignore this flag — non-deploy use
+   * keeps working unchanged.
+   */
+  cloud?: boolean;
+  /**
+   * When `true`, inference for this agent uses the user's connected LLM
+   * subscription via `@agent-relay/cloud`'s provider link, rather than
+   * workforce-billed tokens. The deploy CLI calls `connectProvider({...})`
+   * at deploy time. Only meaningful when {@link cloud} is `true`.
+   */
+  useSubscription?: boolean;
+  /**
+   * Per-provider integration declarations keyed by Relayfile provider slug
+   * (`github`, `linear`, `slack`, `notion`, `jira`). At deploy time the CLI
+   * runs `RelayfileSetup.connectIntegration({ allowedIntegrations: [key] })`
+   * for each provider not yet connected to the active workspace.
+   */
+  integrations?: Record<string, PersonaIntegrationConfig>;
+  /** Cron-style schedules. Each `name` is unique within the persona. */
+  schedules?: PersonaSchedule[];
+  /**
+   * Sandbox preference. `true` (default for cloud personas) means the
+   * agent runs inside a Daytona sandbox at deploy time; `false` runs it in
+   * the runner process. The object form lets the author tune timeout / env.
+   */
+  sandbox?: PersonaSandbox;
+  /**
+   * Memory subsystem opt-in. Wires the agent-assistant memory adapter at
+   * runtime; the persona spec only declares intent, not implementation
+   * details (api keys, adapter type, etc. come from workforce env).
+   */
+  memory?: PersonaMemory;
+  /**
+   * Conversational traits, applied only when the agent posts to a chat
+   * surface. Omit for headless agents.
+   */
+  traits?: PersonaTraits;
+  /**
+   * Relative POSIX path to the TypeScript (or compiled .js / .mjs) file
+   * whose default export is the deploy-time event handler. Resolved
+   * relative to the persona JSON's directory at deploy time. Required when
+   * {@link cloud} is `true` and any trigger is declared; the deploy CLI
+   * enforces this at deploy time, the parser keeps it optional so partially-
+   * authored specs still parse.
+   */
+  onEvent?: string;
 }
 
 export interface PersonaSelection {

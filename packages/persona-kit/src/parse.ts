@@ -16,15 +16,24 @@ import type {
   McpServerSpec,
   PermissionMode,
   PersonaInputSpec,
+  PersonaIntegrationConfig,
+  PersonaIntegrationTrigger,
   PersonaIntent,
+  PersonaMemory,
+  PersonaMemoryConfig,
+  PersonaMemoryScope,
   PersonaMount,
   PersonaPermissions,
   PersonaRuntime,
+  PersonaSandbox,
+  PersonaSandboxConfig,
+  PersonaSchedule,
   PersonaSelection,
   PersonaSkill,
   PersonaSpec,
   PersonaTag,
   PersonaTier,
+  PersonaTraits,
   SidecarMdMode
 } from './types.js';
 
@@ -450,6 +459,320 @@ export function parseMcpServers(
   return out;
 }
 
+const MEMORY_SCOPE_VALUES: readonly PersonaMemoryScope[] = [
+  'session',
+  'user',
+  'workspace',
+  'org',
+  'object'
+];
+
+const TRAIT_LEVEL_VALUES = ['low', 'medium', 'high'] as const;
+const TRAIT_RISK_VALUES = ['conservative', 'balanced', 'aggressive'] as const;
+
+const ONEVENT_EXT_RE = /\.(?:ts|tsx|mts|cts|js|mjs|cjs)$/i;
+
+// Standard 5-field cron: minute hour day-of-month month day-of-week. Each
+// field is `*`, an integer, a range (`1-5`), a list (`1,3,5`), or a step
+// like every-N (`*` slash `15`) or `5-25` slash `5`. Names like `MON` / `JAN`
+// are deliberately not allowed at parse time; the runtime is the source of
+// truth for what schedulers accept, and unknown shapes should propagate as
+// runtime errors rather than silently passing through here.
+const CRON_FIELD_RE = /^(?:\*|(?:\d+(?:-\d+)?)(?:,\d+(?:-\d+)?)*)(?:\/\d+)?$/;
+
+function assertOnEventPath(value: unknown, context: string): string {
+  if (typeof value !== 'string' || !value.trim()) {
+    throw new Error(`${context} must be a non-empty string`);
+  }
+  if (value.startsWith('/')) {
+    throw new Error(`${context} must be a relative POSIX path; got absolute "${value}"`);
+  }
+  const segments = value.split(/[\\/]+/);
+  if (segments.some((s) => s === '..')) {
+    throw new Error(`${context} must not contain ".." segments`);
+  }
+  if (!ONEVENT_EXT_RE.test(value)) {
+    throw new Error(
+      `${context} must point at a .ts/.tsx/.mts/.cts/.js/.mjs/.cjs file; got "${value}"`
+    );
+  }
+  return value;
+}
+
+function assertCronExpression(value: string, context: string): void {
+  const fields = value.trim().split(/\s+/);
+  if (fields.length !== 5) {
+    throw new Error(`${context} must be a 5-field cron expression; got ${fields.length} field(s)`);
+  }
+  for (let i = 0; i < fields.length; i += 1) {
+    const field = fields[i];
+    if (!CRON_FIELD_RE.test(field)) {
+      throw new Error(`${context} field ${i + 1} is not a valid cron token: "${field}"`);
+    }
+  }
+}
+
+export function parseIntegrationTrigger(
+  value: unknown,
+  context: string
+): PersonaIntegrationTrigger {
+  if (!isObject(value)) {
+    throw new Error(`${context} must be an object`);
+  }
+  const { on, match, where } = value;
+  if (typeof on !== 'string' || !on.trim()) {
+    throw new Error(`${context}.on must be a non-empty string`);
+  }
+  if (match !== undefined && (typeof match !== 'string' || !match.trim())) {
+    throw new Error(`${context}.match must be a non-empty string if provided`);
+  }
+  if (where !== undefined && (typeof where !== 'string' || !where.trim())) {
+    throw new Error(`${context}.where must be a non-empty string if provided`);
+  }
+  return {
+    on,
+    ...(typeof match === 'string' ? { match } : {}),
+    ...(typeof where === 'string' ? { where } : {})
+  };
+}
+
+export function parseIntegrationConfig(
+  value: unknown,
+  context: string
+): PersonaIntegrationConfig {
+  if (!isObject(value)) {
+    throw new Error(`${context} must be an object`);
+  }
+  const { scope, triggers } = value;
+
+  const out: PersonaIntegrationConfig = {};
+
+  if (scope !== undefined) {
+    const parsedScope = parseStringMap(scope, `${context}.scope`);
+    if (parsedScope && Object.keys(parsedScope).length > 0) {
+      out.scope = parsedScope;
+    }
+  }
+
+  if (triggers !== undefined) {
+    if (!Array.isArray(triggers)) {
+      throw new Error(`${context}.triggers must be an array if provided`);
+    }
+    if (triggers.length === 0) {
+      throw new Error(
+        `${context}.triggers must contain at least one entry if provided (omit the field to declare an integration with no event triggers)`
+      );
+    }
+    out.triggers = triggers.map((entry, idx) =>
+      parseIntegrationTrigger(entry, `${context}.triggers[${idx}]`)
+    );
+  }
+
+  return out;
+}
+
+export function parseIntegrations(
+  value: unknown,
+  context: string
+): Record<string, PersonaIntegrationConfig> | undefined {
+  if (value === undefined) return undefined;
+  if (!isObject(value)) {
+    throw new Error(`${context} must be an object if provided`);
+  }
+
+  const out: Record<string, PersonaIntegrationConfig> = {};
+  for (const [provider, raw] of Object.entries(value)) {
+    if (!provider.trim()) {
+      throw new Error(`${context} integration keys must be non-empty strings`);
+    }
+    out[provider] = parseIntegrationConfig(raw, `${context}.${provider}`);
+  }
+
+  return Object.keys(out).length > 0 ? out : undefined;
+}
+
+export function parseSchedules(
+  value: unknown,
+  context: string
+): PersonaSchedule[] | undefined {
+  if (value === undefined) return undefined;
+  if (!Array.isArray(value)) {
+    throw new Error(`${context} must be an array if provided`);
+  }
+  if (value.length === 0) return undefined;
+
+  const seenNames = new Set<string>();
+  const out: PersonaSchedule[] = [];
+  for (const [idx, entry] of value.entries()) {
+    const entryContext = `${context}[${idx}]`;
+    if (!isObject(entry)) {
+      throw new Error(`${entryContext} must be an object`);
+    }
+    const { name, cron, tz } = entry;
+    if (typeof name !== 'string' || !name.trim()) {
+      throw new Error(`${entryContext}.name must be a non-empty string`);
+    }
+    if (seenNames.has(name)) {
+      throw new Error(`${entryContext}.name "${name}" duplicates an earlier schedule`);
+    }
+    seenNames.add(name);
+    if (typeof cron !== 'string' || !cron.trim()) {
+      throw new Error(`${entryContext}.cron must be a non-empty string`);
+    }
+    assertCronExpression(cron, `${entryContext}.cron`);
+    if (tz !== undefined && (typeof tz !== 'string' || !tz.trim())) {
+      throw new Error(`${entryContext}.tz must be a non-empty string if provided`);
+    }
+    out.push({
+      name,
+      cron,
+      ...(typeof tz === 'string' ? { tz } : {})
+    });
+  }
+  return out;
+}
+
+export function parseSandbox(value: unknown, context: string): PersonaSandbox | undefined {
+  if (value === undefined) return undefined;
+  if (typeof value === 'boolean') return value;
+  if (!isObject(value)) {
+    throw new Error(`${context} must be a boolean or an object if provided`);
+  }
+  const { enabled, timeoutSeconds, env } = value;
+  const out: PersonaSandboxConfig = {};
+  if (enabled !== undefined) {
+    if (typeof enabled !== 'boolean') {
+      throw new Error(`${context}.enabled must be a boolean if provided`);
+    }
+    out.enabled = enabled;
+  }
+  if (timeoutSeconds !== undefined) {
+    if (
+      typeof timeoutSeconds !== 'number' ||
+      !Number.isFinite(timeoutSeconds) ||
+      timeoutSeconds <= 0
+    ) {
+      throw new Error(`${context}.timeoutSeconds must be a positive number if provided`);
+    }
+    out.timeoutSeconds = timeoutSeconds;
+  }
+  if (env !== undefined) {
+    const parsedEnv = parseStringMap(env, `${context}.env`);
+    if (parsedEnv && Object.keys(parsedEnv).length > 0) {
+      out.env = parsedEnv;
+    }
+  }
+  return out;
+}
+
+export function parseMemory(value: unknown, context: string): PersonaMemory | undefined {
+  if (value === undefined) return undefined;
+  if (typeof value === 'boolean') return value;
+  if (!isObject(value)) {
+    throw new Error(`${context} must be a boolean or an object if provided`);
+  }
+  const { enabled, scopes, ttlDays, autoPromote, dedupMs } = value;
+  const out: PersonaMemoryConfig = {};
+  if (enabled !== undefined) {
+    if (typeof enabled !== 'boolean') {
+      throw new Error(`${context}.enabled must be a boolean if provided`);
+    }
+    out.enabled = enabled;
+  }
+  if (scopes !== undefined) {
+    if (!Array.isArray(scopes) || scopes.length === 0) {
+      throw new Error(
+        `${context}.scopes must be a non-empty array of memory scopes if provided`
+      );
+    }
+    const parsedScopes: PersonaMemoryScope[] = [];
+    for (const [idx, entry] of scopes.entries()) {
+      if (typeof entry !== 'string' || !MEMORY_SCOPE_VALUES.includes(entry as PersonaMemoryScope)) {
+        throw new Error(
+          `${context}.scopes[${idx}] must be one of: ${MEMORY_SCOPE_VALUES.join(', ')}`
+        );
+      }
+      const scope = entry as PersonaMemoryScope;
+      if (!parsedScopes.includes(scope)) parsedScopes.push(scope);
+    }
+    out.scopes = parsedScopes;
+  }
+  if (ttlDays !== undefined) {
+    if (typeof ttlDays !== 'number' || !Number.isFinite(ttlDays) || ttlDays <= 0) {
+      throw new Error(`${context}.ttlDays must be a positive number if provided`);
+    }
+    out.ttlDays = ttlDays;
+  }
+  if (autoPromote !== undefined) {
+    if (typeof autoPromote !== 'boolean') {
+      throw new Error(`${context}.autoPromote must be a boolean if provided`);
+    }
+    out.autoPromote = autoPromote;
+  }
+  if (dedupMs !== undefined) {
+    if (typeof dedupMs !== 'number' || !Number.isFinite(dedupMs) || dedupMs < 0) {
+      throw new Error(`${context}.dedupMs must be a non-negative number if provided`);
+    }
+    out.dedupMs = dedupMs;
+  }
+  return out;
+}
+
+export function parseTraits(value: unknown, context: string): PersonaTraits | undefined {
+  if (value === undefined) return undefined;
+  if (!isObject(value)) {
+    throw new Error(`${context} must be an object if provided`);
+  }
+  const { voice, formality, proactivity, riskPosture, domain, vocabulary, preferMarkdown } = value;
+  const out: PersonaTraits = {};
+  if (voice !== undefined) {
+    if (typeof voice !== 'string' || !voice.trim()) {
+      throw new Error(`${context}.voice must be a non-empty string if provided`);
+    }
+    out.voice = voice;
+  }
+  if (formality !== undefined) {
+    if (typeof formality !== 'string' || !TRAIT_LEVEL_VALUES.includes(formality as 'low')) {
+      throw new Error(`${context}.formality must be one of: ${TRAIT_LEVEL_VALUES.join(', ')}`);
+    }
+    out.formality = formality as PersonaTraits['formality'];
+  }
+  if (proactivity !== undefined) {
+    if (typeof proactivity !== 'string' || !TRAIT_LEVEL_VALUES.includes(proactivity as 'low')) {
+      throw new Error(`${context}.proactivity must be one of: ${TRAIT_LEVEL_VALUES.join(', ')}`);
+    }
+    out.proactivity = proactivity as PersonaTraits['proactivity'];
+  }
+  if (riskPosture !== undefined) {
+    if (typeof riskPosture !== 'string' || !TRAIT_RISK_VALUES.includes(riskPosture as 'balanced')) {
+      throw new Error(`${context}.riskPosture must be one of: ${TRAIT_RISK_VALUES.join(', ')}`);
+    }
+    out.riskPosture = riskPosture as PersonaTraits['riskPosture'];
+  }
+  if (domain !== undefined) {
+    if (typeof domain !== 'string' || !domain.trim()) {
+      throw new Error(`${context}.domain must be a non-empty string if provided`);
+    }
+    out.domain = domain;
+  }
+  if (vocabulary !== undefined) {
+    const parsed = parseStringList(vocabulary, `${context}.vocabulary`);
+    if (parsed) out.vocabulary = parsed;
+  }
+  if (preferMarkdown !== undefined) {
+    if (typeof preferMarkdown !== 'boolean') {
+      throw new Error(`${context}.preferMarkdown must be a boolean if provided`);
+    }
+    out.preferMarkdown = preferMarkdown;
+  }
+  return Object.keys(out).length > 0 ? out : undefined;
+}
+
+export function parseOnEvent(value: unknown, context: string): string | undefined {
+  if (value === undefined) return undefined;
+  return assertOnEventPath(value, context);
+}
+
 export function parsePersonaSpec(value: unknown, expectedIntent: PersonaIntent): PersonaSpec {
   if (!isObject(value)) {
     throw new Error(`persona[${expectedIntent}] must be an object`);
@@ -473,7 +796,15 @@ export function parsePersonaSpec(value: unknown, expectedIntent: PersonaIntent):
     agentsMd,
     agentsMdMode,
     claudeMdContent,
-    agentsMdContent
+    agentsMdContent,
+    cloud,
+    useSubscription,
+    integrations,
+    schedules,
+    sandbox,
+    memory,
+    traits,
+    onEvent
   } = value;
 
   if (typeof id !== 'string' || !id.trim()) {
@@ -545,6 +876,22 @@ export function parsePersonaSpec(value: unknown, expectedIntent: PersonaIntent):
     throw new Error(`persona[${expectedIntent}].agentsMdContent must be a non-empty string`);
   }
 
+  if (cloud !== undefined && typeof cloud !== 'boolean') {
+    throw new Error(`persona[${expectedIntent}].cloud must be a boolean if provided`);
+  }
+  if (useSubscription !== undefined && typeof useSubscription !== 'boolean') {
+    throw new Error(`persona[${expectedIntent}].useSubscription must be a boolean if provided`);
+  }
+  const parsedIntegrations = parseIntegrations(
+    integrations,
+    `persona[${expectedIntent}].integrations`
+  );
+  const parsedSchedules = parseSchedules(schedules, `persona[${expectedIntent}].schedules`);
+  const parsedSandbox = parseSandbox(sandbox, `persona[${expectedIntent}].sandbox`);
+  const parsedMemory = parseMemory(memory, `persona[${expectedIntent}].memory`);
+  const parsedTraits = parseTraits(traits, `persona[${expectedIntent}].traits`);
+  const parsedOnEvent = parseOnEvent(onEvent, `persona[${expectedIntent}].onEvent`);
+
   return {
     id,
     intent,
@@ -563,7 +910,15 @@ export function parsePersonaSpec(value: unknown, expectedIntent: PersonaIntent):
     ...(typeof agentsMd === 'string' ? { agentsMd } : {}),
     ...(agentsMdMode ? { agentsMdMode: agentsMdMode as SidecarMdMode } : {}),
     ...(typeof claudeMdContent === 'string' ? { claudeMdContent } : {}),
-    ...(typeof agentsMdContent === 'string' ? { agentsMdContent } : {})
+    ...(typeof agentsMdContent === 'string' ? { agentsMdContent } : {}),
+    ...(typeof cloud === 'boolean' ? { cloud } : {}),
+    ...(typeof useSubscription === 'boolean' ? { useSubscription } : {}),
+    ...(parsedIntegrations ? { integrations: parsedIntegrations } : {}),
+    ...(parsedSchedules ? { schedules: parsedSchedules } : {}),
+    ...(parsedSandbox !== undefined ? { sandbox: parsedSandbox } : {}),
+    ...(parsedMemory !== undefined ? { memory: parsedMemory } : {}),
+    ...(parsedTraits ? { traits: parsedTraits } : {}),
+    ...(parsedOnEvent !== undefined ? { onEvent: parsedOnEvent } : {})
   };
 }
 

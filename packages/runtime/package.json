@@ -1,6 +1,6 @@
 {
-  "name": "@agentworkforce/persona-kit",
-  "version": "2.1.4",
+  "name": "@agentworkforce/runtime",
+  "version": "0.0.0",
   "private": false,
   "type": "module",
   "main": "dist/index.js",
@@ -9,6 +9,18 @@
     ".": {
       "types": "./dist/index.d.ts",
       "default": "./dist/index.js"
+    },
+    "./runner": {
+      "types": "./dist/runner.d.ts",
+      "default": "./dist/runner.js"
+    },
+    "./clients": {
+      "types": "./dist/clients/index.d.ts",
+      "default": "./dist/clients/index.js"
+    },
+    "./raw": {
+      "types": "./dist/raw.d.ts",
+      "default": "./dist/raw.js"
     },
     "./package.json": "./package.json"
   },
@@ -20,7 +32,7 @@
   "repository": {
     "type": "git",
     "url": "https://github.com/AgentWorkforce/workforce",
-    "directory": "packages/persona-kit"
+    "directory": "packages/runtime"
   },
   "publishConfig": {
     "access": "public"
@@ -29,10 +41,10 @@
     "build": "tsc -p tsconfig.json",
     "dev": "tsc -p tsconfig.json --watch --preserveWatchOutput",
     "typecheck": "tsc -p tsconfig.json --noEmit",
-    "test": "tsc -p tsconfig.json && node --test dist/*.test.js",
+    "test": "tsc -p tsconfig.json && node --test dist/**/*.test.js dist/*.test.js",
     "lint": "tsc -p tsconfig.json --noEmit"
   },
   "dependencies": {
-    "@relayfile/local-mount": "^0.7.0"
+    "@agentworkforce/persona-kit": "workspace:*"
   }
 }

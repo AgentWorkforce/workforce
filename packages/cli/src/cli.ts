@@ -60,6 +60,7 @@ import {
   type AutoSyncHandle
 } from '@relayfile/local-mount';
 import ora, { type Ora } from 'ora';
+import { runDeploy, runLogin } from './deploy-command.js';
 import {
   startLaunchMetadataRecording,
   type LaunchMetadataRun
@@ -3814,6 +3815,14 @@ export async function main(): Promise<void> {
 
   if (subcommand === 'pick') {
     await runPick(rest);
+  }
+
+  if (subcommand === 'deploy') {
+    await runDeploy(rest);
+  }
+
+  if (subcommand === 'login') {
+    await runLogin(rest);
   }
 
   if (subcommand !== 'agent') {
