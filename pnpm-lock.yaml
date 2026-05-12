@@ -45,6 +45,12 @@ importers:
         specifier: ^9.4.0
         version: 9.4.0
 
+  packages/daytona-runner:
+    devDependencies:
+      '@daytonaio/sdk':
+        specifier: ^0.148.0
+        version: 0.148.0(ws@8.20.0)
+
   packages/deploy:
     dependencies:
       '@agentworkforce/persona-kit':
