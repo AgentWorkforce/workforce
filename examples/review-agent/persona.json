@@ -18,19 +18,9 @@
       "triggers": [{ "on": "app_mention" }]
     }
   },
-  "sandbox": true,
   "memory": {
     "enabled": true,
-    "scopes": ["session", "workspace"]
-  },
-  "traits": {
-    "voice": "professional-warm",
-    "formality": "low",
-    "proactivity": "medium",
-    "riskPosture": "conservative",
-    "domain": "engineering",
-    "vocabulary": ["PR", "diff", "CI"],
-    "preferMarkdown": true
+    "scopes": ["workspace"]
   },
   "onEvent": "./agent.ts",
   "harness": "codex",

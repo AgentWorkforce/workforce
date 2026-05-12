@@ -14,7 +14,6 @@
       }
     }
   },
-  "sandbox": true,
   "inputs": {
     "GITHUB_OWNER": {
       "description": "GitHub owner containing the target repository.",
