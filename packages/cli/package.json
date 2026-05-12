@@ -1,6 +1,6 @@
 {
   "name": "@agentworkforce/cli",
-  "version": "2.1.4",
+  "version": "3.0.1",
   "private": false,
   "type": "module",
   "files": [
@@ -10,6 +10,7 @@
     "package.json"
   ],
   "dependencies": {
+    "@agentworkforce/deploy": "workspace:*",
     "@agentworkforce/persona-kit": "workspace:*",
     "@agentworkforce/workload-router": "workspace:*",
     "@relayburn/sdk": "^2.5.2",

@@ -139,7 +139,7 @@ function resolvedInputBindings(
 function resolveSidecarWrite(
   selection: ResolvedPersona
 ): ResolvedSidecarWrite[] {
-  const harness = selection.runtime.harness;
+  const harness = selection.harness;
   if (harness === 'claude') {
     if (selection.claudeMdContent !== undefined) {
       return [
@@ -213,7 +213,7 @@ export function buildPersonaSpawnPlan(
   persona: ResolvedPersona,
   options: PlanOptions = {}
 ): PersonaSpawnPlan {
-  const harness = persona.runtime.harness;
+  const harness = persona.harness;
   // Input env-var fallbacks read from `processEnv` only when ambient capture
   // is opted into. With ambient capture off, `resolvePersonaInputs` sees an
   // empty env and inputs must resolve from explicit values, persona
@@ -228,7 +228,7 @@ export function buildPersonaSpawnPlan(
     processEnv
   );
   const renderedSystemPrompt = renderPersonaInputs(
-    persona.runtime.systemPrompt,
+    persona.systemPrompt,
     inputResolution.values
   );
   const skills = materializeSkills(
@@ -240,12 +240,12 @@ export function buildPersonaSpawnPlan(
   const spec = buildInteractiveSpec({
     harness,
     personaId: persona.personaId,
-    model: persona.runtime.model,
+    model: persona.model,
     systemPrompt: renderedSystemPrompt,
     ...(persona.mcpServers ? { mcpServers: persona.mcpServers } : {}),
     ...(persona.permissions ? { permissions: persona.permissions } : {}),
-    ...(persona.runtime.harnessSettings
-      ? { harnessSettings: persona.runtime.harnessSettings }
+    ...(persona.harnessSettings
+      ? { harnessSettings: persona.harnessSettings }
       : {}),
     ...(skills.sessionInstallRoot
       ? { pluginDirs: [skills.sessionInstallRoot] }

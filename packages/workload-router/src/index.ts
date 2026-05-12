@@ -1,12 +1,10 @@
 import {
   deepFreeze,
   isObject,
-  isTier,
   materializeSkills,
   materializeSkillsFor,
   parsePersonaSpec,
   PERSONA_INTENTS,
-  PERSONA_TIERS,
   resolveSidecar,
   sidecarSelectionFields,
   buildInstallArtifacts,
@@ -17,7 +15,6 @@ import {
   type PersonaIntent,
   type PersonaSelection,
   type PersonaSpec,
-  type PersonaTier,
   type SkillMaterializationOptions
 } from '@agentworkforce/persona-kit';
 
@@ -29,7 +26,6 @@ import defaultRoutingProfileJson from '../routing-profiles/default.json' with { 
 // ---------------------------------------------------------------------------
 
 export interface RoutingProfileRule {
-  tier: PersonaTier;
   rationale: string;
 }
 
@@ -61,14 +57,11 @@ function parseRoutingProfile(value: unknown, context: string): RoutingProfile {
     if (!isObject(rule)) {
       throw new Error(`${context}.intents.${intent} must be an object`);
     }
-    const { tier, rationale } = rule;
-    if (!isTier(tier)) {
-      throw new Error(`${context}.intents.${intent}.tier must be one of: ${PERSONA_TIERS.join(', ')}`);
-    }
+    const { rationale } = rule;
     if (typeof rationale !== 'string' || !rationale.trim()) {
       throw new Error(`${context}.intents.${intent}.rationale must be a non-empty string`);
     }
-    parsedIntents[intent] = { tier, rationale };
+    parsedIntents[intent] = { rationale };
   }
 
   return {
@@ -114,8 +107,10 @@ export function resolvePersona(intent: PersonaIntent, profile: RoutingProfile | 
 
   return {
     personaId: spec.id,
-    tier: rule.tier,
-    runtime: spec.tiers[rule.tier],
+    harness: spec.harness,
+    model: spec.model,
+    systemPrompt: spec.systemPrompt,
+    harnessSettings: spec.harnessSettings,
     skills: spec.skills,
     rationale: `${profileSpec.id}: ${rule.rationale}`,
     ...(spec.inputs ? { inputs: spec.inputs } : {}),
@@ -123,28 +118,7 @@ export function resolvePersona(intent: PersonaIntent, profile: RoutingProfile | 
     ...(spec.mcpServers ? { mcpServers: spec.mcpServers } : {}),
     ...(spec.permissions ? { permissions: spec.permissions } : {}),
     ...(spec.mount ? { mount: spec.mount } : {}),
-    ...sidecarSelectionFields(resolveSidecar(spec, rule.tier))
-  };
-}
-
-/**
- * Backward-compatible helper for callers that already selected a tier directly.
- * Prefer resolvePersona(intent, profile) for policy-driven selection.
- */
-export function resolvePersonaByTier(intent: PersonaIntent, tier: PersonaTier = 'best-value'): PersonaSelection {
-  const spec = requireBuiltInPersona(intent);
-  return {
-    personaId: spec.id,
-    tier,
-    runtime: spec.tiers[tier],
-    skills: spec.skills,
-    rationale: `legacy-tier-override: ${tier}`,
-    ...(spec.inputs ? { inputs: spec.inputs } : {}),
-    ...(spec.env ? { env: spec.env } : {}),
-    ...(spec.mcpServers ? { mcpServers: spec.mcpServers } : {}),
-    ...(spec.permissions ? { permissions: spec.permissions } : {}),
-    ...(spec.mount ? { mount: spec.mount } : {}),
-    ...sidecarSelectionFields(resolveSidecar(spec, tier))
+    ...sidecarSelectionFields(resolveSidecar(spec))
   };
 }
 
@@ -170,16 +144,13 @@ export function resolvePersonaByTier(intent: PersonaIntent, tier: PersonaTier = 
  *
  * @param intent   The internal persona intent to resolve (e.g. `'persona-authoring'`).
  * @param options  Optional overrides. `harness` forces a specific harness
- *                 (otherwise inferred from the selected tier's runtime).
- *                 `tier` bypasses profile-driven routing and selects a tier
- *                 directly (legacy path — prefer `profile`). `profile`
- *                 selects the routing profile (defaults to `'default'`).
+ *                 (otherwise inferred from the persona's declared harness).
+ *                 `profile` selects the routing profile (defaults to `'default'`).
  */
 export function usePersona(
   intent: PersonaIntent,
   options: {
     harness?: Harness;
-    tier?: PersonaTier;
     profile?: RoutingProfile | RoutingProfileId;
     /**
      * Stage claude skills under this absolute directory instead of the
@@ -193,9 +164,7 @@ export function usePersona(
     repoRoot?: string;
   } = {}
 ): PersonaContext {
-  const baseSelection = options.tier
-    ? resolvePersonaByTier(intent, options.tier)
-    : resolvePersona(intent, options.profile ?? 'default');
+  const baseSelection = resolvePersona(intent, options.profile ?? 'default');
 
   return useSelection(baseSelection, {
     harness: options.harness,
@@ -214,24 +183,18 @@ export function useSelection(
   baseSelection: PersonaSelection,
   options: { harness?: Harness; installRoot?: string; repoRoot?: string } = {}
 ): PersonaContext {
-  const effectiveHarness = options.harness ?? baseSelection.runtime.harness;
+  const effectiveHarness = options.harness ?? baseSelection.harness;
   const selection =
-    effectiveHarness === baseSelection.runtime.harness
+    effectiveHarness === baseSelection.harness
       ? baseSelection
-      : {
-          ...baseSelection,
-          runtime: {
-            ...baseSelection.runtime,
-            harness: effectiveHarness
-          }
-        };
+      : { ...baseSelection, harness: effectiveHarness };
 
   const materializationOptions: SkillMaterializationOptions = {
     ...(options.installRoot !== undefined ? { installRoot: options.installRoot } : {}),
     ...(options.repoRoot !== undefined ? { repoRoot: options.repoRoot } : {})
   };
   const installPlan =
-    effectiveHarness === baseSelection.runtime.harness
+    effectiveHarness === baseSelection.harness
       ? materializeSkillsFor(selection, materializationOptions)
       : materializeSkills(selection.skills, effectiveHarness, materializationOptions);
 

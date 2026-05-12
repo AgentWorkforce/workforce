@@ -1,6 +1,6 @@
 {
   "name": "@agentworkforce/persona-kit",
-  "version": "2.1.4",
+  "version": "3.0.1",
   "private": false,
   "type": "module",
   "main": "dist/index.js",
@@ -9,7 +9,8 @@
     ".": {
       "types": "./dist/index.d.ts",
       "default": "./dist/index.js"
-    }
+    },
+    "./package.json": "./package.json"
   },
   "files": [
     "dist",

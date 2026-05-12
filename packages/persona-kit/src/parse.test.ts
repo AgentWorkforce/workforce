@@ -5,23 +5,22 @@ import {
   assertSidecarPath,
   INPUT_NAME_RE,
   parseHarnessSettings,
+  parseIntegrations,
   parseInputs,
+  parseMemory,
   parseMcpServers,
   parseMount,
+  parseOnEvent,
   parsePermissions,
   parsePersonaSpec,
+  parseSandbox,
+  parseSchedules,
   parseSkills,
   parseStringList,
   parseStringMap,
-  parseTags
+  parseTags,
+  parseTraits
 } from './parse.js';
-
-const baseRuntime = {
-  harness: 'claude',
-  model: 'anthropic/claude-3-5-sonnet',
-  systemPrompt: 'be helpful',
-  harnessSettings: { reasoning: 'medium', timeoutSeconds: 300 }
-};
 
 function validSpec(over: Record<string, unknown> = {}): Record<string, unknown> {
   return {
@@ -29,17 +28,23 @@ function validSpec(over: Record<string, unknown> = {}): Record<string, unknown> 
     intent: 'documentation',
     tags: ['documentation'],
     description: 'd',
-    tiers: { best: baseRuntime, 'best-value': baseRuntime, minimum: baseRuntime },
+    harness: 'claude',
+    model: 'anthropic/claude-3-5-sonnet',
+    systemPrompt: 'be helpful',
+    harnessSettings: { reasoning: 'medium', timeoutSeconds: 300 },
     ...over
   };
 }
 
-test('parsePersonaSpec accepts a minimal valid spec across all tiers', () => {
+test('parsePersonaSpec accepts a minimal valid flat spec', () => {
   const spec = parsePersonaSpec(validSpec(), 'documentation');
   assert.equal(spec.id, 'p');
   assert.equal(spec.intent, 'documentation');
   assert.deepEqual(spec.tags, ['documentation']);
-  assert.equal(spec.tiers.best.harness, 'claude');
+  assert.equal(spec.harness, 'claude');
+  assert.equal(spec.model, 'anthropic/claude-3-5-sonnet');
+  assert.equal(spec.systemPrompt, 'be helpful');
+  assert.equal(spec.harnessSettings.reasoning, 'medium');
 });
 
 test('parsePersonaSpec strips unknown top-level fields silently', () => {
@@ -49,6 +54,39 @@ test('parsePersonaSpec strips unknown top-level fields silently', () => {
   assert.ok(!('extra' in spec));
 });
 
+test('parsePersonaSpec accepts deploy-v1 optional fields', () => {
+  const spec = parsePersonaSpec(
+    validSpec({
+      cloud: true,
+      useSubscription: true,
+      integrations: {
+        github: {
+          scope: { repo: 'AgentWorkforce/workforce' },
+          triggers: [{ on: 'pull_request.opened' }]
+        }
+      },
+      schedules: [{ name: 'weekly', cron: '0 9 * * 6', tz: 'UTC' }],
+      sandbox: { enabled: true, timeoutSeconds: 1800, env: { NODE_ENV: 'production' } },
+      memory: { enabled: true, scopes: ['workspace'], ttlDays: 30 },
+      traits: { voice: 'professional-warm', preferMarkdown: true },
+      onEvent: './agent.ts'
+    }),
+    'documentation'
+  );
+
+  assert.equal(spec.cloud, true);
+  assert.equal(spec.integrations?.github.triggers?.[0].on, 'pull_request.opened');
+  assert.equal(spec.schedules?.[0].name, 'weekly');
+  assert.deepEqual(spec.sandbox, {
+    enabled: true,
+    timeoutSeconds: 1800,
+    env: { NODE_ENV: 'production' }
+  });
+  assert.deepEqual(spec.memory, { enabled: true, scopes: ['workspace'], ttlDays: 30 });
+  assert.equal(spec.traits?.preferMarkdown, true);
+  assert.equal(spec.onEvent, './agent.ts');
+});
+
 test('parsePersonaSpec throws when intent does not match the expected intent', () => {
   assert.throws(
     () => parsePersonaSpec(validSpec({ intent: 'review' }), 'documentation'),
@@ -56,17 +94,28 @@ test('parsePersonaSpec throws when intent does not match the expected intent', (
   );
 });
 
-test('parsePersonaSpec throws with a precise field path on a malformed tier', () => {
+test('parsePersonaSpec throws with a precise field path on a malformed harnessSettings', () => {
   const raw = validSpec({
-    tiers: {
-      best: baseRuntime,
-      'best-value': { ...baseRuntime, harnessSettings: { reasoning: 'turbo', timeoutSeconds: 1 } },
-      minimum: baseRuntime
-    }
+    harnessSettings: { reasoning: 'turbo', timeoutSeconds: 1 }
   });
   assert.throws(
     () => parsePersonaSpec(raw, 'documentation'),
-    /persona\[documentation\]\.tiers\.best-value\.harnessSettings\.reasoning must be low\|medium\|high/
+    /persona\[documentation\]\.harnessSettings\.reasoning must be low\|medium\|high/
+  );
+});
+
+test('parsePersonaSpec throws when required runtime fields are missing', () => {
+  assert.throws(
+    () => parsePersonaSpec(validSpec({ harness: 'mystery' }), 'documentation'),
+    /persona\[documentation\]\.harness must be one of:/
+  );
+  assert.throws(
+    () => parsePersonaSpec(validSpec({ model: '' }), 'documentation'),
+    /persona\[documentation\]\.model must be a non-empty string/
+  );
+  assert.throws(
+    () => parsePersonaSpec(validSpec({ systemPrompt: '   ' }), 'documentation'),
+    /persona\[documentation\]\.systemPrompt must be a non-empty string/
   );
 });
 
@@ -296,11 +345,234 @@ test('parsePersonaSpec rejects a non-object spec', () => {
   assert.throws(() => parsePersonaSpec('nope', 'documentation'), /must be an object/);
 });
 
-test('parsePersonaSpec preserves defaultTier when valid and rejects when invalid', () => {
-  const ok = parsePersonaSpec(validSpec({ defaultTier: 'best' }), 'documentation');
-  assert.equal(ok.defaultTier, 'best');
-  assert.throws(
-    () => parsePersonaSpec(validSpec({ defaultTier: 'turbo' }), 'documentation'),
-    /defaultTier must be one of:/
+// --- deploy-v1 schema additions ----------------------------------------------
+
+test('parseSandbox accepts boolean shorthand and round-trips both forms', () => {
+  assert.equal(parseSandbox(true, 'sandbox'), true);
+  assert.equal(parseSandbox(false, 'sandbox'), false);
+  assert.equal(parseSandbox(undefined, 'sandbox'), undefined);
+  const obj = parseSandbox(
+    { enabled: true, timeoutSeconds: 600, env: { FOO: 'bar' } },
+    'sandbox'
   );
+  assert.deepEqual(obj, { enabled: true, timeoutSeconds: 600, env: { FOO: 'bar' } });
+});
+
+test('parseSandbox rejects malformed objects with field-pointed errors', () => {
+  assert.throws(() => parseSandbox('on', 'sandbox'), /sandbox must be a boolean or an object/);
+  assert.throws(
+    () => parseSandbox({ enabled: 'yes' }, 'sandbox'),
+    /sandbox\.enabled must be a boolean/
+  );
+  assert.throws(
+    () => parseSandbox({ timeoutSeconds: -1 }, 'sandbox'),
+    /sandbox\.timeoutSeconds must be a positive number/
+  );
+  assert.throws(
+    () => parseSandbox({ timeoutSeconds: Number.POSITIVE_INFINITY }, 'sandbox'),
+    /sandbox\.timeoutSeconds must be a positive number/
+  );
+});
+
+test('parseMemory accepts boolean + object forms and validates scopes', () => {
+  assert.equal(parseMemory(true, 'memory'), true);
+  assert.equal(parseMemory(false, 'memory'), false);
+  assert.equal(parseMemory(undefined, 'memory'), undefined);
+  const m = parseMemory(
+    { enabled: true, scopes: ['user', 'user', 'workspace'], ttlDays: 7, autoPromote: true, dedupMs: 0 },
+    'memory'
+  );
+  // Duplicates are deduped while preserving first-seen order.
+  assert.deepEqual(m, {
+    enabled: true,
+    scopes: ['user', 'workspace'],
+    ttlDays: 7,
+    autoPromote: true,
+    dedupMs: 0
+  });
+});
+
+test('parseMemory rejects unknown scopes and non-positive ttl', () => {
+  assert.throws(
+    () => parseMemory({ scopes: ['planet'] }, 'memory'),
+    /memory\.scopes\[0\] must be one of: session, user, workspace, org, object/
+  );
+  assert.throws(() => parseMemory({ scopes: [] }, 'memory'), /scopes must be a non-empty array/);
+  assert.throws(() => parseMemory({ ttlDays: 0 }, 'memory'), /ttlDays must be a positive number/);
+  assert.throws(() => parseMemory({ dedupMs: -1 }, 'memory'), /dedupMs must be a non-negative number/);
+});
+
+test('parseTraits keeps only supplied fields and validates enums', () => {
+  assert.equal(parseTraits(undefined, 'traits'), undefined);
+  assert.equal(parseTraits({}, 'traits'), undefined); // empty object collapses to undefined
+  const t = parseTraits(
+    {
+      voice: 'concise',
+      formality: 'low',
+      proactivity: 'high',
+      riskPosture: 'balanced',
+      domain: 'engineering',
+      vocabulary: ['PR', 'diff'],
+      preferMarkdown: true
+    },
+    'traits'
+  );
+  assert.deepEqual(t, {
+    voice: 'concise',
+    formality: 'low',
+    proactivity: 'high',
+    riskPosture: 'balanced',
+    domain: 'engineering',
+    vocabulary: ['PR', 'diff'],
+    preferMarkdown: true
+  });
+  assert.throws(
+    () => parseTraits({ formality: 'extreme' }, 'traits'),
+    /traits\.formality must be one of: low, medium, high/
+  );
+  assert.throws(
+    () => parseTraits({ riskPosture: 'wild' }, 'traits'),
+    /traits\.riskPosture must be one of: conservative, balanced, aggressive/
+  );
+});
+
+test('parseSchedules validates cron, requires unique names, preserves tz when set', () => {
+  const s = parseSchedules(
+    [
+      { name: 'morning', cron: '0 9 * * 1-5', tz: 'America/New_York' },
+      { name: 'sweep', cron: '*/15 0,12 * * *' }
+    ],
+    'schedules'
+  );
+  assert.deepEqual(s, [
+    { name: 'morning', cron: '0 9 * * 1-5', tz: 'America/New_York' },
+    { name: 'sweep', cron: '*/15 0,12 * * *' }
+  ]);
+
+  assert.throws(
+    () =>
+      parseSchedules(
+        [
+          { name: 'dup', cron: '0 9 * * *' },
+          { name: 'dup', cron: '0 10 * * *' }
+        ],
+        'schedules'
+      ),
+    /duplicates an earlier schedule/
+  );
+  assert.throws(
+    () => parseSchedules([{ name: 'short', cron: '0 9 * *' }], 'schedules'),
+    /must be a 5-field cron expression/
+  );
+  assert.throws(
+    () => parseSchedules([{ name: 'bad', cron: '0 9 * * MON' }], 'schedules'),
+    /is not a valid cron token/
+  );
+  assert.equal(parseSchedules(undefined, 'schedules'), undefined);
+  assert.equal(parseSchedules([], 'schedules'), undefined);
+});
+
+test('parseIntegrations preserves scope + triggers; rejects empty trigger arrays', () => {
+  const i = parseIntegrations(
+    {
+      github: {
+        scope: { repo: 'org/r' },
+        triggers: [
+          { on: 'pull_request.opened' },
+          { on: 'issue_comment.created', match: '@mention' }
+        ]
+      },
+      linear: {} // no scope, no triggers — still a declared integration
+    },
+    'integrations'
+  );
+  assert.equal(i?.github.scope?.repo, 'org/r');
+  assert.equal(i?.github.triggers?.length, 2);
+  assert.equal(i?.github.triggers?.[1].match, '@mention');
+  assert.deepEqual(i?.linear, {});
+
+  assert.throws(
+    () =>
+      parseIntegrations(
+        { github: { triggers: [] } },
+        'integrations'
+      ),
+    /triggers must contain at least one entry/
+  );
+  assert.throws(
+    () =>
+      parseIntegrations(
+        { github: { triggers: [{ on: '' }] } },
+        'integrations'
+      ),
+    /triggers\[0\]\.on must be a non-empty string/
+  );
+});
+
+test('parseOnEvent enforces relative path with a supported extension', () => {
+  assert.equal(parseOnEvent('./agent.ts', 'onEvent'), './agent.ts');
+  assert.equal(parseOnEvent('handlers/main.mjs', 'onEvent'), 'handlers/main.mjs');
+  assert.equal(parseOnEvent(undefined, 'onEvent'), undefined);
+
+  assert.throws(() => parseOnEvent('/abs/agent.ts', 'onEvent'), /must be a relative POSIX path/);
+  assert.throws(() => parseOnEvent('a/../b.ts', 'onEvent'), /must not contain ".." segments/);
+  assert.throws(() => parseOnEvent('agent.py', 'onEvent'), /must point at a \.ts/);
+  assert.throws(() => parseOnEvent('', 'onEvent'), /must be a non-empty string/);
+});
+
+test('parseOnEvent rejects Windows-absolute path shapes too', () => {
+  assert.throws(
+    () => parseOnEvent('C:\\handlers\\agent.ts', 'onEvent'),
+    /must be a relative POSIX path/
+  );
+  assert.throws(
+    () => parseOnEvent('C:/handlers/agent.ts', 'onEvent'),
+    /must be a relative POSIX path/
+  );
+  assert.throws(
+    () => parseOnEvent('\\\\server\\share\\agent.ts', 'onEvent'),
+    /must be a relative POSIX path/
+  );
+});
+
+test('parseSchedules trims name/cron/tz before validation and dedupe', () => {
+  // Whitespace variants of the same name should collapse so dedupe works.
+  assert.throws(
+    () =>
+      parseSchedules(
+        [
+          { name: 'weekly', cron: '0 9 * * 6' },
+          { name: ' weekly ', cron: '0 10 * * 6' }
+        ],
+        'schedules'
+      ),
+    /duplicates an earlier schedule/
+  );
+  const s = parseSchedules(
+    [{ name: '  morning  ', cron: '  0 9 * * 1-5  ', tz: '  America/New_York  ' }],
+    'schedules'
+  );
+  assert.deepEqual(s, [
+    { name: 'morning', cron: '0 9 * * 1-5', tz: 'America/New_York' }
+  ]);
+});
+
+test('parsePersonaSpec rejects non-boolean cloud / useSubscription', () => {
+  assert.throws(
+    () => parsePersonaSpec(validSpec({ cloud: 'yes' }), 'documentation'),
+    /cloud must be a boolean/
+  );
+  assert.throws(
+    () => parsePersonaSpec(validSpec({ useSubscription: 1 }), 'documentation'),
+    /useSubscription must be a boolean/
+  );
+});
+
+test('parsePersonaSpec keeps boolean shorthand sandbox / memory through round-trip', () => {
+  const spec = parsePersonaSpec(
+    validSpec({ cloud: true, sandbox: true, memory: false }),
+    'documentation'
+  );
+  assert.equal(spec.sandbox, true);
+  assert.equal(spec.memory, false);
 });

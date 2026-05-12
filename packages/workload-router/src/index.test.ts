@@ -9,7 +9,6 @@ import {
   listBuiltInPersonas,
   personaCatalog,
   resolvePersona,
-  resolvePersonaByTier,
   routingProfiles,
   usePersona,
   useSelection
@@ -28,16 +27,12 @@ const skillShSkill = {
 };
 
 function syntheticSelection(over: Partial<PersonaSelection> = {}): PersonaSelection {
-  const runtime = {
-    harness: 'codex' as const,
-    model: 'test-model',
-    systemPrompt: 'test prompt',
-    harnessSettings: { reasoning: 'medium' as const, timeoutSeconds: 300 }
-  };
   return {
     personaId: 'synthetic',
-    tier: 'best-value',
-    runtime,
+    harness: 'codex',
+    model: 'test-model',
+    systemPrompt: 'test prompt',
+    harnessSettings: { reasoning: 'medium', timeoutSeconds: 300 },
     skills: [],
     rationale: 'test',
     ...over
@@ -51,25 +46,17 @@ test('built-in catalog is limited to internal system personas', () => {
   assert.equal(personaCatalog['persona-improvement']?.id, 'persona-improver');
   assert.equal(personaCatalog.review, undefined);
   assert.ok(PERSONA_INTENTS.includes('review'));
-  assert.equal(routingProfiles.default.intents.review.tier, 'best-value');
+  assert.ok(routingProfiles.default.intents.review.rationale.length > 0);
 });
 
 test('resolves persona-maker from the default routing profile', () => {
   const selection = resolvePersona('persona-authoring');
   assert.equal(selection.personaId, 'persona-maker');
-  assert.equal(selection.tier, 'best');
-  assert.equal(selection.runtime.harness, 'codex');
+  assert.equal(selection.harness, 'opencode');
   assert.match(selection.rationale, /balanced-default/);
   assert.equal(selection.inputs?.TARGET_DIR?.default, '.agentworkforce/workforce/personas');
   assert.equal(selection.inputs?.CREATE_MODE?.default, 'local');
   assert.match(selection.agentsMdContent ?? '', /\$TARGET_DIR\/<id>\.json/);
-  assert.equal(selection.runtime.harnessSettings.sandboxMode, 'workspace-write');
-  assert.equal(selection.runtime.harnessSettings.approvalPolicy, 'on-request');
-  assert.equal(selection.runtime.harnessSettings.workspaceWriteNetworkAccess, true);
-  assert.match(
-    selection.agentsMdContent ?? '',
-    /Do not request network escalation only to complete this fallback/
-  );
 });
 
 test('optional pack-owned intents do not resolve from the built-in catalog', () => {
@@ -77,35 +64,12 @@ test('optional pack-owned intents do not resolve from the built-in catalog', () 
     () => resolvePersona('review'),
     /No built-in persona is registered for intent "review".*personas-core/
   );
-  assert.throws(
-    () => resolvePersonaByTier('review', 'best'),
-    /No built-in persona is registered for intent "review"/
-  );
-});
-
-test('legacy tier override remains available for internal personas', () => {
-  const selection = resolvePersonaByTier('persona-authoring', 'minimum');
-  assert.equal(selection.personaId, 'persona-maker');
-  assert.equal(selection.tier, 'minimum');
-  assert.equal(selection.runtime.harness, 'opencode');
-  assert.match(selection.rationale, /legacy-tier-override/);
 });
 
 test('materializeSkillsFor derives an install plan from a resolved internal persona', () => {
   const selection = resolvePersona('persona-authoring');
   const plan = materializeSkillsFor(selection);
-  assert.equal(plan.harness, 'codex');
-  assert.equal(plan.installs.length, 1);
-  assert.deepEqual([...plan.installs[0].installCommand], [
-    'npx',
-    '-y',
-    'skills',
-    'add',
-    'https://github.com/vercel-labs/skills',
-    '--skill',
-    'find-skills',
-    '-y'
-  ]);
+  assert.equal(plan.harness, selection.harness);
 });
 
 test('useSelection install command never embeds cleanup', () => {
@@ -195,10 +159,6 @@ test('usePersona combines selection and grouped install metadata into a frozen c
   assert.ok(Object.isFrozen(context.install));
   assert.ok(Object.isFrozen(context.install.plan));
   assert.ok(Object.isFrozen(context.install.command));
-});
-
-test('PersonaSpec catalog leaves defaultTier unset for built-ins', () => {
-  assert.equal(personaCatalog['persona-authoring']?.defaultTier, undefined);
 });
 
 test('resolvePersona populates sidecar selection fields from the internal catalog', () => {

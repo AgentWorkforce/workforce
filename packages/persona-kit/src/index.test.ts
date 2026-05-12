@@ -22,19 +22,16 @@ const skillShSkill = {
 };
 
 function syntheticSpec(over: Partial<PersonaSpec> = {}): PersonaSpec {
-  const baseRuntime = {
-    harness: 'claude' as const,
-    model: 'claude-3-5-sonnet',
-    systemPrompt: 'base',
-    harnessSettings: { reasoning: 'medium' as const, timeoutSeconds: 300 }
-  };
   return {
     id: 's',
     intent: 'documentation',
     tags: ['documentation'],
     description: 'd',
     skills: [],
-    tiers: { best: baseRuntime, 'best-value': baseRuntime, minimum: baseRuntime },
+    harness: 'claude',
+    model: 'claude-3-5-sonnet',
+    systemPrompt: 'base',
+    harnessSettings: { reasoning: 'medium', timeoutSeconds: 300 },
     ...over
   };
 }
@@ -409,36 +406,22 @@ test('local source rejects paths without .md suffix', () => {
   );
 });
 
-test('resolveSidecar: tier path override drops top-level inlined content for the same channel', () => {
-  const spec = syntheticSpec({
-    claudeMdContent: '# top-level inlined\n',
-    claudeMdMode: 'overwrite',
-    tiers: {
-      best: {
-        ...syntheticSpec().tiers.best,
-        claudeMd: '/abs/persona.md'
-      },
-      'best-value': syntheticSpec().tiers['best-value'],
-      minimum: syntheticSpec().tiers.minimum
-    }
-  });
-  const resolved = resolveSidecar(spec, 'best');
-  assert.equal(resolved.claudeMd, '/abs/persona.md');
-  assert.equal(resolved.claudeMdContent, undefined);
-  assert.equal(resolved.claudeMdMode, 'overwrite');
-});
-
-test('resolveSidecar: mode cascades independently of path', () => {
+test('resolveSidecar: path + mode pass through directly from the spec', () => {
   const spec = syntheticSpec({
     claudeMd: '/abs/top.md',
     claudeMdMode: 'extend'
   });
-  const resolved = resolveSidecar(spec, 'best');
+  const resolved = resolveSidecar(spec);
   assert.equal(resolved.claudeMd, '/abs/top.md');
   assert.equal(resolved.claudeMdMode, 'extend');
 });
 
-test('PersonaSpec accepts an optional defaultTier', () => {
-  const spec = syntheticSpec({ defaultTier: 'best' });
-  assert.equal(spec.defaultTier, 'best');
+test('resolveSidecar: defaults claudeMdMode to overwrite and surfaces inlined content', () => {
+  const spec = syntheticSpec({
+    claudeMdContent: '# inlined\n'
+  });
+  const resolved = resolveSidecar(spec);
+  assert.equal(resolved.claudeMdContent, '# inlined\n');
+  assert.equal(resolved.claudeMd, undefined);
+  assert.equal(resolved.claudeMdMode, 'overwrite');
 });

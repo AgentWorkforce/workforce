@@ -8,7 +8,6 @@ export {
   PERMISSION_MODES,
   PERSONA_INTENTS,
   PERSONA_TAGS,
-  PERSONA_TIERS,
   SIDECAR_MD_MODES,
   SKILL_SOURCE_KINDS
 } from './constants.js';
@@ -25,15 +24,22 @@ export type {
   PersonaContext,
   PersonaInputSpec,
   PersonaInstallContext,
+  PersonaIntegrationConfig,
+  PersonaIntegrationTrigger,
   PersonaIntent,
+  PersonaMemory,
+  PersonaMemoryConfig,
+  PersonaMemoryScope,
   PersonaMount,
   PersonaPermissions,
-  PersonaRuntime,
+  PersonaSandbox,
+  PersonaSandboxConfig,
+  PersonaSchedule,
   PersonaSelection,
   PersonaSkill,
   PersonaSpec,
   PersonaTag,
-  PersonaTier,
+  PersonaTraits,
   SidecarMdMode,
   SkillInstall,
   SkillMaterializationOptions,
@@ -52,21 +58,37 @@ export {
   isObject,
   isSidecarMode,
   isTag,
-  isTier,
   parseHarnessSettings,
   parseInputs,
+  parseIntegrationConfig,
+  parseIntegrationTrigger,
+  parseIntegrations,
   parseMcpServers,
+  parseMemory,
   parseMount,
+  parseOnEvent,
   parsePermissions,
   parsePersonaSpec,
-  parseRuntime,
+  parseSandbox,
+  parseSchedules,
   parseSkills,
   parseStringList,
   parseStringMap,
   parseTags,
+  parseTraits,
   resolveSidecar,
   sidecarSelectionFields
 } from './parse.js';
+
+// Trigger registry + lint helper
+export {
+  KNOWN_TRIGGERS,
+  lintTriggers,
+  type KnownProviderName,
+  type KnownTriggerName,
+  type TriggerLintIssue,
+  type TriggerLintLevel
+} from './triggers.js';
 
 // Skill materialization
 export {

@@ -4,17 +4,6 @@ You are implementing the parallelizable, mechanical pieces of the `workforce dep
 
 You are working in parallel with a human engineer who owns the schema diff in `persona-kit`, the `@agentworkforce/runtime` core (`handler()` + ctx builder + shim), the deploy orchestrator's main flow, and the CLI dispatch case. **Treat their files as published interfaces — do not modify them.** If something you need is missing, leave a `TODO(human): exposed surface needed — <what>` comment and skip ahead.
 
-## Companion Ricky workflow (parallel cross-repo tracks)
-
-A separate Ricky-orchestrated workflow runs in parallel to this spec. See `docs/plans/deploy-v1-workflow-spec.md` for the full narrative; the short version is:
-
-- **Track A** (`cloud` repo, branch `feat/workforce-daytona-runner`): extracts `DaytonaRuntime` into the publishable `@workforce/daytona-runner` package and adds `POST /api/v1/workspaces/:id/sandboxes`. Your Task 4 (`packages/deploy/src/modes/sandbox.ts`) will consume the published package; keep its `runSandbox(input: SandboxRunInput): Promise<SandboxRunHandle>` signature stable so Ricky's Track B can rebase onto it.
-- **Track B** (`workforce` repo, branch `feat/deploy-v1-daytona-consume`): rewrites `packages/deploy/src/modes/sandbox.ts` to use `@workforce/daytona-runner` and adds workforce-managed sandbox issuance. Depends on your Task 4 landing first.
-- **Track C** (`workforce` repo worktree, branch `feat/mcp-workforce`): adds `@agentworkforce/mcp-workforce` MCP server. Consumes your Task 1 integration clients (`packages/runtime/src/clients/{github,linear,slack,notion,jira}.ts`) via the runtime — keep that surface stable.
-- **Track INT** (`workforce` repo worktree, branch `feat/deploy-v1-e2e`): cross-repo E2E test. Depends on Tasks 1–5 merged.
-
-You do **not** need to coordinate with Ricky directly. Your branches (`codex/deploy-v1-<task-slug>`) are namespaced separately from Ricky's (`feat/workforce-daytona-runner`, `feat/deploy-v1-daytona-consume`, `feat/mcp-workforce`, `feat/deploy-v1-e2e`); no collision is possible. If the Task 1 client surface or the Task 4 `runSandbox` signature changes after this spec, flag it in your PR body so the Ricky lead can rebase the downstream tracks.
-
 ## Working agreement
 
 - **Branch per task.** One branch per numbered task. Naming: `codex/deploy-v1-<task-slug>` (e.g. `codex/deploy-v1-github-client`).
