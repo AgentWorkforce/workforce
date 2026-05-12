@@ -76,6 +76,9 @@ importers:
 
   packages/runtime:
     dependencies:
+      '@agent-assistant/proactive':
+        specifier: ^0.4.31
+        version: 0.4.32
       '@agentworkforce/persona-kit':
         specifier: workspace:*
         version: link:../persona-kit
@@ -87,6 +90,18 @@ importers:
         version: link:../persona-kit
 
 packages:
+
+  '@agent-assistant/connectivity@0.2.24':
+    resolution: {integrity: sha512-Nkrv8xJnQrX+6nzGVqnBGdcit6yqsF0mA4rk2kfX2Kduv14lVyVM9wjpLWLLF165v7LifCg/VlatYBPTEbLxRw==}
+
+  '@agent-assistant/coordination@0.4.32':
+    resolution: {integrity: sha512-qepgjfDSIbARR/do4oHhx0GytjIsNzC/ETZKRtEeF1/fWzHp9zLfUBAz9/KjX3EUWNxcQ3LMVNeR/Ai3qpUtZQ==}
+
+  '@agent-assistant/proactive@0.4.32':
+    resolution: {integrity: sha512-Bl2iXw7Iyyyr47+1c7E8Y9jpnezA7MMA9SnfxDEk1p1WKR77+XIRrKwgHiytRok6qJbb4WjfXEfsO3ExhFXEnQ==}
+
+  '@agent-assistant/surfaces@0.4.32':
+    resolution: {integrity: sha512-VI1UpwDD/RznfngRKatqL3zkZ6Bo9MszIGwZ5/H68r+6yghsFeTSq42eyoQM90DuQniX6Z/QfPmA890U1ZA2MQ==}
 
   '@aws-crypto/crc32@5.2.0':
     resolution: {integrity: sha512-nLbCWqQNgUiwwtFsen1AdzAtvuLRsQS8rYgMuxCrdKf9kOssamGLuPwyTY9wyYblNr9+1XM8v6zoDTPPSIeANg==}
@@ -1281,6 +1296,11 @@ packages:
   ms@2.1.3:
     resolution: {integrity: sha512-6FlzubTLZG3J2a/NVCAleEhjzq5oxgHyaCU9yYXvcLsvoVaHJq/s5xXI6/XXP6tz7R9xAOtHnSO/tXtF3WRTlA==}
 
+  nanoid@5.1.11:
+    resolution: {integrity: sha512-v+KEsUv2ps74PaSKv0gHTxTCgMXOIfBEbaqa6w6ISIGC7ZsvHN4N9oJ8d4cmf0n5oTzQz2SLmThbQWhjd/8eKg==}
+    engines: {node: ^18 || >=20}
+    hasBin: true
+
   node-addon-api@7.1.1:
     resolution: {integrity: sha512-5m3bsyrjFWE1xf7nz7YXdN4udnVtXK6/Yfgn5qnahL6bCkf2yKt4k3nuTKAtT4r3IG8JNR2ncsIMdZuAzJjHQQ==}
 
@@ -1461,6 +1481,23 @@ packages:
     resolution: {integrity: sha512-gzUt/qt81nXsFGKIFcC3YnfEAx5NkunCfnDlvuBSSFS02bcXu4Lmea0AFIUwbLWxWPx3d9p8S5QoaujKcNQxcQ==}
 
 snapshots:
+
+  '@agent-assistant/connectivity@0.2.24':
+    dependencies:
+      nanoid: 5.1.11
+
+  '@agent-assistant/coordination@0.4.32':
+    dependencies:
+      '@agent-assistant/connectivity': 0.2.24
+      nanoid: 5.1.11
+
+  '@agent-assistant/proactive@0.4.32':
+    dependencies:
+      '@agent-assistant/coordination': 0.4.32
+      '@agent-assistant/surfaces': 0.4.32
+      nanoid: 5.1.11
+
+  '@agent-assistant/surfaces@0.4.32': {}
 
   '@aws-crypto/crc32@5.2.0':
     dependencies:
@@ -2969,6 +3006,8 @@ snapshots:
   module-details-from-path@1.0.4: {}
 
   ms@2.1.3: {}
+
+  nanoid@5.1.11: {}
 
   node-addon-api@7.1.1: {}
 

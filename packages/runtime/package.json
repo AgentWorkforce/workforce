@@ -22,6 +22,10 @@
       "types": "./dist/raw.d.ts",
       "default": "./dist/raw.js"
     },
+    "./proactive": {
+      "types": "./dist/proactive.d.ts",
+      "default": "./dist/proactive.js"
+    },
     "./package.json": "./package.json"
   },
   "files": [
@@ -45,6 +49,7 @@
     "lint": "tsc -p tsconfig.json --noEmit"
   },
   "dependencies": {
+    "@agent-assistant/proactive": "^0.4.31",
     "@agentworkforce/persona-kit": "workspace:*"
   }
 }
