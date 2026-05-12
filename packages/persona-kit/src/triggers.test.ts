@@ -3,13 +3,6 @@ import assert from 'node:assert/strict';
 import { KNOWN_TRIGGERS, lintTriggers } from './triggers.js';
 import type { PersonaSpec } from './types.js';
 
-const baseRuntime = {
-  harness: 'claude' as const,
-  model: 'anthropic/claude-3-5-sonnet',
-  systemPrompt: 'be helpful',
-  harnessSettings: { reasoning: 'medium' as const, timeoutSeconds: 300 }
-};
-
 function specWithIntegrations(
   integrations: PersonaSpec['integrations']
 ): PersonaSpec {
@@ -19,11 +12,10 @@ function specWithIntegrations(
     tags: ['documentation'],
     description: 'd',
     skills: [],
-    tiers: {
-      best: baseRuntime,
-      'best-value': baseRuntime,
-      minimum: baseRuntime
-    },
+    harness: 'claude',
+    model: 'anthropic/claude-3-5-sonnet',
+    systemPrompt: 'be helpful',
+    harnessSettings: { reasoning: 'medium', timeoutSeconds: 300 },
     ...(integrations ? { integrations } : {})
   };
 }

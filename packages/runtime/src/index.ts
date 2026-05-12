@@ -54,6 +54,5 @@ export type {
   PersonaMemoryScope,
   PersonaSchedule,
   PersonaSpec,
-  PersonaTier,
   PersonaTraits
 } from '@agentworkforce/persona-kit';

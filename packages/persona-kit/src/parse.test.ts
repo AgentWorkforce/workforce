@@ -22,30 +22,29 @@ import {
   parseTraits
 } from './parse.js';
 
-const baseRuntime = {
-  harness: 'claude',
-  model: 'anthropic/claude-3-5-sonnet',
-  systemPrompt: 'be helpful',
-  harnessSettings: { reasoning: 'medium', timeoutSeconds: 300 }
-};
-
 function validSpec(over: Record<string, unknown> = {}): Record<string, unknown> {
   return {
     id: 'p',
     intent: 'documentation',
     tags: ['documentation'],
     description: 'd',
-    tiers: { best: baseRuntime, 'best-value': baseRuntime, minimum: baseRuntime },
+    harness: 'claude',
+    model: 'anthropic/claude-3-5-sonnet',
+    systemPrompt: 'be helpful',
+    harnessSettings: { reasoning: 'medium', timeoutSeconds: 300 },
     ...over
   };
 }
 
-test('parsePersonaSpec accepts a minimal valid spec across all tiers', () => {
+test('parsePersonaSpec accepts a minimal valid flat spec', () => {
   const spec = parsePersonaSpec(validSpec(), 'documentation');
   assert.equal(spec.id, 'p');
   assert.equal(spec.intent, 'documentation');
   assert.deepEqual(spec.tags, ['documentation']);
-  assert.equal(spec.tiers.best.harness, 'claude');
+  assert.equal(spec.harness, 'claude');
+  assert.equal(spec.model, 'anthropic/claude-3-5-sonnet');
+  assert.equal(spec.systemPrompt, 'be helpful');
+  assert.equal(spec.harnessSettings.reasoning, 'medium');
 });
 
 test('parsePersonaSpec strips unknown top-level fields silently', () => {
@@ -95,17 +94,28 @@ test('parsePersonaSpec throws when intent does not match the expected intent', (
   );
 });
 
-test('parsePersonaSpec throws with a precise field path on a malformed tier', () => {
+test('parsePersonaSpec throws with a precise field path on a malformed harnessSettings', () => {
   const raw = validSpec({
-    tiers: {
-      best: baseRuntime,
-      'best-value': { ...baseRuntime, harnessSettings: { reasoning: 'turbo', timeoutSeconds: 1 } },
-      minimum: baseRuntime
-    }
+    harnessSettings: { reasoning: 'turbo', timeoutSeconds: 1 }
   });
   assert.throws(
     () => parsePersonaSpec(raw, 'documentation'),
-    /persona\[documentation\]\.tiers\.best-value\.harnessSettings\.reasoning must be low\|medium\|high/
+    /persona\[documentation\]\.harnessSettings\.reasoning must be low\|medium\|high/
+  );
+});
+
+test('parsePersonaSpec throws when required runtime fields are missing', () => {
+  assert.throws(
+    () => parsePersonaSpec(validSpec({ harness: 'mystery' }), 'documentation'),
+    /persona\[documentation\]\.harness must be one of:/
+  );
+  assert.throws(
+    () => parsePersonaSpec(validSpec({ model: '' }), 'documentation'),
+    /persona\[documentation\]\.model must be a non-empty string/
+  );
+  assert.throws(
+    () => parsePersonaSpec(validSpec({ systemPrompt: '   ' }), 'documentation'),
+    /persona\[documentation\]\.systemPrompt must be a non-empty string/
   );
 });
 
@@ -333,15 +343,6 @@ test('assertSidecarPath rejects absolute paths and ".." traversal', () => {
 test('parsePersonaSpec rejects a non-object spec', () => {
   assert.throws(() => parsePersonaSpec(null, 'documentation'), /must be an object/);
   assert.throws(() => parsePersonaSpec('nope', 'documentation'), /must be an object/);
-});
-
-test('parsePersonaSpec preserves defaultTier when valid and rejects when invalid', () => {
-  const ok = parsePersonaSpec(validSpec({ defaultTier: 'best' }), 'documentation');
-  assert.equal(ok.defaultTier, 'best');
-  assert.throws(
-    () => parsePersonaSpec(validSpec({ defaultTier: 'turbo' }), 'documentation'),
-    /defaultTier must be one of:/
-  );
 });
 
 // --- deploy-v1 schema additions ----------------------------------------------

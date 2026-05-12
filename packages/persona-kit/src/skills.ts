@@ -375,13 +375,13 @@ export function materializeSkills(
 
 /**
  * Convenience wrapper: derive the install plan directly from a resolved
- * persona selection, using its tier's harness automatically.
+ * persona selection, using its harness automatically.
  */
 export function materializeSkillsFor(
   selection: PersonaSelection,
   options: SkillMaterializationOptions = {}
 ): SkillMaterializationPlan {
-  return materializeSkills(selection.skills, selection.runtime.harness, options);
+  return materializeSkills(selection.skills, selection.harness, options);
 }
 
 function shellEscape(value: string): string {

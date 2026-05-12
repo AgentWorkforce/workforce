@@ -39,7 +39,7 @@ export interface LaunchMetadataBackendLike {
 }
 
 export interface LaunchMetadataStartOptions {
-  selection: Pick<PersonaSelection, 'personaId' | 'tier' | 'runtime'>;
+  selection: Pick<PersonaSelection, 'personaId' | 'harness'>;
   personaSpec: unknown;
   personaSource: string;
   cwd: string;
@@ -87,7 +87,7 @@ export function personaVersionShort(personaSpec: unknown): string {
 }
 
 export function buildLaunchMetadata(input: {
-  selection: Pick<PersonaSelection, 'personaId' | 'tier'>;
+  selection: Pick<PersonaSelection, 'personaId'>;
   personaSpec: unknown;
   personaSource: string;
   /**
@@ -101,7 +101,6 @@ export function buildLaunchMetadata(input: {
   return {
     agentworkforce: '1',
     persona: input.selection.personaId,
-    personaTier: input.selection.tier,
     personaVersion: personaVersionHash(input.personaSpec),
     personaSource: input.personaSource,
     ...(typeof input.spawnerPid === 'number'
@@ -167,10 +166,10 @@ export async function startLaunchMetadataRecording(
   try {
     await withTimeout(
       writePendingStamp({
-        harness: options.selection.runtime.harness,
+        harness: options.selection.harness,
         cwd: options.cwd,
         enrichment: metadata,
-        sessionDirHint: launchMetadataSessionDirHint(options.selection.runtime.harness),
+        sessionDirHint: launchMetadataSessionDirHint(options.selection.harness),
         spawnStartTs: (options.now?.() ?? new Date()).toISOString(),
         spawnerPid: process.pid
       }),
@@ -189,7 +188,7 @@ export async function startLaunchMetadataRecording(
   const runIngest = async () => {
     try {
       await withTimeout(
-        ingest({ harness: launchMetadataIngestHarness(options.selection.runtime.harness) }),
+        ingest({ harness: launchMetadataIngestHarness(options.selection.harness) }),
         LAUNCH_METADATA_BACKEND_CALL_TIMEOUT_MS,
         'ingest'
       );

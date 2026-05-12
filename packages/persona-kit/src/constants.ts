@@ -1,7 +1,6 @@
 import type { Harness, HarnessSkillTarget } from './types.js';
 
 export const HARNESS_VALUES = ['opencode', 'codex', 'claude'] as const;
-export const PERSONA_TIERS = ['best', 'best-value', 'minimum'] as const;
 export const PERSONA_TAGS = [
   'planning',
   'implementation',

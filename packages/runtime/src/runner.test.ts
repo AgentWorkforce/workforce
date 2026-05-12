@@ -6,20 +6,16 @@ import { handler } from './handler.js';
 import type { RawGatewayEnvelope } from './shim.js';
 import type { SandboxContext, WorkforceEvent } from './types.js';
 
-const baseRuntime = {
-  harness: 'claude' as const,
-  model: 'anthropic/claude-3-5-sonnet',
-  systemPrompt: 'be helpful',
-  harnessSettings: { reasoning: 'medium' as const, timeoutSeconds: 300 }
-};
-
 const persona: PersonaSpec = {
   id: 'demo',
   intent: 'documentation',
   tags: ['documentation'],
   description: 'test persona',
   skills: [],
-  tiers: { best: baseRuntime, 'best-value': baseRuntime, minimum: baseRuntime },
+  harness: 'claude',
+  model: 'anthropic/claude-3-5-sonnet',
+  systemPrompt: 'be helpful',
+  harnessSettings: { reasoning: 'medium', timeoutSeconds: 300 },
   cloud: true,
   schedules: [{ name: 'weekly', cron: '0 9 * * 6' }]
 };

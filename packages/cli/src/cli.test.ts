@@ -88,26 +88,10 @@ function writeStandaloneCodexPersona(workforceHome: string, id = 'local-codex'):
       intent: 'review',
       tags: ['review'],
       description: 'Local no-skill codex persona for CLI subprocess tests.',
-      tiers: {
-        best: {
-          harness: 'codex',
-          model: 'test-codex',
-          systemPrompt: 'Run the local codex test harness.',
-          harnessSettings: { reasoning: 'high', timeoutSeconds: 30 }
-        },
-        'best-value': {
-          harness: 'codex',
-          model: 'test-codex',
-          systemPrompt: 'Run the local codex test harness.',
-          harnessSettings: { reasoning: 'medium', timeoutSeconds: 30 }
-        },
-        minimum: {
-          harness: 'codex',
-          model: 'test-codex',
-          systemPrompt: 'Run the local codex test harness.',
-          harnessSettings: { reasoning: 'low', timeoutSeconds: 30 }
-        }
-      }
+      harness: 'codex',
+      model: 'test-codex',
+      systemPrompt: 'Run the local codex test harness.',
+      harnessSettings: { reasoning: 'medium', timeoutSeconds: 30 }
     }),
     'utf8'
   );
@@ -227,7 +211,7 @@ test('parseCreateArgs: rejects positional selectors because create has a fixed p
     assert.throws(() => parseCreateArgs(['local-codex']), /__exit_trap__:1/);
     assert.deepEqual(trap.exits, [1]);
     assert.match(trap.stderr, /create: unexpected argument "local-codex"/);
-    assert.match(trap.stderr, /always runs persona-maker@best/);
+    assert.match(trap.stderr, /always runs persona-maker/);
   } finally {
     trap.restore();
   }
@@ -645,26 +629,10 @@ test('main: local personas with custom intents appear in list and unknown-person
       intent: 'nextjs-web-steward',
       tags: ['implementation'],
       description: 'Stewards Next.js web surfaces.',
-      tiers: {
-        best: {
-          harness: 'codex',
-          model: 'openai-codex/gpt-5.3-codex',
-          systemPrompt: 'Implement Next.js UI work carefully.',
-          harnessSettings: { reasoning: 'high', timeoutSeconds: 30 }
-        },
-        'best-value': {
-          harness: 'opencode',
-          model: 'opencode/gpt-5-nano',
-          systemPrompt: 'Implement Next.js UI work carefully.',
-          harnessSettings: { reasoning: 'medium', timeoutSeconds: 30 }
-        },
-        minimum: {
-          harness: 'opencode',
-          model: 'opencode/minimax-m2.5-free',
-          systemPrompt: 'Implement Next.js UI work carefully.',
-          harnessSettings: { reasoning: 'low', timeoutSeconds: 30 }
-        }
-      }
+      harness: 'opencode',
+      model: 'opencode/gpt-5-nano',
+      systemPrompt: 'Implement Next.js UI work carefully.',
+      harnessSettings: { reasoning: 'medium', timeoutSeconds: 30 }
     }),
     'utf8'
   );
@@ -675,16 +643,15 @@ test('main: local personas with custom intents appear in list and unknown-person
     assert.equal(list.exitCode, 0);
     assert.equal(list.stderr, '');
     const parsed = JSON.parse(list.stdout) as {
-      personas: Array<{ persona: string; intent: string; rating: string }>;
+      personas: Array<{ persona: string; intent: string }>;
     };
     assert.ok(
       parsed.personas.some(
         (row) =>
           row.persona === 'nextjs-web-steward' &&
-          row.intent === 'nextjs-web-steward' &&
-          row.rating === 'best-value'
+          row.intent === 'nextjs-web-steward'
       ),
-      'custom-intent local persona should be shown at the default recommended tier'
+      'custom-intent local persona should appear in the listing'
     );
 
     const missing = await runCliCapturingStderr(['agent', 'does-not-exist'], env);
@@ -889,22 +856,18 @@ test('buildSidecarBody: extend mode degrades to overwrite when real file is miss
 });
 
 test('loadSidecarForSelection: prefers inlined Content over path; selects by harness', () => {
-  const baseRuntime = {
+  const baseSelection = {
+    personaId: 'p',
     harness: 'claude' as const,
     model: 'claude-3-5-sonnet',
     systemPrompt: 'You are a test persona.',
-    harnessSettings: { reasoning: 'medium' as const, timeoutSeconds: 300 }
-  };
-  const selection = {
-    personaId: 'p',
-    tier: 'best' as const,
-    runtime: baseRuntime,
+    harnessSettings: { reasoning: 'medium' as const, timeoutSeconds: 300 },
     skills: [],
     rationale: 'test',
     claudeMdContent: '# Inlined\n',
     claudeMdMode: 'overwrite' as const
   };
-  const { sidecar } = loadSidecarForSelection(selection);
+  const { sidecar } = loadSidecarForSelection(baseSelection);
   assert.ok(sidecar);
   assert.equal(sidecar.mountFile, 'CLAUDE.md');
   assert.equal(sidecar.personaContent, '# Inlined\n');
@@ -912,8 +875,8 @@ test('loadSidecarForSelection: prefers inlined Content over path; selects by har
 
   // codex picks AGENTS.md, not CLAUDE.md
   const codexSelection = {
-    ...selection,
-    runtime: { ...baseRuntime, harness: 'codex' as const },
+    ...baseSelection,
+    harness: 'codex' as const,
     agentsMdContent: '# agents inlined\n'
   };
   const codexOut = loadSidecarForSelection(codexSelection);
@@ -922,8 +885,8 @@ test('loadSidecarForSelection: prefers inlined Content over path; selects by har
 
   // codex with no sidecar fields returns nothing
   const codexNoSidecar = {
-    ...selection,
-    runtime: { ...baseRuntime, harness: 'codex' as const },
+    ...baseSelection,
+    harness: 'codex' as const,
     claudeMdContent: undefined
   };
   const codexEmpty = loadSidecarForSelection(codexNoSidecar);
@@ -933,13 +896,10 @@ test('loadSidecarForSelection: prefers inlined Content over path; selects by har
 test('loadSidecarForSelection: opencode picks agentsMd, not claudeMd', () => {
   const selection = {
     personaId: 'p',
-    tier: 'best' as const,
-    runtime: {
-      harness: 'opencode' as const,
-      model: 'gpt-5.2',
-      systemPrompt: 'X',
-      harnessSettings: { reasoning: 'medium' as const, timeoutSeconds: 300 }
-    },
+    harness: 'opencode' as const,
+    model: 'gpt-5.2',
+    systemPrompt: 'X',
+    harnessSettings: { reasoning: 'medium' as const, timeoutSeconds: 300 },
     skills: [],
     rationale: 'test',
     claudeMdContent: '# claude\n',
@@ -958,7 +918,7 @@ test('main: codex sessions engage the sandbox mount by default', async () => {
     // Codex defaults to a relayfile mount in parity with claude/opencode so
     // persona-supplied AGENTS.md sidecars and per-session writes stay sandboxed.
     const { stderr } = await runCliCapturingStderr(
-      ['agent', `${personaId}@best`],
+      ['agent', `${personaId}`],
       { AGENT_WORKFORCE_HOME: workforceHome }
     );
     assert.match(
@@ -979,7 +939,7 @@ test('main: codex --install-in-repo disengages the sandbox mount', async () => {
     // The single opt-out: --install-in-repo. Confirms parity with claude/
     // opencode where the same flag turns the mount off.
     const { stderr } = await runCliCapturingStderr(
-      ['agent', `${personaId}@best`, '--install-in-repo'],
+      ['agent', `${personaId}`, '--install-in-repo'],
       { AGENT_WORKFORCE_HOME: workforceHome }
     );
     assert.ok(
@@ -1007,7 +967,7 @@ process.exit(7);
 
     const workforceHome = join(dir, '.agentworkforce', 'workforce');
     const personaId = writeStandaloneCodexPersona(workforceHome);
-    const res = await runCliCapturingStderr(['agent', `${personaId}@best`, '--install-in-repo'], {
+    const res = await runCliCapturingStderr(['agent', `${personaId}`, '--install-in-repo'], {
       PATH: `${dir}:${process.env.PATH ?? ''}`,
       AGENT_WORKFORCE_HOME: workforceHome,
       AGENTWORKFORCE_LAUNCH_METADATA: '0'
@@ -1133,13 +1093,40 @@ test('parseProposals: empty proposals array is valid', () => {
   assert.equal(parsed.proposals.length, 0);
 });
 
+test('parseProposals: synthesizes missing display fields from valid patches', () => {
+  const raw = JSON.stringify({
+    personaId: 'foo',
+    personaFilePath: '/tmp/foo.json',
+    transcriptPath: '',
+    proposals: [
+      {
+        id: '',
+        summary: '',
+        patches: [{ path: 'description', op: 'set', value: 'New description' }]
+      },
+      {
+        id: 'tighten-system-prompt',
+        summary: '   ',
+        rationale: '  useful signal  ',
+        patches: [{ path: 'systemPrompt', op: 'set', value: 'New prompt' }]
+      }
+    ]
+  });
+  const parsed = parseProposals(raw);
+  assert.equal(parsed.proposals[0].id, 'proposal-1');
+  assert.equal(parsed.proposals[0].summary, 'Update description');
+  assert.equal(parsed.proposals[0].rationale, '');
+  assert.equal(parsed.proposals[1].summary, 'Tighten system prompt');
+  assert.equal(parsed.proposals[1].rationale, 'useful signal');
+});
+
 test('applyAcceptedPatches: set replaces top-level field', () => {
   const tmp = mkdtempSync(join(tmpdir(), 'aw-improver-'));
   try {
     const path = join(tmp, 'persona.json');
     writeFileSync(
       path,
-      JSON.stringify({ id: 'foo', description: 'old', tiers: { best: { systemPrompt: 'p' } } }),
+      JSON.stringify({ id: 'foo', description: 'old', systemPrompt: 'p' }),
       'utf8'
     );
     const proposals: ImproverProposal[] = [
@@ -1153,13 +1140,13 @@ test('applyAcceptedPatches: set replaces top-level field', () => {
     applyAcceptedPatches(path, proposals);
     const after = JSON.parse(readFileSync(path, 'utf8'));
     assert.equal(after.description, 'new description');
-    assert.equal(after.tiers.best.systemPrompt, 'p', 'unrelated fields untouched');
+    assert.equal(after.systemPrompt, 'p', 'unrelated fields untouched');
   } finally {
     rmSync(tmp, { recursive: true, force: true });
   }
 });
 
-test('applyAcceptedPatches: set into nested tier path', () => {
+test('applyAcceptedPatches: set replaces top-level systemPrompt', () => {
   const tmp = mkdtempSync(join(tmpdir(), 'aw-improver-'));
   try {
     const path = join(tmp, 'persona.json');
@@ -1167,10 +1154,7 @@ test('applyAcceptedPatches: set into nested tier path', () => {
       path,
       JSON.stringify({
         id: 'foo',
-        tiers: {
-          best: { systemPrompt: 'old prompt' },
-          'best-value': { systemPrompt: 'old bv prompt' }
-        }
+        systemPrompt: 'old prompt'
       }),
       'utf8'
     );
@@ -1180,14 +1164,12 @@ test('applyAcceptedPatches: set into nested tier path', () => {
         summary: 's',
         rationale: 'r',
         patches: [
-          { path: 'tiers.best.systemPrompt', op: 'set', value: 'new prompt' },
-          { path: 'tiers.best-value.systemPrompt', op: 'set', value: 'new bv prompt' }
+          { path: 'systemPrompt', op: 'set', value: 'new prompt' }
         ]
       }
     ]);
     const after = JSON.parse(readFileSync(path, 'utf8'));
-    assert.equal(after.tiers.best.systemPrompt, 'new prompt');
-    assert.equal(after.tiers['best-value'].systemPrompt, 'new bv prompt');
+    assert.equal(after.systemPrompt, 'new prompt');
   } finally {
     rmSync(tmp, { recursive: true, force: true });
   }
@@ -1260,8 +1242,8 @@ test('parseProposals: rejects set on a non-allowlisted path (e.g. id)', () => {
   assert.throws(() => parseProposals(raw), /set path "id" is not in the allowlist/);
 });
 
-test('parseProposals: rejects set on tier model/harness (locked)', () => {
-  for (const path of ['tiers.best.model', 'tiers.best.harness', 'tiers.best.harnessSettings.reasoning']) {
+test('parseProposals: rejects set on locked runtime fields', () => {
+  for (const path of ['model', 'harness', 'harnessSettings.reasoning']) {
     const raw = JSON.stringify({
       personaId: 'foo',
       personaFilePath: '/tmp/foo.json',
@@ -1297,7 +1279,7 @@ test('parseProposals: rejects append on a non-allowlisted path', () => {
 });
 
 test('parseProposals: rejects prototype-pollution path segments', () => {
-  for (const path of ['__proto__.polluted', 'constructor.prototype.x', 'tiers.__proto__.x']) {
+  for (const path of ['__proto__.polluted', 'constructor.prototype.x', 'harnessSettings.__proto__.x']) {
     const raw = JSON.stringify({
       personaId: 'foo',
       personaFilePath: '/tmp/foo.json',

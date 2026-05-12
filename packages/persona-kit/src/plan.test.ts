@@ -6,13 +6,10 @@ import type { Harness } from './types.js';
 function persona(over: Partial<ResolvedPersona> = {}): ResolvedPersona {
   return {
     personaId: 'p',
-    tier: 'best-value',
-    runtime: {
-      harness: 'claude',
-      model: 'anthropic/claude-3-5-sonnet',
-      systemPrompt: 'be helpful',
-      harnessSettings: { reasoning: 'medium', timeoutSeconds: 300 }
-    },
+    harness: 'claude',
+    model: 'anthropic/claude-3-5-sonnet',
+    systemPrompt: 'be helpful',
+    harnessSettings: { reasoning: 'medium', timeoutSeconds: 300 },
     skills: [],
     rationale: 'test',
     ...over
@@ -36,12 +33,9 @@ test('buildPersonaSpawnPlan returns the persona, cli, and args for claude', () =
 test('buildPersonaSpawnPlan emits initialPrompt for codex', () => {
   const plan = buildPersonaSpawnPlan(
     persona({
-      runtime: {
-        harness: 'codex',
-        model: 'openai/gpt-5',
-        systemPrompt: 'codex prompt',
-        harnessSettings: { reasoning: 'medium', timeoutSeconds: 300 }
-      }
+      harness: 'codex',
+      model: 'openai/gpt-5',
+      systemPrompt: 'codex prompt'
     }),
     { processEnv: cleanEnv }
   );
@@ -53,12 +47,8 @@ test('buildPersonaSpawnPlan emits configFiles for opencode', () => {
   const plan = buildPersonaSpawnPlan(
     persona({
       personaId: 'sample',
-      runtime: {
-        harness: 'opencode',
-        model: 'anthropic/claude-3-5-sonnet',
-        systemPrompt: 'opencode prompt',
-        harnessSettings: { reasoning: 'medium', timeoutSeconds: 300 }
-      }
+      harness: 'opencode',
+      systemPrompt: 'opencode prompt'
     }),
     { processEnv: cleanEnv }
   );
@@ -85,12 +75,7 @@ test('buildPersonaSpawnPlan resolves sidecars from claudeMdContent / agentsMdCon
     persona({
       agentsMdContent: '# agents sidecar',
       agentsMdMode: 'extend',
-      runtime: {
-        harness: 'opencode',
-        model: 'anthropic/claude-3-5-sonnet',
-        systemPrompt: 'be helpful',
-        harnessSettings: { reasoning: 'medium', timeoutSeconds: 300 }
-      }
+      harness: 'opencode'
     }),
     { processEnv: cleanEnv }
   );
@@ -201,12 +186,9 @@ test('buildPersonaSpawnPlan emits sourcePath when only claudeMd path is set', ()
 test('buildPersonaSpawnPlan emits sourcePath for opencode/codex agentsMd path', () => {
   const plan = buildPersonaSpawnPlan(
     persona({
-      runtime: {
-        harness: 'opencode',
-        model: 'm',
-        systemPrompt: 's',
-        harnessSettings: { reasoning: 'medium', timeoutSeconds: 300 }
-      },
+      harness: 'opencode',
+      model: 'm',
+      systemPrompt: 's',
       agentsMd: '/abs/path/to/AGENTS.md'
     }),
     { processEnv: cleanEnv }
@@ -236,12 +218,9 @@ test('buildPersonaSpawnPlan empty-skills case keeps installs empty', () => {
   for (const harness of ['claude', 'codex', 'opencode'] as Harness[]) {
     const plan = buildPersonaSpawnPlan(
       persona({
-        runtime: {
-          harness,
-          model: 'm',
-          systemPrompt: 's',
-          harnessSettings: { reasoning: 'medium', timeoutSeconds: 300 }
-        }
+        harness,
+        model: 'm',
+        systemPrompt: 's'
       }),
       { processEnv: cleanEnv }
     );

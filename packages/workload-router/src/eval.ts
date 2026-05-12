@@ -1,4 +1,4 @@
-import type { PersonaIntent, PersonaTier } from '@agentworkforce/persona-kit';
+import type { Harness, PersonaIntent } from '@agentworkforce/persona-kit';
 
 export interface EvalCase {
   id: string;
@@ -9,7 +9,8 @@ export interface EvalCase {
 
 export interface EvalResult {
   caseId: string;
-  tier: PersonaTier;
+  harness: Harness;
+  model: string;
   score: number; // 0-100
   costUsd?: number;
   latencyMs?: number;
@@ -17,8 +18,8 @@ export interface EvalResult {
 }
 
 /**
- * Placeholder for a future benchmark runner that executes persona/tier combinations
- * and computes quality/cost/latency tradeoffs.
+ * Placeholder for a future benchmark runner that executes persona/harness/model
+ * combinations and computes quality/cost/latency tradeoffs.
  */
 export function summarizeEval(results: readonly EvalResult[]): {
   avgScore: number;

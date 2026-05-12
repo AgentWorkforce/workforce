@@ -31,7 +31,6 @@ import {
   materializeSkills,
   MissingPersonaInputError,
   PERSONA_TAGS,
-  PERSONA_TIERS,
   renderPersonaInputs,
   resolveMcpServersLenient,
   resolvePersonaInputs,
@@ -45,7 +44,6 @@ import {
   type PersonaSelection,
   type PersonaSpec,
   type PersonaTag,
-  type PersonaTier,
   type SidecarMdMode,
   type SkillMaterializationPlan
 } from '@agentworkforce/persona-kit';
@@ -88,7 +86,7 @@ is one of: built-in (bundled), cwd (./.agentworkforce/workforce/personas),
 personal (~/.agentworkforce/workforce/personas), or dir:N (configured).
 
 Commands:
-  create [flags]     Opens persona-maker@best for creating a new
+  create [flags]     Opens persona-maker for creating a new
                       persona, with target path passed as persona inputs.
                       Flags:
                         --save-in-directory=<target>
@@ -105,12 +103,8 @@ Commands:
                         --install-in-repo   Same behavior as agent.
                         --no-launch-metadata
                                             Same behavior as agent.
-  agent [flags] <persona>[@<tier>]
-                      Run a persona. Tier one of: ${PERSONA_TIERS.join(' | ')}.
-                      With no @<tier>, the resolution order is:
-                      routingProfiles.default.intents (built-in personas only)
-                      → persona.defaultTier (when set) → best-value. Drops into
-                      an interactive harness session.
+  agent [flags] <persona>
+                      Run a persona. Drops into an interactive harness session.
 
                       Flags:
                         --install-in-repo   Disengage the sandbox mount and
@@ -152,26 +146,16 @@ Commands:
                                             success, kept on failure for
                                             inspection.
   list [flags]        List available personas from the cascade (cwd →
-                      configured persona dirs → library). By default shows
-                      one row per persona at the recommended tier for its
-                      intent; pass --all to see every tier. Flags:
-                        --all                         show every tier (overrides default)
+                      configured persona dirs → library). Flags:
                         --json                        emit JSON instead of a table
-                        --filter-rating <tier>        only show this tier; disables
-                                                      the recommended-only default
-                                                      (${PERSONA_TIERS.join(' | ')})
                         --filter-harness <harness>    only show this harness
                                                       (${HARNESS_VALUES.join(' | ')})
                         --filter-tag <tag>            only show personas carrying this tag
                                                       (${PERSONA_TAGS.join(' | ')})
                         --no-display-description      hide the DESCRIPTION column
-  show <persona>[@<tier>]
-                      Print the fully-resolved spec for a single persona,
+  show <persona>      Print the fully-resolved spec for a single persona,
                       including which cascade layer defined it (cwd, user,
-                      dir:<n>, library). By default shows only the recommended
-                      tier for the persona's intent; pass @<tier> to pick one,
-                      or --all to see every tier. Flags:
-                        --all         include every tier (overrides default)
+                      dir:<n>, library). Flags:
                         --json        emit the resolved PersonaSpec as JSON
   install [flags] <pkg|path>
                       Copy persona JSON files from an npm package or local
@@ -212,8 +196,8 @@ Examples:
   agentworkforce create
   agentworkforce create --save-in-directory=user
   agentworkforce install @agentworkforce/personas-core --persona code-reviewer
-  agentworkforce agent code-reviewer@best-value
-  agentworkforce agent my-reviewer@best
+  agentworkforce agent code-reviewer
+  agentworkforce agent my-reviewer
   agentworkforce list
   agentworkforce show code-reviewer
   agentworkforce install @agentrelay/personas --persona relay-orchestrator
@@ -242,7 +226,7 @@ function readPackageVersion(): string {
 }
 
 export const CLI_VERSION = readPackageVersion();
-export const CREATE_SELECTOR = 'persona-maker@best';
+export const CREATE_SELECTOR = 'persona-maker';
 
 const CREATE_INPUT_TARGET_DIR = 'TARGET_DIR';
 const CREATE_INPUT_CREATE_MODE = 'CREATE_MODE';
@@ -253,8 +237,8 @@ for (const warning of local.warnings) {
 }
 
 type ResolvedTarget =
-  | { kind: 'repo'; source: 'library'; spec: PersonaSpec; tier: PersonaTier }
-  | { kind: 'local'; source: PersonaSource; spec: PersonaSpec; tier: PersonaTier };
+  | { kind: 'repo'; source: 'library'; spec: PersonaSpec }
+  | { kind: 'local'; source: PersonaSource; spec: PersonaSpec };
 
 interface KnownPersonaRow {
   name: string;
@@ -327,32 +311,26 @@ function resolveSpec(key: string): ResolvedTarget['spec'] | { error: string } {
 }
 
 function parseSelector(sel: string): ResolvedTarget {
+  // Catch legacy `@<tier>` selectors and point users at the new selector form.
+  // Tiers were removed; a persona's runtime fields now live at the top level.
   const at = sel.indexOf('@');
-  const key = at === -1 ? sel : sel.slice(0, at);
-  const tierRaw = at === -1 ? undefined : sel.slice(at + 1);
-  if (!key) die('Missing persona name before "@"');
-  if (tierRaw !== undefined && !PERSONA_TIERS.includes(tierRaw as PersonaTier)) {
-    die(`Invalid tier "${tierRaw}". Must be one of: ${PERSONA_TIERS.join(', ')}`);
+  if (at !== -1) {
+    const suffix = sel.slice(at + 1);
+    die(
+      `@<tier> selectors were removed; tiers are no longer part of the persona shape. ` +
+        `Use 'agentworkforce agent ${sel.slice(0, at)}' instead (drop "@${suffix}").`,
+      false
+    );
   }
+  const key = sel;
+  if (!key) die('Missing persona name');
   const result = resolveSpec(key);
   if ('error' in result) die(result.error, false);
   const kind = local.byId.has(key) ? 'local' : 'repo';
-  // Resolution order when no @<tier> is given: routingProfiles default for the
-  // persona's intent (built-ins only — local personas with custom intents miss
-  // the lookup and fall through), then the persona's own defaultTier, then
-  // 'best-value'. Mirrors `resolveShowTarget` and the `list` recommended-tier
-  // filter so all three commands agree on what "no tier" means.
-  const profileRule =
-    kind === 'repo'
-      ? (routingProfiles.default.intents as Partial<Record<string, { tier: PersonaTier }>>)[
-          result.intent
-        ]
-      : undefined;
-  const tier = (tierRaw ?? profileRule?.tier ?? result.defaultTier ?? 'best-value') as PersonaTier;
   if (kind === 'local') {
-    return { kind, source: local.sources.get(result.id) ?? 'cwd', spec: result, tier };
+    return { kind, source: local.sources.get(result.id) ?? 'cwd', spec: result };
   }
-  return { kind, source: 'library', spec: result, tier };
+  return { kind, source: 'library', spec: result };
 }
 
 /**
@@ -370,19 +348,25 @@ export function resolveSystemPromptPlaceholders(prompt: string, harness: Harness
   return prompt.replaceAll('<harness>', harness);
 }
 
-function buildSelection(spec: PersonaSpec, tier: PersonaTier, kind: 'repo' | 'local'): PersonaSelection {
-  const rawRuntime = spec.tiers[tier];
-  const runtime = {
-    ...rawRuntime,
-    systemPrompt: resolveSystemPromptPlaceholders(rawRuntime.systemPrompt, rawRuntime.harness)
-  };
-  const sidecar = resolveSidecar(spec, tier);
+function buildSelection(spec: PersonaSpec, kind: 'repo' | 'local'): PersonaSelection {
+  const systemPrompt = resolveSystemPromptPlaceholders(spec.systemPrompt, spec.harness);
+  const sidecar = resolveSidecar(spec);
+  // Built-in personas: prefer the routing-profile rationale string so the
+  // selection carries the policy-explained "why" rather than a generic label.
+  const rationale =
+    kind === 'local'
+      ? `local-override: ${spec.id}`
+      : (
+          routingProfiles.default.intents as Partial<Record<string, { rationale: string }>>
+        )[spec.intent]?.rationale ?? `cli: ${spec.id}`;
   return {
     personaId: spec.id,
-    tier,
-    runtime,
+    harness: spec.harness,
+    model: spec.model,
+    systemPrompt,
+    harnessSettings: spec.harnessSettings,
     skills: spec.skills,
-    rationale: kind === 'local' ? `local-override: ${spec.id}` : `cli-tier-override: ${tier}`,
+    rationale,
     ...(spec.inputs ? { inputs: spec.inputs } : {}),
     ...(spec.env ? { env: spec.env } : {}),
     ...(spec.mcpServers ? { mcpServers: spec.mcpServers } : {}),
@@ -547,7 +531,7 @@ function buildInstallContext(
   selection: PersonaSelection,
   options: { installRoot?: string; repoRoot?: string } = {}
 ): CliInstallContext {
-  const plan = materializeSkills(selection.skills, selection.runtime.harness, {
+  const plan = materializeSkills(selection.skills, selection.harness, {
     ...(options.installRoot !== undefined ? { installRoot: options.installRoot } : {}),
     ...(options.repoRoot !== undefined ? { repoRoot: options.repoRoot } : {})
   });
@@ -843,7 +827,7 @@ export interface ResolvedSidecar {
 export function loadSidecarForSelection(
   selection: PersonaSelection
 ): { sidecar?: ResolvedSidecar; warning?: string } {
-  const harness = selection.runtime.harness;
+  const harness = selection.harness;
   if (harness !== 'claude' && harness !== 'opencode' && harness !== 'codex') return {};
   if (harness === 'claude') {
     if (selection.claudeMdContent) {
@@ -980,7 +964,7 @@ function runDryRun(selection: PersonaSelection): number {
     process.env
   );
   const renderedSystemPrompt = renderPersonaInputs(
-    selection.runtime.systemPrompt,
+    selection.systemPrompt,
     inputResolution.values
   );
   const renderedClaudeContent =
@@ -993,14 +977,14 @@ function runDryRun(selection: PersonaSelection): number {
       : undefined;
   const effectiveSelection: PersonaSelection = {
     ...selection,
-    runtime: { ...selection.runtime, systemPrompt: renderedSystemPrompt },
+    systemPrompt: renderedSystemPrompt,
     ...(renderedClaudeContent !== undefined ? { claudeMdContent: renderedClaudeContent } : {}),
     ...(renderedAgentsContent !== undefined ? { agentsMdContent: renderedAgentsContent } : {})
   };
-  const { runtime, personaId, tier } = effectiveSelection;
+  const { personaId, harness, model, harnessSettings, systemPrompt } = effectiveSelection;
 
   process.stderr.write(
-    `→ ${personaId} [${tier}] via ${runtime.harness} (${runtime.model}) [DRY-RUN]\n`
+    `→ ${personaId} via ${harness} (${model}) [DRY-RUN]\n`
   );
 
   // Check 1: sidecar resolution. A loadSidecarForSelection warning means
@@ -1029,11 +1013,11 @@ function runDryRun(selection: PersonaSelection): number {
   let spec: InteractiveSpec;
   try {
     spec = buildInteractiveSpec({
-      harness: runtime.harness,
+      harness,
       personaId,
-      model: runtime.model,
-      systemPrompt: runtime.systemPrompt,
-      harnessSettings: runtime.harnessSettings,
+      model,
+      systemPrompt,
+      harnessSettings,
       mcpServers: mcpResolution.servers,
       permissions: effectiveSelection.permissions
     });
@@ -1049,7 +1033,7 @@ function runDryRun(selection: PersonaSelection): number {
   // Dry-run runs each install inside a fresh tempDir (see `cwd: tempDir` on
   // the spawnSync below). Pass repoRoot=process.cwd() so `local`-kind skills
   // resolve their relative source paths against the real repo, not the tmp.
-  const plan = materializeSkills(effectiveSelection.skills, runtime.harness, {
+  const plan = materializeSkills(effectiveSelection.skills, harness, {
     repoRoot: process.cwd()
   });
   if (plan.installs.length === 0) {
@@ -1144,7 +1128,7 @@ async function runInteractive(
     process.env
   );
   const renderedSystemPrompt = renderPersonaInputs(
-    selection.runtime.systemPrompt,
+    selection.systemPrompt,
     inputResolution.values
   );
   // Render input placeholders ($TARGET_DIR, ${CREATE_MODE}, …) inside the
@@ -1162,14 +1146,11 @@ async function runInteractive(
       : undefined;
   const effectiveSelection: PersonaSelection = {
     ...selection,
-    runtime: {
-      ...selection.runtime,
-      systemPrompt: renderedSystemPrompt
-    },
+    systemPrompt: renderedSystemPrompt,
     ...(renderedClaudeContent !== undefined ? { claudeMdContent: renderedClaudeContent } : {}),
     ...(renderedAgentsContent !== undefined ? { agentsMdContent: renderedAgentsContent } : {})
   };
-  const { runtime, personaId, tier } = effectiveSelection;
+  const { personaId, harness, model, harnessSettings, systemPrompt } = effectiveSelection;
   // `installRoot` (out-of-repo skill staging via `--plugin-dir`) is currently
   // claude-only; the workload-router SDK throws if it's set for other
   // harnesses. For opencode, we instead keep installs out of the repo by
@@ -1177,7 +1158,7 @@ async function runInteractive(
   // below). The --install-in-repo flag forces legacy in-repo installs
   // across the board.
   const useClean = decideCleanMode(
-    runtime.harness,
+    harness,
     options.installInRepo === true
   ).useClean;
   // Per-persona CLAUDE.md / AGENTS.md: load the author content if any. The
@@ -1199,10 +1180,10 @@ async function runInteractive(
   // via claude's installRoot, or (b) open a mount. Both engage for claude/
   // opencode by default; --install-in-repo disengages both.
   const useSessionDir =
-    !options.installInRepo && (runtime.harness === 'claude' || useClean);
+    !options.installInRepo && (harness === 'claude' || useClean);
   const sessionRoot = useSessionDir ? generateSessionRoot(personaId) : undefined;
   const installRoot =
-    sessionRoot && runtime.harness === 'claude'
+    sessionRoot && harness === 'claude'
       ? sessionInstallRoot(sessionRoot)
       : undefined;
   // `repoRoot` lets the local skill provider (kind: 'local') resolve
@@ -1214,7 +1195,7 @@ async function runInteractive(
     ...(installRoot !== undefined ? { installRoot } : {}),
     repoRoot: process.cwd()
   });
-  process.stderr.write(`→ ${personaId} [${tier}] via ${runtime.harness} (${runtime.model})\n`);
+  process.stderr.write(`→ ${personaId} via ${harness} (${model})\n`);
 
   const startLaunchMetadataForLaunch = (cwd = process.cwd()) =>
     startLaunchMetadataRecording({
@@ -1253,17 +1234,17 @@ async function runInteractive(
   // etc. land in the sandbox rather than the real repo. We defer it to
   // `onBeforeLaunch` below instead of pre-running here.
   const deferInstallToMount =
-    useClean && runtime.harness !== 'claude' && install.commandString !== ':';
+    useClean && harness !== 'claude' && install.commandString !== ':';
   if (install.commandString !== ':' && !deferInstallToMount) {
     await runInstall(install.command, installLabel);
   }
 
   const spec = buildInteractiveSpec({
-    harness: runtime.harness,
+    harness,
     personaId,
-    model: runtime.model,
-    systemPrompt: runtime.systemPrompt,
-    harnessSettings: runtime.harnessSettings,
+    model,
+    systemPrompt,
+    harnessSettings,
     mcpServers: resolvedMcp,
     permissions: effectiveSelection.permissions,
     ...(installRoot !== undefined ? { pluginDirs: [installRoot] } : {})
@@ -1299,8 +1280,8 @@ async function runInteractive(
   // env refs are interpolated. We show the bin, model, and the *names* of
   // the servers / permission fields so the user can verify the shape without
   // leaking credentials to stderr or CI logs.
-  const summary: string[] = [`model=${runtime.model}`];
-  if (runtime.harness === 'claude') {
+  const summary: string[] = [`model=${model}`];
+  if (harness === 'claude') {
     const servers = Object.keys(resolvedMcp ?? {});
     summary.push(`mcp-strict=${servers.length ? servers.join(',') : '(none)'}`);
     if (effectiveSelection.permissions?.allow?.length) {
@@ -1344,7 +1325,7 @@ async function runInteractive(
     const { ignoredPatterns, readonlyPatterns } = buildRelayfileMountPatterns({
       projectDir: process.cwd(),
       personaId,
-      harness: runtime.harness,
+      harness,
       mount: effectiveSelection.mount,
       configFilePaths: spec.configFiles.map((file) => file.path)
     });
@@ -1485,7 +1466,7 @@ async function runInteractive(
       const childCwd = handle.mountDir;
       if (options.capture) {
         options.capture.sessionCwd = childCwd;
-        options.capture.harness = runtime.harness;
+        options.capture.harness = harness;
         options.capture.startedAt = Date.now();
       }
       // Flip the SIGINT phase flag before spawn so a Ctrl-C arriving during
@@ -1555,7 +1536,7 @@ async function runInteractive(
       const e = err as NodeJS.ErrnoException;
       if (e.code === 'ENOENT') {
         process.stderr.write(
-          `Failed to spawn "${spec.bin}" inside sandbox mount: binary not found on PATH. Install the ${runtime.harness} CLI and retry.\n`
+          `Failed to spawn "${spec.bin}" inside sandbox mount: binary not found on PATH. Install the ${harness} CLI and retry.\n`
         );
         return 127;
       }
@@ -1598,7 +1579,7 @@ async function runInteractive(
   const launchMetadata = await startLaunchMetadataForLaunch();
   if (options.capture) {
     options.capture.sessionCwd = process.cwd();
-    options.capture.harness = runtime.harness;
+    options.capture.harness = harness;
     options.capture.startedAt = Date.now();
     options.capture.stampEnrichment = { ...launchMetadata.metadata };
     options.capture.stampingEnabled = launchMetadata.enabled;
@@ -1630,7 +1611,7 @@ async function runInteractive(
     child.on('error', (err: NodeJS.ErrnoException) => {
       if (err.code === 'ENOENT') {
         process.stderr.write(
-          `Failed to spawn "${spec.bin}": binary not found on PATH. Install the ${runtime.harness} CLI and retry.\n`
+          `Failed to spawn "${spec.bin}": binary not found on PATH. Install the ${harness} CLI and retry.\n`
         );
       } else {
         process.stderr.write(`Failed to spawn "${spec.bin}": ${err.message}\n`);
@@ -1985,26 +1966,20 @@ interface PersonaListRow {
   intent: string;
   tags: PersonaTag[];
   description: string;
-  rating: PersonaTier;
-  defaultTier: PersonaTier | undefined;
 }
 
 function collectPersonaRows(): PersonaListRow[] {
   const rows: PersonaListRow[] = [];
   const pushSpec = (spec: PersonaSpec, source: PersonaSource): void => {
-    for (const tier of PERSONA_TIERS) {
-      rows.push({
-        persona: spec.id,
-        source,
-        harness: spec.tiers[tier].harness,
-        model: spec.tiers[tier].model,
-        intent: spec.intent,
-        tags: spec.tags,
-        description: spec.description,
-        rating: tier,
-        defaultTier: spec.defaultTier
-      });
-    }
+    rows.push({
+      persona: spec.id,
+      source,
+      harness: spec.harness,
+      model: spec.model,
+      intent: spec.intent,
+      tags: spec.tags,
+      description: spec.description
+    });
   };
   const seen = new Set<string>();
   for (const [id, spec] of local.byId) {
@@ -2015,12 +1990,7 @@ function collectPersonaRows(): PersonaListRow[] {
     if (seen.has(spec.id)) continue;
     pushSpec(spec, 'library');
   }
-  const tierOrder = new Map(PERSONA_TIERS.map((t, i) => [t, i] as const));
-  return rows.sort(
-    (a, b) =>
-      a.persona.localeCompare(b.persona) ||
-      (tierOrder.get(a.rating)! - tierOrder.get(b.rating)!)
-  );
+  return rows.sort((a, b) => a.persona.localeCompare(b.persona));
 }
 
 interface ListDisplayOptions {
@@ -2036,7 +2006,6 @@ function formatPersonaTable(
     source: string;
     harness: string;
     model: string;
-    rating: string;
     tags: string;
     description: string;
   }
@@ -2045,18 +2014,14 @@ function formatPersonaTable(
     source: 'SOURCE',
     harness: 'HARNESS',
     model: 'MODEL',
-    rating: 'RATING',
     tags: 'TAGS',
     description: 'DESCRIPTION'
   };
   const rendered: RenderRow[] = rows.map((r) => ({
     persona: r.persona,
-    // Show the user-facing label (`built-in` / `repo` / `personal` / `dir:N`).
-    // The internal cascade key is still in `--json` output for tooling.
     source: formatPersonaSourceLabel(r.source),
     harness: r.harness,
     model: r.model,
-    rating: r.rating,
     tags: r.tags.join(','),
     description: r.description
   }));
@@ -2065,7 +2030,6 @@ function formatPersonaTable(
     source: Math.max(headers.source.length, ...rendered.map((r) => r.source.length)),
     harness: Math.max(headers.harness.length, ...rendered.map((r) => r.harness.length)),
     model: Math.max(headers.model.length, ...rendered.map((r) => r.model.length)),
-    rating: Math.max(headers.rating.length, ...rendered.map((r) => r.rating.length)),
     tags: Math.max(headers.tags.length, ...rendered.map((r) => r.tags.length)),
     description: headers.description.length
   };
@@ -2076,9 +2040,8 @@ function formatPersonaTable(
     widths.source +
     widths.harness +
     widths.model +
-    widths.rating +
     widths.tags +
-    (6 + (display.description ? 1 : 0) - 1) * 2;
+    (5 + (display.description ? 1 : 0) - 1) * 2;
   const descBudget = Math.max(20, termWidth - fixed - 1);
   const truncate = (s: string, n: number) => (s.length <= n ? s : s.slice(0, Math.max(1, n - 1)) + '…');
   const line = (row: RenderRow) => {
@@ -2087,7 +2050,6 @@ function formatPersonaTable(
       row.source.padEnd(widths.source),
       row.harness.padEnd(widths.harness),
       row.model.padEnd(widths.model),
-      row.rating.padEnd(widths.rating),
       row.tags.padEnd(widths.tags)
     ];
     if (display.description) {
@@ -2100,19 +2062,13 @@ function formatPersonaTable(
 
 function parseListArgs(args: readonly string[]): {
   json: boolean;
-  filterRating?: PersonaTier;
   filterHarness?: Harness;
   filterTag?: PersonaTag;
   display: ListDisplayOptions;
-  showAll: boolean;
-  filterRatingExplicit: boolean;
 } {
   let json = false;
-  let filterRating: PersonaTier | undefined;
-  let filterRatingExplicit = false;
   let filterHarness: Harness | undefined;
   let filterTag: PersonaTag | undefined;
-  let showAll = false;
   const display: ListDisplayOptions = { description: true };
 
   const valueOf = (i: number, flag: string): string => {
@@ -2129,20 +2085,9 @@ function parseListArgs(args: readonly string[]): {
       json = true;
     } else if (arg === '-h' || arg === '--help') {
       process.stdout.write(
-        'Usage: agentworkforce list [--all] [--json] [--filter-rating <tier>] [--filter-harness <harness>] [--filter-tag <tag>] [--no-display-description]\n'
+        'Usage: agentworkforce list [--json] [--filter-harness <harness>] [--filter-tag <tag>] [--no-display-description]\n'
       );
       process.exit(0);
-    } else if (arg === '--all' || arg === '--no-recommended') {
-      showAll = true;
-    } else if (arg === '--recommended') {
-      showAll = false;
-    } else if (arg === '--filter-rating') {
-      const v = valueOf(i++, arg);
-      if (!(PERSONA_TIERS as readonly string[]).includes(v)) {
-        die(`list: invalid --filter-rating "${v}". Must be one of: ${PERSONA_TIERS.join(', ')}`);
-      }
-      filterRating = v as PersonaTier;
-      filterRatingExplicit = true;
     } else if (arg === '--filter-harness') {
       const v = valueOf(i++, arg);
       if (!(HARNESS_VALUES as readonly string[]).includes(v)) {
@@ -2163,24 +2108,15 @@ function parseListArgs(args: readonly string[]): {
       die(`list: unexpected argument "${arg}".`);
     }
   }
-  return { json, filterRating, filterHarness, filterTag, display, showAll, filterRatingExplicit };
+  return { json, filterHarness, filterTag, display };
 }
 
 function runList(args: readonly string[]): never {
-  const { json, filterRating, filterHarness, filterTag, display, showAll, filterRatingExplicit } =
-    parseListArgs(args);
-
-  const recommendedByIntent = routingProfiles.default.intents;
-  const applyRecommended = !showAll && !filterRatingExplicit;
+  const { json, filterHarness, filterTag, display } = parseListArgs(args);
 
   const rows = collectPersonaRows().filter((r) => {
-    if (filterRating && r.rating !== filterRating) return false;
     if (filterHarness && r.harness !== filterHarness) return false;
     if (filterTag && !r.tags.includes(filterTag)) return false;
-    if (applyRecommended) {
-      const rule = (recommendedByIntent as Partial<Record<string, { tier: PersonaTier }>>)[r.intent];
-      if (r.rating !== (rule?.tier ?? r.defaultTier ?? 'best-value')) return false;
-    }
     return true;
   });
 
@@ -2188,9 +2124,7 @@ function runList(args: readonly string[]): never {
     process.stdout.write(JSON.stringify({ personas: rows }, null, 2) + '\n');
   } else {
     process.stdout.write(formatPersonaTable(rows, display));
-    const uniq = new Set(rows.map((r) => r.persona)).size;
-    const suffix = applyRecommended ? ' (recommended tier per intent; pass --all to see every tier)' : '';
-    process.stdout.write(`\n${uniq} persona(s), ${rows.length} row(s)${suffix}.\n`);
+    process.stdout.write(`\n${rows.length} persona(s).\n`);
   }
   process.exit(0);
 }
@@ -2198,18 +2132,14 @@ function runList(args: readonly string[]): never {
 function parseShowArgs(args: readonly string[]): {
   selector: string;
   json: boolean;
-  all: boolean;
 } {
   let json = false;
-  let all = false;
   let selector: string | undefined;
   for (const arg of args) {
     if (arg === '--json') {
       json = true;
-    } else if (arg === '--all') {
-      all = true;
     } else if (arg === '-h' || arg === '--help') {
-      process.stdout.write('Usage: agentworkforce show <persona>[@<tier>] [--all] [--json]\n');
+      process.stdout.write('Usage: agentworkforce show <persona> [--json]\n');
       process.exit(0);
     } else if (arg.startsWith('--')) {
       die(`show: unexpected flag "${arg}".`);
@@ -2220,32 +2150,19 @@ function parseShowArgs(args: readonly string[]): {
     }
   }
   if (!selector) die('show: missing persona name.');
-  return { selector, json, all };
+  return { selector, json };
 }
 
-function resolveShowTarget(
-  selector: string,
-  all: boolean
-): {
-  spec: PersonaSpec;
-  source: PersonaSource;
-  tiers: PersonaTier[];
-  explicitTier: PersonaTier | undefined;
-} {
-  const at = selector.indexOf('@');
-  const key = at === -1 ? selector : selector.slice(0, at);
-  const tierRaw = at === -1 ? undefined : selector.slice(at + 1);
-  if (!key) die('show: missing persona name before "@".');
-  let explicitTier: PersonaTier | undefined;
-  if (tierRaw !== undefined) {
-    if (!PERSONA_TIERS.includes(tierRaw as PersonaTier)) {
-      die(`show: invalid tier "${tierRaw}". Must be one of: ${PERSONA_TIERS.join(', ')}`);
-    }
-    explicitTier = tierRaw as PersonaTier;
-    if (all) {
-      die('show: --all cannot be combined with an explicit @<tier> suffix.');
-    }
+function resolveShowTarget(selector: string): { spec: PersonaSpec; source: PersonaSource } {
+  if (selector.includes('@')) {
+    die(
+      'show: @<tier> selectors were removed; tiers are no longer part of the persona shape. ' +
+        `Use 'agentworkforce show ${selector.slice(0, selector.indexOf('@'))}' instead.`,
+      false
+    );
   }
+  const key = selector;
+  if (!key) die('show: missing persona name.');
 
   const localSpec = local.byId.get(key);
   let spec: PersonaSpec | undefined;
@@ -2267,17 +2184,7 @@ function resolveShowTarget(
     if ('error' in result) die(result.error, false);
     spec = result;
   }
-
-  let tiers: PersonaTier[];
-  if (all) {
-    tiers = [...PERSONA_TIERS];
-  } else if (explicitTier) {
-    tiers = [explicitTier];
-  } else {
-    const rule = (routingProfiles.default.intents as Partial<Record<string, { tier: PersonaTier }>>)[spec.intent];
-    tiers = [rule?.tier ?? spec.defaultTier ?? 'best-value'];
-  }
-  return { spec, source, tiers, explicitTier };
+  return { spec, source };
 }
 
 function indent(text: string, prefix: string): string {
@@ -2287,22 +2194,13 @@ function indent(text: string, prefix: string): string {
     .join('\n');
 }
 
-function formatPersonaShow(
-  spec: PersonaSpec,
-  source: PersonaSource,
-  tiers: readonly PersonaTier[],
-  tierNote: string
-): string {
+function formatPersonaShow(spec: PersonaSpec, source: PersonaSource): string {
   const lines: string[] = [];
   lines.push(`PERSONA      ${spec.id}`);
   lines.push(`SOURCE       ${source}`);
   lines.push(`INTENT       ${spec.intent}`);
   lines.push(`TAGS         ${spec.tags.length ? spec.tags.join(', ') : '(none)'}`);
   lines.push(`DESCRIPTION  ${spec.description}`);
-  if (spec.defaultTier) {
-    lines.push(`DEFAULT TIER ${spec.defaultTier}`);
-  }
-  lines.push(`TIERS SHOWN  ${tiers.join(', ')}${tierNote ? `  (${tierNote})` : ''}`);
 
   lines.push('');
   lines.push('SKILLS');
@@ -2386,49 +2284,37 @@ function formatPersonaShow(
     for (const k of envKeys) lines.push(`  ${k}=${spec.env![k]}`);
   }
 
-  for (const tier of tiers) {
-    const rt = spec.tiers[tier];
-    lines.push('');
-    lines.push(`TIER: ${tier}`);
-    lines.push(`  harness:  ${rt.harness}`);
-    lines.push(`  model:    ${rt.model}`);
-    lines.push(`  reasoning: ${rt.harnessSettings.reasoning}`);
-    lines.push(`  timeout:  ${rt.harnessSettings.timeoutSeconds}s`);
-    if (rt.harnessSettings.sandboxMode) {
-      lines.push(`  sandbox:  ${rt.harnessSettings.sandboxMode}`);
-    }
-    if (rt.harnessSettings.approvalPolicy) {
-      lines.push(`  approvals: ${rt.harnessSettings.approvalPolicy}`);
-    }
-    if (rt.harnessSettings.workspaceWriteNetworkAccess !== undefined) {
-      lines.push(`  network:  ${rt.harnessSettings.workspaceWriteNetworkAccess}`);
-    }
-    if (rt.harnessSettings.webSearch !== undefined) {
-      lines.push(`  webSearch: ${rt.harnessSettings.webSearch}`);
-    }
-    lines.push('  systemPrompt:');
-    lines.push(indent(rt.systemPrompt, '    '));
+  lines.push('');
+  lines.push('RUNTIME');
+  lines.push(`  harness:  ${spec.harness}`);
+  lines.push(`  model:    ${spec.model}`);
+  lines.push(`  reasoning: ${spec.harnessSettings.reasoning}`);
+  lines.push(`  timeout:  ${spec.harnessSettings.timeoutSeconds}s`);
+  if (spec.harnessSettings.sandboxMode) {
+    lines.push(`  sandbox:  ${spec.harnessSettings.sandboxMode}`);
   }
+  if (spec.harnessSettings.approvalPolicy) {
+    lines.push(`  approvals: ${spec.harnessSettings.approvalPolicy}`);
+  }
+  if (spec.harnessSettings.workspaceWriteNetworkAccess !== undefined) {
+    lines.push(`  network:  ${spec.harnessSettings.workspaceWriteNetworkAccess}`);
+  }
+  if (spec.harnessSettings.webSearch !== undefined) {
+    lines.push(`  webSearch: ${spec.harnessSettings.webSearch}`);
+  }
+  lines.push('  systemPrompt:');
+  lines.push(indent(spec.systemPrompt, '    '));
 
   return lines.join('\n') + '\n';
 }
 
 function runShow(args: readonly string[]): never {
-  const { selector, json, all } = parseShowArgs(args);
-  const { spec, source, tiers, explicitTier } = resolveShowTarget(selector, all);
-  const tierNote = all
-    ? 'all tiers'
-    : explicitTier
-      ? 'explicit @<tier>'
-      : 'recommended for intent; pass --all or @<tier> to override';
+  const { selector, json } = parseShowArgs(args);
+  const { spec, source } = resolveShowTarget(selector);
   if (json) {
-    const projectedTiers = Object.fromEntries(
-      tiers.map((t) => [t, spec.tiers[t]])
-    ) as PersonaSpec['tiers'];
-    const projected: PersonaSpec = { ...spec, tiers: projectedTiers };
-    process.stdout.write(JSON.stringify({ source, spec: projected }, null, 2) + '\n');
+    process.stdout.write(JSON.stringify({ source, spec }, null, 2) + '\n');
   } else {
-    process.stdout.write(formatPersonaShow(spec, source, tiers, tierNote));
+    process.stdout.write(formatPersonaShow(spec, source));
   }
   process.exit(0);
 }
@@ -2536,7 +2422,7 @@ async function runAgentSelector(
 ): Promise<never> {
   const target = parseSelector(selector);
   const selection = {
-    ...buildSelection(target.spec, target.tier, target.kind),
+    ...buildSelection(target.spec, target.kind),
     ...(inputValues ? { inputValues } : {})
   };
 
@@ -2697,9 +2583,7 @@ const ALLOWED_SET_PATHS: readonly string[] = [
   'agentsMdContent',
   'claudeMdContent',
   'tags',
-  'tiers.best.systemPrompt',
-  'tiers.best-value.systemPrompt',
-  'tiers.minimum.systemPrompt'
+  'systemPrompt'
 ];
 
 /**
@@ -3195,8 +3079,7 @@ async function runPersonaImprover(args: {
   if (!improverSpec) {
     throw new Error('built-in persona "persona-improver" is not registered in the catalog');
   }
-  const tier: PersonaTier = 'best-value';
-  const selection = buildSelection(improverSpec, tier, 'repo');
+  const selection = buildSelection(improverSpec, 'repo');
   const inputValues: Record<string, string> = {
     PERSONA_FILE_PATH: args.personaFilePath,
     SESSION_TRANSCRIPT_PATH: args.transcriptPath,
@@ -3208,7 +3091,7 @@ async function runPersonaImprover(args: {
     process.env
   );
   const renderedSystemPrompt = renderPersonaInputs(
-    selection.runtime.systemPrompt,
+    selection.systemPrompt,
     inputResolution.values
   );
   const callerEnv = { ...process.env, ...inputResolution.values };
@@ -3222,11 +3105,11 @@ async function runPersonaImprover(args: {
   ].join('\n');
   const task = `${taskBody}\n\nRun inputs:\n${JSON.stringify(inputValues, null, 2)}`;
   const spec = buildNonInteractiveSpec({
-    harness: selection.runtime.harness,
+    harness: selection.harness,
     personaId: selection.personaId,
-    model: selection.runtime.model,
+    model: selection.model,
     systemPrompt: renderedSystemPrompt,
-    harnessSettings: selection.runtime.harnessSettings,
+    harnessSettings: selection.harnessSettings,
     mcpServers: mcpResolution.servers,
     permissions: selection.permissions,
     task
@@ -3252,8 +3135,8 @@ async function runPersonaImprover(args: {
       }
     }
   };
-  const timeoutMs = selection.runtime.harnessSettings.timeoutSeconds
-    ? selection.runtime.harnessSettings.timeoutSeconds * 1000
+  const timeoutMs = selection.harnessSettings.timeoutSeconds
+    ? selection.harnessSettings.timeoutSeconds * 1000
     : undefined;
   let captureResult: { exitCode: number | null; stderr: string };
   try {
@@ -3339,15 +3222,8 @@ export function parseProposals(raw: string): ImproverProposalsFile {
       throw new Error(`proposals[${idx}] must be an object`);
     }
     const p = item as Record<string, unknown>;
-    if (typeof p.id !== 'string' || !p.id.trim()) {
-      throw new Error(`proposals[${idx}].id must be a non-empty string`);
-    }
-    if (typeof p.summary !== 'string' || !p.summary.trim()) {
-      throw new Error(`proposals[${idx}].summary must be a non-empty string`);
-    }
-    if (typeof p.rationale !== 'string') {
-      throw new Error(`proposals[${idx}].rationale must be a string`);
-    }
+    const id = normalizeNonEmptyString(p.id) ?? `proposal-${idx + 1}`;
+    const rationale = typeof p.rationale === 'string' ? p.rationale.trim() : '';
     if (!Array.isArray(p.patches) || p.patches.length === 0) {
       throw new Error(`proposals[${idx}].patches must be a non-empty array`);
     }
@@ -3369,10 +3245,11 @@ export function parseProposals(raw: string): ImproverProposalsFile {
       assertAllowedImproverPatch(patch, `proposals[${idx}].patches[${pidx}]`);
       patches.push(patch);
     }
+    const summary = normalizeProposalSummary(p.summary, id, patches);
     proposals.push({
-      id: p.id,
-      summary: p.summary,
-      rationale: p.rationale,
+      id,
+      summary,
+      rationale,
       patches
     });
   }
@@ -3382,6 +3259,52 @@ export function parseProposals(raw: string): ImproverProposalsFile {
     transcriptPath: typeof obj.transcriptPath === 'string' ? obj.transcriptPath : '',
     proposals
   };
+}
+
+function normalizeNonEmptyString(value: unknown): string | undefined {
+  if (typeof value !== 'string') return undefined;
+  const trimmed = value.trim();
+  return trimmed.length > 0 ? trimmed : undefined;
+}
+
+function normalizeProposalSummary(
+  value: unknown,
+  id: string,
+  patches: readonly ImproverPatch[]
+): string {
+  const explicit = normalizeNonEmptyString(value);
+  if (explicit) return explicit;
+  const fromId = humanizeProposalId(id);
+  if (fromId) return fromId;
+  return summarizeProposalPatches(patches);
+}
+
+function humanizeProposalId(id: string): string | undefined {
+  const trimmed = id.trim();
+  if (!trimmed || /^p\d+$/i.test(trimmed) || /^proposal-\d+$/i.test(trimmed)) {
+    return undefined;
+  }
+  const words = trimmed.replace(/[-_]+/g, ' ').replace(/\s+/g, ' ').trim();
+  if (!words) return undefined;
+  return `${words.slice(0, 1).toUpperCase()}${words.slice(1)}`;
+}
+
+function summarizeProposalPatches(patches: readonly ImproverPatch[]): string {
+  if (patches.length === 1) return summarizeSingleProposalPatch(patches[0]);
+  return `Apply ${patches.length} persona updates`;
+}
+
+function summarizeSingleProposalPatch(patch: ImproverPatch): string {
+  if (patch.op === 'append' && patch.path === 'skills') return 'Add skill';
+  if (patch.path.startsWith('inputs.')) {
+    return `Add ${patch.path.slice('inputs.'.length)} input`;
+  }
+  if (patch.path === 'description') return 'Update description';
+  if (patch.path === 'agentsMdContent') return 'Update AGENTS.md guidance';
+  if (patch.path === 'claudeMdContent') return 'Update CLAUDE.md guidance';
+  if (patch.path === 'tags') return 'Update tags';
+  if (patch.path === 'systemPrompt') return 'Update system prompt';
+  return patch.op === 'append' ? `Append to ${patch.path}` : `Update ${patch.path}`;
 }
 
 /**
@@ -3961,7 +3884,7 @@ export function parseCreateArgs(args: readonly string[]): {
   const [unexpected] = positional;
   if (unexpected) {
     die(
-      `create: unexpected argument "${unexpected}". The create command always runs ${CREATE_SELECTOR}; use "agentworkforce agent <persona>[@<tier>]" to run another persona.`
+      `create: unexpected argument "${unexpected}". The create command always runs ${CREATE_SELECTOR}; use "agentworkforce agent <persona>" to run another persona.`
     );
   }
 
