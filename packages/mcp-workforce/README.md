@@ -25,12 +25,16 @@ then has tool access to:
 export WORKFORCE_WORKSPACE_ID=ws_demo
 export WORKFORCE_RUNTIME_TOKEN=<workspace-token>          # required for workflow.*
 export SUPERMEMORY_API_KEY=<key>                          # required for memory.*
-export WORKFORCE_INTEGRATION_GITHUB_TOKEN=ghp_...         # required for integration.github.*
+export RELAYFILE_MOUNT_ROOT=/path/to/relayfile/mount      # required for integration.*
 
 npx @agentworkforce/mcp-workforce
 ```
 
-The server speaks MCP over stdio.
+The server speaks MCP over stdio. Integration tools don't talk to
+GitHub/Linear/etc. directly — they write canonical JSON files inside
+the Relayfile mount, and Relayfile's writeback worker turns those
+into real provider API calls. Relayfile holds the OAuth credentials;
+the MCP server itself never sees a provider token.
 
 ## Persona-side wiring
 
@@ -53,7 +57,9 @@ spawns a harness. Personas that want to declare it manually can use:
 | `WORKFORCE_CLOUD_URL` | Override cloud base URL | optional |
 | `SUPERMEMORY_API_KEY` | Memory adapter credentials | `memory.*` |
 | `SUPERMEMORY_ENDPOINT` | Override supermemory endpoint | optional |
-| `WORKFORCE_INTEGRATION_<PROVIDER>_TOKEN` | Direct provider token | `integration.<provider>.*` |
+| `RELAYFILE_MOUNT_ROOT` | Relayfile mount root the integration clients write into | `integration.*` |
+| `RELAYFILE_ROOT` | Legacy alias for `RELAYFILE_MOUNT_ROOT` | optional |
+| `WORKFORCE_WRITEBACK_TIMEOUT_MS` | Per-call writeback wait; default 30000 | optional |
 
 Tools that lack their required env throw a clear setup error at first
 call — the server itself still boots so partial wiring is debuggable.
