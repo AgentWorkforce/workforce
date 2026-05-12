@@ -7,6 +7,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [3.0.0] - 2026-05-12
+
+### Fixed
+
+- Address CI failure + persona-maker AGENTS.md drift
+
+### Changed
+
+- Drop tiers; flatten harness/model/prompt to top-level
+
 ## [2.1.2] - 2026-05-11
 
 ### Changed

@@ -7,6 +7,21 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [3.0.0] - 2026-05-12
+
+### Added
+
+- **Ship workforce deploy v1 — persona-as-deployable-agent**
+
+### Fixed
+
+- Address CI failure + persona-maker AGENTS.md drift
+- Address PR review feedback + unblock examples typecheck
+
+### Changed
+
+- Drop tiers; flatten harness/model/prompt to top-level
+
 ## [2.1.4] - 2026-05-11
 
 ### Added
