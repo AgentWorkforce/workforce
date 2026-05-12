@@ -1,11 +1,11 @@
-# @workforce/daytona-runner
+# @agentworkforce/daytona-runner
 
 Daytona-backed `WorkflowRuntime` adapter for AgentWorkforce deploy workflows. This package owns the Daytona runtime implementation, auth helpers, and runtime contract types.
 
 ## Install
 
 ```sh
-npm install @workforce/daytona-runner @daytonaio/sdk
+npm install @agentworkforce/daytona-runner @daytonaio/sdk
 ```
 
 `@daytonaio/sdk` is a peer dependency — consumers bring their own version (^0.148.0).
@@ -17,7 +17,7 @@ import { Daytona } from '@daytonaio/sdk';
 import {
   DaytonaRuntime,
   resolveDaytonaAuthCredentials,
-} from '@workforce/daytona-runner';
+} from '@agentworkforce/daytona-runner';
 
 const auth = resolveDaytonaAuthCredentials({
   apiKey: process.env.DAYTONA_API_KEY,

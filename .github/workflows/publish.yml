@@ -89,7 +89,7 @@ jobs:
           # persona-kit is a leaf dep consumed by workload-router and cli, so it
           # must publish first. The top-level `agentworkforce` wrapper depends on
           # `@agentworkforce/cli`, so it must publish last.
-          echo "packages=persona-kit workload-router cli agentworkforce" >> "$GITHUB_OUTPUT"
+          echo "packages=persona-kit workload-router cli agentworkforce daytona-runner" >> "$GITHUB_OUTPUT"
 
       # Lockstep baseline heal. The workspace publishes every package at the
       # same version, so if any package's local version lags either its own
