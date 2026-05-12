@@ -7,19 +7,17 @@ import {
   CODEX_SANDBOX_MODES,
   HARNESS_VALUES,
   PERSONA_TAGS,
-  PERSONA_TIERS,
   SIDECAR_MD_MODES,
   type CodexApprovalPolicy,
   type CodexSandboxMode,
+  type Harness,
   type HarnessSettings,
   type McpServerSpec,
   type PersonaInputSpec,
   type PersonaMount,
   type PersonaPermissions,
-  type PersonaRuntime,
   type PersonaSpec,
   type PersonaTag,
-  type PersonaTier,
   type SidecarMdMode
 } from '@agentworkforce/persona-kit';
 import { listBuiltInPersonas, personaCatalog } from '@agentworkforce/workload-router';
@@ -61,16 +59,14 @@ export interface LocalPersonaOverride {
    * on merge); `mode` replaces the base's mode when set.
    */
   permissions?: PersonaPermissions;
-  /** Convenience: replaces systemPrompt on every inherited tier. Ignored if `tiers` is also set. */
+  /** Replaces the inherited systemPrompt when set. */
   systemPrompt?: string;
-  /** Per-tier overrides. If a tier is set here, it replaces the inherited tier wholesale. */
-  tiers?: Partial<Record<PersonaTier, Partial<PersonaRuntime>>>;
-  /**
-   * Persona-author's preferred tier when a caller does not request one
-   * explicitly. Mirrors {@link PersonaSpec.defaultTier}; when present in
-   * an override, it replaces the inherited base value.
-   */
-  defaultTier?: PersonaTier;
+  /** Replaces the inherited harness when set. */
+  harness?: Harness;
+  /** Replaces the inherited model when set. */
+  model?: string;
+  /** Per-field harness settings override; merged on top of the inherited harnessSettings. */
+  harnessSettings?: Partial<HarnessSettings>;
   /**
    * Path to a `CLAUDE.md` sidecar, relative to this JSON file's directory.
    * The loader stats the file and resolves it to an absolute path on the
@@ -448,12 +444,32 @@ function parseOverride(value: unknown, context: string): LocalPersonaOverride {
   assertMcpServersShape(raw.mcpServers, `${context}.mcpServers`);
   assertMountShape(raw.mount, `${context}.mount`);
   assertPermissionsShape(raw.permissions, `${context}.permissions`);
-  assertTiersShape(raw.tiers, `${context}.tiers`);
 
-  if (raw.defaultTier !== undefined && !PERSONA_TIERS.includes(raw.defaultTier as PersonaTier)) {
+  if (raw.tiers !== undefined) {
     throw new Error(
-      `${context}.defaultTier must be one of: ${PERSONA_TIERS.join(', ')}`
+      `${context}.tiers is no longer supported; declare harness/model/systemPrompt/harnessSettings at the top level`
     );
+  }
+  if (raw.defaultTier !== undefined) {
+    throw new Error(
+      `${context}.defaultTier is no longer supported (tiers have been removed)`
+    );
+  }
+  if (raw.harness !== undefined) {
+    if (typeof raw.harness !== 'string' || !HARNESS_VALUES.includes(raw.harness as Harness)) {
+      throw new Error(`${context}.harness must be one of: ${HARNESS_VALUES.join(', ')}`);
+    }
+  }
+  if (raw.model !== undefined) {
+    if (typeof raw.model !== 'string' || !raw.model.trim()) {
+      throw new Error(`${context}.model must be a non-empty string if provided`);
+    }
+  }
+  if (raw.harnessSettings !== undefined) {
+    if (!isPlainObject(raw.harnessSettings)) {
+      throw new Error(`${context}.harnessSettings must be an object if provided`);
+    }
+    assertPartialHarnessSettingsShape(raw.harnessSettings, `${context}.harnessSettings`);
   }
 
   if (raw.claudeMd !== undefined) assertSidecarPath(raw.claudeMd, `${context}.claudeMd`);
@@ -482,8 +498,11 @@ function parseOverride(value: unknown, context: string): LocalPersonaOverride {
     mount: raw.mount as LocalPersonaOverride['mount'],
     permissions: raw.permissions as LocalPersonaOverride['permissions'],
     systemPrompt: raw.systemPrompt as string | undefined,
-    tiers: raw.tiers as LocalPersonaOverride['tiers'],
-    ...(raw.defaultTier !== undefined ? { defaultTier: raw.defaultTier as PersonaTier } : {}),
+    ...(raw.harness !== undefined ? { harness: raw.harness as Harness } : {}),
+    ...(raw.model !== undefined ? { model: raw.model as string } : {}),
+    ...(raw.harnessSettings !== undefined
+      ? { harnessSettings: raw.harnessSettings as Partial<HarnessSettings> }
+      : {}),
     ...(typeof raw.claudeMd === 'string' ? { claudeMd: raw.claudeMd } : {}),
     ...(raw.claudeMdMode ? { claudeMdMode: raw.claudeMdMode as SidecarMdMode } : {}),
     ...(typeof raw.agentsMd === 'string' ? { agentsMd: raw.agentsMd } : {}),
@@ -619,46 +638,6 @@ function assertMountShape(value: unknown, context: string): void {
   }
 }
 
-function assertTiersShape(value: unknown, context: string): void {
-  if (value === undefined) return;
-  if (!isPlainObject(value)) {
-    throw new Error(`${context} must be an object if provided`);
-  }
-  for (const [tierName, runtime] of Object.entries(value)) {
-    const path = `${context}.${tierName}`;
-    if (!isPlainObject(runtime)) {
-      throw new Error(`${path} must be an object`);
-    }
-    if (runtime.model !== undefined && typeof runtime.model !== 'string') {
-      throw new Error(`${path}.model must be a string`);
-    }
-    if (runtime.harness !== undefined && typeof runtime.harness !== 'string') {
-      throw new Error(`${path}.harness must be a string`);
-    }
-    if (runtime.systemPrompt !== undefined && typeof runtime.systemPrompt !== 'string') {
-      throw new Error(`${path}.systemPrompt must be a string`);
-    }
-    if (runtime.harnessSettings !== undefined && !isPlainObject(runtime.harnessSettings)) {
-      throw new Error(`${path}.harnessSettings must be an object`);
-    }
-    if (runtime.harnessSettings !== undefined) {
-      assertPartialHarnessSettingsShape(runtime.harnessSettings, `${path}.harnessSettings`);
-    }
-    if (runtime.claudeMd !== undefined) assertSidecarPath(runtime.claudeMd, `${path}.claudeMd`);
-    if (runtime.agentsMd !== undefined) assertSidecarPath(runtime.agentsMd, `${path}.agentsMd`);
-    if (runtime.claudeMdContent !== undefined) {
-      assertInlineSidecarContent(runtime.claudeMdContent, `${path}.claudeMdContent`);
-    }
-    if (runtime.agentsMdContent !== undefined) {
-      assertInlineSidecarContent(runtime.agentsMdContent, `${path}.agentsMdContent`);
-    }
-    // Tier-level mode without a tier-level path is allowed: it overrides
-    // top-level mode for this tier while inheriting the inherited path.
-    if (runtime.claudeMdMode !== undefined) assertSidecarMode(runtime.claudeMdMode, `${path}.claudeMdMode`);
-    if (runtime.agentsMdMode !== undefined) assertSidecarMode(runtime.agentsMdMode, `${path}.agentsMdMode`);
-  }
-}
-
 function assertPartialHarnessSettingsShape(value: Record<string, unknown>, context: string): void {
   const {
     reasoning,
@@ -726,45 +705,6 @@ function requireStandaloneField<T>(value: T | undefined, context: string): T {
   return value;
 }
 
-function assertStandaloneRuntime(
-  runtime: Partial<PersonaRuntime> | undefined,
-  context: string,
-  fallbackSystemPrompt?: string
-): PersonaRuntime {
-  if (!runtime) {
-    throw new Error(`${context} is required for standalone personas`);
-  }
-  if (
-    typeof runtime.harness !== 'string' ||
-    !HARNESS_VALUES.includes(runtime.harness as PersonaRuntime['harness'])
-  ) {
-    throw new Error(`${context}.harness must be one of: ${HARNESS_VALUES.join(', ')}`);
-  }
-  if (typeof runtime.model !== 'string' || !runtime.model.trim()) {
-    throw new Error(`${context}.model must be a non-empty string`);
-  }
-  const systemPrompt =
-    typeof runtime.systemPrompt === 'string' && runtime.systemPrompt.trim()
-      ? runtime.systemPrompt
-      : fallbackSystemPrompt;
-  if (typeof systemPrompt !== 'string' || !systemPrompt.trim()) {
-    throw new Error(`${context}.systemPrompt must be a non-empty string`);
-  }
-  const settings = runtime.harnessSettings as unknown;
-  if (!isPlainObject(settings)) {
-    throw new Error(`${context}.harnessSettings must be an object`);
-  }
-  const harnessSettings = assertStandaloneHarnessSettings(settings, `${context}.harnessSettings`);
-  return {
-    harness: runtime.harness as PersonaRuntime['harness'],
-    model: runtime.model,
-    systemPrompt,
-    harnessSettings,
-    ...(typeof runtime.claudeMdContent === 'string' ? { claudeMdContent: runtime.claudeMdContent } : {}),
-    ...(typeof runtime.agentsMdContent === 'string' ? { agentsMdContent: runtime.agentsMdContent } : {})
-  };
-}
-
 function assertStandaloneHarnessSettings(
   settings: Record<string, unknown>,
   context: string
@@ -799,48 +739,31 @@ function standaloneSpecFromOverride(
   override: LocalPersonaOverride & { intent: string },
   sidecarWarnings: string[] = []
 ): PersonaSpec {
-  const tiers = {} as Record<PersonaTier, PersonaRuntime>;
-  const rawTiers = requireStandaloneField(
-    override.tiers,
-    `standalone persona "${override.id}".tiers`
-  );
-  const topLevelFallbackSystemPrompt =
+  const context = `standalone persona "${override.id}"`;
+  const harness = requireStandaloneField(override.harness, `${context}.harness`);
+  if (!HARNESS_VALUES.includes(harness)) {
+    throw new Error(`${context}.harness must be one of: ${HARNESS_VALUES.join(', ')}`);
+  }
+  const model = requireStandaloneField(override.model, `${context}.model`);
+  if (typeof model !== 'string' || !model.trim()) {
+    throw new Error(`${context}.model must be a non-empty string`);
+  }
+  const fallbackSystemPrompt = override.claudeMdContent ?? override.agentsMdContent;
+  const systemPrompt =
     typeof override.systemPrompt === 'string' && override.systemPrompt.trim()
       ? override.systemPrompt
-      : override.claudeMdContent ?? override.agentsMdContent;
-  for (const tier of PERSONA_TIERS) {
-    const tierFallbackSystemPrompt =
-      rawTiers[tier]?.claudeMdContent ??
-      rawTiers[tier]?.agentsMdContent ??
-      topLevelFallbackSystemPrompt;
-    const runtime = assertStandaloneRuntime(
-      rawTiers[tier],
-      `standalone persona "${override.id}".tiers.${tier}`,
-      tierFallbackSystemPrompt
-    );
-    const tierOverride = rawTiers[tier];
-    if (tierOverride?.claudeMd !== undefined) {
-      const { abs, warning } = resolveSidecarPath(
-        tierOverride.claudeMd,
-        override.__sourceDir,
-        `[${override.id}].tiers.${tier}.claudeMd`
-      );
-      if (warning) sidecarWarnings.push(warning);
-      if (abs) runtime.claudeMd = abs;
-    }
-    if (tierOverride?.agentsMd !== undefined) {
-      const { abs, warning } = resolveSidecarPath(
-        tierOverride.agentsMd,
-        override.__sourceDir,
-        `[${override.id}].tiers.${tier}.agentsMd`
-      );
-      if (warning) sidecarWarnings.push(warning);
-      if (abs) runtime.agentsMd = abs;
-    }
-    if (tierOverride?.claudeMdMode) runtime.claudeMdMode = tierOverride.claudeMdMode;
-    if (tierOverride?.agentsMdMode) runtime.agentsMdMode = tierOverride.agentsMdMode;
-    tiers[tier] = runtime;
+      : fallbackSystemPrompt;
+  if (typeof systemPrompt !== 'string' || !systemPrompt.trim()) {
+    throw new Error(`${context}.systemPrompt must be a non-empty string`);
   }
+  const settingsRaw = override.harnessSettings;
+  if (!settingsRaw || !isPlainObject(settingsRaw)) {
+    throw new Error(`${context}.harnessSettings must be an object`);
+  }
+  const harnessSettings = assertStandaloneHarnessSettings(
+    settingsRaw as Record<string, unknown>,
+    `${context}.harnessSettings`
+  );
 
   const inputs = override.inputs;
   const env = override.env;
@@ -874,18 +797,14 @@ function standaloneSpecFromOverride(
   return {
     id: override.id,
     intent: override.intent,
-    tags: requireStandaloneField(
-      override.tags,
-      `standalone persona "${override.id}".tags`
-    ),
-    description: requireStandaloneField(
-      override.description,
-      `standalone persona "${override.id}".description`
-    ),
+    tags: requireStandaloneField(override.tags, `${context}.tags`),
+    description: requireStandaloneField(override.description, `${context}.description`),
     skills: override.skills ?? [],
     ...(inputs ? { inputs } : {}),
-    tiers,
-    ...(override.defaultTier ? { defaultTier: override.defaultTier } : {}),
+    harness,
+    model,
+    systemPrompt,
+    harnessSettings,
     ...(env ? { env } : {}),
     ...(mcpServers ? { mcpServers } : {}),
     ...(mount ? { mount } : {}),
@@ -1023,51 +942,13 @@ function mergeOverride(
   override: LocalPersonaOverride,
   sidecarWarnings: string[] = []
 ): PersonaSpec {
-  const tiers = {} as Record<PersonaTier, PersonaRuntime>;
-  for (const tier of PERSONA_TIERS) {
-    const baseRuntime = base.tiers[tier];
-    const tierOverride = override.tiers?.[tier];
-    let merged: PersonaRuntime = tierOverride
-      ? {
-          ...baseRuntime,
-          ...tierOverride,
-          harnessSettings: {
-            ...baseRuntime.harnessSettings,
-            ...(tierOverride.harnessSettings ?? {})
-          }
-        }
-      : baseRuntime;
-    if (tierOverride?.claudeMd !== undefined) {
-      const { abs, warning } = resolveSidecarPath(
-        tierOverride.claudeMd,
-        override.__sourceDir,
-        `[${override.id}].tiers.${tier}.claudeMd`
-      );
-      if (warning) sidecarWarnings.push(warning);
-      // Override owns the channel — clear inherited content so the override
-      // path isn't masked by base.claudeMdContent in downstream selection.
-      merged = { ...merged };
-      delete merged.claudeMdContent;
-      if (abs) merged.claudeMd = abs;
-      else delete merged.claudeMd;
-    }
-    if (tierOverride?.agentsMd !== undefined) {
-      const { abs, warning } = resolveSidecarPath(
-        tierOverride.agentsMd,
-        override.__sourceDir,
-        `[${override.id}].tiers.${tier}.agentsMd`
-      );
-      if (warning) sidecarWarnings.push(warning);
-      merged = { ...merged };
-      delete merged.agentsMdContent;
-      if (abs) merged.agentsMd = abs;
-      else delete merged.agentsMd;
-    }
-    if (override.systemPrompt && !tierOverride?.systemPrompt) {
-      merged = { ...merged, systemPrompt: override.systemPrompt };
-    }
-    tiers[tier] = merged;
-  }
+  const harness = override.harness ?? base.harness;
+  const model = override.model ?? base.model;
+  const systemPrompt = override.systemPrompt ?? base.systemPrompt;
+  const harnessSettings: HarnessSettings = {
+    ...base.harnessSettings,
+    ...(override.harnessSettings ?? {})
+  };
 
   const env =
     override.env || base.env
@@ -1128,12 +1009,10 @@ function mergeOverride(
     description: override.description ?? base.description,
     skills: override.skills ?? base.skills,
     ...(inputs ? { inputs } : {}),
-    tiers,
-    ...(override.defaultTier
-      ? { defaultTier: override.defaultTier }
-      : base.defaultTier
-        ? { defaultTier: base.defaultTier }
-        : {}),
+    harness,
+    model,
+    systemPrompt,
+    harnessSettings,
     ...(env ? { env } : {}),
     ...(mcpServers ? { mcpServers } : {}),
     ...(mount ? { mount } : {}),

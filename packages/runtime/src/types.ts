@@ -1,6 +1,5 @@
 import type {
   PersonaSpec,
-  PersonaTier,
   PersonaMemoryScope
 } from '@agentworkforce/persona-kit';
 import type { GithubClient } from './clients/github.js';
@@ -77,8 +76,6 @@ export interface HarnessRunArgs {
   prompt: string;
   /** Working directory inside the sandbox; defaults to ctx.sandbox.cwd. */
   cwd?: string;
-  /** Which persona tier to use; defaults to the persona's `defaultTier`. */
-  tier?: PersonaTier;
   /** Override or extend the persona's `inputs` for this run. */
   inputs?: Record<string, string>;
   /** Environment overrides merged on top of the persona's `env`. */
@@ -152,7 +149,7 @@ export interface ScheduleContext {
  * `useSubscription` flag.
  */
 export interface LlmContext {
-  complete(prompt: string, opts?: { maxTokens?: number; tier?: PersonaTier }): Promise<string>;
+  complete(prompt: string, opts?: { maxTokens?: number }): Promise<string>;
 }
 
 /**
@@ -178,7 +175,7 @@ export interface IntegrationClients {
  * integration fields undefined.
  */
 export interface WorkforceCtx extends IntegrationClients {
-  /** Read-only persona metadata, useful for branching on traits/tier. */
+  /** Read-only persona metadata, useful for branching on traits. */
   readonly persona: PersonaSpec;
   /** Workspace the agent is deployed into. */
   readonly workspaceId: string;

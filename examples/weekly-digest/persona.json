@@ -1,18 +1,10 @@
 {
   "id": "weekly-digest",
   "intent": "documentation",
-  "tags": ["documentation"],
-  "description": "Weekly competitive-intel digest. Searches the web for mentions of configured topics, dedupes and clusters by source domain, and upserts a single GitHub issue per ISO week.",
-  "cloud": true,
-  "integrations": {
-    "github": {}
-  },
-  "schedules": [
-    { "name": "weekly", "cron": "0 9 * * 6", "tz": "UTC" }
+  "tags": [
+    "documentation"
   ],
-  "sandbox": true,
-  "memory": { "enabled": true, "scopes": ["workspace"], "ttlDays": 90 },
-  "onEvent": "./agent.ts",
+  "description": "Weekly competitive-intel digest. Searches the web for mentions of configured topics, dedupes and clusters by source domain, and upserts a single GitHub issue per ISO week.",
   "inputs": {
     "WEEKLY_DIGEST_TOPICS": {
       "description": "Comma-separated list of topics the agent searches for each week.",
@@ -25,24 +17,31 @@
       "default": "AgentWorkforce/weekly-digest"
     }
   },
-  "tiers": {
-    "best": {
-      "harness": "codex",
-      "model": "openai-codex/gpt-5.3-codex",
-      "systemPrompt": "Research the configured topics and produce a clustered weekly digest.",
-      "harnessSettings": { "reasoning": "high", "timeoutSeconds": 1200 }
-    },
-    "best-value": {
-      "harness": "opencode",
-      "model": "opencode/gpt-5-nano",
-      "systemPrompt": "Research the configured topics and produce a clustered weekly digest.",
-      "harnessSettings": { "reasoning": "medium", "timeoutSeconds": 900 }
-    },
-    "minimum": {
-      "harness": "opencode",
-      "model": "opencode/minimax-m2.5-free",
-      "systemPrompt": "Research the configured topics and produce a clustered weekly digest.",
-      "harnessSettings": { "reasoning": "low", "timeoutSeconds": 600 }
+  "harness": "opencode",
+  "model": "opencode/gpt-5-nano",
+  "systemPrompt": "Research the configured topics and produce a clustered weekly digest.",
+  "harnessSettings": {
+    "reasoning": "medium",
+    "timeoutSeconds": 900
+  },
+  "cloud": true,
+  "integrations": {
+    "github": {}
+  },
+  "schedules": [
+    {
+      "name": "weekly",
+      "cron": "0 9 * * 6",
+      "tz": "UTC"
     }
-  }
+  ],
+  "sandbox": true,
+  "memory": {
+    "enabled": true,
+    "scopes": [
+      "workspace"
+    ],
+    "ttlDays": 90
+  },
+  "onEvent": "./agent.ts"
 }

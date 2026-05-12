@@ -5,13 +5,11 @@ import type {
   PERMISSION_MODES,
   PERSONA_INTENTS,
   PERSONA_TAGS,
-  PERSONA_TIERS,
   SIDECAR_MD_MODES,
   SKILL_SOURCE_KINDS
 } from './constants.js';
 
 export type Harness = (typeof HARNESS_VALUES)[number];
-export type PersonaTier = (typeof PERSONA_TIERS)[number];
 export type PersonaIntent = (typeof PERSONA_INTENTS)[number];
 export type PersonaTag = (typeof PERSONA_TAGS)[number];
 export type CodexSandboxMode = (typeof CODEX_SANDBOX_MODES)[number];
@@ -47,35 +45,6 @@ export interface HarnessSettings {
    * which still prompts.
    */
   dangerouslyBypassApprovalsAndSandbox?: boolean;
-}
-
-export interface PersonaRuntime {
-  harness: Harness;
-  model: string;
-  systemPrompt: string;
-  harnessSettings: HarnessSettings;
-  /**
-   * Per-tier override of the persona's `claudeMd` path. Resolves to an
-   * absolute filesystem path on the parsed spec — for built-ins, the value
-   * comes from `claudeMdContent` instead of a path. Materialized into the
-   * sandbox mount as `/CLAUDE.md` when running under the claude harness.
-   */
-  claudeMd?: string;
-  /** Per-tier override of {@link PersonaSpec.claudeMdMode}. */
-  claudeMdMode?: SidecarMdMode;
-  /** Per-tier override of the persona's `agentsMd` path. */
-  agentsMd?: string;
-  /** Per-tier override of {@link PersonaSpec.agentsMdMode}. */
-  agentsMdMode?: SidecarMdMode;
-  /**
-   * Inlined sidecar content for built-in personas. The catalog generator
-   * reads the sibling `.md` at build time and emits its body here so the
-   * installed package does not need to ship the file separately. Runtime
-   * code prefers this over `claudeMd` when both are set.
-   */
-  claudeMdContent?: string;
-  /** Inlined `AGENTS.md` content for built-in personas (see {@link claudeMdContent}). */
-  agentsMdContent?: string;
 }
 
 /**
@@ -282,15 +251,14 @@ export interface PersonaSpec {
    * values are substituted into the persona's system prompt.
    */
   inputs?: Record<string, PersonaInputSpec>;
-  tiers: Record<PersonaTier, PersonaRuntime>;
-  /**
-   * Persona-author's preferred tier when a caller does not request one
-   * explicitly. Selectors like `agentworkforce agent <persona>` (no `@<tier>`
-   * suffix) resolve to this value before falling back to `'best-value'`.
-   * Routing-profile rules continue to override this for built-in personas
-   * resolved through {@link resolvePersona}.
-   */
-  defaultTier?: PersonaTier;
+  /** Harness binary used to run this persona (`claude`, `codex`, `opencode`). */
+  harness: Harness;
+  /** Model identifier passed to the harness. */
+  model: string;
+  /** System prompt body. `$NAME` / `${NAME}` references to inputs are substituted at spawn time. */
+  systemPrompt: string;
+  /** Harness-level knobs (reasoning, timeout, codex sandbox/approval policy, etc.). */
+  harnessSettings: HarnessSettings;
   /**
    * Environment variables injected into the harness child process.
    * Values may be literal strings or `$VAR` references resolved from the
@@ -320,7 +288,7 @@ export interface PersonaSpec {
    * when the persona runs under the claude harness. The path is relative
    * to the JSON file that declared the field; the loader resolves it to
    * an already-absolute path on the parsed spec. Built-in personas inline
-   * the content into {@link PersonaRuntime.claudeMdContent} at build time.
+   * the content into {@link PersonaSpec.claudeMdContent} at build time.
    */
   claudeMd?: string;
   /** Defaults to `overwrite`. See {@link SidecarMdMode}. */
@@ -333,7 +301,12 @@ export interface PersonaSpec {
   agentsMd?: string;
   /** Defaults to `overwrite`. See {@link SidecarMdMode}. */
   agentsMdMode?: SidecarMdMode;
-  /** Inlined `CLAUDE.md` content for built-in personas (see {@link PersonaRuntime.claudeMdContent}). */
+  /**
+   * Inlined `CLAUDE.md` content for built-in personas. The catalog generator
+   * reads the sibling `.md` at build time and emits its body here so the
+   * installed package does not need to ship the file separately. Runtime
+   * code prefers this over `claudeMd` when both are set.
+   */
   claudeMdContent?: string;
   /** Inlined `AGENTS.md` content for built-in personas. */
   agentsMdContent?: string;
@@ -392,8 +365,10 @@ export interface PersonaSpec {
 
 export interface PersonaSelection {
   personaId: string;
-  tier: PersonaTier;
-  runtime: PersonaRuntime;
+  harness: Harness;
+  model: string;
+  systemPrompt: string;
+  harnessSettings: HarnessSettings;
   skills: PersonaSkill[];
   rationale: string;
   inputs?: Record<string, PersonaInputSpec>;
@@ -403,9 +378,8 @@ export interface PersonaSelection {
   permissions?: PersonaPermissions;
   mount?: PersonaMount;
   /**
-   * Effective sidecar config for the selected (tier, harness). Already-
-   * cascaded across top-level/per-tier so launchers don't have to re-walk
-   * the spec. Modes default to `overwrite`.
+   * Effective sidecar config for the persona. Modes default to `overwrite`
+   * when a path or inlined content exists; otherwise the mode field is omitted.
    */
   claudeMd?: string;
   claudeMdContent?: string;
@@ -519,7 +493,7 @@ export interface PersonaInstallContext {
  * yourself when you are ready to materialize the persona's skills.
  */
 export interface PersonaContext {
-  /** Resolved persona choice for this intent/profile: identity, tier, runtime, skills, and routing rationale. */
+  /** Resolved persona choice for this intent/profile: identity, runtime, skills, and routing rationale. */
   readonly selection: PersonaSelection;
   /** Grouped install metadata for the resolved persona's skills. */
   readonly install: PersonaInstallContext;

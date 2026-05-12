@@ -74,21 +74,6 @@ async function inlineSidecarContent(raw, file) {
       touched = true;
     }
   }
-  if (spec.tiers && typeof spec.tiers === 'object') {
-    for (const [tier, runtime] of Object.entries(spec.tiers)) {
-      if (!runtime || typeof runtime !== 'object') continue;
-      for (const { pathField, contentField } of sidecarTargets) {
-        if (typeof runtime[pathField] === 'string') {
-          runtime[contentField] = await readSidecar(
-            runtime[pathField],
-            `tiers.${tier}.${pathField}`
-          );
-          delete runtime[pathField];
-          touched = true;
-        }
-      }
-    }
-  }
   return touched ? JSON.stringify(spec, null, 2) : raw.trim();
 }
 

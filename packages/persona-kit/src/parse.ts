@@ -5,7 +5,6 @@ import {
   PERMISSION_MODES,
   PERSONA_INTENTS,
   PERSONA_TAGS,
-  PERSONA_TIERS,
   SIDECAR_MD_MODES
 } from './constants.js';
 import type {
@@ -24,7 +23,6 @@ import type {
   PersonaMemoryScope,
   PersonaMount,
   PersonaPermissions,
-  PersonaRuntime,
   PersonaSandbox,
   PersonaSandboxConfig,
   PersonaSchedule,
@@ -32,7 +30,6 @@ import type {
   PersonaSkill,
   PersonaSpec,
   PersonaTag,
-  PersonaTier,
   PersonaTraits,
   SidecarMdMode
 } from './types.js';
@@ -43,10 +40,6 @@ export function isObject(value: unknown): value is Record<string, unknown> {
 
 export function isHarness(value: unknown): value is Harness {
   return typeof value === 'string' && HARNESS_VALUES.includes(value as Harness);
-}
-
-export function isTier(value: unknown): value is PersonaTier {
-  return typeof value === 'string' && PERSONA_TIERS.includes(value as PersonaTier);
 }
 
 export function isIntent(value: unknown): value is PersonaIntent {
@@ -163,71 +156,6 @@ export function parseHarnessSettings(value: unknown, context: string): HarnessSe
   }
 
   return out;
-}
-
-export function parseRuntime(value: unknown, context: string): PersonaRuntime {
-  if (!isObject(value)) {
-    throw new Error(`${context} must be an object`);
-  }
-
-  const {
-    harness,
-    model,
-    systemPrompt,
-    harnessSettings,
-    claudeMd,
-    claudeMdMode,
-    agentsMd,
-    agentsMdMode,
-    claudeMdContent,
-    agentsMdContent
-  } = value;
-
-  if (!isHarness(harness)) {
-    throw new Error(`${context}.harness must be one of: ${HARNESS_VALUES.join(', ')}`);
-  }
-  if (typeof model !== 'string' || !model.trim()) {
-    throw new Error(`${context}.model must be a non-empty string`);
-  }
-  if (typeof systemPrompt !== 'string' || !systemPrompt.trim()) {
-    throw new Error(`${context}.systemPrompt must be a non-empty string`);
-  }
-  const parsedHarnessSettings = parseHarnessSettings(
-    harnessSettings,
-    `${context}.harnessSettings`
-  );
-
-  if (claudeMd !== undefined) assertSidecarPath(claudeMd, `${context}.claudeMd`);
-  if (agentsMd !== undefined) assertSidecarPath(agentsMd, `${context}.agentsMd`);
-  if (claudeMdMode !== undefined && !isSidecarMode(claudeMdMode)) {
-    throw new Error(`${context}.claudeMdMode must be one of: ${SIDECAR_MD_MODES.join(', ')}`);
-  }
-  if (agentsMdMode !== undefined && !isSidecarMode(agentsMdMode)) {
-    throw new Error(`${context}.agentsMdMode must be one of: ${SIDECAR_MD_MODES.join(', ')}`);
-  }
-  // Mode is allowed without a same-level path: a tier may declare just
-  // `claudeMdMode` and inherit the path from the spec top-level (or vice
-  // versa). The cascade validates that a path/content actually exists at
-  // runtime — a stranded mode with no path anywhere becomes a no-op.
-  if (claudeMdContent !== undefined && (typeof claudeMdContent !== 'string' || !claudeMdContent.length)) {
-    throw new Error(`${context}.claudeMdContent must be a non-empty string`);
-  }
-  if (agentsMdContent !== undefined && (typeof agentsMdContent !== 'string' || !agentsMdContent.length)) {
-    throw new Error(`${context}.agentsMdContent must be a non-empty string`);
-  }
-
-  return {
-    harness,
-    model,
-    systemPrompt,
-    harnessSettings: parsedHarnessSettings,
-    ...(typeof claudeMd === 'string' ? { claudeMd } : {}),
-    ...(claudeMdMode ? { claudeMdMode: claudeMdMode as SidecarMdMode } : {}),
-    ...(typeof agentsMd === 'string' ? { agentsMd } : {}),
-    ...(agentsMdMode ? { agentsMdMode: agentsMdMode as SidecarMdMode } : {}),
-    ...(typeof claudeMdContent === 'string' ? { claudeMdContent } : {}),
-    ...(typeof agentsMdContent === 'string' ? { agentsMdContent } : {})
-  };
 }
 
 export function parseSkills(value: unknown, context: string): PersonaSkill[] {
@@ -795,8 +723,10 @@ export function parsePersonaSpec(value: unknown, expectedIntent: PersonaIntent):
     intent,
     tags,
     description,
-    tiers,
-    defaultTier,
+    harness,
+    model,
+    systemPrompt,
+    harnessSettings,
     skills,
     inputs,
     env,
@@ -832,24 +762,23 @@ export function parsePersonaSpec(value: unknown, expectedIntent: PersonaIntent):
   if (typeof description !== 'string' || !description.trim()) {
     throw new Error(`persona[${expectedIntent}].description must be a non-empty string`);
   }
-  if (!isObject(tiers)) {
-    throw new Error(`persona[${expectedIntent}].tiers must be an object`);
-  }
 
-  const parsedTiers = {} as Record<PersonaTier, PersonaRuntime>;
-  for (const tier of PERSONA_TIERS) {
-    parsedTiers[tier] = parseRuntime(tiers[tier], `persona[${expectedIntent}].tiers.${tier}`);
+  if (!isHarness(harness)) {
+    throw new Error(
+      `persona[${expectedIntent}].harness must be one of: ${HARNESS_VALUES.join(', ')}`
+    );
   }
-
-  let parsedDefaultTier: PersonaTier | undefined;
-  if (defaultTier !== undefined) {
-    if (!isTier(defaultTier)) {
-      throw new Error(
-        `persona[${expectedIntent}].defaultTier must be one of: ${PERSONA_TIERS.join(', ')}`
-      );
-    }
-    parsedDefaultTier = defaultTier;
+  if (typeof model !== 'string' || !model.trim()) {
+    throw new Error(`persona[${expectedIntent}].model must be a non-empty string`);
   }
+  const trimmedModel = model.trim();
+  if (typeof systemPrompt !== 'string' || !systemPrompt.trim()) {
+    throw new Error(`persona[${expectedIntent}].systemPrompt must be a non-empty string`);
+  }
+  const parsedHarnessSettings = parseHarnessSettings(
+    harnessSettings,
+    `persona[${expectedIntent}].harnessSettings`
+  );
 
   const parsedSkills = parseSkills(skills, `persona[${expectedIntent}].skills`);
   const parsedInputs = parseInputs(inputs, `persona[${expectedIntent}].inputs`);
@@ -873,8 +802,6 @@ export function parsePersonaSpec(value: unknown, expectedIntent: PersonaIntent):
       `persona[${expectedIntent}].agentsMdMode must be one of: ${SIDECAR_MD_MODES.join(', ')}`
     );
   }
-  // Spec-level mode without a spec-level path is allowed — a tier may
-  // supply the path while inheriting the mode here. See parseRuntime.
   if (
     claudeMdContent !== undefined &&
     (typeof claudeMdContent !== 'string' || !claudeMdContent.length)
@@ -911,8 +838,10 @@ export function parsePersonaSpec(value: unknown, expectedIntent: PersonaIntent):
     description,
     skills: parsedSkills,
     ...(parsedInputs ? { inputs: parsedInputs } : {}),
-    tiers: parsedTiers,
-    ...(parsedDefaultTier ? { defaultTier: parsedDefaultTier } : {}),
+    harness,
+    model: trimmedModel,
+    systemPrompt,
+    harnessSettings: parsedHarnessSettings,
     ...(parsedEnv ? { env: parsedEnv } : {}),
     ...(parsedMcpServers ? { mcpServers: parsedMcpServers } : {}),
     ...(parsedPermissions ? { permissions: parsedPermissions } : {}),
@@ -935,24 +864,12 @@ export function parsePersonaSpec(value: unknown, expectedIntent: PersonaIntent):
 }
 
 /**
- * Resolve the effective sidecar config for a (spec, tier) pair.
- *
- * Path-or-content resolution: each sidecar (`claude*`, `agents*`) is a
- * single "channel" — its `*Md` and `*MdContent` fields are tied together
- * and travel as a unit through the cascade. If the tier-level runtime
- * declares EITHER `claudeMd` or `claudeMdContent`, the tier owns the
- * channel and the top-level path/content is ignored (otherwise a tier
- * path override would silently lose to inherited inlined content, since
- * downstream consumers prefer Content over a path).
- *
- * Mode resolution: independent — a tier can set just `claudeMdMode` and
- * inherit the top-level path. Defaults to `overwrite` if neither layer
- * sets a mode. Modes are only meaningful when a path/content is present.
+ * Resolve the effective sidecar config for a persona. Each sidecar
+ * (`claude*`, `agents*`) is a single channel of path + inlined content +
+ * mode read directly off the spec. Modes default to `overwrite` and are
+ * only meaningful when a path or inlined content is present.
  */
-export function resolveSidecar(
-  spec: PersonaSpec,
-  tier: PersonaTier
-): {
+export function resolveSidecar(spec: PersonaSpec): {
   claudeMd?: string;
   claudeMdContent?: string;
   claudeMdMode: SidecarMdMode;
@@ -960,20 +877,13 @@ export function resolveSidecar(
   agentsMdContent?: string;
   agentsMdMode: SidecarMdMode;
 } {
-  const runtime = spec.tiers[tier];
-  const tierOwnsClaude = runtime.claudeMd !== undefined || runtime.claudeMdContent !== undefined;
-  const tierOwnsAgents = runtime.agentsMd !== undefined || runtime.agentsMdContent !== undefined;
-  const claudePath = tierOwnsClaude ? runtime.claudeMd : spec.claudeMd;
-  const claudeContent = tierOwnsClaude ? runtime.claudeMdContent : spec.claudeMdContent;
-  const agentsPath = tierOwnsAgents ? runtime.agentsMd : spec.agentsMd;
-  const agentsContent = tierOwnsAgents ? runtime.agentsMdContent : spec.agentsMdContent;
   return {
-    ...(claudePath ? { claudeMd: claudePath } : {}),
-    ...(claudeContent ? { claudeMdContent: claudeContent } : {}),
-    claudeMdMode: runtime.claudeMdMode ?? spec.claudeMdMode ?? 'overwrite',
-    ...(agentsPath ? { agentsMd: agentsPath } : {}),
-    ...(agentsContent ? { agentsMdContent: agentsContent } : {}),
-    agentsMdMode: runtime.agentsMdMode ?? spec.agentsMdMode ?? 'overwrite'
+    ...(spec.claudeMd ? { claudeMd: spec.claudeMd } : {}),
+    ...(spec.claudeMdContent ? { claudeMdContent: spec.claudeMdContent } : {}),
+    claudeMdMode: spec.claudeMdMode ?? 'overwrite',
+    ...(spec.agentsMd ? { agentsMd: spec.agentsMd } : {}),
+    ...(spec.agentsMdContent ? { agentsMdContent: spec.agentsMdContent } : {}),
+    agentsMdMode: spec.agentsMdMode ?? 'overwrite'
   };
 }
 

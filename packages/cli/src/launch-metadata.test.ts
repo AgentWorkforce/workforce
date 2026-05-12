@@ -13,19 +13,10 @@ import {
   type LaunchMetadataPendingStampOptions
 } from './launch-metadata.js';
 
-function fakeSelection(): Pick<PersonaSelection, 'personaId' | 'tier' | 'runtime'> {
+function fakeSelection(): Pick<PersonaSelection, 'personaId' | 'harness'> {
   return {
     personaId: 'code-reviewer',
-    tier: 'best',
-    runtime: {
-      harness: 'codex',
-      model: 'openai-codex/gpt-5.3-codex',
-      systemPrompt: 'Review the diff.',
-      harnessSettings: {
-        reasoning: 'high',
-        timeoutSeconds: 1200
-      }
-    }
+    harness: 'codex'
   };
 }
 
@@ -36,27 +27,10 @@ function fakeSpec(overrides: Partial<PersonaSpec> = {}): PersonaSpec {
     tags: ['review'],
     description: 'Reviews code.',
     skills: [],
-    tiers: {
-      best: fakeSelection().runtime,
-      'best-value': {
-        harness: 'opencode',
-        model: 'opencode/gpt-5-nano',
-        systemPrompt: 'Review concisely.',
-        harnessSettings: {
-          reasoning: 'medium',
-          timeoutSeconds: 900
-        }
-      },
-      minimum: {
-        harness: 'opencode',
-        model: 'opencode/minimax-m2.5-free',
-        systemPrompt: 'Review blockers.',
-        harnessSettings: {
-          reasoning: 'low',
-          timeoutSeconds: 600
-        }
-      }
-    },
+    harness: 'codex',
+    model: 'openai-codex/gpt-5.3-codex',
+    systemPrompt: 'Review the diff.',
+    harnessSettings: { reasoning: 'high', timeoutSeconds: 1200 },
     ...overrides
   };
 }
@@ -93,7 +67,6 @@ test('buildLaunchMetadata emits the required AgentWorkforce metadata', () => {
   assert.deepEqual(metadata, {
     agentworkforce: '1',
     persona: 'code-reviewer',
-    personaTier: 'best',
     personaVersion: personaVersionHash(spec),
     personaSource: 'dir:1'
   });

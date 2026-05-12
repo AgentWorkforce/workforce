@@ -12,26 +12,10 @@ function input(): Pick<ModeLaunchInput, 'workspace' | 'persona' | 'env'> {
       tags: ['documentation'],
       description: '',
       skills: [],
-      tiers: {
-        best: {
-          harness: 'claude',
-          model: 'm',
-          systemPrompt: 's',
-          harnessSettings: { reasoning: 'medium', timeoutSeconds: 300 }
-        },
-        'best-value': {
-          harness: 'claude',
-          model: 'm',
-          systemPrompt: 's',
-          harnessSettings: { reasoning: 'medium', timeoutSeconds: 300 }
-        },
-        minimum: {
-          harness: 'claude',
-          model: 'm',
-          systemPrompt: 's',
-          harnessSettings: { reasoning: 'medium', timeoutSeconds: 300 }
-        }
-      },
+      harness: 'claude',
+      model: 'm',
+      systemPrompt: 's',
+      harnessSettings: { reasoning: 'medium', timeoutSeconds: 300 },
       cloud: true,
       onEvent: './agent.ts'
     }

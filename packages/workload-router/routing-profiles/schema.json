@@ -46,13 +46,9 @@
   "definitions": {
     "rule": {
       "type": "object",
-      "required": ["tier", "rationale"],
+      "required": ["rationale"],
       "additionalProperties": false,
       "properties": {
-        "tier": {
-          "type": "string",
-          "enum": ["best", "best-value", "minimum"]
-        },
         "rationale": { "type": "string", "minLength": 1 }
       }
     }

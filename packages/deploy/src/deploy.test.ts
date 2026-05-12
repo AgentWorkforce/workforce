@@ -13,24 +13,16 @@ import type {
   WorkspaceAuth
 } from './index.js';
 
-const baseRuntime = {
-  harness: 'claude',
-  model: 'anthropic/claude-3-5-sonnet',
-  systemPrompt: 'be helpful',
-  harnessSettings: { reasoning: 'medium', timeoutSeconds: 300 }
-};
-
 function basePersonaJson(overrides: Record<string, unknown> = {}): Record<string, unknown> {
   return {
     id: 'demo',
     intent: 'documentation',
     tags: ['documentation'],
     description: 'test persona',
-    tiers: {
-      best: baseRuntime,
-      'best-value': baseRuntime,
-      minimum: baseRuntime
-    },
+    harness: 'claude',
+    model: 'anthropic/claude-3-5-sonnet',
+    systemPrompt: 'be helpful',
+    harnessSettings: { reasoning: 'medium', timeoutSeconds: 300 },
     cloud: true,
     schedules: [{ name: 'weekly', cron: '0 9 * * 6' }],
     onEvent: './agent.ts',

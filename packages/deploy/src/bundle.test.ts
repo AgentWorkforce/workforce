@@ -6,13 +6,6 @@ import os from 'node:os';
 import { bundleStager } from './bundle.js';
 import type { PersonaSpec } from '@agentworkforce/persona-kit';
 
-const baseRuntime = {
-  harness: 'claude' as const,
-  model: 'anthropic/claude-3-5-sonnet',
-  systemPrompt: 'be helpful',
-  harnessSettings: { reasoning: 'medium' as const, timeoutSeconds: 300 }
-};
-
 function persona(overrides: Partial<PersonaSpec> = {}): PersonaSpec {
   return {
     id: 'bundle-fixture',
@@ -20,7 +13,10 @@ function persona(overrides: Partial<PersonaSpec> = {}): PersonaSpec {
     tags: ['documentation'],
     description: 'fixture for bundle tests',
     skills: [],
-    tiers: { best: baseRuntime, 'best-value': baseRuntime, minimum: baseRuntime },
+    harness: 'claude',
+    model: 'anthropic/claude-3-5-sonnet',
+    systemPrompt: 'be helpful',
+    harnessSettings: { reasoning: 'medium', timeoutSeconds: 300 },
     cloud: true,
     schedules: [{ name: 'weekly', cron: '0 9 * * 6' }],
     onEvent: './agent.ts',

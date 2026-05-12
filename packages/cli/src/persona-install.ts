@@ -67,8 +67,6 @@ interface PackageJsonShape {
 interface PersonaAsset {
   /** Where the field appears in the JSON (for path-rewriting). */
   field: 'claudeMd' | 'agentsMd';
-  /** Optional tier (`undefined` for top-level). */
-  tier?: string;
   sourcePath: string;
   /** Stable relative target inside `<targetDir>/__assets/<personaId>/`. */
   assetKey: string;
@@ -251,11 +249,7 @@ function collectPersonaAssets(personaJsonPath: string, json: Record<string, unkn
   const sourceDir = dirname(personaJsonPath);
   const sidecarFields: Array<'claudeMd' | 'agentsMd'> = ['claudeMd', 'agentsMd'];
 
-  const addAsset = (
-    field: 'claudeMd' | 'agentsMd',
-    relPath: string,
-    tier?: string
-  ): void => {
+  const addAsset = (field: 'claudeMd' | 'agentsMd', relPath: string): void => {
     const sourcePath = resolvePath(sourceDir, relPath);
     const fromRoot = relative(sourceDir, sourcePath);
     if (fromRoot.startsWith('..') || isAbsolute(fromRoot)) {
@@ -268,10 +262,7 @@ function collectPersonaAssets(personaJsonPath: string, json: Record<string, unkn
         `install: ${personaJsonPath}: referenced ${field} sidecar not found at ${sourcePath}`
       );
     }
-    // Stable, collision-free key inside `__assets/<personaId>/`. Tier-
-    // scoped fields go under `<tier>/` so a persona with the same path
-    // declared at top-level and per-tier still produces unique targets.
-    const baseKey = tier ? `${tier}/${basename(relPath)}` : basename(relPath);
+    const baseKey = basename(relPath);
     let assetKey = baseKey;
     let suffix = 1;
     while (assetKeys.has(assetKey)) {
@@ -279,28 +270,13 @@ function collectPersonaAssets(personaJsonPath: string, json: Record<string, unkn
       assetKey = `${baseKey.slice(0, dot)}-${++suffix}${baseKey.slice(dot)}`;
     }
     assetKeys.add(assetKey);
-    assets.push({ field, tier, sourcePath, assetKey });
+    assets.push({ field, sourcePath, assetKey });
   };
 
   for (const field of sidecarFields) {
     if (json[field] !== undefined) {
       const rel = assertPackagedSidecarPath(json[field], field, personaJsonPath);
       addAsset(field, rel);
-    }
-  }
-  if (isPlainObject(json.tiers)) {
-    for (const [tier, runtime] of Object.entries(json.tiers)) {
-      if (!isPlainObject(runtime)) continue;
-      for (const field of sidecarFields) {
-        if (runtime[field] !== undefined) {
-          const rel = assertPackagedSidecarPath(
-            runtime[field],
-            `tiers.${tier}.${field}`,
-            personaJsonPath
-          );
-          addAsset(field, rel, tier);
-        }
-      }
     }
   }
   return assets;
@@ -315,12 +291,7 @@ function rewriteJsonAssetPaths(
   const cloned = JSON.parse(JSON.stringify(json)) as Record<string, unknown>;
   const newPath = (assetKey: string): string => `__assets/${personaId}/${assetKey}`;
   for (const asset of assets) {
-    if (asset.tier === undefined) {
-      cloned[asset.field] = newPath(asset.assetKey);
-    } else {
-      const tiers = cloned.tiers as Record<string, Record<string, unknown>>;
-      tiers[asset.tier][asset.field] = newPath(asset.assetKey);
-    }
+    cloned[asset.field] = newPath(asset.assetKey);
   }
   return cloned;
 }
