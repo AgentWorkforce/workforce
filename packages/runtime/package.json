@@ -49,7 +49,7 @@
     "lint": "tsc -p tsconfig.json --noEmit"
   },
   "dependencies": {
-    "@agent-assistant/proactive": "^0.4.31",
+    "@agent-assistant/proactive": "^0.4.32",
     "@agentworkforce/persona-kit": "workspace:*"
   }
 }

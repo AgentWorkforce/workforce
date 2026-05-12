@@ -77,7 +77,7 @@ importers:
   packages/runtime:
     dependencies:
       '@agent-assistant/proactive':
-        specifier: ^0.4.31
+        specifier: ^0.4.32
         version: 0.4.32
       '@agentworkforce/persona-kit':
         specifier: workspace:*

@@ -175,7 +175,7 @@ export interface IntegrationClients {
  * integration fields undefined.
  */
 export interface WorkforceCtx extends IntegrationClients {
-  /** Read-only persona metadata, useful for branching on traits. */
+  /** Read-only persona metadata for handler-level branching. */
   readonly persona: PersonaSpec;
   /** Workspace the agent is deployed into. */
   readonly workspaceId: string;
