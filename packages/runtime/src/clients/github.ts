@@ -1,224 +1,210 @@
-import { isRetryableStatus, WorkforceIntegrationError } from './errors.js';
-
-export interface GithubIssueTarget {
-  owner: string;
-  repo: string;
-  number: number;
-}
-
-export interface GithubRepoCoords {
-  owner: string;
-  repo: string;
-}
-
-export interface GithubIssueRef {
-  number: number;
-  url: string;
-}
-
-export interface GithubUpsertResult extends GithubIssueRef {
-  created: boolean;
-}
-
-export interface GithubReviewComment {
-  path: string;
-  line: number;
-  body: string;
-}
-
-export interface GithubReview {
-  body: string;
-  event: 'COMMENT' | 'APPROVE' | 'REQUEST_CHANGES';
-  comments?: GithubReviewComment[];
-}
-
-export interface GithubPr {
-  title: string;
-  body: string;
-  diff: string;
-  head: string;
-  base: string;
-  author: string;
-}
+import {
+  draftFile,
+  encodeSegment,
+  type IntegrationClientOptions,
+  listDirectoryEntries,
+  listJsonFiles,
+  readJsonFile,
+  readTextFile,
+  writeJsonFile
+} from './request.js';
 
 /**
- * Minimal GitHub client used by personas. Today it covers the operations
- * weekly-digest and review-agent need; we grow it by need rather than
- * mirroring the full REST surface.
+ * Relayfile-VFS-backed GitHub client. Same handler-side surface as the
+ * direct-REST version this replaces; the difference is the wire — every
+ * call now reads/writes JSON files at canonical paths under a Relayfile
+ * mount, and Relayfile's writeback worker turns those into real GitHub
+ * REST calls with retry/durability. Auth + token rotation happens in
+ * Relayfile, not here, so personas don't have to thread a PAT through
+ * env.
  */
 export interface GithubClient {
-  comment(target: GithubIssueTarget, body: string): Promise<GithubIssueRef>;
-  createIssue(args: GithubRepoCoords & { title: string; body: string; labels?: string[] }): Promise<GithubIssueRef>;
-  upsertIssue(args: GithubRepoCoords & { title: string; body: string; labels?: string[]; matchTitle: string }): Promise<GithubUpsertResult>;
-  getPr(target: GithubIssueTarget): Promise<GithubPr>;
-  postReview(target: GithubIssueTarget, review: GithubReview): Promise<void>;
+  comment(
+    target: { owner: string; repo: string; number: number },
+    body: string
+  ): Promise<{ id: string; url: string }>;
+  createIssue(args: {
+    owner: string;
+    repo: string;
+    title: string;
+    body: string;
+    labels?: string[];
+  }): Promise<{ number: number; url: string }>;
+  upsertIssue(args: {
+    owner: string;
+    repo: string;
+    title: string;
+    body: string;
+    labels?: string[];
+    matchTitle: string;
+  }): Promise<{ number: number; url: string; created: boolean }>;
+  getPr(target: {
+    owner: string;
+    repo: string;
+    number: number;
+  }): Promise<{ title: string; body: string; diff: string; head: string; base: string; author: string }>;
+  postReview(
+    target: { owner: string; repo: string; number: number },
+    args: {
+      body: string;
+      event: 'COMMENT' | 'APPROVE' | 'REQUEST_CHANGES';
+      comments?: Array<{ path: string; line: number; body: string }>;
+    }
+  ): Promise<void>;
 }
 
-export interface GithubClientOptions {
-  /** Bearer token. Either a PAT or a Relayfile-issued scoped token. */
-  token: string;
-  /** Override for GitHub Enterprise. Defaults to api.github.com. */
-  apiUrl?: string;
-  /** Optional fetch override (tests + custom transports). */
-  fetchImpl?: typeof fetch;
+interface GithubIssueFile {
+  number?: number;
+  html_url?: string;
+  url?: string;
+  title?: string;
 }
 
-/**
- * Construct a real GitHub client. The token is sent on every request as
- * a Bearer credential, matching both PAT and GitHub App installation
- * token conventions.
- */
-export function createGithubClient(opts: GithubClientOptions): GithubClient {
-  const apiUrl = (opts.apiUrl ?? 'https://api.github.com').replace(/\/$/, '');
-  const fetchImpl = opts.fetchImpl ?? fetch;
+interface GithubPullRequestFile {
+  title?: string;
+  body?: string | null;
+  head?: { ref?: string } | string;
+  base?: { ref?: string } | string;
+  user?: { login?: string } | string;
+  author?: string;
+  diff?: string;
+}
 
-  async function request<T>(
-    operation: string,
-    init: { method: string; pathname: string; body?: unknown; accept?: string; responseType?: 'json' | 'text' }
-  ): Promise<T> {
-    const url = `${apiUrl}${init.pathname}`;
-    let response: Response;
-    try {
-      response = await fetchImpl(url, {
-        method: init.method,
-        headers: {
-          accept: init.accept ?? 'application/vnd.github+json',
-          authorization: `Bearer ${opts.token}`,
-          'x-github-api-version': '2022-11-28',
-          ...(init.body !== undefined ? { 'content-type': 'application/json' } : {}),
-          'user-agent': 'workforce-runtime'
-        },
-        ...(init.body !== undefined ? { body: JSON.stringify(init.body) } : {})
-      });
-    } catch (err) {
-      throw new WorkforceIntegrationError({
-        provider: 'github',
-        operation,
-        message: `network error: ${err instanceof Error ? err.message : String(err)}`,
-        retryable: true,
-        cause: err
-      });
-    }
+function repoRoot(owner: string, repo: string): string {
+  return `/github/repos/${encodeSegment(owner)}/${encodeSegment(repo)}`;
+}
 
-    if (!response.ok) {
-      const bodyText = await response.text().catch(() => '');
-      throw new WorkforceIntegrationError({
-        provider: 'github',
-        operation,
-        message: `${response.status} ${response.statusText}${bodyText ? ` — ${truncate(bodyText, 400)}` : ''}`,
-        status: response.status,
-        retryable: isRetryableStatus(response.status)
-      });
-    }
+async function findNumberSegment(
+  opts: IntegrationClientOptions,
+  kind: 'issues' | 'pulls',
+  owner: string,
+  repo: string,
+  number: number
+): Promise<string> {
+  // Relayfile may emit canonical paths under either `<n>.json` or
+  // `<n>__<slug>/` directories depending on the adapter version. Probe
+  // both shapes; fall back to the raw number so reads still surface a
+  // useful WorkforceIntegrationError if neither exists.
+  const dir = `${repoRoot(owner, repo)}/${kind}`;
+  const prefix = `${number}__`;
+  const entries = await listDirectoryEntries(opts, 'github', `find.${kind}`, dir);
+  return entries.find((entry) => entry === String(number) || entry.startsWith(prefix)) ?? String(number);
+}
 
-    if (response.status === 204) return undefined as T;
-    if (init.responseType === 'text') return (await response.text()) as unknown as T;
-    return (await response.json()) as T;
-  }
+function readRef(value: GithubPullRequestFile['head']): string {
+  if (typeof value === 'string') return value;
+  return value?.ref ?? '';
+}
 
+function readAuthor(value: GithubPullRequestFile): string {
+  if (typeof value.user === 'string') return value.user;
+  return value.user?.login ?? value.author ?? '';
+}
+
+export function createGithubClient(opts: IntegrationClientOptions): GithubClient {
   return {
     async comment(target, body) {
-      const out = await request<{ id: number; html_url: string }>('comment', {
-        method: 'POST',
-        pathname: `/repos/${target.owner}/${target.repo}/issues/${target.number}/comments`,
-        body: { body }
-      });
-      return { number: target.number, url: out.html_url };
-    },
-    async createIssue(args) {
-      const out = await request<{ number: number; html_url: string }>('createIssue', {
-        method: 'POST',
-        pathname: `/repos/${args.owner}/${args.repo}/issues`,
-        body: {
-          title: args.title,
-          body: args.body,
-          ...(args.labels ? { labels: args.labels } : {})
-        }
-      });
-      return { number: out.number, url: out.html_url };
-    },
-    async upsertIssue(args) {
-      const search = await request<{
-        items: Array<{ number: number; title: string; html_url: string; state: string }>;
-      }>('upsertIssue.search', {
-        method: 'GET',
-        pathname: `/search/issues?q=${encodeURIComponent(
-          `repo:${args.owner}/${args.repo} in:title is:issue "${args.matchTitle}"`
-        )}&per_page=10`
-      });
-      const exact = search.items.find(
-        (item) => item.title === args.matchTitle && item.state === 'open'
+      const result = await writeJsonFile(
+        opts,
+        'github',
+        'comment',
+        `${repoRoot(target.owner, target.repo)}/issues/${encodeSegment(target.number)}/comments/${draftFile('create comment')}`,
+        { body }
       );
-      if (exact) {
-        await request<unknown>('upsertIssue.edit', {
-          method: 'PATCH',
-          pathname: `/repos/${args.owner}/${args.repo}/issues/${exact.number}`,
-          body: {
-            body: args.body,
-            ...(args.labels ? { labels: args.labels } : {})
-          }
-        });
-        return { number: exact.number, url: exact.html_url, created: false };
-      }
-      const created = await request<{ number: number; html_url: string }>('upsertIssue.create', {
-        method: 'POST',
-        pathname: `/repos/${args.owner}/${args.repo}/issues`,
-        body: {
-          title: args.matchTitle === args.title ? args.title : args.matchTitle,
-          body: args.body,
-          ...(args.labels ? { labels: args.labels } : {})
-        }
-      });
-      return { number: created.number, url: created.html_url, created: true };
-    },
-    async getPr(target) {
-      const pr = await request<{
-        title: string;
-        body: string | null;
-        head: { ref: string };
-        base: { ref: string };
-        user: { login: string } | null;
-      }>('getPr.metadata', {
-        method: 'GET',
-        pathname: `/repos/${target.owner}/${target.repo}/pulls/${target.number}`
-      });
-      // Fetch the diff through the canonical API endpoint with the same
-      // configured host + auth pipeline, not whatever URL the previous
-      // response handed us. Using `request` keeps the bearer token scoped
-      // to `apiUrl` and reuses the WorkforceIntegrationError mapping.
-      const diff = await request<string>('getPr.diff', {
-        method: 'GET',
-        pathname: `/repos/${target.owner}/${target.repo}/pulls/${target.number}`,
-        accept: 'application/vnd.github.v3.diff',
-        responseType: 'text'
-      });
       return {
-        title: pr.title,
-        body: pr.body ?? '',
-        diff,
-        head: pr.head.ref,
-        base: pr.base.ref,
-        author: pr.user?.login ?? ''
+        id: result.receipt?.created ?? result.receipt?.id ?? result.path,
+        url: result.receipt?.url ?? result.path
       };
     },
-    async postReview(target, review) {
-      await request<unknown>('postReview', {
-        method: 'POST',
-        pathname: `/repos/${target.owner}/${target.repo}/pulls/${target.number}/reviews`,
-        body: {
-          body: review.body,
-          event: review.event,
-          ...(review.comments
-            ? {
-                comments: review.comments.map((c) => ({ path: c.path, line: c.line, body: c.body }))
-              }
-            : {})
-        }
-      });
+
+    async createIssue(args) {
+      const result = await writeJsonFile(
+        opts,
+        'github',
+        'createIssue',
+        `${repoRoot(args.owner, args.repo)}/issues/${draftFile('create issue')}`,
+        { title: args.title, body: args.body, labels: args.labels }
+      );
+      const number = Number(result.receipt?.created ?? result.receipt?.id ?? 0);
+      return { number: Number.isFinite(number) ? number : 0, url: result.receipt?.url ?? result.path };
+    },
+
+    async upsertIssue(args) {
+      const issueDir = `${repoRoot(args.owner, args.repo)}/issues`;
+      const flatIssues = await listJsonFiles<GithubIssueFile>(opts, 'github', 'upsertIssue.find.flat', issueDir);
+      const entries = await listDirectoryEntries(opts, 'github', 'upsertIssue.find.dirs', issueDir);
+      const nestedIssueCandidates = await Promise.all(
+        entries
+          .filter((entry) => /^[1-9]\d*(?:__.*)?$/.test(entry))
+          .map(async (entry) =>
+            readJsonFile<GithubIssueFile>(
+              opts,
+              'github',
+              'upsertIssue.find.meta',
+              `${issueDir}/${entry}/meta.json`
+            )
+              .then((value) => ({ path: `${issueDir}/${entry}/meta.json`, value }))
+              .catch(() => undefined)
+          )
+      );
+      const nestedIssues = nestedIssueCandidates.filter((result): result is { path: string; value: GithubIssueFile } =>
+        Boolean(result?.value.title)
+      );
+      const issues = [...flatIssues, ...nestedIssues];
+      const existing = issues.find((issue) => issue.value.title === args.matchTitle && issue.value.number);
+      if (existing?.value.number) {
+        await writeJsonFile(
+          opts,
+          'github',
+          'upsertIssue.update',
+          `${issueDir}/${encodeSegment(existing.value.number)}.json`,
+          { title: args.title, body: args.body, labels: args.labels }
+        );
+        return {
+          number: existing.value.number,
+          url: existing.value.html_url ?? existing.value.url ?? '',
+          created: false
+        };
+      }
+      const created = await this.createIssue(args);
+      return { ...created, created: true };
+    },
+
+    async getPr(target) {
+      const pullSegment = await findNumberSegment(opts, 'pulls', target.owner, target.repo, target.number);
+      const pullRoot = `${repoRoot(target.owner, target.repo)}/pulls/${encodeSegment(pullSegment)}`;
+      const pr = await readJsonFile<GithubPullRequestFile>(
+        opts,
+        'github',
+        'getPr',
+        `${pullRoot}/meta.json`
+      ).catch(() =>
+        readJsonFile<GithubPullRequestFile>(
+          opts,
+          'github',
+          'getPr',
+          `${repoRoot(target.owner, target.repo)}/pulls/${encodeSegment(target.number)}/metadata.json`
+        )
+      );
+      const diff = await readTextFile(opts, 'github', 'getPr.diff', `${pullRoot}/diff.patch`).catch(() => '');
+      return {
+        title: pr.title ?? '',
+        body: pr.body ?? '',
+        diff: pr.diff ?? diff,
+        head: readRef(pr.head),
+        base: readRef(pr.base),
+        author: readAuthor(pr)
+      };
+    },
+
+    async postReview(target, args) {
+      await writeJsonFile(
+        opts,
+        'github',
+        'postReview',
+        `${repoRoot(target.owner, target.repo)}/pulls/${encodeSegment(target.number)}/reviews/${draftFile('create review')}`,
+        { ...args, comments: args.comments ?? [] }
+      );
     }
   };
-}
-
-function truncate(s: string, n: number): string {
-  return s.length <= n ? s : `${s.slice(0, n)}…`;
 }
