@@ -1,6 +1,6 @@
 {
   "id": "linear-shipper",
-  "intent": "implementation",
+  "intent": "implement-frontend",
   "tags": ["implementation"],
   "description": "Turns a new Linear issue into an implementation attempt and links the resulting GitHub work back to Linear.",
   "cloud": true,
