@@ -17,22 +17,30 @@ test('loadConfig trims env values and applies sensible defaults', () => {
   assert.equal(config.personaId, 'reviewer');
   assert.equal(config.runtimeToken, 'tok');
   assert.equal(config.cloudUrl, 'https://cloud.agentworkforce.com');
-  assert.deepEqual(config.providerTokens, {});
+  assert.equal(config.writebackTimeoutMs, 30_000);
+  assert.equal(config.relayfileMountRoot, undefined);
 });
 
-test('loadConfig collects WORKFORCE_INTEGRATION_<PROVIDER>_TOKEN env vars', () => {
+test('loadConfig picks up RELAYFILE_MOUNT_ROOT (and RELAYFILE_ROOT as a fallback)', () => {
+  const fromMountRoot = loadConfig({
+    WORKFORCE_WORKSPACE_ID: 'ws',
+    RELAYFILE_MOUNT_ROOT: '  /mnt/relayfile  '
+  });
+  assert.equal(fromMountRoot.relayfileMountRoot, '/mnt/relayfile');
+
+  const fromLegacyAlias = loadConfig({
+    WORKFORCE_WORKSPACE_ID: 'ws',
+    RELAYFILE_ROOT: '/mnt/legacy'
+  });
+  assert.equal(fromLegacyAlias.relayfileMountRoot, '/mnt/legacy');
+});
+
+test('loadConfig honors WORKFORCE_WRITEBACK_TIMEOUT_MS', () => {
   const config = loadConfig({
     WORKFORCE_WORKSPACE_ID: 'ws',
-    WORKFORCE_INTEGRATION_GITHUB_TOKEN: 'ghp_a',
-    WORKFORCE_INTEGRATION_LINEAR_TOKEN: '  lin_b  ',
-    // Empty / suffix-mismatched entries are ignored.
-    WORKFORCE_INTEGRATION_EMPTY_TOKEN: '',
-    WORKFORCE_INTEGRATION_GITHUB_CONNECTION_ID: 'not-a-token'
+    WORKFORCE_WRITEBACK_TIMEOUT_MS: '5000'
   });
-  assert.deepEqual(config.providerTokens, {
-    github: 'ghp_a',
-    linear: 'lin_b'
-  });
+  assert.equal(config.writebackTimeoutMs, 5000);
 });
 
 test('loadConfig normalizes the cloudUrl by stripping a trailing slash', () => {

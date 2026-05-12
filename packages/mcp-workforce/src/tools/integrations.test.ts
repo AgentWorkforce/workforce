@@ -1,13 +1,20 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
+import { mkdtemp, readdir, readFile, rm } from 'node:fs/promises';
+import { tmpdir } from 'node:os';
+import path from 'node:path';
 import { dispatchIntegration, _resetIntegrationCache } from './integrations.js';
 import type { WorkforceMcpConfig } from '../config.js';
+
+async function tempMount(): Promise<string> {
+  return mkdtemp(path.join(tmpdir(), 'mcp-workforce-int-'));
+}
 
 function config(over: Partial<WorkforceMcpConfig> = {}): WorkforceMcpConfig {
   return {
     workspaceId: 'ws-demo',
     cloudUrl: 'https://cloud.example.com',
-    providerTokens: { github: 'ghp_secret' },
+    writebackTimeoutMs: 0,
     ...over
   };
 }
@@ -32,73 +39,82 @@ test('dispatchIntegration rejects unwired providers', async () => {
   );
 });
 
-test('dispatchIntegration rejects when the provider token is missing', async () => {
+test('dispatchIntegration rejects when RELAYFILE_MOUNT_ROOT is missing', async () => {
   _resetIntegrationCache();
   await assert.rejects(
     () =>
       dispatchIntegration(
         'integration.github.comment',
         { target: { owner: 'o', repo: 'r', number: 1 }, body: 'x' },
-        { config: config({ providerTokens: {} }) }
+        { config: config() }
       ),
-    /WORKFORCE_INTEGRATION_GITHUB_TOKEN/
+    /RELAYFILE_MOUNT_ROOT is required/
   );
 });
 
-test('dispatchIntegration forwards integration.github.comment to the github client', async (t) => {
+test('dispatchIntegration writes a github comment draft under the Relayfile mount', async () => {
   _resetIntegrationCache();
-  const originalFetch = globalThis.fetch;
-  const calls: Array<{ url: string; method?: string; body?: unknown }> = [];
-  globalThis.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
-    const url = typeof input === 'string' ? input : input.toString();
-    const body = init?.body ? JSON.parse(init.body.toString()) : undefined;
-    calls.push({ url, method: init?.method ?? 'GET', body });
-    return new Response(
-      JSON.stringify({ id: 99, html_url: 'https://github.com/o/r/issues/1#issuecomment-99' }),
-      { status: 201 }
-    );
-  }) as typeof fetch;
-  t.after(() => {
-    globalThis.fetch = originalFetch;
-    _resetIntegrationCache();
-  });
+  const mount = await tempMount();
+  try {
+    const result = (await dispatchIntegration(
+      'integration.github.comment',
+      { target: { owner: 'o', repo: 'r', number: 1 }, body: 'hello' },
+      { config: config({ relayfileMountRoot: mount }) }
+    )) as { id: string; url: string };
 
-  const result = await dispatchIntegration(
-    'integration.github.comment',
-    { target: { owner: 'o', repo: 'r', number: 1 }, body: 'hello' },
-    { config: config() }
-  );
-  assert.deepEqual(result, { number: 1, url: 'https://github.com/o/r/issues/1#issuecomment-99' });
-  assert.equal(calls[0].url, 'https://api.github.com/repos/o/r/issues/1/comments');
-  assert.equal(calls[0].method, 'POST');
-  assert.deepEqual(calls[0].body, { body: 'hello' });
+    // The Relayfile writeback worker would populate the receipt; with
+    // writebackTimeoutMs=0 the client returns immediately and the
+    // draft path is what we'd expect to see on disk.
+    assert.match(result.url, /^\/github\/repos\/o\/r\/issues\/1\/comments\//);
+    const commentsDir = path.join(mount, 'github/repos/o/r/issues/1/comments');
+    const drafts = await readdir(commentsDir);
+    assert.equal(drafts.length, 1);
+    assert.deepEqual(JSON.parse(await readFile(path.join(commentsDir, drafts[0] ?? ''), 'utf8')), {
+      body: 'hello'
+    });
+  } finally {
+    await rm(mount, { recursive: true, force: true });
+    _resetIntegrationCache();
+  }
 });
 
 test('dispatchIntegration validates github.postReview event enum', async () => {
   _resetIntegrationCache();
-  await assert.rejects(
-    () =>
-      dispatchIntegration(
-        'integration.github.postReview',
-        {
-          target: { owner: 'o', repo: 'r', number: 1 },
-          review: { body: 'lgtm', event: 'WAVE' }
-        },
-        { config: config() }
-      ),
-    /review\.event must be one of/
-  );
+  const mount = await tempMount();
+  try {
+    await assert.rejects(
+      () =>
+        dispatchIntegration(
+          'integration.github.postReview',
+          {
+            target: { owner: 'o', repo: 'r', number: 1 },
+            review: { body: 'lgtm', event: 'WAVE' }
+          },
+          { config: config({ relayfileMountRoot: mount }) }
+        ),
+      /review\.event must be one of/
+    );
+  } finally {
+    await rm(mount, { recursive: true, force: true });
+    _resetIntegrationCache();
+  }
 });
 
 test('dispatchIntegration surfaces missing required fields with field-pointed errors', async () => {
   _resetIntegrationCache();
-  await assert.rejects(
-    () =>
-      dispatchIntegration(
-        'integration.github.createIssue',
-        { owner: 'o', repo: '', title: 't', body: 'b' },
-        { config: config() }
-      ),
-    /repo: must be a non-empty string/
-  );
+  const mount = await tempMount();
+  try {
+    await assert.rejects(
+      () =>
+        dispatchIntegration(
+          'integration.github.createIssue',
+          { owner: 'o', repo: '', title: 't', body: 'b' },
+          { config: config({ relayfileMountRoot: mount }) }
+        ),
+      /repo: must be a non-empty string/
+    );
+  } finally {
+    await rm(mount, { recursive: true, force: true });
+    _resetIntegrationCache();
+  }
 });

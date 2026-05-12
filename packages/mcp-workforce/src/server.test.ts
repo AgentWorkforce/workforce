@@ -32,7 +32,7 @@ test('createWorkforceMcpServer registers the documented tool set', () => {
     WORKFORCE_WORKSPACE_ID: 'ws-demo',
     WORKFORCE_RUNTIME_TOKEN: 'tok',
     SUPERMEMORY_API_KEY: 'sm',
-    WORKFORCE_INTEGRATION_GITHUB_TOKEN: 'ghp'
+    RELAYFILE_MOUNT_ROOT: '/tmp/wf-mcp-server-test'
   });
   const server = createWorkforceMcpServer(config);
   // The MCP SDK exposes the underlying low-level Server which holds the

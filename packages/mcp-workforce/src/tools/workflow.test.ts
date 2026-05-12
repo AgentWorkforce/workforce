@@ -44,7 +44,7 @@ function config(over: Partial<WorkforceMcpConfig> = {}): WorkforceMcpConfig {
     workspaceId: 'ws-demo',
     cloudUrl: 'https://cloud.example.com',
     runtimeToken: 'tok-secret',
-    providerTokens: {},
+    writebackTimeoutMs: 0,
     ...over
   };
 }

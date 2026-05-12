@@ -44,7 +44,7 @@ function config(over: Partial<WorkforceMcpConfig> = {}): WorkforceMcpConfig {
     workspaceId: 'ws-demo',
     cloudUrl: 'https://cloud.example.com',
     supermemoryApiKey: 'sm_secret',
-    providerTokens: {},
+    writebackTimeoutMs: 0,
     ...over
   };
 }

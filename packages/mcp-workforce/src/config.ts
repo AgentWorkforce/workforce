@@ -17,14 +17,24 @@ export interface WorkforceMcpConfig {
   supermemoryApiKey?: string;
   /** Supermemory endpoint override. */
   supermemoryEndpoint?: string;
-  /** Per-provider direct tokens — same env convention deploy uses. */
-  providerTokens: Record<string, string>;
+  /**
+   * Relayfile mount root. Integration clients read/write canonical
+   * JSON files under this path; Relayfile's writeback worker turns
+   * those file operations into the real provider API calls. Required
+   * for any `integration.*` tool to function.
+   */
+  relayfileMountRoot?: string;
+  /**
+   * Default writeback timeout for integration calls that block on a
+   * receipt (createIssue, comment, etc.). Defaults to 30s; the
+   * runtime overrides this via `WORKFORCE_WRITEBACK_TIMEOUT_MS` when
+   * a persona configures it.
+   */
+  writebackTimeoutMs: number;
 }
 
-const PROVIDER_TOKEN_PREFIX = 'WORKFORCE_INTEGRATION_';
-const PROVIDER_TOKEN_SUFFIX = '_TOKEN';
-
 const DEFAULT_CLOUD_URL = 'https://cloud.agentworkforce.com';
+const DEFAULT_WRITEBACK_TIMEOUT_MS = 30_000;
 
 /**
  * Build the config from a snapshot of the env. `loadConfig()` reads from
@@ -40,15 +50,10 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): WorkforceMcpCo
     );
   }
 
-  const providerTokens: Record<string, string> = {};
-  for (const [key, raw] of Object.entries(env)) {
-    if (!key.startsWith(PROVIDER_TOKEN_PREFIX) || !key.endsWith(PROVIDER_TOKEN_SUFFIX)) continue;
-    const provider = key
-      .slice(PROVIDER_TOKEN_PREFIX.length, key.length - PROVIDER_TOKEN_SUFFIX.length)
-      .toLowerCase();
-    const value = (raw ?? '').trim();
-    if (provider && value) providerTokens[provider] = value;
-  }
+  const writebackRaw = (env.WORKFORCE_WRITEBACK_TIMEOUT_MS ?? '').trim();
+  const writebackTimeoutMs = writebackRaw
+    ? Math.max(0, Number.parseInt(writebackRaw, 10) || DEFAULT_WRITEBACK_TIMEOUT_MS)
+    : DEFAULT_WRITEBACK_TIMEOUT_MS;
 
   return {
     workspaceId,
@@ -63,6 +68,11 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): WorkforceMcpCo
     ...(env.SUPERMEMORY_ENDPOINT?.trim()
       ? { supermemoryEndpoint: env.SUPERMEMORY_ENDPOINT.trim() }
       : {}),
-    providerTokens
+    ...(env.RELAYFILE_MOUNT_ROOT?.trim()
+      ? { relayfileMountRoot: env.RELAYFILE_MOUNT_ROOT.trim() }
+      : env.RELAYFILE_ROOT?.trim()
+        ? { relayfileMountRoot: env.RELAYFILE_ROOT.trim() }
+        : {}),
+    writebackTimeoutMs
   };
 }

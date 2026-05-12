@@ -4,15 +4,16 @@ import type { WorkforceMcpConfig } from '../config.js';
 /**
  * Integration tools are flat methods of the form
  * `integration.<provider>.<method>` (e.g. `integration.github.comment`).
- * Each provider is wired lazily — the MCP server constructs the client on
- * first call so harness invocations that never touch GitHub don't pay
- * for the auth setup.
+ * Each provider is wired lazily — the MCP server constructs the client
+ * on first call so harness invocations that never touch GitHub don't
+ * pay for the setup.
  *
- * Tokens come from the same env convention deploy uses:
- * `WORKFORCE_INTEGRATION_<PROVIDER>_TOKEN`. Higher-level resolvers (the
- * Relayfile OAuth flow) plug in by extending the runtime's deploy
- * resolver — by the time the harness is spawned, the env is already
- * populated.
+ * Workforce integration clients are Relayfile-VFS-backed: tools write
+ * canonical JSON files inside the Relayfile mount and the writeback
+ * worker turns those into real provider API calls. The MCP server
+ * picks up the mount root from `RELAYFILE_MOUNT_ROOT` (or
+ * `RELAYFILE_ROOT`); the runtime sets this automatically when it
+ * spawns the harness via `ctx.harness.run`.
  */
 export interface IntegrationToolDeps {
   config: WorkforceMcpConfig;
@@ -131,13 +132,15 @@ async function invokeGithub(
 
 function resolveGithub(deps: IntegrationToolDeps): ProviderClient {
   if (clientCache.github) return clientCache.github;
-  const token = deps.config.providerTokens.github;
-  if (!token) {
+  if (!deps.config.relayfileMountRoot) {
     throw new Error(
-      'integration.github is not configured: set WORKFORCE_INTEGRATION_GITHUB_TOKEN before spawning the harness'
+      'integration.github is not configured: RELAYFILE_MOUNT_ROOT is required so the github client can write drafts into the Relayfile mount. The workforce runtime sets this automatically when spawning the harness via ctx.harness.run.'
     );
   }
-  clientCache.github = createGithubClient({ token });
+  clientCache.github = createGithubClient({
+    relayfileMountRoot: deps.config.relayfileMountRoot,
+    writebackTimeoutMs: deps.config.writebackTimeoutMs
+  });
   return clientCache.github;
 }
 
