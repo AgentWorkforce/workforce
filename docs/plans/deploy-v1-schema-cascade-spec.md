@@ -110,6 +110,7 @@ After each track's PR is opened, the workflow's lead Claude:
 **Gates that BLOCK auto-merge** (workflow stops cascade, posts loud alert):
 - Any required CI check returns FAILURE after the fixer loop.
 - Any human reviewer left `CHANGES_REQUESTED` (don't override).
+- **Any unresolved review comment thread** from a human reviewer — query `gh api repos/<owner>/<repo>/pulls/<n>/comments` and skip auto-merge if any thread has `in_reply_to_id` chains where the last reply is from a non-bot reviewer and the thread isn't marked resolved. ("As long as there are no outstanding review comments" — Khaliq, May 12.)
 - Merge conflict that fixer can't resolve.
 - A downstream-track PR was already opened and its CI breaks post-merge of an upstream track → STOP, do not merge further.
 
