@@ -26,7 +26,11 @@ export default handler(async (ctx, event) => {
   if (!ctx.linear) throw new Error('linear-shipper requires the linear integration');
   if (!ctx.github) throw new Error('linear-shipper requires the github integration');
 
-  const issueRef = (event as LinearIssueEvent).issue;
+  const payload =
+    typeof event.payload === 'object' && event.payload !== null
+      ? (event.payload as LinearIssueEvent)
+      : {};
+  const issueRef = payload.issue;
   const issueId = issueRef?.id ?? issueRef?.identifier;
   if (!issueId) throw new Error('Linear event is missing an issue id');
 
