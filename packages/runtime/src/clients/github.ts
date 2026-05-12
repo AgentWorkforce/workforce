@@ -74,7 +74,7 @@ async function findNumberSegment(
 ): Promise<string> {
   const dir = `${repoRoot(owner, repo)}/${kind}`;
   const prefix = `${number}__`;
-  const entries = await listDirectoryEntries(opts, 'github', `find.${kind}`, dir).catch(() => []);
+  const entries = await listDirectoryEntries(opts, 'github', `find.${kind}`, dir);
   return entries.find((entry) => entry === String(number) || entry.startsWith(prefix)) ?? String(number);
 }
 
@@ -119,7 +119,7 @@ export function createGithubClient(opts: IntegrationClientOptions): GithubClient
     async upsertIssue(args) {
       const issueDir = `${repoRoot(args.owner, args.repo)}/issues`;
       const flatIssues = await listJsonFiles<GithubIssueFile>(opts, 'github', 'upsertIssue.find.flat', issueDir);
-      const entries = await listDirectoryEntries(opts, 'github', 'upsertIssue.find.dirs', issueDir).catch(() => []);
+      const entries = await listDirectoryEntries(opts, 'github', 'upsertIssue.find.dirs', issueDir);
       const nestedIssueCandidates = await Promise.all(
         entries
           .filter((entry) => /^[1-9]\d*(?:__.*)?$/.test(entry))

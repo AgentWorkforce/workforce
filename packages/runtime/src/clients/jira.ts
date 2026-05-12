@@ -28,7 +28,7 @@ export function createJiraClient(opts: IntegrationClientOptions): JiraClient {
         'jira',
         'createIssue',
         `/jira/issues/${draftFile('create issue')}`,
-        { fields: args.fields }
+        { cloudId: args.cloudId, fields: args.fields }
       );
       return {
         id: result.receipt?.created ?? result.receipt?.id ?? result.path,
@@ -43,7 +43,7 @@ export function createJiraClient(opts: IntegrationClientOptions): JiraClient {
         'jira',
         'comment',
         `/jira/issues/${encodeSegment(target.issueIdOrKey)}/comments/${draftFile('create comment')}`,
-        { body }
+        { cloudId: target.cloudId, body }
       );
       return {
         id: result.receipt?.created ?? result.receipt?.id ?? result.path,
@@ -58,7 +58,7 @@ export function createJiraClient(opts: IntegrationClientOptions): JiraClient {
         'jira',
         'transition',
         `/jira/issues/${encodeSegment(target.issueIdOrKey)}/transitions/${draftFile('create transition')}`,
-        { transition: { id } }
+        { cloudId: target.cloudId, transition: { id } }
       );
     }
   };

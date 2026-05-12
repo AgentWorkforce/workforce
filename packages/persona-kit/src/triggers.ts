@@ -15,6 +15,9 @@ export const KNOWN_TRIGGERS = {
     'workflow_run.completed'
   ] as const,
   linear: [
+    'comment.created',
+    'comment.updated',
+    'comment.deleted',
     'comment.create',
     'comment.update',
     'comment.remove',
@@ -101,7 +104,7 @@ export interface TriggerLintIssue {
 }
 
 export function isKnownProvider(provider: string): provider is ProviderName {
-  return provider in KNOWN_TRIGGERS;
+  return Object.prototype.hasOwnProperty.call(KNOWN_TRIGGERS, provider);
 }
 
 export function lintTriggers(persona: PersonaSpec): TriggerLintIssue[] {

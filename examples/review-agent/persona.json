@@ -10,7 +10,7 @@
       "triggers": [
         { "on": "pull_request.opened" },
         { "on": "issue_comment.created", "match": "@mention" },
-        { "on": "pull_request_review_comment.created" },
+        { "on": "pull_request_review_comment.created", "match": "@mention" },
         { "on": "check_run.completed", "where": "conclusion=failure" }
       ]
     },

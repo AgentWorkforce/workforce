@@ -10,6 +10,17 @@ function inputDefault(ctx: Parameters<Parameters<typeof handler>[0]>[0], name: s
   return value;
 }
 
+function shellQuote(value: string): string {
+  return `'${value.replace(/'/g, `'\\''`)}'`;
+}
+
+function safeRepoDirName(value: string): string {
+  if (!/^[A-Za-z0-9._-]+$/.test(value)) {
+    throw new Error('GITHUB_REPO must be a repository name, not a path or shell fragment');
+  }
+  return value;
+}
+
 export default handler(async (ctx, event) => {
   if (event.source !== 'linear' || event.type !== 'issue.created') return;
   if (!ctx.linear) throw new Error('linear-shipper requires the linear integration');
@@ -22,10 +33,10 @@ export default handler(async (ctx, event) => {
   const issue = await ctx.linear.getIssue(issueId);
   const repoUrl = inputDefault(ctx, 'REPO_URL');
   const owner = inputDefault(ctx, 'GITHUB_OWNER');
-  const repo = inputDefault(ctx, 'GITHUB_REPO');
+  const repo = safeRepoDirName(inputDefault(ctx, 'GITHUB_REPO'));
   const repoDir = `${ctx.sandbox.cwd}/${repo}`;
 
-  await ctx.sandbox.exec(`git clone ${repoUrl} ${repoDir}`);
+  await ctx.sandbox.exec(`git clone ${shellQuote(repoUrl)} ${shellQuote(repoDir)}`);
   const result = await ctx.harness.run({
     prompt: `Implement this Linear issue. Create the smallest reviewable change and include verification notes.\n\nTitle: ${issue.title}\n\n${issue.description ?? ''}`,
     cwd: repoDir,

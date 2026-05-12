@@ -10,11 +10,13 @@ function githubTarget(event: Record<string, unknown>): GithubTarget {
   } | undefined;
   const pullRequest = event.pull_request as { number?: number } | undefined;
   const issue = event.issue as { number?: number } | undefined;
+  const checkRun = event.check_run as { pull_requests?: Array<{ number?: number }> } | undefined;
   const owner = typeof repository?.owner === 'string'
     ? repository.owner
     : repository?.owner?.login ?? repository?.full_name?.split('/')[0];
   const repo = repository?.name ?? repository?.full_name?.split('/')[1];
-  const number = pullRequest?.number ?? issue?.number ?? Number(event.number);
+  const checkRunPullRequest = checkRun?.pull_requests?.find((pr) => typeof pr.number === 'number');
+  const number = pullRequest?.number ?? issue?.number ?? checkRunPullRequest?.number ?? Number(event.number);
   if (!owner || !repo || !Number.isFinite(number)) {
     throw new Error('GitHub event is missing owner, repo, or number');
   }

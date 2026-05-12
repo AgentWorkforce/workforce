@@ -77,7 +77,12 @@ export async function runSandbox(input: SandboxRunInput): Promise<SandboxRunHand
   const daytona = daytonaFactory(input.daytona);
   const sandbox = await daytona.create({ language: 'typescript', envVars: input.env });
 
-  await uploadBundle(input.bundle, sandbox);
+  try {
+    await uploadBundle(input.bundle, sandbox);
+  } catch (error) {
+    await daytona.delete(sandbox);
+    throw error;
+  }
 
   const emit = input.onLog ?? ((line: string) => console.log(line));
   const timeoutSeconds =
@@ -138,12 +143,16 @@ async function runCommand(
         return emitFinalResult(response, opts.onLog);
       }
 
+      const stdoutBuffer = lineBuffer(opts.onLog);
+      const stderrBuffer = lineBuffer(opts.onLog);
       await processApi.getSessionCommandLogs(
         sessionId,
         response.cmdId,
-        (chunk) => emitChunk(chunk, opts.onLog),
-        (chunk) => emitChunk(chunk, opts.onLog)
+        stdoutBuffer.write,
+        stderrBuffer.write
       );
+      stdoutBuffer.end();
+      stderrBuffer.end();
       const command = await processApi.getSessionCommand(sessionId, response.cmdId);
       return { code: command.exitCode ?? 0 };
     } catch (error) {
@@ -164,7 +173,7 @@ async function runCommand(
     opts.env,
     opts.timeoutSeconds
   );
-  emitChunk(result.result ?? '', opts.onLog);
+  emitBuffered(result.result ?? '', opts.onLog);
   return { code: result.exitCode ?? 0 };
 }
 
@@ -172,17 +181,44 @@ function emitFinalResult(
   response: { exitCode?: number; output?: string; stdout?: string; stderr?: string },
   onLog: (line: string) => void
 ): { code: number } {
-  emitChunk(response.output ?? response.stdout ?? '', onLog);
-  emitChunk(response.stderr ?? '', onLog);
+  emitBuffered(response.output ?? response.stdout ?? '', onLog);
+  emitBuffered(response.stderr ?? '', onLog);
   return { code: response.exitCode ?? 0 };
 }
 
-function emitChunk(chunk: string, onLog: (line: string) => void): void {
-  for (const line of chunk.split(/\r?\n/)) {
-    if (line.length > 0) {
-      onLog(line);
+function emitBuffered(chunk: string, onLog: (line: string) => void): void {
+  const buffer = lineBuffer(onLog);
+  buffer.write(chunk);
+  buffer.end();
+}
+
+function lineBuffer(onLog: (line: string) => void): {
+  write(chunk: string): void;
+  end(): void;
+} {
+  let pending = '';
+
+  return {
+    write(chunk: string): void {
+      pending += chunk;
+      let index = pending.indexOf('\n');
+      while (index !== -1) {
+        const line = pending.slice(0, index).replace(/\r$/, '');
+        pending = pending.slice(index + 1);
+        if (line.length > 0) {
+          onLog(line);
+        }
+        index = pending.indexOf('\n');
+      }
+    },
+    end(): void {
+      const line = pending.replace(/\r$/, '');
+      pending = '';
+      if (line.length > 0) {
+        onLog(line);
+      }
     }
-  }
+  };
 }
 
 async function collectFiles(dir: string): Promise<string[]> {

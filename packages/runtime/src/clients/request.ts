@@ -102,7 +102,7 @@ export async function listJsonFiles<T>(
 ): Promise<Array<{ path: string; value: T }>> {
   try {
     const absoluteDir = toAbsolutePath(client, relayDir);
-    const entries = await readdir(absoluteDir).catch(() => []);
+    const entries = await readdirIfPresent(absoluteDir);
     const out: Array<{ path: string; value: T }> = [];
     for (const entry of entries) {
       if (!entry.endsWith('.json')) continue;
@@ -123,10 +123,25 @@ export async function listDirectoryEntries(
   relayDir: string
 ): Promise<string[]> {
   try {
-    return await readdir(toAbsolutePath(client, relayDir));
+    return await readdirIfPresent(toAbsolutePath(client, relayDir));
   } catch (cause) {
     throw new WorkforceIntegrationError({ provider, operation, cause, retryable: false });
   }
+}
+
+async function readdirIfPresent(absoluteDir: string): Promise<string[]> {
+  try {
+    return await readdir(absoluteDir);
+  } catch (error) {
+    if (isNoEntryError(error)) {
+      return [];
+    }
+    throw error;
+  }
+}
+
+function isNoEntryError(error: unknown): boolean {
+  return isRecord(error) && error.code === 'ENOENT';
 }
 
 export async function writeJsonFile(

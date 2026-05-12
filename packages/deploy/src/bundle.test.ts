@@ -2,7 +2,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import { mkdtemp, readFile, rm, stat } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
-import { join, resolve } from 'node:path';
+import { dirname, join, resolve } from 'node:path';
 import { stageBundle, type BundleInput } from './bundle.js';
 import type { PersonaSpec } from '@agentworkforce/persona-kit';
 
@@ -53,7 +53,7 @@ test('stageBundle writes persona, runner, package metadata, and esbuild bundle',
     assert.equal(
       await readFile(result.runnerPath, 'utf8'),
       `import { startRunner } from '@agentworkforce/runtime/runner';
-import persona from './persona.json' assert { type: 'json' };
+import persona from './persona.json' with { type: 'json' };
 import * as agentModule from './agent.bundle.mjs';
 const handler = agentModule.default ?? agentModule.handler;
 startRunner({ persona, handler });
@@ -94,4 +94,16 @@ test('stageBundle rejects a missing onEvent file', async () => {
       /onEvent file does not exist/
     );
   });
+});
+
+test('stageBundle rejects output directories that contain source files', async () => {
+  const personaPath = resolve('src/__fixtures__/simple-agent/persona.json');
+  await assert.rejects(
+    stageBundle({
+      personaPath,
+      persona: basePersona({ onEvent: './agent.ts' }),
+      outDir: dirname(personaPath)
+    } as BundleInput),
+    /outDir must not contain persona source files/
+  );
 });

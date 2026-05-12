@@ -22,6 +22,7 @@ test('jira createIssue writes a Jira issue draft', async () => {
     const files = await readdir(dir);
     assert.equal(files.length, 1);
     assert.deepEqual(JSON.parse(await readFile(path.join(dir, files[0] ?? ''), 'utf8')), {
+      cloudId: 'cloud_1',
       fields: { project: { key: 'ENG' }, summary: 'Ship it', issuetype: { name: 'Task' } }
     });
   } finally {
@@ -39,6 +40,7 @@ test('jira transition writes an issue transition draft', async () => {
     const files = await readdir(dir);
     assert.equal(files.length, 1);
     assert.deepEqual(JSON.parse(await readFile(path.join(dir, files[0] ?? ''), 'utf8')), {
+      cloudId: 'cloud_1',
       transition: { id: '31' }
     });
   } finally {

@@ -1,6 +1,6 @@
 import { build } from 'esbuild';
 import { access, mkdir, readFile, readdir, rm, stat, writeFile } from 'node:fs/promises';
-import { dirname, isAbsolute, join, resolve } from 'node:path';
+import { dirname, isAbsolute, join, relative, resolve } from 'node:path';
 import type { PersonaSpec } from '@agentworkforce/persona-kit';
 
 export interface BundleInput {
@@ -24,7 +24,7 @@ type DeployPersonaSpec = PersonaSpec & {
 };
 
 const runnerTemplate = `import { startRunner } from '@agentworkforce/runtime/runner';
-import persona from './persona.json' assert { type: 'json' };
+import persona from './persona.json' with { type: 'json' };
 import * as agentModule from './agent.bundle.mjs';
 const handler = agentModule.default ?? agentModule.handler;
 startRunner({ persona, handler });
@@ -45,6 +45,7 @@ export async function stageBundle(input: BundleInput): Promise<BundleResult> {
 
   const entryPath = resolve(dirname(input.personaPath), persona.onEvent);
   await assertFile(entryPath, `onEvent file does not exist: ${entryPath}`);
+  assertOutputDirDoesNotContainInputs(input.outDir, [input.personaPath, entryPath]);
 
   await rm(input.outDir, { recursive: true, force: true });
   await mkdir(input.outDir, { recursive: true });
@@ -100,6 +101,21 @@ async function assertFile(path: string, message: string): Promise<void> {
     // fall through
   }
   throw new Error(message);
+}
+
+function assertOutputDirDoesNotContainInputs(outDir: string, inputPaths: string[]): void {
+  const resolvedOutDir = resolve(outDir);
+  for (const inputPath of inputPaths) {
+    const resolvedInputPath = resolve(inputPath);
+    if (containsPath(resolvedOutDir, resolvedInputPath)) {
+      throw new Error('outDir must not contain persona source files');
+    }
+  }
+}
+
+function containsPath(parent: string, child: string): boolean {
+  const rel = relative(parent, child);
+  return rel === '' || (rel.length > 0 && !rel.startsWith('..') && !isAbsolute(rel));
 }
 
 async function readWorkspacePackageVersion(packageName: string): Promise<string> {

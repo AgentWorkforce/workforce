@@ -27,7 +27,7 @@ workforce deploy ./examples/weekly-digest/persona.json
 For local iteration, run it in dev mode:
 
 ```bash
-BRAVE_API_KEY=... workforce deploy ./examples/weekly-digest/persona.json --mode dev
+BRAVE_API_KEY=... workforce deploy ./examples/weekly-digest/persona.json --dev
 ```
 
 The example searches Brave on a weekly cron schedule, clusters findings, and

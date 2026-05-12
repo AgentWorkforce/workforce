@@ -43,7 +43,7 @@ test('lintTriggers accepts deploy-v1 example trigger names', () => {
           { on: 'check_run.completed', where: 'conclusion=failure' }
         ]
       },
-      linear: { triggers: [{ on: 'issue.created' }] },
+      linear: { triggers: [{ on: 'issue.created' }, { on: 'comment.created' }] },
       slack: { triggers: [{ on: 'app_mention' }] },
       notion: { triggers: [{ on: 'page.updated' }] },
       jira: { triggers: [{ on: 'issue.created' }] }
@@ -51,6 +51,19 @@ test('lintTriggers accepts deploy-v1 example trigger names', () => {
   );
 
   assert.deepEqual(issues, []);
+});
+
+test('lintTriggers treats inherited object keys as unknown providers', () => {
+  const issues = lintTriggers(
+    persona({
+      toString: { triggers: [{ on: 'anything.happened' }] }
+    })
+  );
+
+  assert.deepEqual(
+    issues.map((issue) => [issue.code, issue.provider, issue.path]),
+    [['unknown_provider', 'toString', 'integrations.toString']]
+  );
 });
 
 test('lintTriggers warns for unknown providers and trigger names without throwing', () => {

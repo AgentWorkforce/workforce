@@ -30,21 +30,27 @@ export async function runDev(input: DevRunInput): Promise<DevRunHandle> {
   child.stderr.on('data', flushStderr.write);
 
   let settled = false;
-  const done = new Promise<{ code: number; signal: NodeJS.Signals | null }>((resolve, reject) => {
-    child.once('error', reject);
-    child.once('exit', (code, signal) => {
-      settled = true;
-      flushStdout.end();
-      flushStderr.end();
-      process.off('SIGINT', onSigint);
-      resolve({ code: code ?? 0, signal });
-    });
-  });
-
   const stop = () => stopChild(child, () => settled);
   const onSigint = () => {
     void stop();
   };
+  const cleanup = () => {
+    settled = true;
+    flushStdout.end();
+    flushStderr.end();
+    process.off('SIGINT', onSigint);
+  };
+  const done = new Promise<{ code: number; signal: NodeJS.Signals | null }>((resolve, reject) => {
+    child.once('error', (error) => {
+      cleanup();
+      reject(error);
+    });
+    child.once('exit', (code, signal) => {
+      cleanup();
+      resolve({ code: code ?? 0, signal });
+    });
+  });
+
   process.on('SIGINT', onSigint);
 
   return {

@@ -27,6 +27,24 @@ const generator = createGenerator({
 const schema = generator.createSchema('PersonaSpec');
 schema.$schema = 'https://json-schema.org/draft/2020-12/schema';
 schema.$id = 'https://agentworkforce.dev/schemas/persona.schema.json';
+const personaSpecSchema = schema.definitions?.PersonaSpec;
+if (personaSpecSchema) {
+  personaSpecSchema.allOf = [
+    ...(personaSpecSchema.allOf ?? []),
+    {
+      if: {
+        type: 'object',
+        properties: {
+          cloud: { const: true }
+        },
+        required: ['cloud']
+      },
+      then: {
+        required: ['onEvent']
+      }
+    }
+  ];
+}
 
 const serialized = `${JSON.stringify(schema, null, 2)}\n`;
 await mkdir(dirname(schemaPath), { recursive: true });

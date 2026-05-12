@@ -34,7 +34,12 @@ function clusterByHost(results: BraveResult[]): ClusteredFinding[] {
   for (const result of results) {
     if (!result.url || seen.has(result.url)) continue;
     seen.add(result.url);
-    const url = new URL(result.url);
+    let url: URL;
+    try {
+      url = new URL(result.url);
+    } catch {
+      continue;
+    }
     const host = url.host.replace(/^www\./, '');
     const cluster = clusters.get(host) ?? { host, items: [] };
     cluster.items.push({

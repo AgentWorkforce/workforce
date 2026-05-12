@@ -163,6 +163,26 @@
         "description",
         "skills",
         "tiers"
+      ],
+      "allOf": [
+        {
+          "if": {
+            "type": "object",
+            "properties": {
+              "cloud": {
+                "const": true
+              }
+            },
+            "required": [
+              "cloud"
+            ]
+          },
+          "then": {
+            "required": [
+              "onEvent"
+            ]
+          }
+        }
       ]
     },
     "PersonaTag": {

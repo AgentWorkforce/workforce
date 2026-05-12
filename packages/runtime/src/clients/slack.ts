@@ -16,6 +16,14 @@ export interface SlackClient {
 
 function parseThreadRef(threadTs: SlackThreadRef): { channel: string; ts: string } {
   if (typeof threadTs !== 'string') {
+    if (!threadTs.channel.trim() || !threadTs.ts.trim()) {
+      throw new WorkforceIntegrationError({
+        provider: 'slack',
+        operation: 'reply',
+        cause: new Error('Slack reply threadTs must include non-empty channel and ts'),
+        retryable: false
+      });
+    }
     return threadTs;
   }
 

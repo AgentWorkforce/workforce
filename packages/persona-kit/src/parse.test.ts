@@ -2,6 +2,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import {
   assertInputName,
+  assertRelativePath,
   assertSidecarPath,
   INPUT_NAME_RE,
   parseHarnessSettings,
@@ -75,6 +76,7 @@ test('parsePersonaSpec accepts deploy-v1 optional fields', () => {
   );
 
   assert.equal(spec.cloud, true);
+  assert.equal(spec.useSubscription, true);
   assert.equal(spec.integrations?.github.triggers?.[0].on, 'pull_request.opened');
   assert.equal(spec.schedules?.[0].name, 'weekly');
   assert.deepEqual(spec.sandbox, {
@@ -85,6 +87,17 @@ test('parsePersonaSpec accepts deploy-v1 optional fields', () => {
   assert.deepEqual(spec.memory, { enabled: true, scopes: ['workspace'], ttlDays: 30 });
   assert.equal(spec.traits?.preferMarkdown, true);
   assert.equal(spec.onEvent, './agent.ts');
+});
+
+test('parsePersonaSpec rejects unsafe onEvent paths', () => {
+  assert.throws(
+    () => parsePersonaSpec(validSpec({ onEvent: '/tmp/agent.ts' }), 'documentation'),
+    /onEvent must be a relative POSIX path/
+  );
+  assert.throws(
+    () => parsePersonaSpec(validSpec({ onEvent: '../agent.ts' }), 'documentation'),
+    /onEvent must not contain "\.\." segments/
+  );
 });
 
 test('parsePersonaSpec throws when intent does not match the expected intent', () => {
@@ -163,6 +176,12 @@ test('INPUT_NAME_RE matches env-var convention', () => {
 test('assertInputName throws on names that violate the env-var convention', () => {
   assert.throws(() => assertInputName('lowercase', 'inputs.lowercase'), /env-style name/);
   assert.throws(() => assertInputName('1LEADING', 'inputs.1LEADING'), /env-style name/);
+});
+
+test('assertRelativePath accepts safe relative paths and rejects traversal', () => {
+  assert.doesNotThrow(() => assertRelativePath('./agent.ts', 'onEvent'));
+  assert.throws(() => assertRelativePath('../agent.ts', 'onEvent'), /must not contain/);
+  assert.throws(() => assertRelativePath('/agent.ts', 'onEvent'), /relative POSIX path/);
 });
 
 test('parseInputs accepts a string default and an object with description+env+default', () => {

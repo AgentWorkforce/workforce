@@ -51,3 +51,15 @@ test('slack reply rejects malformed string thread refs', async () => {
     (error) => error instanceof WorkforceIntegrationError && error.provider === 'slack'
   );
 });
+
+test('slack reply rejects malformed object thread refs', async () => {
+  const client = createSlackClient({ relayfileMountRoot: '/tmp/unused' });
+  await assert.rejects(
+    () => client.reply({ channel: '', ts: '123.456' }, 'hello'),
+    (error) => error instanceof WorkforceIntegrationError && error.provider === 'slack'
+  );
+  await assert.rejects(
+    () => client.reply({ channel: 'C123', ts: '' }, 'hello'),
+    (error) => error instanceof WorkforceIntegrationError && error.provider === 'slack'
+  );
+});

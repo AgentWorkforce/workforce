@@ -58,7 +58,9 @@ test('runSandbox creates a Daytona sandbox, uploads the bundle, executes runner,
           onStdout: (chunk: string) => void
         ) => {
           calls.push('logs');
-          onStdout('hello\n');
+          onStdout('hel');
+          onStdout('lo\nwor');
+          onStdout('ld');
         },
         getSessionCommand: async () => {
           calls.push('commandStatus');
@@ -97,7 +99,7 @@ test('runSandbox creates a Daytona sandbox, uploads the bundle, executes runner,
 
       assert.equal(handle.sandboxId, 'sandbox-1');
       assert.deepEqual(result, { code: 0 });
-      assert.deepEqual(logs, ['[runtime] hello']);
+      assert.deepEqual(logs, ['[runtime] hello', '[runtime] world']);
       assert.deepEqual(calls, [
         'client:key',
         'create:typescript:bar',
@@ -137,4 +139,46 @@ test('runSandbox propagates Daytona create errors', async () => {
   } finally {
     restore();
   }
+});
+
+test('runSandbox deletes a created sandbox when bundle upload fails', async () => {
+  await withTmpDir(async (dir) => {
+    await writeFile(join(dir, 'runner.mjs'), '', 'utf8');
+    const calls: string[] = [];
+    const sandbox = {
+      id: 'sandbox-upload-failed',
+      fs: {
+        uploadFiles: async () => {
+          calls.push('upload');
+          throw new Error('upload failed');
+        }
+      },
+      process: {
+        executeCommand: async () => ({ exitCode: 0, result: '' })
+      }
+    };
+    const restore = setDaytonaFactoryForTest(() => ({
+      create: async () => {
+        calls.push('create');
+        return sandbox;
+      },
+      delete: async (target) => {
+        calls.push(`delete:${target.id}`);
+      }
+    }));
+
+    try {
+      await assert.rejects(
+        runSandbox({
+          bundle: bundle(dir),
+          sandboxConfig: true,
+          daytona: { apiKey: 'key' }
+        }),
+        /upload failed/
+      );
+      assert.deepEqual(calls, ['create', 'upload', 'delete:sandbox-upload-failed']);
+    } finally {
+      restore();
+    }
+  });
 });

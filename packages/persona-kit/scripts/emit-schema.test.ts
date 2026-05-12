@@ -48,9 +48,28 @@ test('emit-schema script is idempotent', async () => {
   assert.equal(after, before);
 });
 
+test('generated schema requires onEvent for cloud personas', async () => {
+  const schema = JSON.parse(await readFile(schemaPath, 'utf8'));
+  const fixture = JSON.parse(await readFile(resolve(fixturesDir, 'minimal.json'), 'utf8'));
+
+  assertSchema({ ...fixture, cloud: true, onEvent: './agent.ts' }, schema, schema, 'cloud-persona');
+  assert.throws(
+    () => assertSchema({ ...fixture, cloud: true }, schema, schema, 'cloud-persona'),
+    /cloud-persona\.onEvent is required/
+  );
+});
+
 function assertSchema(value, schema, root, path) {
   if (schema.$ref) {
     return assertSchema(value, resolveRef(schema.$ref, root), root, path);
+  }
+  if (schema.allOf) {
+    for (const candidate of schema.allOf) {
+      assertSchema(value, candidate, root, path);
+    }
+  }
+  if (schema.if && matchesSchema(value, schema.if, root, path) && schema.then) {
+    assertSchema(value, schema.then, root, path);
   }
   if (schema.anyOf) {
     const errors = [];
@@ -73,7 +92,7 @@ function assertSchema(value, schema, root, path) {
   if (schema.type) {
     assertType(value, schema.type, path);
   }
-  if (schema.type === 'object' || schema.properties || schema.additionalProperties) {
+  if (schema.type === 'object' || schema.properties || schema.additionalProperties || schema.required) {
     if (!isObject(value)) {
       throw new Error(`${path} must be an object`);
     }
@@ -100,6 +119,15 @@ function assertSchema(value, schema, root, path) {
     if (schema.items) {
       value.forEach((item, index) => assertSchema(item, schema.items, root, `${path}[${index}]`));
     }
+  }
+}
+
+function matchesSchema(value, schema, root, path) {
+  try {
+    assertSchema(value, schema, root, path);
+    return true;
+  } catch {
+    return false;
   }
 }
 

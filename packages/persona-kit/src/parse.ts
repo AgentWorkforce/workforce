@@ -35,7 +35,7 @@ import type {
 } from './types.js';
 
 export function isObject(value: unknown): value is Record<string, unknown> {
-  return typeof value === 'object' && value !== null;
+  return typeof value === 'object' && value !== null && !Array.isArray(value);
 }
 
 export function isHarness(value: unknown): value is Harness {
@@ -75,6 +75,13 @@ export function parseTags(value: unknown, context: string): PersonaTag[] {
 }
 
 export function assertSidecarPath(value: unknown, context: string): void {
+  assertRelativePath(value, context);
+  if (!String(value).toLowerCase().endsWith('.md')) {
+    throw new Error(`${context} must end with .md`);
+  }
+}
+
+export function assertRelativePath(value: unknown, context: string): void {
   if (typeof value !== 'string' || !value.trim()) {
     throw new Error(`${context} must be a non-empty string`);
   }
@@ -84,9 +91,6 @@ export function assertSidecarPath(value: unknown, context: string): void {
   const segments = value.split(/[\\/]+/);
   if (segments.some((s) => s === '..')) {
     throw new Error(`${context} must not contain ".." segments`);
-  }
-  if (!value.toLowerCase().endsWith('.md')) {
-    throw new Error(`${context} must end with .md`);
   }
 }
 
@@ -743,8 +747,8 @@ export function parsePersonaSpec(value: unknown, expectedIntent: PersonaIntent):
   const parsedSandbox = parseSandbox(sandbox, `persona[${expectedIntent}].sandbox`);
   const parsedMemory = parseMemory(memory, `persona[${expectedIntent}].memory`);
   const parsedTraits = parseTraits(traits, `persona[${expectedIntent}].traits`);
-  if (onEvent !== undefined && (typeof onEvent !== 'string' || !onEvent.trim())) {
-    throw new Error(`persona[${expectedIntent}].onEvent must be a non-empty string if provided`);
+  if (onEvent !== undefined) {
+    assertRelativePath(onEvent, `persona[${expectedIntent}].onEvent`);
   }
 
   if (claudeMd !== undefined) assertSidecarPath(claudeMd, `persona[${expectedIntent}].claudeMd`);
