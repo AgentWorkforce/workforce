@@ -43,26 +43,12 @@
     }
   },
   "schedules": [{ "name": "daily-review", "cron": "0 14 * * 1-5", "tz": "UTC" }],
-  "sandbox": {
-    "enabled": true,
-    "timeoutSeconds": 1800,
-    "env": { "NODE_ENV": "production" }
-  },
   "memory": {
     "enabled": true,
-    "scopes": ["session", "user", "workspace"],
+    "scopes": ["workspace", "user", "global"],
     "ttlDays": 30,
     "autoPromote": true,
     "dedupMs": 300000
-  },
-  "traits": {
-    "voice": "professional-warm",
-    "formality": "low",
-    "proactivity": "medium",
-    "riskPosture": "conservative",
-    "domain": "engineering",
-    "vocabulary": ["PR", "diff", "CI"],
-    "preferMarkdown": true
   },
   "onEvent": "./agent.ts",
   "env": { "BRAVE_API_KEY": "$BRAVE_API_KEY" },

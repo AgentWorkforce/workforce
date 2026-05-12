@@ -59,10 +59,25 @@ test('generated schema requires onEvent for cloud personas', async () => {
   );
 });
 
+test('generated schema reflects locked v1 persona fields', async () => {
+  const schema = JSON.parse(await readFile(schemaPath, 'utf8')) as SchemaNode;
+  const definitions = schema.definitions as Record<string, SchemaNode>;
+  const personaSpec = definitions.PersonaSpec;
+  const properties = personaSpec.properties ?? {};
+
+  assert.equal('sandbox' in properties, false);
+  assert.equal('traits' in properties, false);
+  assert.deepEqual(definitions.PersonaMemoryScope.enum, ['workspace', 'user', 'global']);
+  assert.equal('PersonaSandbox' in definitions, false);
+  assert.equal('PersonaSandboxConfig' in definitions, false);
+  assert.equal('PersonaTraits' in definitions, false);
+});
+
 type SchemaNode = Record<string, unknown> & {
   $ref?: string;
   allOf?: SchemaNode[];
   anyOf?: SchemaNode[];
+  definitions?: Record<string, SchemaNode>;
   if?: SchemaNode;
   then?: SchemaNode;
   enum?: unknown[];

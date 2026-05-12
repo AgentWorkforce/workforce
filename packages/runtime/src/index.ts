@@ -53,6 +53,5 @@ export type {
   PersonaIntegrationTrigger,
   PersonaMemoryScope,
   PersonaSchedule,
-  PersonaSpec,
-  PersonaTraits
+  PersonaSpec
 } from '@agentworkforce/persona-kit';

@@ -116,19 +116,11 @@
           "items": {
             "$ref": "#/definitions/PersonaSchedule"
           },
-          "description": "Cron-style schedules. Each `name` is unique within the persona."
-        },
-        "sandbox": {
-          "$ref": "#/definitions/PersonaSandbox",
-          "description": "Sandbox preference. `true` (default for cloud personas) means the agent runs inside a Daytona sandbox at deploy time; `false` runs it in the runner process. The object form lets the author tune timeout / env."
+          "description": "Cron-style clock listeners. Each `name` is unique within the persona."
         },
         "memory": {
           "$ref": "#/definitions/PersonaMemory",
           "description": "Memory subsystem opt-in. Wires the agent-assistant memory adapter at runtime; the persona spec only declares intent, not implementation details (api keys, adapter type, etc. come from workforce env)."
-        },
-        "traits": {
-          "$ref": "#/definitions/PersonaTraits",
-          "description": "Conversational traits, applied only when the agent posts to a chat surface. Omit for headless agents."
         },
         "onEvent": {
           "type": "string",
@@ -146,6 +138,7 @@
         "systemPrompt",
         "harnessSettings"
       ],
+      "description": "A persona listens for events. Three listener kinds: clock (cron schedules through `schedules[]`), radio (RelayFile integration events through `integrations.<provider>.triggers[]`), and inbox (RelayCast targeted messages, not yet modeled in v1). The current shape predates the listeners framing; semantics are equivalent.",
       "allOf": [
         {
           "if": {
@@ -420,7 +413,7 @@
           }
         }
       },
-      "description": "Per-provider integration configuration. The map key is the Relayfile provider slug (`github`, `linear`, `slack`, `notion`, `jira`). `scope` is provider-specific filter metadata (e.g. `{ repo: \"org/repo\" }` for github, `{ database: \"<id>\" }` for notion). `triggers` are flat — all trigger events for this provider fan into the same `onEvent` handler, which discriminates on `event.source` + `event.type`."
+      "description": "Radio listener configuration for a RelayFile provider. The map key is the provider slug (`github`, `linear`, `slack`, `notion`, `jira`). `scope` is provider-specific filter metadata (e.g. `{ repo: \"org/repo\" }` for github, `{ database: \"<id>\" }` for notion). `triggers` are flat — all radio listener events for this provider fan into the same `onEvent` handler, which discriminates on `event.source` + `event.type`."
     },
     "PersonaIntegrationTrigger": {
       "type": "object",
@@ -457,36 +450,7 @@
         "name",
         "cron"
       ],
-      "description": "A cron-style schedule. `name` is unique within the persona and surfaces to the handler as `event.name`. `cron` is a standard 5-field expression. `tz` defaults to `UTC` at the runtime layer (the parser keeps it optional so the spec stays close to what the author wrote)."
-    },
-    "PersonaSandbox": {
-      "anyOf": [
-        {
-          "type": "boolean"
-        },
-        {
-          "$ref": "#/definitions/PersonaSandboxConfig"
-        }
-      ],
-      "description": "Sandbox can be specified as `true` / `false` shorthand or as the full config object. The parser preserves whichever form the author wrote so round-trips stay lossless; consumers normalize when reading."
-    },
-    "PersonaSandboxConfig": {
-      "type": "object",
-      "properties": {
-        "enabled": {
-          "type": "boolean"
-        },
-        "timeoutSeconds": {
-          "type": "number"
-        },
-        "env": {
-          "type": "object",
-          "additionalProperties": {
-            "type": "string"
-          }
-        }
-      },
-      "description": "Long-form sandbox configuration. `enabled` defaults to true when the object form is present; supply the boolean shorthand `sandbox: false` to opt out entirely. `timeoutSeconds` caps a single handler invocation (default 1800s in the runtime). `env` is merged on top of auto-injected secrets at sandbox-create time.\n\nImage selection is intentionally not user-configurable in v1 — workforce picks a standard image. Add `image` later if a real demand surfaces."
+      "description": "Clock listener configuration. `name` is unique within the persona and surfaces to the handler as `event.name`. `cron` is a standard 5-field expression. `tz` defaults to `UTC` at the runtime layer (the parser keeps it optional so the spec stays close to what the author wrote)."
     },
     "PersonaMemory": {
       "anyOf": [
@@ -525,58 +489,11 @@
     "PersonaMemoryScope": {
       "type": "string",
       "enum": [
-        "session",
-        "user",
         "workspace",
-        "org",
-        "object"
+        "user",
+        "global"
       ],
       "description": "Memory scope semantics, mirroring"
-    },
-    "PersonaTraits": {
-      "type": "object",
-      "properties": {
-        "voice": {
-          "type": "string"
-        },
-        "formality": {
-          "type": "string",
-          "enum": [
-            "low",
-            "medium",
-            "high"
-          ]
-        },
-        "proactivity": {
-          "type": "string",
-          "enum": [
-            "low",
-            "medium",
-            "high"
-          ]
-        },
-        "riskPosture": {
-          "type": "string",
-          "enum": [
-            "conservative",
-            "balanced",
-            "aggressive"
-          ]
-        },
-        "domain": {
-          "type": "string"
-        },
-        "vocabulary": {
-          "type": "array",
-          "items": {
-            "type": "string"
-          }
-        },
-        "preferMarkdown": {
-          "type": "boolean"
-        }
-      },
-      "description": "Conversational traits, applied only when the agent posts to a chat surface (Slack, Relaycast, GitHub PR comment). Headless agents — the paraglide \"Linear issue → PR\" pattern — should omit this field. Mirrors the trait shape in `@agent-assistant/traits`."
     }
   },
   "$id": "https://agentworkforce.dev/schemas/persona.schema.json"

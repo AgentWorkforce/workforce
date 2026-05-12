@@ -38,7 +38,7 @@ One file. One command. One contract.
 
 ### In
 
-- Persona JSON schema extension: `cloud`, `useSubscription`, `integrations`, `schedules`, `sandbox`, `memory`, `traits`, `onEvent`.
+- Persona JSON schema extension: `cloud`, `useSubscription`, `integrations`, `schedules`, `memory`, `onEvent`.
 - New package `@agentworkforce/runtime` — thin facade exposing `handler(...)` that wraps `agent({...})` from `@agent-relay/agent` (cloud proactive-runtime M1 SDK).
 - New package `@agentworkforce/deploy` — the deploy CLI logic; the existing `cli.ts` gets a `deploy` case that dispatches to it.
 - Daytona sandbox launcher used in the `--sandbox` run mode.
@@ -64,7 +64,7 @@ One file. One command. One contract.
 
 ## 3. Persona JSON schema diff
 
-All new fields are optional. A persona that does not set any of them continues to behave exactly as today — `workforce agent <id>` works unchanged. Set `cloud: true` and at least one trigger to opt into the new deploy surface.
+All new fields are optional. A persona that does not set any of them continues to behave exactly as today — `workforce agent <id>` works unchanged. Set `cloud: true` and at least one listener to opt into the new deploy surface. A persona listens for events through three listener kinds: **clock** (`schedules[]` cron ticks), **radio** (`integrations.<provider>.triggers[]` RelayFile events), and **inbox** (RelayCast targeted messages, not yet modeled in v1). The JSON shape predates the listeners framing; the semantics are equivalent.
 
 ### 3.1 Top-level additions
 
@@ -72,14 +72,14 @@ All new fields are optional. A persona that does not set any of them continues t
 |---|---|---|---|
 | `cloud` | `boolean` | always (default `false`) | When `true`, this persona is deployable. `workforce deploy` only operates on personas where this is `true`. |
 | `useSubscription` | `boolean` | optional | When `true`, inference uses the user's connected LLM subscription via `@agent-relay/cloud`'s provider link (no workforce-billed tokens). Triggers a `connectProvider` step at deploy time. |
-| `integrations` | `Record<string, IntegrationConfig>` | when persona has event triggers | Declares which Relayfile providers this agent needs and what events fire its handler. See §3.2. |
-| `schedules` | `Schedule[]` | when persona runs on cron | One or more cron triggers, registered with the runtime's `ctx.schedule.every(...)`. Each schedule has a `name` echoed back to the handler. See §3.3. |
-| `sandbox` | `boolean \| SandboxConfig` | optional | `true` (default) means agent runs inside a Daytona sandbox. `false` means the runner process owns its own filesystem. Object form lets you tune env / timeout. See §3.4. |
-| `memory` | `boolean \| MemoryConfig` | optional | Enables the agent-assistant memory subsystem. Scopes and TTL configurable. See §3.5. |
-| `traits` | `Traits` | optional, **only meaningful for interactive agents** | Mirrors `@agent-assistant/traits`: voice, formality, proactivity, etc. Applied when the agent posts to a chat surface (Slack, Relaycast). Headless agents (paraglide-style "Linear issue → ship") may omit this. See §3.6. |
+| `integrations` | `Record<string, IntegrationConfig>` | when persona has radio listeners | Declares which RelayFile providers this agent needs and what radio events fire its handler. See §3.2. |
+| `schedules` | `Schedule[]` | when persona has clock listeners | One or more cron listeners, registered with the runtime's `ctx.schedule.every(...)`. Each schedule has a `name` echoed back to the handler. See §3.3. |
+| `memory` | `boolean \| MemoryConfig` | optional | Declares memory intent. `ctx.memory` is a v1 stub until the follow-up memory wiring workflow lands. See §3.4. |
 | `onEvent` | `string` | when `cloud: true` and any trigger declared | Path to a TS file (relative to the persona JSON) whose default export is the event handler. Sub-file references like `./agent.ts` and `./handlers/index.ts` are supported. See §4. |
 
-### 3.2 `integrations` shape
+`traits` and `sandbox` were removed from the persona spec in v1. Personality belongs in the persona's prompt/sidecar and the persona-personality-builder flow. Sandbox behavior is deploy-time runtime configuration: sandbox mode is on by default for deploys, with opt-out handled by deploy flags or runtime config rather than persona JSON.
+
+### 3.2 `integrations` radio listener shape
 
 ```jsonc
 "integrations": {
@@ -100,13 +100,13 @@ All new fields are optional. A persona that does not set any of them continues t
 
 Key choices:
 - **Key is the Relayfile provider slug.** `github`, `linear`, `slack`, `notion`, `jira`. The deploy step calls `RelayfileSetup.connectIntegration({ allowedIntegrations: [key] })` for any provider not yet connected to the user's workspace.
-- **`triggers[]` is a flat list per provider** — multiple events from the same provider all fan into the same `onEvent`. The handler discriminates on `event.source` + `event.type`.
+- **`triggers[]` is a flat radio listener list per provider** — multiple events from the same provider all fan into the same `onEvent`. The handler discriminates on `event.source` + `event.type`.
 - **`match` and `where` are sugars** — `match: "@mention"` is shorthand for "filter to events that mention the deployed agent." The deploy CLI lints them against a known set; unknown values warn but don't fail. We can always upgrade the runtime to enforce them later.
 - **`scope` is optional and provider-specific.** Validated by the deploy CLI against a small provider-schema map. For v1, supported keys are documented per provider in the examples.
 
 The act of stacking integrations is just declaring multiple keys. The act of linking them ("when GitHub fires, post to Slack") is code in `onEvent`. We considered a declarative `links:` block — see §11.4 for why we deferred it.
 
-### 3.3 `schedules` shape
+### 3.3 `schedules` clock listener shape
 
 ```jsonc
 "schedules": [
@@ -119,56 +119,26 @@ The act of stacking integrations is just declaring multiple keys. The act of lin
 - `cron` is a standard 5-field expression. `tz` defaults to `UTC`.
 - Multiple schedules are allowed. The runtime registers each with `ctx.schedule.every(cron, { tz, payload: { name } })`.
 
-### 3.4 `sandbox` shape
-
-```jsonc
-"sandbox": true                                          // default
-"sandbox": { "enabled": true, "timeoutSeconds": 1800, "env": { "FOO": "bar" } }
-"sandbox": false                                         // run in the runner process's fs
-```
-
-- Image is **not** user-configurable in v1. Workforce picks a standard image (`node-22` baseline) for the default Daytona sandbox. We can add `image` later if a real demand surfaces; eliminating the field keeps the v1 contract small.
-- `timeoutSeconds` caps a single handler invocation. Default 1800s.
-- `env` adds env vars on top of the auto-injected secrets (Relayfile connection tokens, harness inference creds, etc.).
-- When `sandbox: false`, the agent's `ctx.sandbox` still exists but points at the runner's own process — useful for `--dev` iteration, **not** what we recommend for production.
-
-### 3.5 `memory` shape
+### 3.4 `memory` shape
 
 ```jsonc
 "memory": true                                            // sensible defaults
 "memory": {
   "enabled": true,
-  "scopes": ["session", "user", "workspace"],
+  "scopes": ["workspace", "user", "global"],
   "ttlDays": 30,
   "autoPromote": true,
   "dedupMs": 300000
 }
 ```
 
-- Implementation: the runtime wires `@agent-assistant/memory` with the supermemory adapter (matching sage today). API key is pulled from workforce-managed env, not declared in the persona.
-- `scopes` is the only field with real semantic weight: session-only memory is wiped per handler; user-scope persists across the user's invocations of this agent; workspace persists across all users.
+- ⚠️ **Memory is not wired.** `ctx.memory` is a stub in v1; see `docs/plans/deploy-v1-schema-cascade-spec.md` § Loud hole. Memory wiring lands in a follow-up workflow (not yet specced).
+- When memory is wired, the runtime will use the supermemory adapter. API keys come from workforce-managed env, not from persona JSON.
+- `scopes` is the only field with real semantic weight: workspace memory persists across users in a workspace, user memory follows an individual user's invocations, and global memory is shared across the deployed agent.
 - `autoPromote` flips on the sage turn-recorder pattern — agent decides if session content is worth promoting.
-- **No `memoryMd` file.** Memory is config, not prose. Personality goes in `traits` and `description`.
+- **No `memoryMd` file.** Memory is config, not prose. Personality goes in prompt/sidecar content and the persona-personality-builder flow.
 
-### 3.6 `traits` shape
-
-Direct mapping to `@agent-assistant/traits`:
-
-```jsonc
-"traits": {
-  "voice": "professional-warm",
-  "formality": "low",
-  "proactivity": "medium",
-  "riskPosture": "conservative",
-  "domain": "engineering",
-  "vocabulary": ["PR", "diff", "CI"],
-  "preferMarkdown": true
-}
-```
-
-Only used when the runtime renders into a conversational surface (Slack message, Relaycast post, GitHub PR comment). Skip the field entirely for headless agents — saves the runtime a subsystem registration.
-
-### 3.7 Trigger-name registry
+### 3.5 Trigger-name registry
 
 `packages/persona-kit/src/triggers.ts` (new) ships a small registry of known trigger names per provider so the deploy CLI can lint them:
 
@@ -217,7 +187,7 @@ interface WorkforceCtx {
   notion?:  NotionClient;
   jira?:    JiraClient;
 
-  // Daytona sandbox (or process fs if sandbox:false)
+  // Daytona sandbox or runtime-provided process fs
   sandbox: {
     cwd: string;                                          // absolute path inside the sandbox
     exec(cmd: string, opts?: { cwd?: string; env?: Record<string,string> }): Promise<ExecResult>;
@@ -242,7 +212,7 @@ interface WorkforceCtx {
     cancel(name: string): Promise<void>;
   };
 
-  // Persona metadata (id, traits, harness tier defaults, etc.) — read-only
+  // Persona metadata (id, harness defaults, listeners, etc.) — read-only
   persona: PersonaSpec;
 }
 
@@ -254,7 +224,7 @@ export function handler<I extends IntegrationKeys>(
 Implementation notes:
 - `handler(...)` reads the persona JSON adjacent to the entrypoint (workforce bundles them together). At cold-start it:
   1. Calls `agent({ workspace, schedule, watch, inbox, onEvent: shim })` from `@agent-relay/agent`, mapping `persona.integrations` to `watch` and `persona.schedules` to `schedule`.
-  2. Builds `ctx` once per agent boot: opens Daytona handle (if `sandbox: true`), wires Relayfile-derived clients, attaches memory adapter.
+  2. Builds `ctx` once per agent boot: opens Daytona handle when deploy runs in sandbox mode, wires Relayfile-derived clients, attaches memory adapter.
   3. The `shim` reshapes the raw envelope from `@agent-relay/agent` into the `WorkforceEvent` discriminated union and invokes the user's `fn(ctx, event)`.
 - The user never imports `@agent-relay/agent` directly. Workforce owns the ergonomics. If the underlying SDK churns, we absorb the diff here.
 - The SDK doors stay open for power users: we re-export `agent` from `@agentworkforce/runtime/raw` so anyone who wants the lower-level surface can drop down. This matters for nightcto-shaped projects that outgrow the persona contract.
@@ -354,7 +324,6 @@ Direct port of the proactive-agents weekly-digest pattern.
   "cloud": true,
   "integrations": { "github": { "scope": { "repo": "AgentWorkforce/weekly-digest" } } },
   "schedules": [{ "name": "weekly", "cron": "0 9 * * 6", "tz": "UTC" }],
-  "sandbox": true,
   "memory": { "enabled": true, "scopes": ["workspace"], "ttlDays": 90 },
   "onEvent": "./agent.ts",
   "tiers": { ... standard codex/opencode tiers ... }
@@ -385,9 +354,7 @@ Direct port of the proactive-agents weekly-digest pattern.
     },
     "slack": { "triggers": [{ "on": "app_mention" }] }
   },
-  "sandbox": true,
-  "memory": { "enabled": true, "scopes": ["session", "workspace"] },
-  "traits": { "voice": "professional-warm", "formality": "low", "preferMarkdown": true },
+  "memory": { "enabled": true, "scopes": ["user", "workspace"] },
   "onEvent": "./agent.ts",
   "tiers": { ... }
 }
@@ -409,7 +376,7 @@ workforce/
 │   ├── cli/                          # add `deploy`, `login` cases
 │   ├── persona-kit/                  # extend PersonaSpec schema (§3)
 │   │   └── src/
-│   │       ├── types.ts              # +CloudFields, +IntegrationConfig, +Schedule, +Sandbox, +Memory, +Traits
+│   │       ├── types.ts              # +CloudFields, +IntegrationConfig, +Schedule, +Memory
 │   │       ├── parse.ts              # extend parsePersonaSpec to read new fields
 │   │       └── triggers.ts           # NEW — known triggers registry (§3.7)
 │   ├── harness-kit/                  # no changes for v1
@@ -494,7 +461,7 @@ If a track slips, §10's fallback applies: ship `--dev` end-to-end with `weekly-
 Tasks that are mechanical, well-specified, and don't gate on my decisions — perfect for a codex agent spawned via `workforce agent code-implementer` or a similar persona:
 
 1. **Trigger registry expansion** — fill out `packages/persona-kit/src/triggers.ts` with the full set of known trigger names per Tier-1 provider (Linear, GitHub, Slack, Notion, Jira) by reading the Relayfile provider docs in `/Users/khaliqgant/Projects/AgentWorkforce/relayfile/docs/`.
-2. **Test fixtures** — generate sample `persona.json` files exercising every optional combination (with/without traits, sandbox false, multi-schedule, etc.) into `packages/persona-kit/src/__fixtures__/`.
+2. **Test fixtures** — generate sample `persona.json` files exercising deploy optional combinations (memory, multi-schedule, integrations, etc.) into `packages/persona-kit/src/__fixtures__/`.
 3. **JSON Schema export** — emit a JSON Schema from the extended `PersonaSpec` for editor autocomplete. New script: `packages/persona-kit/scripts/emit-schema.mjs`. Wire to `pnpm run build` so it ships with the package.
 4. **Example expansion** — write a third example, `examples/linear-shipper/` (the paraglide pattern: Linear issue created → drive to PR), purely against the runtime substrate I land in §9.1.
 5. **README polish** — once the deploy command is real, codex agent rewrites the workforce README to lead with the deploy story.
