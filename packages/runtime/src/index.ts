@@ -27,22 +27,34 @@ export type {
   WorkforceProviderEvent
 } from './types.js';
 
-// Integration clients — concrete today: github. Others are typed `unknown`
-// in `WorkforceCtx` until they ship; importing them from here keeps
-// handler-side imports stable when typed clients land.
+// Integration clients — Relayfile-VFS-backed. All five Tier-1 providers
+// ship typed clients on `WorkforceCtx`. Construct them with
+// `IntegrationClientOptions` (mount root + writeback timing) — the
+// runtime wires this up automatically when a persona declares the
+// matching integration.
 export {
   createGithubClient,
-  WorkforceIntegrationError,
-  isRetryableStatus,
+  createLinearClient,
+  createNotionClient,
+  createJiraClient,
+  createSlackClient,
   type GithubClient,
-  type GithubClientOptions,
-  type GithubIssueRef,
-  type GithubIssueTarget,
-  type GithubPr,
-  type GithubRepoCoords,
-  type GithubReview,
-  type GithubReviewComment,
-  type GithubUpsertResult
+  type LinearClient,
+  type NotionClient,
+  type JiraClient,
+  type SlackClient,
+  type IntegrationClientOptions,
+  type WritebackReceipt,
+  type WritebackResult,
+  WorkforceIntegrationError,
+  draftFile,
+  encodeSegment,
+  listDirectoryEntries,
+  listJsonFiles,
+  readJsonFile,
+  readTextFile,
+  resolveMountRoot,
+  writeJsonFile
 } from './clients/index.js';
 
 // Re-export persona-kit types personas commonly reference at the handler

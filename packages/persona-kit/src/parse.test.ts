@@ -1,9 +1,11 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
+import { readFileSync } from 'node:fs';
 import {
   assertInputName,
   assertSidecarPath,
   INPUT_NAME_RE,
+  isIntent,
   parseHarnessSettings,
   parseIntegrations,
   parseInputs,
@@ -32,6 +34,15 @@ function validSpec(over: Record<string, unknown> = {}): Record<string, unknown> 
     harnessSettings: { reasoning: 'medium', timeoutSeconds: 300 },
     ...over
   };
+}
+
+function parsePersonaFixture(path: string) {
+  const fixtureUrl = new URL(`../../../${path}`, import.meta.url);
+  const raw = JSON.parse(readFileSync(fixtureUrl, 'utf8')) as Record<string, unknown>;
+  if (!isIntent(raw.intent)) {
+    throw new Error(`${path} declares an invalid intent`);
+  }
+  return parsePersonaSpec(raw, raw.intent);
 }
 
 test('parsePersonaSpec accepts a minimal valid flat spec', () => {
@@ -92,6 +103,20 @@ test('parsePersonaSpec rejects removed deploy-v1 traits and sandbox keys', () =>
         "sandbox was removed in v1; sandbox is on by default at deploy time. Use 'workforce deploy --no-sandbox' or runtime config to opt out. See docs/plans/deploy-v1.md"
     }
   );
+});
+
+test('parsePersonaSpec accepts the Relayfile-VFS example personas', () => {
+  const reviewAgent = parsePersonaFixture('examples/review-agent/persona.json');
+  assert.equal(reviewAgent.id, 'review-agent');
+  assert.equal(reviewAgent.intent, 'review');
+  assert.equal(reviewAgent.integrations?.github.triggers?.length, 4);
+  assert.deepEqual(reviewAgent.memory, { enabled: true, scopes: ['workspace'] });
+
+  const linearShipper = parsePersonaFixture('examples/linear-shipper/persona.json');
+  assert.equal(linearShipper.id, 'linear-shipper');
+  assert.equal(linearShipper.intent, 'implement-frontend');
+  assert.equal(linearShipper.integrations?.linear.triggers?.[0].on, 'issue.created');
+  assert.equal(linearShipper.inputs?.GITHUB_OWNER.default, 'AgentWorkforce');
 });
 
 test('parsePersonaSpec throws when intent does not match the expected intent', () => {
@@ -359,7 +384,13 @@ test('parseMemory accepts boolean + object forms and validates scopes', () => {
   assert.equal(parseMemory(false, 'memory'), false);
   assert.equal(parseMemory(undefined, 'memory'), undefined);
   const m = parseMemory(
-    { enabled: true, scopes: ['user', 'user', 'workspace', 'global'], ttlDays: 7, autoPromote: true, dedupMs: 0 },
+    {
+      enabled: true,
+      scopes: ['user', 'user', 'workspace', 'global'],
+      ttlDays: 7,
+      autoPromote: true,
+      dedupMs: 0
+    },
     'memory'
   );
   // Duplicates are deduped while preserving first-seen order.

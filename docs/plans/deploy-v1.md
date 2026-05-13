@@ -64,7 +64,7 @@ One file. One command. One contract.
 
 ## 3. Persona JSON schema diff
 
-All new fields are optional. A persona that does not set any of them continues to behave exactly as today — `workforce agent <id>` works unchanged. Set `cloud: true` and at least one listener to opt into the new deploy surface. A persona listens for events through three listener kinds: **clock** (`schedules[]` cron ticks), **radio** (`integrations.<provider>.triggers[]` RelayFile events), and **inbox** (RelayCast targeted messages, not yet modeled in v1). The JSON shape predates the listeners framing; the semantics are equivalent.
+All new fields are optional. A persona that does not set any of them continues to behave exactly as today — `workforce agent <id>` works unchanged. Set `cloud: true` and at least one trigger to opt into the new deploy surface.
 
 ### 3.1 Top-level additions
 
@@ -72,14 +72,14 @@ All new fields are optional. A persona that does not set any of them continues t
 |---|---|---|---|
 | `cloud` | `boolean` | always (default `false`) | When `true`, this persona is deployable. `workforce deploy` only operates on personas where this is `true`. |
 | `useSubscription` | `boolean` | optional | When `true`, inference uses the user's connected LLM subscription via `@agent-relay/cloud`'s provider link (no workforce-billed tokens). Triggers a `connectProvider` step at deploy time. |
-| `integrations` | `Record<string, IntegrationConfig>` | when persona has radio listeners | Declares which RelayFile providers this agent needs and what radio events fire its handler. See §3.2. |
-| `schedules` | `Schedule[]` | when persona has clock listeners | One or more cron listeners, registered with the runtime's `ctx.schedule.every(...)`. Each schedule has a `name` echoed back to the handler. See §3.3. |
-| `memory` | `boolean \| MemoryConfig` | optional | Declares memory intent. `ctx.memory` is a v1 stub until the follow-up memory wiring workflow lands. See §3.4. |
+| `integrations` | `Record<string, IntegrationConfig>` | when persona has event triggers | Declares which Relayfile providers this agent needs and what events fire its handler. See §3.2. |
+| `schedules` | `Schedule[]` | when persona runs on cron | One or more cron triggers, registered with the runtime's `ctx.schedule.every(...)`. Each schedule has a `name` echoed back to the handler. See §3.3. |
+| `memory` | `boolean \| MemoryConfig` | optional | Enables the agent-assistant memory subsystem. Scopes and TTL configurable. See §3.4. |
 | `onEvent` | `string` | when `cloud: true` and any trigger declared | Path to a TS file (relative to the persona JSON) whose default export is the event handler. Sub-file references like `./agent.ts` and `./handlers/index.ts` are supported. See §4. |
 
 `traits` and `sandbox` were removed from the persona spec in v1. Personality belongs in the persona's prompt/sidecar and the persona-personality-builder flow. Sandbox behavior is deploy-time runtime configuration: sandbox mode is on by default for deploys, with opt-out handled by deploy flags or runtime config rather than persona JSON.
 
-### 3.2 `integrations` radio listener shape
+### 3.2 `integrations` shape
 
 ```jsonc
 "integrations": {
@@ -100,13 +100,13 @@ All new fields are optional. A persona that does not set any of them continues t
 
 Key choices:
 - **Key is the Relayfile provider slug.** `github`, `linear`, `slack`, `notion`, `jira`. The deploy step calls `RelayfileSetup.connectIntegration({ allowedIntegrations: [key] })` for any provider not yet connected to the user's workspace.
-- **`triggers[]` is a flat radio listener list per provider** — multiple events from the same provider all fan into the same `onEvent`. The handler discriminates on `event.source` + `event.type`.
+- **`triggers[]` is a flat list per provider** — multiple events from the same provider all fan into the same `onEvent`. The handler discriminates on `event.source` + `event.type`.
 - **`match` and `where` are sugars** — `match: "@mention"` is shorthand for "filter to events that mention the deployed agent." The deploy CLI lints them against a known set; unknown values warn but don't fail. We can always upgrade the runtime to enforce them later.
 - **`scope` is optional and provider-specific.** Validated by the deploy CLI against a small provider-schema map. For v1, supported keys are documented per provider in the examples.
 
 The act of stacking integrations is just declaring multiple keys. The act of linking them ("when GitHub fires, post to Slack") is code in `onEvent`. We considered a declarative `links:` block — see §11.4 for why we deferred it.
 
-### 3.3 `schedules` clock listener shape
+### 3.3 `schedules` shape
 
 ```jsonc
 "schedules": [
@@ -132,8 +132,7 @@ The act of stacking integrations is just declaring multiple keys. The act of lin
 }
 ```
 
-- ⚠️ **Memory is not wired.** `ctx.memory` is a stub in v1; see `docs/plans/deploy-v1-schema-cascade-spec.md` § Loud hole. Memory wiring lands in a follow-up workflow (not yet specified).
-- When memory is wired, the runtime will use the supermemory adapter. API keys come from workforce-managed env, not from persona JSON.
+- Implementation: the runtime wires `@agent-assistant/memory` with the supermemory adapter (matching sage today). API key is pulled from workforce-managed env, not declared in the persona.
 - `scopes` is the only field with real semantic weight: workspace memory persists across users in a workspace, user memory follows an individual user's invocations, and global memory is shared across the deployed agent.
 - `autoPromote` flips on the sage turn-recorder pattern — agent decides if session content is worth promoting.
 - **No `memoryMd` file.** Memory is config, not prose. Personality goes in prompt/sidecar content and the persona-personality-builder flow.
@@ -154,6 +153,10 @@ export const KNOWN_TRIGGERS = {
 ```
 
 Unknown trigger names log a yellow warning but don't fail deploy. The cloud runtime is the source of truth; we don't want to be a gating bottleneck.
+
+### 3.8 Deploy-time persona inputs
+
+Existing `persona.inputs` remain the declaration point for non-secret runtime values. `workforce deploy` supplies deploy-time overrides with repeatable `--input KEY=value` flags; the CLI rejects keys that the persona did not declare and requires each value to be a string. In `--mode dev` and `--mode sandbox`, accepted values are injected into the runner environment as `WORKFORCE_INPUT_<KEY>`. In `--mode cloud`, the same map is sent in the deployment POST body as `inputs`.
 
 ---
 
@@ -224,7 +227,7 @@ export function handler<I extends IntegrationKeys>(
 Implementation notes:
 - `handler(...)` reads the persona JSON adjacent to the entrypoint (workforce bundles them together). At cold-start it:
   1. Calls `agent({ workspace, schedule, watch, inbox, onEvent: shim })` from `@agent-relay/agent`, mapping `persona.integrations` to `watch` and `persona.schedules` to `schedule`.
-  2. Builds `ctx` once per agent boot: opens Daytona handle when deploy runs in sandbox mode, wires Relayfile-derived clients. (Memory adapter wiring is deferred — `ctx.memory` is a stub in v1; see §3.4.)
+  2. Builds `ctx` once per agent boot: opens Daytona handle when deploy runs in sandbox mode, wires Relayfile-derived clients, attaches memory adapter.
   3. The `shim` reshapes the raw envelope from `@agent-relay/agent` into the `WorkforceEvent` discriminated union and invokes the user's `fn(ctx, event)`.
 - The user never imports `@agent-relay/agent` directly. Workforce owns the ergonomics. If the underlying SDK churns, we absorb the diff here.
 - The SDK doors stay open for power users: we re-export `agent` from `@agentworkforce/runtime/raw` so anyone who wants the lower-level surface can drop down. This matters for nightcto-shaped projects that outgrow the persona contract.
@@ -252,11 +255,13 @@ workforce deploy <persona-path>
     [--detach]                            # background the runner
     [--bundle-out <dir>]                  # emit bundle without launching
     [--dry-run]                           # validate only
+    [--input <key>=<value>]               # override declared persona input (repeatable)
 ```
 
 Flow:
 
 1. **Resolve persona**: load the JSON via `parsePersonaSpec` (extended schema). Fail fast on schema errors with field-pointed messages.
+   Deploy-time persona input overrides come from repeated `--input KEY=value` flags. Each key must be declared by `persona.inputs`; values are non-secret strings passed through to the runner as `WORKFORCE_INPUT_<KEY>` and included in cloud deployment requests.
 2. **Login check**: if no workforce auth token in keychain, prompt `workforce login` (browser OAuth via existing relayauth flow).
 3. **Workspace check**: ensure user has a workspace; offer to create one (`relay workspaces create <name>` semantics, called via SDK not subprocess).
 4. **Integrations**: for each `persona.integrations` key, check if connected to the active workspace. If not, **prompt the user before each** (`Connect github now? (Y/n)`). On yes, call `RelayfileSetup.connectIntegration({ allowedIntegrations: [key] })` and open the browser. Block until callback. On no, fail with a clear message.
