@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [3.0.9] - 2026-05-13
+
+### Fixed
+
+- Orchestrator + list/destroy read active.json; sanitize HTML errors (#118)
+
 ## [3.0.8] - 2026-05-13
 
 ### Fixed
