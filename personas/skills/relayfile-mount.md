@@ -41,14 +41,27 @@ Use gitignore negation, NOT a broad `**` exclude.
 **Correct:**
 
 ```json
-"ignoredPatterns": ["/*", "!web/", "!web/**", "secrets/", ".env"]
+"ignoredPatterns": ["/*", "!web", "!web/**", "secrets/", ".env"]
 ```
 
-**Three rules to avoid bricking the mount:**
+**Four rules to avoid bricking the mount:**
 
 1. **Use `/*` as the broad-exclude, never `**`.** Gitignore semantics skip excluded parent directories entirely. Once `**` excludes a directory, a later `!dir/**` cannot bring its contents back — the dir was never walked. `/*` only excludes root-level entries, so subdirs of allowed paths stay visible.
-2. **Include BOTH the directory and its contents.** `!web/` re-includes the directory node; `!web/**` re-includes everything inside it. You need both.
-3. **No `./` prefixes.** The `ignore` library expects bare relative patterns; `./web/**` is treated as a literal path that almost never matches.
+2. **Negate the directory with `!web`, NOT `!web/`.** This one is non-obvious and breaks every "obvious" allow-list. The relayfile walker calls the `ignore` library twice per directory entry — once with the bare name (`web`) and once with the trailing-slash form (`web/`) — and OR's the results. The bare-name check fires first, and `/*` matches `web` regardless of type. A trailing-slash negation `!web/` only counters the trailing-slash form, so the bare-name check still returns "ignored" and the walker skips the directory. `!web` (no slash) negates BOTH forms, which is what you need. **If your allow-listed subtree isn't appearing in the mount, this is almost always the bug.**
+3. **Include BOTH the directory and its contents.** `!web` re-includes the directory node so the walker recurses into it; `!web/**` re-includes everything inside it. You need both.
+4. **No `./` prefixes.** The `ignore` library expects bare relative patterns; `./web/**` is treated as a literal path that almost never matches.
+
+**Wrong (looks right, silently empty mount):**
+
+```json
+"ignoredPatterns": ["/*", "!web/", "!web/**"]
+```
+
+**Right:**
+
+```json
+"ignoredPatterns": ["/*", "!web", "!web/**"]
+```
 
 ## readonlyPatterns scope
 
@@ -68,7 +81,7 @@ The mount auto-includes `.git`, so `git status`/`log`/`diff` work inside the san
 ## Quick checklist before declaring `mount`
 
 - [ ] Does the persona actually need a sandbox? If full project access is fine, omit `mount` entirely.
-- [ ] For allow-lists: `/*` (not `**`) plus paired `!dir/` and `!dir/**` for each allowed path?
+- [ ] For allow-lists: `/*` (not `**`) plus paired `!dir` (NO trailing slash) and `!dir/**` for each allowed path?
 - [ ] Is the persona's *work* directory NOT in `readonlyPatterns`?
 - [ ] Are secrets, `.env`, and any private dirs in `ignoredPatterns`?
 - [ ] Does `permissions` cover the tool-side scope (Bash, file edits, MCP) the persona should and shouldn't have?
