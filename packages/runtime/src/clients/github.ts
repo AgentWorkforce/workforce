@@ -58,6 +58,7 @@ interface GithubIssueFile {
   html_url?: string;
   url?: string;
   title?: string;
+  state?: string;
 }
 
 interface GithubPullRequestFile {
@@ -81,7 +82,7 @@ async function findNumberSegment(
   repo: string,
   number: number
 ): Promise<string> {
-  // Relayfile may emit canonical paths under either `<n>.json` or
+  // Relayfile may emit canonical paths under either `<n>/` or
   // `<n>__<slug>/` directories depending on the adapter version. Probe
   // both shapes; fall back to the raw number so reads still surface a
   // useful WorkforceIntegrationError if neither exists.
@@ -151,7 +152,9 @@ export function createGithubClient(opts: IntegrationClientOptions): GithubClient
         Boolean(result?.value.title)
       );
       const issues = [...flatIssues, ...nestedIssues];
-      const existing = issues.find((issue) => issue.value.title === args.matchTitle && issue.value.number);
+      const existing = issues.find(
+        (issue) => issue.value.state === 'open' && issue.value.title === args.matchTitle && issue.value.number
+      );
       if (existing?.value.number) {
         await writeJsonFile(
           opts,
@@ -172,7 +175,8 @@ export function createGithubClient(opts: IntegrationClientOptions): GithubClient
 
     async getPr(target) {
       const pullSegment = await findNumberSegment(opts, 'pulls', target.owner, target.repo, target.number);
-      const pullRoot = `${repoRoot(target.owner, target.repo)}/pulls/${encodeSegment(pullSegment)}`;
+      const pullsRoot = `${repoRoot(target.owner, target.repo)}/pulls`;
+      const pullRoot = `${pullsRoot}/${encodeSegment(pullSegment)}`;
       const pr = await readJsonFile<GithubPullRequestFile>(
         opts,
         'github',
@@ -183,7 +187,14 @@ export function createGithubClient(opts: IntegrationClientOptions): GithubClient
           opts,
           'github',
           'getPr',
-          `${repoRoot(target.owner, target.repo)}/pulls/${encodeSegment(target.number)}/metadata.json`
+          `${pullRoot}/metadata.json`
+        ).catch(() =>
+          readJsonFile<GithubPullRequestFile>(
+            opts,
+            'github',
+            'getPr',
+            `${pullsRoot}/${encodeSegment(target.number)}.json`
+          )
         )
       );
       const diff = await readTextFile(opts, 'github', 'getPr.diff', `${pullRoot}/diff.patch`).catch(() => '');
