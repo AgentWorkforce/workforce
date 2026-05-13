@@ -57,21 +57,30 @@ export function toProactiveSession(
  * agent-assistant's proactive engine schedule its own follow-ups using
  * workforce's `ctx.schedule.at` / `ctx.schedule.cancel`.
  *
- * The returned binding stores the supplied adapter; it does not capture
- * `ctx` directly. This keeps the binding usable across event invocations
- * — the handler builds the adapter once and reuses it.
+ * IMPORTANT: the adapter closes over the supplied `ctx`, so the binding
+ * must be rebuilt per event invocation. Reusing a binding constructed
+ * with a previous invocation's ctx would route wake-ups through stale
+ * schedule / sandbox / workspace handles. Treat the binding as request-
+ * scoped, the same way `ctx` itself is.
+ *
+ * Cancellation caveat: `ctx.schedule.at` does not currently accept a
+ * caller-supplied name — schedule names are owned by the persona's
+ * declared `schedules[]` list. `cancelWakeUp` therefore only works if
+ * the caller has pre-registered a persona schedule slot whose name
+ * matches the returned `bindingId` (the deterministic
+ * `proactive-${agentName}` key below). Otherwise `cancelWakeUp` is a
+ * no-op against the underlying scheduler.
  */
 export function schedulerBindingFromCtx(ctx: WorkforceCtx): ContextSchedulerBinding {
+  const slotName = bindingSlotFor(ctx.agentName);
   const adapter: RuntimeScheduleContext = {
     scheduleWakeUp: async (at, context) => {
       await ctx.schedule.at(at, context);
-      // The proactive package wants a binding id back. We use the wake-up
-      // ISO timestamp + agent name as a deterministic key so cancel calls
-      // can find the same slot. Workforce's `ctx.schedule.cancel` takes a
-      // schedule name; the persona's schedules list is the authoritative
-      // source so callers pre-register a slot for proactive wake-ups
-      // (e.g. "proactive-followups") and we return that name as the id.
-      return { bindingId: bindingIdFor(at, ctx.agentName) };
+      // Workforce's `ctx.schedule.cancel` takes a schedule name from the
+      // persona's `schedules[]` list. We return a stable per-agent slot
+      // name so a matching pre-registered persona schedule (e.g.
+      // `proactive-${agentName}`) can be cancelled by `cancelWakeUp`.
+      return { bindingId: slotName };
     },
     cancelWakeUp: async (bindingId) => {
       await ctx.schedule.cancel(bindingId);
@@ -80,8 +89,8 @@ export function schedulerBindingFromCtx(ctx: WorkforceCtx): ContextSchedulerBind
   return new ContextSchedulerBinding(adapter);
 }
 
-function bindingIdFor(at: Date, agentName: string): string {
-  return `proactive-${agentName}-${at.toISOString()}`;
+function bindingSlotFor(agentName: string): string {
+  return `proactive-${agentName}`;
 }
 
 // Re-export the underlying types so callers can build their own adapters

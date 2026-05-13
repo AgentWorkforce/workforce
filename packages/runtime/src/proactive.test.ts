@@ -111,7 +111,10 @@ test('schedulerBindingFromCtx routes requestWakeUp through ctx.schedule.at', asy
   const id = await binding.requestWakeUp(at, { reason: 'follow-up' } as never);
   assert.equal(calls.length, 1);
   assert.equal(calls[0].at.toISOString(), at.toISOString());
-  assert.match(id, /^proactive-reviewer-2026-05-13T09:00:00\.000Z$/);
+  // The bindingId is a stable per-agent slot name so a pre-registered
+  // persona schedule slot can be cancelled by `cancelWakeUp`. It is not
+  // per-timestamp, since `ctx.schedule.at` does not accept caller names.
+  assert.equal(id, 'proactive-reviewer');
 });
 
 test('schedulerBindingFromCtx routes cancelWakeUp through ctx.schedule.cancel', async () => {
@@ -127,6 +130,6 @@ test('schedulerBindingFromCtx routes cancelWakeUp through ctx.schedule.cancel', 
     }
   });
   const binding = schedulerBindingFromCtx(ctx);
-  await binding.cancelWakeUp('proactive-reviewer-2026-05-13T09:00:00.000Z');
-  assert.deepEqual(cancelled, ['proactive-reviewer-2026-05-13T09:00:00.000Z']);
+  await binding.cancelWakeUp('proactive-reviewer');
+  assert.deepEqual(cancelled, ['proactive-reviewer']);
 });
