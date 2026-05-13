@@ -251,8 +251,8 @@ function extractAgentId(body: AgentLookupBody | null): string | null {
 
 async function pathExists(target: string): Promise<boolean> {
   try {
-    await stat(path.resolve(target));
-    return true;
+    const stats = await stat(path.resolve(target));
+    return stats.isFile();
   } catch {
     return false;
   }

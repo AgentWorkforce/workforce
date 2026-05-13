@@ -305,6 +305,41 @@ test('runDestroy: persona path resolves to agent id via /agents lookup', async (
   }
 });
 
+test('runDestroy: directory target is not treated as a persona file', async () => {
+  const restoreEnv = withTokenEnv('tok-1', WORKSPACE);
+  const tmp = await mkdtemp(path.join(os.tmpdir(), 'aw-destroy-dir-'));
+  const fetchTrap = trapFetch(async (call) => {
+    assert.equal(
+      call.url,
+      `${CLOUD}/api/v1/workspaces/${WORKSPACE}/deployments/${encodeURIComponent(tmp)}`
+    );
+    assert.equal(call.init?.method, 'DELETE');
+    return new Response(
+      JSON.stringify({
+        agentId: tmp,
+        status: 'destroyed',
+        destroyedAt: '2026-05-13T00:00:00.000Z',
+        cancelledScheduleIds: []
+      }),
+      { status: 200, headers: { 'content-type': 'application/json' } }
+    );
+  });
+  const trap = trapIO();
+  try {
+    await assert.rejects(
+      runDestroy([tmp, '--cloud-url', CLOUD]),
+      /__exit_trap__:0/
+    );
+    assert.deepEqual(trap.exits, [0]);
+    assert.equal(fetchTrap.calls.length, 1);
+  } finally {
+    trap.restore();
+    fetchTrap.restore();
+    restoreEnv();
+    await rm(tmp, { recursive: true, force: true });
+  }
+});
+
 test('runDestroy: persona path with no deployed agent returns exit 2', async () => {
   const restoreEnv = withTokenEnv('tok-1', WORKSPACE);
   const tmp = await mkdtemp(path.join(os.tmpdir(), 'aw-destroy-'));
