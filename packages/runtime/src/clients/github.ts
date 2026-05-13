@@ -161,7 +161,15 @@ export function createGithubClient(opts: IntegrationClientOptions): GithubClient
           'github',
           'upsertIssue.update',
           `${issueDir}/${encodeSegment(existing.value.number)}.json`,
-          { title: args.title, body: args.body, labels: args.labels }
+          {
+            number: existing.value.number,
+            state: existing.value.state,
+            html_url: existing.value.html_url,
+            url: existing.value.url,
+            title: args.title,
+            body: args.body,
+            labels: args.labels
+          }
         );
         return {
           number: existing.value.number,
@@ -176,7 +184,10 @@ export function createGithubClient(opts: IntegrationClientOptions): GithubClient
     async getPr(target) {
       const pullSegment = await findNumberSegment(opts, 'pulls', target.owner, target.repo, target.number);
       const pullsRoot = `${repoRoot(target.owner, target.repo)}/pulls`;
-      const pullRoot = `${pullsRoot}/${encodeSegment(pullSegment)}`;
+      // `findNumberSegment` returns the actual on-disk entry name verbatim
+      // (e.g. `123__fix%2Fci`), so do NOT re-encode it — that would
+      // double-escape any percent sequences and miss the directory.
+      const pullRoot = `${pullsRoot}/${pullSegment}`;
       const pr = await readJsonFile<GithubPullRequestFile>(
         opts,
         'github',

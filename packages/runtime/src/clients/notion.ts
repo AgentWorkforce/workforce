@@ -1,3 +1,4 @@
+import { WorkforceIntegrationError } from '../errors.js';
 import {
   draftFile,
   encodeSegment,
@@ -29,7 +30,12 @@ export interface NotionClient {
 function readDatabaseId(parent: Record<string, unknown>): string {
   const databaseId = parent.database_id ?? parent.databaseId;
   if (typeof databaseId !== 'string' || databaseId.trim().length === 0) {
-    throw new Error('Notion createPage file writeback requires parent.database_id');
+    throw new WorkforceIntegrationError({
+      provider: 'notion',
+      operation: 'createPage',
+      cause: new Error('Notion createPage requires parent.database_id'),
+      retryable: false
+    });
   }
   return databaseId.trim();
 }

@@ -223,6 +223,12 @@ async function waitForReceipt(
   client: IntegrationClientOptions
 ): Promise<WritebackReceipt | undefined> {
   const timeoutMs = client.writebackTimeoutMs ?? 0;
+  // Fire-and-forget: never reinterpret the just-written draft as a
+  // receipt. The draft payload may legitimately carry top-level `id` /
+  // `path` / `created` fields (e.g. an upsert update writing back the
+  // canonical issue), and treating that as a receipt would surface a
+  // bogus identifier to callers.
+  if (timeoutMs <= 0) return undefined;
   const deadline = Date.now() + timeoutMs;
   do {
     const parsed = await readCurrentJson(absolutePath);
@@ -234,7 +240,6 @@ async function waitForReceipt(
     ) {
       return parsed as WritebackReceipt;
     }
-    if (timeoutMs <= 0) return undefined;
     await new Promise((resolve) => setTimeout(resolve, client.writebackPollMs ?? 250));
   } while (Date.now() < deadline);
   return undefined;
