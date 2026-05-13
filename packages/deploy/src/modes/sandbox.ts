@@ -61,8 +61,6 @@ export const sandboxLauncher: ModeLauncher = {
       throw err;
     }
 
-    const sandboxTimeoutSeconds = resolveTimeoutSeconds(input.persona.sandbox);
-
     let stopping = false;
     const stop = async (): Promise<void> => {
       if (stopping) return;
@@ -79,8 +77,7 @@ export const sandboxLauncher: ModeLauncher = {
     const done = (async () => {
       try {
         const result = await client.exec(handle, 'node runner.mjs', {
-          cwd: SANDBOX_BUNDLE_DIR,
-          timeoutSeconds: sandboxTimeoutSeconds
+          cwd: SANDBOX_BUNDLE_DIR
         });
         const output = result.output.trim();
         if (output.length > 0) input.io.info(`[sandbox] ${output}`);
@@ -149,14 +146,6 @@ export function resolveSandboxClient(
     workspaceToken,
     personaId: input.persona.id
   });
-}
-
-function resolveTimeoutSeconds(sandbox: ModeLaunchInput['persona']['sandbox']): number | undefined {
-  if (sandbox === undefined || sandbox === true || sandbox === false) return undefined;
-  if (typeof sandbox.timeoutSeconds === 'number' && sandbox.timeoutSeconds > 0) {
-    return sandbox.timeoutSeconds;
-  }
-  return undefined;
 }
 
 // Re-exported for tests + power users wanting to compose the client manually.

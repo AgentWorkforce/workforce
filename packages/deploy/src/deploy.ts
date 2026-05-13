@@ -179,6 +179,7 @@ export async function deploy(opts: DeployOptions, resolvers: DeployResolvers = {
     bundle,
     workspace,
     io,
+    ...(opts.cloudUrl ? { cloudUrl: opts.cloudUrl } : {}),
     ...(opts.detach ? { detach: true } : {}),
     ...(opts.byoSandbox ? { byoSandbox: true } : {})
   });

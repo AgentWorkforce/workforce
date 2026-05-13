@@ -42,7 +42,8 @@ export const PERSONA_INTENTS = [
   'local-stack-orchestration',
   'e2e-validation',
   'write-integration-tests',
-  'relay-orchestrator'
+  'relay-orchestrator',
+  'scaffold-proactive-agent'
 ] as const;
 
 export const BUILT_IN_PERSONA_INTENTS = ['persona-authoring', 'persona-improvement'] as const;
