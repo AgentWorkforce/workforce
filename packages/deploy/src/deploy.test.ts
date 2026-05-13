@@ -45,6 +45,39 @@ async function withTempPersona(
   };
 }
 
+async function withWorkspaceEnv<T>(
+  env: { workspace?: string; token?: string },
+  fn: () => Promise<T>
+): Promise<T> {
+  const previousWorkspace = process.env.WORKFORCE_WORKSPACE_ID;
+  const previousToken = process.env.WORKFORCE_WORKSPACE_TOKEN;
+  if (env.workspace === undefined) {
+    delete process.env.WORKFORCE_WORKSPACE_ID;
+  } else {
+    process.env.WORKFORCE_WORKSPACE_ID = env.workspace;
+  }
+  if (env.token === undefined) {
+    delete process.env.WORKFORCE_WORKSPACE_TOKEN;
+  } else {
+    process.env.WORKFORCE_WORKSPACE_TOKEN = env.token;
+  }
+
+  try {
+    return await fn();
+  } finally {
+    if (previousWorkspace === undefined) {
+      delete process.env.WORKFORCE_WORKSPACE_ID;
+    } else {
+      process.env.WORKFORCE_WORKSPACE_ID = previousWorkspace;
+    }
+    if (previousToken === undefined) {
+      delete process.env.WORKFORCE_WORKSPACE_TOKEN;
+    } else {
+      process.env.WORKFORCE_WORKSPACE_TOKEN = previousToken;
+    }
+  }
+}
+
 test('preflightPersona accepts a valid deploy-shaped persona', async () => {
   const { personaPath, cleanup } = await withTempPersona(basePersonaJson());
   try {
@@ -294,42 +327,125 @@ test('deploy --bundle-out emits to the supplied dir and skips launch', async () 
   }
 });
 
-test('--mode cloud throws a clear "not yet available" error', async () => {
+test('--mode cloud skips local integration resolver and hands off to the cloud launcher', async () => {
   const { personaPath, cleanup } = await withTempPersona(basePersonaJson());
   const io = createBufferedIO();
+  let launched = false;
   try {
-    await assert.rejects(
-      deploy(
-        { personaPath, mode: 'cloud', io },
-        {
-          workspaceAuth: {
-            async resolveWorkspace() {
-              return { workspace: 'w', token: 't' };
-            }
+    const result = await deploy(
+      { personaPath, mode: 'cloud', io },
+      {
+        workspaceAuth: {
+          async resolveWorkspace() {
+            return { workspace: 'w', token: 't' };
+          }
+        },
+        integrations: {
+          async isConnected() {
+            throw new Error('cloud mode should not use local integration resolver');
           },
-          integrations: {
-            async isConnected() {
-              return true;
-            },
-            async connect() {
-              throw new Error('unreachable');
-            }
-          },
-          bundle: {
-            async stage() {
+          async connect() {
+            throw new Error('cloud mode should not use local integration resolver');
+          }
+        },
+        bundle: {
+          async stage(input) {
+            await mkdir(input.outDir, { recursive: true });
+            const runner = path.join(input.outDir, 'runner.mjs');
+            const bundle = path.join(input.outDir, 'agent.bundle.mjs');
+            const personaCopy = path.join(input.outDir, 'persona.json');
+            const pkg = path.join(input.outDir, 'package.json');
+            await Promise.all([
+              writeFile(runner, '', 'utf8'),
+              writeFile(bundle, '', 'utf8'),
+              writeFile(personaCopy, '{}', 'utf8'),
+              writeFile(pkg, '{}', 'utf8')
+            ]);
+            return {
+              runnerPath: runner,
+              bundlePath: bundle,
+              personaCopyPath: personaCopy,
+              packageJsonPath: pkg,
+              sizeBytes: 0
+            };
+          }
+        },
+        modes: {
+          cloud: {
+            async launch(input) {
+              launched = true;
+              assert.equal(input.workspace, 'w');
               return {
-                runnerPath: '/tmp/r',
-                bundlePath: '/tmp/b',
-                personaCopyPath: '/tmp/p',
-                packageJsonPath: '/tmp/k',
-                sizeBytes: 0
+                id: 'agent-cloud',
+                async stop() {
+                  /* no-op */
+                },
+                done: Promise.resolve({ code: 0 })
               };
             }
           }
         }
-      ),
-      /--mode cloud is not yet available/
+      }
     );
+    assert.equal(result.mode, 'cloud');
+    assert.equal(launched, true);
+    assert.deepEqual(result.connectedIntegrations, []);
+  } finally {
+    await cleanup();
+  }
+});
+
+test('--mode cloud does not require an env workspace token before launching', async () => {
+  const { personaPath, cleanup } = await withTempPersona(basePersonaJson());
+  const io = createBufferedIO();
+  let launched = false;
+  try {
+    const result = await withWorkspaceEnv({ workspace: 'w-cloud' }, () => deploy(
+      { personaPath, mode: 'cloud', io },
+      {
+        bundle: {
+          async stage(input) {
+            await mkdir(input.outDir, { recursive: true });
+            const runner = path.join(input.outDir, 'runner.mjs');
+            const bundle = path.join(input.outDir, 'agent.bundle.mjs');
+            const personaCopy = path.join(input.outDir, 'persona.json');
+            const pkg = path.join(input.outDir, 'package.json');
+            await Promise.all([
+              writeFile(runner, '', 'utf8'),
+              writeFile(bundle, '', 'utf8'),
+              writeFile(personaCopy, '{}', 'utf8'),
+              writeFile(pkg, '{}', 'utf8')
+            ]);
+            return {
+              runnerPath: runner,
+              bundlePath: bundle,
+              personaCopyPath: personaCopy,
+              packageJsonPath: pkg,
+              sizeBytes: 0
+            };
+          }
+        },
+        modes: {
+          cloud: {
+            async launch(input) {
+              launched = true;
+              assert.equal(input.workspace, 'w-cloud');
+              assert.equal(input.workspaceToken, undefined);
+              return {
+                id: 'agent-cloud',
+                async stop() {
+                  /* no-op */
+                },
+                done: Promise.resolve({ code: 0 })
+              };
+            }
+          }
+        }
+      }
+    ));
+    assert.equal(result.mode, 'cloud');
+    assert.equal(result.workspace, 'w-cloud');
+    assert.equal(launched, true);
   } finally {
     await cleanup();
   }

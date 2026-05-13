@@ -105,7 +105,7 @@ export const sandboxLauncher: ModeLauncher = {
  * deploy orchestrator (and tests) can plug in an explicit choice.
  */
 export function resolveSandboxClient(
-  input: Pick<ModeLaunchInput, 'workspace' | 'persona' | 'env'> & Partial<Pick<ModeLaunchInput, 'io'>>,
+  input: Pick<ModeLaunchInput, 'workspace' | 'persona' | 'env'> & Partial<Pick<ModeLaunchInput, 'io' | 'workspaceToken' | 'cloudUrl'>>,
   overrides: {
     /** Force BYO even when both BYO and workforce-managed are configured. */
     forceByo?: boolean;
@@ -133,13 +133,13 @@ export function resolveSandboxClient(
     });
   }
 
-  const workspaceToken = process.env.WORKFORCE_WORKSPACE_TOKEN?.trim();
+  const workspaceToken = input.workspaceToken?.trim() || process.env.WORKFORCE_WORKSPACE_TOKEN?.trim();
   if (!workspaceToken) {
     throw new Error(
       'sandbox launcher: no Daytona credentials and no workforce workspace token. Either export DAYTONA_API_KEY, or run `workforce login` (sets WORKFORCE_WORKSPACE_TOKEN) so we can mint a workforce-managed sandbox.'
     );
   }
-  const cloudUrl = (process.env.WORKFORCE_CLOUD_URL?.trim() || DEFAULT_CLOUD_URL).replace(/\/$/, '');
+  const cloudUrl = (input.cloudUrl?.trim() || process.env.WORKFORCE_CLOUD_URL?.trim() || DEFAULT_CLOUD_URL).replace(/\/$/, '');
   return createProxySandboxClient({
     cloudUrl,
     workspaceId: input.workspace,

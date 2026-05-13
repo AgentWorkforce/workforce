@@ -4,6 +4,7 @@ import { bundleStager } from './bundle.js';
 import {
   connectIntegrations,
   envIntegrationResolver,
+  type ConnectAllInput,
   type IntegrationConnectResolver,
   type ProviderSubscriptionResolver
 } from './connect.js';
@@ -15,6 +16,7 @@ import { cloudLauncher } from './modes/cloud.js';
 import { preflightPersona } from './preflight.js';
 import type {
   BundleStager,
+  DeployIO,
   DeployMode,
   DeployOptions,
   DeployResult,
@@ -128,36 +130,25 @@ export async function deploy(opts: DeployOptions, resolvers: DeployResolvers = {
     };
   }
 
-  const workspaceAuth = resolvers.workspaceAuth ?? envWorkspaceAuth();
-  const { workspace } = await workspaceAuth.resolveWorkspace({
-    override: opts.workspace,
-    io
-  });
+  const mode: DeployMode = opts.mode ?? pickMode(opts);
+  const { workspace, token } = mode === 'cloud' && !resolvers.workspaceAuth
+    ? resolveCloudWorkspaceIdentity(opts, io)
+    : await (resolvers.workspaceAuth ?? envWorkspaceAuth()).resolveWorkspace({
+        override: opts.workspace,
+        io
+      });
   io.info(`workspace: ${workspace}`);
 
-  const connectResult = await connectIntegrations({
-    persona: preflight.persona,
-    workspace,
-    noConnect: opts.noConnect === true,
-    io,
-    integrations: resolvers.integrations ?? envIntegrationResolver(),
-    ...(resolvers.subscription ? { subscription: resolvers.subscription } : {})
-  });
-  const failed = connectResult.outcomes.filter((o) => o.status === 'failed');
-  if (failed.length > 0) {
-    throw new Error(
-      `deploy aborted: ${failed.length} integration(s) failed to connect: ${failed.map((f) => f.provider).join(', ')}`
-    );
-  }
-  const skipped = connectResult.outcomes.filter((o) => o.status === 'skipped');
-  if (skipped.length > 0) {
-    throw new Error(
-      `deploy aborted: ${skipped.length} integration(s) skipped: ${skipped.map((s) => s.provider).join(', ')}`
-    );
-  }
-  const connectedIntegrations = connectResult.outcomes
-    .filter((o) => o.status === 'already-connected' || o.status === 'connected-now')
-    .map((o) => o.provider);
+  const connectedIntegrations = mode === 'cloud'
+    ? preflight.integrations
+    : await connectAndCollectIntegrations({
+        persona: preflight.persona,
+        workspace,
+        noConnect: opts.noConnect === true,
+        io,
+        integrations: resolvers.integrations ?? envIntegrationResolver(),
+        ...(resolvers.subscription ? { subscription: resolvers.subscription } : {})
+      });
 
   const bundleDir = path.resolve(
     path.join(preflight.personaDir, '.workforce', 'build', preflight.persona.id)
@@ -171,7 +162,6 @@ export async function deploy(opts: DeployOptions, resolvers: DeployResolvers = {
   });
   io.info(`bundle: staged to ${bundle.runnerPath} (${formatBytes(bundle.sizeBytes)})`);
 
-  const mode: DeployMode = opts.mode ?? pickMode(opts);
   io.info(`mode: ${mode}`);
   const launcher = resolveLauncher(mode, resolvers);
   const handle = await launcher.launch({
@@ -179,9 +169,16 @@ export async function deploy(opts: DeployOptions, resolvers: DeployResolvers = {
     bundle,
     workspace,
     io,
-    ...(opts.cloudUrl ? { cloudUrl: opts.cloudUrl } : {}),
+    ...(token ? { workspaceToken: token } : {}),
     ...(opts.detach ? { detach: true } : {}),
-    ...(opts.byoSandbox ? { byoSandbox: true } : {})
+    ...(opts.byoSandbox ? { byoSandbox: true } : {}),
+    ...(opts.cloudUrl ? { cloudUrl: opts.cloudUrl } : {}),
+    ...(opts.noPrompt ? { noPrompt: true } : {}),
+    ...(opts.harnessSource ? { harnessSource: opts.harnessSource } : {}),
+    ...(opts.byokKey ? { byokKey: opts.byokKey } : {}),
+    ...(opts.onExists ? { onExists: opts.onExists } : {}),
+    ...(opts.inputs ? { inputs: opts.inputs } : {}),
+    ...(opts.onLog ? { onLog: opts.onLog } : {})
   });
   io.info(`launched: ${mode}/${handle.id}`);
 
@@ -208,6 +205,44 @@ function resolveLauncher(mode: DeployMode, resolvers: DeployResolvers): ModeLaun
     case 'cloud':
       return cloudLauncher;
   }
+}
+
+function resolveCloudWorkspaceIdentity(
+  opts: DeployOptions,
+  io: DeployIO
+): { workspace: string; token?: string } {
+  const workspace = (opts.workspace ?? process.env.WORKFORCE_WORKSPACE_ID ?? '').trim();
+  if (!workspace) {
+    io.error(
+      'no workspace resolved: pass --workspace, set WORKFORCE_WORKSPACE_ID, or run `workforce login`'
+    );
+    throw new Error('workspace is required for cloud deploy');
+  }
+
+  const token = (process.env.WORKFORCE_WORKSPACE_TOKEN ?? '').trim();
+  return {
+    workspace,
+    ...(token ? { token } : {})
+  };
+}
+
+async function connectAndCollectIntegrations(input: ConnectAllInput): Promise<string[]> {
+  const connectResult = await connectIntegrations(input);
+  const failed = connectResult.outcomes.filter((o) => o.status === 'failed');
+  if (failed.length > 0) {
+    throw new Error(
+      `deploy aborted: ${failed.length} integration(s) failed to connect: ${failed.map((f) => f.provider).join(', ')}`
+    );
+  }
+  const skipped = connectResult.outcomes.filter((o) => o.status === 'skipped');
+  if (skipped.length > 0) {
+    throw new Error(
+      `deploy aborted: ${skipped.length} integration(s) skipped: ${skipped.map((s) => s.provider).join(', ')}`
+    );
+  }
+  return connectResult.outcomes
+    .filter((o) => o.status === 'already-connected' || o.status === 'connected-now')
+    .map((o) => o.provider);
 }
 
 function formatBytes(bytes: number): string {

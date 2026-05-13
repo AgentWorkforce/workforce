@@ -1,10 +1,14 @@
 import path from 'node:path';
 import {
+  createTerminalIO,
   deploy,
+  resolveWorkspaceToken,
   type DeployMode,
   type DeployOptions,
   type ModeLaunchHandle
 } from '@agentworkforce/deploy';
+
+const DEFAULT_CLOUD_URL = 'https://agentrelay.com';
 
 /**
  * Argv parser + dispatcher for `workforce deploy <persona-path> [flags]`.
@@ -62,14 +66,34 @@ export async function runLogin(args: readonly string[]): Promise<void> {
     process.stdout.write(LOGIN_USAGE);
     process.exit(0);
   }
-  process.stderr.write(
-    'The browser-based workforce login flow is rolling out in stages and is not on by default yet.\n' +
-      'For now, export your workspace credentials in the shell:\n\n' +
-      '  export WORKFORCE_WORKSPACE_ID=<workspace-id>\n' +
-      '  export WORKFORCE_WORKSPACE_TOKEN=<workspace-token>\n\n' +
-      'Then re-run `workforce deploy ./your-persona.json`.\n'
+
+  const opts = parseLoginArgs(args);
+  const io = createTerminalIO();
+  const workspace = opts.workspace
+    ?? process.env.WORKFORCE_WORKSPACE_ID?.trim()
+    ?? (await io.prompt('Workspace ID')).trim();
+  if (!workspace) {
+    process.stderr.write('workforce login failed: workspace is required; pass --workspace or set WORKFORCE_WORKSPACE_ID\n');
+    process.exit(1);
+  }
+
+  const cloudUrl = normalizeCloudUrl(
+    opts.cloudUrl
+      ?? process.env.WORKFORCE_DEPLOY_CLOUD_URL
+      ?? process.env.WORKFORCE_CLOUD_URL
+      ?? DEFAULT_CLOUD_URL
   );
-  process.exit(1);
+
+  try {
+    await resolveWorkspaceToken({ workspace, cloudUrl, io });
+    process.stdout.write(`\nlogged in: ${workspace}\n`);
+    process.exit(0);
+  } catch (err) {
+    process.stderr.write(
+      `\nworkforce login failed: ${err instanceof Error ? err.message : String(err)}\n`
+    );
+    process.exit(1);
+  }
 }
 
 const DEPLOY_USAGE = `usage: workforce deploy <persona-path> [flags]
@@ -83,18 +107,28 @@ Flags:
   --bundle-out <dir>           Emit the bundle to <dir> and exit (no launch)
   --dry-run                    Validate the persona and exit before any side effects
   --cloud-url <url>            Override the workforce cloud base URL
+  --no-prompt                  Fail instead of prompting for cloud setup
+  --harness-source <source>    Cloud harness source: plan, byok, or oauth
+  --byok-key <key>             API key for --harness-source byok
+  --on-exists <choice>         Existing cloud persona behavior: cancel, update, or destroy
   --input <key>=<value>        Override a declared persona input (repeatable)
   -h, --help                   Print this message
 `;
 
-const LOGIN_USAGE = `usage: workforce login
+const LOGIN_USAGE = `usage: workforce login [flags]
 
-Connect this machine to a workforce workspace. The full OAuth flow ships
-once the cloud login surface is live; until then, set:
+Connect this machine to a workforce workspace using the browser OAuth flow.
+The resulting workspace token is stored in the OS keychain when available,
+falling back to ~/.agentworkforce/login.json.
 
-  export WORKFORCE_WORKSPACE_ID=...
-  export WORKFORCE_WORKSPACE_TOKEN=...
+Flags:
+  --workspace <name>          Workforce workspace; defaults to WORKFORCE_WORKSPACE_ID or prompt
+  --cloud-url <url>           Override the workforce cloud base URL
+  -h, --help                  Print this message
 `;
+
+const HARNESS_SOURCES = ['plan', 'byok', 'oauth'] as const;
+const ON_EXISTS_CHOICES = ['update', 'destroy', 'cancel'] as const;
 
 export function parseDeployArgs(args: readonly string[]): DeployOptions {
   let personaPath: string | undefined;
@@ -106,6 +140,10 @@ export function parseDeployArgs(args: readonly string[]): DeployOptions {
   let bundleOut: string | undefined;
   let dryRun = false;
   let cloudUrl: string | undefined;
+  let noPrompt = false;
+  let harnessSource: DeployOptions['harnessSource'];
+  let byokKey: string | undefined;
+  let onExists: DeployOptions['onExists'];
   const inputs: Record<string, string> = {};
 
   for (let i = 0; i < args.length; i += 1) {
@@ -133,6 +171,23 @@ export function parseDeployArgs(args: readonly string[]): DeployOptions {
       dryRun = true;
     } else if (a === '--cloud-url') {
       cloudUrl = expectValue('--cloud-url', args[++i]);
+    } else if (a.startsWith('--cloud-url=')) {
+      cloudUrl = expectInlineValue('--cloud-url', a.slice('--cloud-url='.length));
+    } else if (a === '--no-prompt') {
+      noPrompt = true;
+      noConnect = true;
+    } else if (a === '--harness-source') {
+      harnessSource = expectChoice('--harness-source', expectValue('--harness-source', args[++i]), HARNESS_SOURCES);
+    } else if (a.startsWith('--harness-source=')) {
+      harnessSource = expectChoice('--harness-source', expectInlineValue('--harness-source', a.slice('--harness-source='.length)), HARNESS_SOURCES);
+    } else if (a === '--byok-key') {
+      byokKey = expectValue('--byok-key', args[++i]);
+    } else if (a.startsWith('--byok-key=')) {
+      byokKey = expectInlineValue('--byok-key', a.slice('--byok-key='.length));
+    } else if (a === '--on-exists') {
+      onExists = expectChoice('--on-exists', expectValue('--on-exists', args[++i]), ON_EXISTS_CHOICES);
+    } else if (a.startsWith('--on-exists=')) {
+      onExists = expectChoice('--on-exists', expectInlineValue('--on-exists', a.slice('--on-exists='.length)), ON_EXISTS_CHOICES);
     } else if (a === '--input') {
       parseDeployInputValue(expectDeployInputValue(args[++i]), inputs);
     } else if (a.startsWith('--input=')) {
@@ -160,6 +215,10 @@ export function parseDeployArgs(args: readonly string[]): DeployOptions {
     ...(bundleOut ? { bundleOut } : {}),
     ...(dryRun ? { dryRun: true } : {}),
     ...(cloudUrl ? { cloudUrl } : {}),
+    ...(noPrompt ? { noPrompt: true } : {}),
+    ...(harnessSource ? { harnessSource } : {}),
+    ...(byokKey ? { byokKey } : {}),
+    ...(onExists ? { onExists } : {}),
     ...(Object.keys(inputs).length > 0 ? { inputs } : {})
   };
 }
@@ -191,6 +250,53 @@ function expectValue(flag: string, value: string | undefined): string {
     die(`${flag}: missing value (got "${value}", which looks like a flag)`);
   }
   return value;
+}
+
+function expectInlineValue(flag: string, value: string): string {
+  if (!value.trim()) {
+    die(`${flag}: missing value`);
+  }
+  return value;
+}
+
+function expectChoice<T extends string>(flag: string, value: string, allowed: readonly T[]): T {
+  if (!allowed.includes(value as T)) {
+    die(`${flag}: expected one of ${allowed.join('|')}; got "${value}"`);
+  }
+  return value as T;
+}
+
+function parseLoginArgs(args: readonly string[]): { workspace?: string; cloudUrl?: string } {
+  let workspace: string | undefined;
+  let cloudUrl: string | undefined;
+
+  for (let i = 0; i < args.length; i += 1) {
+    const a = args[i];
+    if (a === '-h' || a === '--help') {
+      process.stdout.write(LOGIN_USAGE);
+      process.exit(0);
+    } else if (a === '--workspace') {
+      workspace = expectValue('--workspace', args[++i]);
+    } else if (a.startsWith('--workspace=')) {
+      workspace = expectInlineValue('--workspace', a.slice('--workspace='.length));
+    } else if (a === '--cloud-url') {
+      cloudUrl = expectValue('--cloud-url', args[++i]);
+    } else if (a.startsWith('--cloud-url=')) {
+      cloudUrl = expectInlineValue('--cloud-url', a.slice('--cloud-url='.length));
+    } else {
+      die(`login: unknown argument "${a}"`);
+    }
+  }
+
+  return {
+    ...(workspace ? { workspace } : {}),
+    ...(cloudUrl ? { cloudUrl } : {})
+  };
+}
+
+function normalizeCloudUrl(url: string): string {
+  const trimmed = url.trim();
+  return trimmed ? trimmed.replace(/\/+$/, '') : DEFAULT_CLOUD_URL;
 }
 
 function die(message: string): never {

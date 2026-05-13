@@ -1,5 +1,8 @@
-import { deploy as deployInternal, pickMode } from './deploy.js';
-import type { DeployResolvers } from './deploy.js';
+import {
+  deploy as deployInternal,
+  pickMode,
+  type DeployResolvers
+} from './deploy.js';
 import { preflightPersona } from './preflight.js';
 import { devLauncher } from './modes/dev.js';
 import { sandboxLauncher } from './modes/sandbox.js';
@@ -11,8 +14,7 @@ import type {
   ModeLauncher
 } from './types.js';
 
-export { pickMode };
-export type { DeployResolvers };
+export { pickMode, type DeployResolvers };
 export { preflightPersona };
 export {
   connectIntegrations,
@@ -22,7 +24,17 @@ export {
   type IntegrationConnectResolver,
   type ProviderSubscriptionResolver
 } from './connect.js';
-export { envWorkspaceAuth, type WorkspaceAuth } from './login.js';
+export {
+  envWorkspaceAuth,
+  loadWorkspaceToken,
+  loginWithBrowser,
+  resolveWorkspaceToken,
+  resolveWorkspaceTokenFromEnv,
+  storeWorkspaceToken,
+  type StoredWorkspaceLogin,
+  type WorkspaceAuth,
+  type WorkspaceAuthToken
+} from './login.js';
 export { createTerminalIO, createBufferedIO, type BufferedIO } from './io.js';
 export { bundleStager } from './bundle.js';
 export { devLauncher } from './modes/dev.js';

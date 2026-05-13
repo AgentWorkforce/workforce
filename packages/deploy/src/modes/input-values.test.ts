@@ -234,15 +234,20 @@ test('cloud launcher includes inputs in persona bundle POST body', async () => {
       workspace: 'ws-test',
       cloudUrl: 'https://cloud.example.com',
       inputs: { TOPIC: 'Deploy v1' },
-      io: createBufferedIO()
+      io: createBufferedIO(),
+      workspaceToken: 'tok-cloud',
+      noPrompt: true,
+      harnessSource: 'byok',
+      byokKey: 'sk-test'
     });
 
-    assert.equal(handle.id, 'dep-1');
-    assert.equal(
-      calls[0]?.url,
-      'https://cloud.example.com/api/v1/workspaces/ws-test/deployments'
+    const deployCall = calls.find(
+      (c) =>
+        c.url === 'https://cloud.example.com/api/v1/workspaces/ws-test/deployments'
     );
-    assert.deepEqual((calls[0]?.body as { inputs?: unknown }).inputs, { TOPIC: 'Deploy v1' });
+    assert.equal(handle.id, 'agent-1');
+    assert.ok(deployCall, 'expected a POST to the deployments endpoint');
+    assert.deepEqual((deployCall.body as { inputs?: unknown }).inputs, { TOPIC: 'Deploy v1' });
   } finally {
     if (oldToken === undefined) {
       delete process.env.WORKFORCE_WORKSPACE_TOKEN;
