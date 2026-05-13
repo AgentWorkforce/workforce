@@ -75,7 +75,8 @@ export const sandboxLauncher: ModeLauncher = {
     const done = (async () => {
       try {
         const result = await client.exec(handle, 'node runner.mjs', {
-          cwd: SANDBOX_BUNDLE_DIR
+          cwd: SANDBOX_BUNDLE_DIR,
+          timeoutSeconds: input.persona.harnessSettings.timeoutSeconds
         });
         const output = result.output.trim();
         if (output.length > 0) input.io.info(`[sandbox] ${output}`);

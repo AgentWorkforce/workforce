@@ -132,7 +132,7 @@ The act of stacking integrations is just declaring multiple keys. The act of lin
 }
 ```
 
-- ⚠️ **Memory is not wired.** `ctx.memory` is a stub in v1; see `docs/plans/deploy-v1-schema-cascade-spec.md` § Loud hole. Memory wiring lands in a follow-up workflow (not yet specced).
+- ⚠️ **Memory is not wired.** `ctx.memory` is a stub in v1; see `docs/plans/deploy-v1-schema-cascade-spec.md` § Loud hole. Memory wiring lands in a follow-up workflow (not yet specified).
 - When memory is wired, the runtime will use the supermemory adapter. API keys come from workforce-managed env, not from persona JSON.
 - `scopes` is the only field with real semantic weight: workspace memory persists across users in a workspace, user memory follows an individual user's invocations, and global memory is shared across the deployed agent.
 - `autoPromote` flips on the sage turn-recorder pattern — agent decides if session content is worth promoting.
@@ -224,7 +224,7 @@ export function handler<I extends IntegrationKeys>(
 Implementation notes:
 - `handler(...)` reads the persona JSON adjacent to the entrypoint (workforce bundles them together). At cold-start it:
   1. Calls `agent({ workspace, schedule, watch, inbox, onEvent: shim })` from `@agent-relay/agent`, mapping `persona.integrations` to `watch` and `persona.schedules` to `schedule`.
-  2. Builds `ctx` once per agent boot: opens Daytona handle when deploy runs in sandbox mode, wires Relayfile-derived clients, attaches memory adapter.
+  2. Builds `ctx` once per agent boot: opens Daytona handle when deploy runs in sandbox mode, wires Relayfile-derived clients. (Memory adapter wiring is deferred — `ctx.memory` is a stub in v1; see §3.4.)
   3. The `shim` reshapes the raw envelope from `@agent-relay/agent` into the `WorkforceEvent` discriminated union and invokes the user's `fn(ctx, event)`.
 - The user never imports `@agent-relay/agent` directly. Workforce owns the ergonomics. If the underlying SDK churns, we absorb the diff here.
 - The SDK doors stay open for power users: we re-export `agent` from `@agentworkforce/runtime/raw` so anyone who wants the lower-level surface can drop down. This matters for nightcto-shaped projects that outgrow the persona contract.
