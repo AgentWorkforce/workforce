@@ -47,6 +47,15 @@ export interface ProviderSubscriptionResolver {
 }
 
 /**
+ * Called after a cloud integration status check gets a 401. The CLI uses
+ * this to run the established browser login flow, refresh the active bearer
+ * token, and let the status check retry once.
+ */
+export interface IntegrationAuthRecoveryResolver {
+  recover(args: { workspace: string; provider: string; reason: string }): Promise<boolean>;
+}
+
+/**
  * Resolver backed by env vars. Used as the default when no higher-level
  * implementation is plugged in. `isConnected` returns true exactly when
  * one of the two recognized env vars is set for the provider; `connect`
@@ -72,7 +81,7 @@ export function envIntegrationResolver(): IntegrationConnectResolver {
 export function relayfileIntegrationResolver(opts: {
   apiUrl: string;
   workspaceId: string;
-  workspaceToken: string;
+  workspaceToken: string | (() => string | Promise<string>);
   io?: Pick<DeployIO, 'info' | 'warn'>;
   pollIntervalMs?: number;
   timeoutMs?: number;
@@ -88,16 +97,18 @@ export function relayfileIntegrationResolver(opts: {
   return {
     async isConnected({ workspace, provider }) {
       const workspaceId = workspace || opts.workspaceId;
+      const token = await resolveWorkspaceToken(opts.workspaceToken);
       const body = await requestJson(fetchImpl, `${apiUrl}/api/v1/workspaces/${encodeURIComponent(
         workspaceId
-      )}/integrations`, opts.workspaceToken);
+      )}/integrations`, token);
       return listHasConnectedProvider(body, provider);
     },
     async connect({ workspace, provider }) {
       const workspaceId = workspace || opts.workspaceId;
+      const token = await resolveWorkspaceToken(opts.workspaceToken);
       const session = await requestJson(fetchImpl, `${apiUrl}/api/v1/workspaces/${encodeURIComponent(
         workspaceId
-      )}/integrations/connect-session`, opts.workspaceToken, {
+      )}/integrations/connect-session`, token, {
         method: 'POST',
         body: JSON.stringify({ allowedIntegrations: [provider] })
       });
@@ -122,7 +133,11 @@ export function relayfileIntegrationResolver(opts: {
           workspaceId
         )}/integrations/${encodeURIComponent(provider)}/status`);
         if (sessionId) statusUrl.searchParams.set('connectionId', sessionId);
-        const status = await requestJson(fetchImpl, statusUrl.toString(), opts.workspaceToken);
+        const status = await requestJson(
+          fetchImpl,
+          statusUrl.toString(),
+          await resolveWorkspaceToken(opts.workspaceToken)
+        );
         if (isConnectedStatus(status)) {
           const connectionId = readString(status, 'connectionId')
             ?? readString(status, 'currentConnectionId')
@@ -155,6 +170,8 @@ export interface ConnectAllInput {
   noPrompt?: boolean;
   io: DeployIO;
   integrations: IntegrationConnectResolver;
+  /** Optional cloud-login recovery for interactive 401s. */
+  authRecovery?: IntegrationAuthRecoveryResolver;
   /** Required only when persona.useSubscription is true. */
   subscription?: ProviderSubscriptionResolver;
 }
@@ -174,7 +191,8 @@ export interface ConnectAllResult {
  * Behavior summary:
  *   - integrations: {} or undefined → returns immediately, no prompts
  *   - already-connected provider → no prompt; emits `already-connected`
- *   - auth failure while checking status → fails without prompting
+ *   - 401 while checking status + authRecovery → prompts login and retries once
+ *   - other auth failure while checking status → fails without integration prompts
  *   - not connected + noPrompt=true → fails immediately without prompting
  *   - not connected + noConnect=true → fails the deploy with a clear message
  *   - not connected + noConnect=false → prompts; on yes runs `connect`,
@@ -187,15 +205,9 @@ export async function connectIntegrations(input: ConnectAllInput): Promise<Conne
 
   for (const provider of Object.keys(integrations)) {
     let statusCheckFailure: string | undefined;
-    const connected = await input.integrations
-      .isConnected({ workspace: input.workspace, provider })
-      .catch((err) => {
-        statusCheckFailure = err instanceof Error ? err.message : String(err);
-        input.io.warn(
-          `failed to check connection status for ${provider}: ${statusCheckFailure}`
-        );
-        return false;
-      });
+    let connected = await checkProviderConnected(input, provider, (message) => {
+      statusCheckFailure = message;
+    });
 
     if (connected) {
       input.io.info(`integrations.${provider}: already connected`);
@@ -203,8 +215,38 @@ export async function connectIntegrations(input: ConnectAllInput): Promise<Conne
       continue;
     }
 
-    if (statusCheckFailure && isIntegrationAuthFailure(statusCheckFailure)) {
-      input.io.error(`integrations.${provider}: auth failed while checking connection status`);
+    if (
+      statusCheckFailure
+      && isIntegrationUnauthorizedFailure(statusCheckFailure)
+      && !input.noPrompt
+      && input.authRecovery
+    ) {
+      const recovered = await input.authRecovery
+        .recover({ workspace: input.workspace, provider, reason: statusCheckFailure })
+        .catch((err) => {
+          input.io.error(
+            `integrations.${provider}: login failed: ${err instanceof Error ? err.message : String(err)}`
+          );
+          return false;
+        });
+
+      if (recovered) {
+        statusCheckFailure = undefined;
+        connected = await checkProviderConnected(input, provider, (message) => {
+          statusCheckFailure = message;
+        });
+        if (connected) {
+          input.io.info(`integrations.${provider}: already connected`);
+          outcomes.push({ provider, status: 'already-connected' });
+          continue;
+        }
+      }
+    }
+
+    if (statusCheckFailure) {
+      input.io.error(
+        `integrations.${provider}: ${isIntegrationAuthFailure(statusCheckFailure) ? 'auth failed' : 'failed'} while checking connection status`
+      );
       outcomes.push({
         provider,
         status: 'failed',
@@ -302,6 +344,21 @@ export async function connectIntegrations(input: ConnectAllInput): Promise<Conne
   };
 }
 
+async function checkProviderConnected(
+  input: ConnectAllInput,
+  provider: string,
+  onFailure: (message: string) => void
+): Promise<boolean> {
+  return await input.integrations
+    .isConnected({ workspace: input.workspace, provider })
+    .catch((err) => {
+      const message = err instanceof Error ? err.message : String(err);
+      onFailure(message);
+      input.io.warn(`failed to check connection status for ${provider}: ${message}`);
+      return false;
+    });
+}
+
 async function requestJson(
   fetchImpl: typeof fetch,
   url: string,
@@ -334,6 +391,14 @@ async function requestJson(
 
 function isIntegrationAuthFailure(message: string): boolean {
   return /cloud integration request failed: (unauthorized|forbidden)\b/i.test(message);
+}
+
+function isIntegrationUnauthorizedFailure(message: string): boolean {
+  return /cloud integration request failed: unauthorized\b/i.test(message);
+}
+
+async function resolveWorkspaceToken(token: string | (() => string | Promise<string>)): Promise<string> {
+  return typeof token === 'function' ? await token() : token;
 }
 
 function listHasConnectedProvider(body: unknown, provider: string): boolean {

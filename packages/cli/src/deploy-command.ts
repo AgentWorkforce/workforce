@@ -13,6 +13,7 @@ import {
   createTerminalIO,
   deploy,
   writeActiveWorkspace,
+  type CloudAuthRecoveryResolver,
   type DeployMode,
   type DeployOptions,
   type ModeLaunchHandle
@@ -83,7 +84,9 @@ export async function runDeploy(args: readonly string[]): Promise<void> {
   }
 
   try {
-    const result = await deploy(parsed);
+    const result = await deploy(parsed, {
+      authRecovery: createDeployAuthRecovery(parsed)
+    });
     if (parsed.dryRun) {
       process.stdout.write(`\nok: ${result.deploymentId} (dry-run)\n`);
       process.exit(0);
@@ -110,6 +113,31 @@ export async function runDeploy(args: readonly string[]): Promise<void> {
     );
     process.exit(1);
   }
+}
+
+function createDeployAuthRecovery(opts: DeployOptions): CloudAuthRecoveryResolver {
+  return {
+    async recover({ workspace, cloudUrl, io, reason }) {
+      const ok = await io.confirm(
+        'Cloud login is required before deploy can check integrations. Log in now? (opens browser)',
+        { defaultValue: true }
+      );
+      if (!ok) return false;
+
+      io.info(`cloud: starting login because integration auth failed (${reason})`);
+      const auth = await deployCommandDeps.ensureAuthenticated(cloudUrl, { force: true });
+      const apiUrl = normalizeCloudUrl(auth.apiUrl || cloudUrl);
+      const activeWorkspace = opts.workspace ?? workspace;
+      await deployCommandDeps.writeActiveWorkspace({
+        workspace: activeWorkspace,
+        cloudUrl: apiUrl
+      });
+      io.info(`cloud: logged in for workspace ${activeWorkspace}; retrying integration check`);
+      return {
+        token: auth.accessToken
+      };
+    }
+  };
 }
 
 function isRunHandle(value: unknown): value is ModeLaunchHandle {

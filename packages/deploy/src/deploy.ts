@@ -7,6 +7,7 @@ import {
   envIntegrationResolver,
   relayfileIntegrationResolver,
   type ConnectAllInput,
+  type IntegrationAuthRecoveryResolver,
   type IntegrationConnectResolver,
   type ProviderSubscriptionResolver
 } from './connect.js';
@@ -36,9 +37,20 @@ import type {
 export interface DeployResolvers {
   workspaceAuth?: WorkspaceAuth;
   integrations?: IntegrationConnectResolver;
+  authRecovery?: CloudAuthRecoveryResolver;
   subscription?: ProviderSubscriptionResolver;
   bundle?: BundleStager;
   modes?: Partial<Record<DeployMode, ModeLauncher>>;
+}
+
+export interface CloudAuthRecoveryResolver {
+  recover(args: {
+    workspace: string;
+    cloudUrl: string;
+    io: DeployIO;
+    provider: string;
+    reason: string;
+  }): Promise<{ token: string } | false | null | undefined>;
 }
 
 /**
@@ -138,6 +150,13 @@ export async function deploy(opts: DeployOptions, resolvers: DeployResolvers = {
     io
   });
   io.info(`workspace: ${workspace}`);
+  let activeToken = token;
+  const cloudUrl = normalizeCloudUrl(
+    opts.cloudUrl
+      ?? process.env.WORKFORCE_DEPLOY_CLOUD_URL
+      ?? process.env.WORKFORCE_CLOUD_URL
+      ?? defaultApiUrl()
+  );
 
   const connectedIntegrations = await connectAndCollectIntegrations({
     persona: preflight.persona,
@@ -148,10 +167,21 @@ export async function deploy(opts: DeployOptions, resolvers: DeployResolvers = {
     integrations: resolvers.integrations ?? defaultIntegrationResolver({
       mode,
       workspace,
-      token,
-      cloudUrl: opts.cloudUrl,
+      token: () => activeToken,
+      cloudUrl,
       io
     }),
+    ...(resolvers.authRecovery
+      ? {
+          authRecovery: authRecoveryForIntegrations(
+            resolvers.authRecovery,
+            () => activeToken,
+            (nextToken) => { activeToken = nextToken; },
+            cloudUrl,
+            io
+          )
+        }
+      : {}),
     ...(resolvers.subscription ? { subscription: resolvers.subscription } : {})
   });
 
@@ -174,7 +204,7 @@ export async function deploy(opts: DeployOptions, resolvers: DeployResolvers = {
     bundle,
     workspace,
     io,
-    ...(token ? { workspaceToken: token } : {}),
+    ...(activeToken ? { workspaceToken: activeToken } : {}),
     ...(opts.detach ? { detach: true } : {}),
     ...(opts.byoSandbox ? { byoSandbox: true } : {}),
     ...(opts.cloudUrl ? { cloudUrl: opts.cloudUrl } : {}),
@@ -234,22 +264,42 @@ async function connectAndCollectIntegrations(input: ConnectAllInput): Promise<st
 function defaultIntegrationResolver(args: {
   mode: DeployMode;
   workspace: string;
-  token: string;
+  token: string | (() => string | Promise<string>);
   cloudUrl?: string;
   io: DeployIO;
 }): IntegrationConnectResolver {
   if (args.mode !== 'cloud') return envIntegrationResolver();
   return relayfileIntegrationResolver({
-    apiUrl: normalizeCloudUrl(
-      args.cloudUrl
-        ?? process.env.WORKFORCE_DEPLOY_CLOUD_URL
-        ?? process.env.WORKFORCE_CLOUD_URL
-        ?? defaultApiUrl()
-    ),
+    apiUrl: normalizeCloudUrl(args.cloudUrl ?? defaultApiUrl()),
     workspaceId: args.workspace,
     workspaceToken: args.token,
     io: args.io
   });
+}
+
+function authRecoveryForIntegrations(
+  resolver: CloudAuthRecoveryResolver,
+  currentToken: () => string,
+  setToken: (token: string) => void,
+  cloudUrl: string,
+  io: DeployIO
+): IntegrationAuthRecoveryResolver {
+  return {
+    async recover({ workspace, provider, reason }) {
+      const result = await resolver.recover({
+        workspace,
+        cloudUrl,
+        io,
+        provider,
+        reason
+      });
+      if (!result) return false;
+      if (result.token && result.token !== currentToken()) {
+        setToken(result.token);
+      }
+      return true;
+    }
+  };
 }
 
 function normalizeCloudUrl(url: string): string {
