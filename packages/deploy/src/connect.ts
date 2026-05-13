@@ -183,11 +183,13 @@ export async function connectIntegrations(input: ConnectAllInput): Promise<Conne
   const outcomes: IntegrationConnectOutcome[] = [];
 
   for (const provider of Object.keys(integrations)) {
+    let statusCheckFailure: string | undefined;
     const connected = await input.integrations
       .isConnected({ workspace: input.workspace, provider })
       .catch((err) => {
+        statusCheckFailure = err instanceof Error ? err.message : String(err);
         input.io.warn(
-          `failed to check connection status for ${provider}: ${err instanceof Error ? err.message : String(err)}`
+          `failed to check connection status for ${provider}: ${statusCheckFailure}`
         );
         return false;
       });
@@ -195,6 +197,16 @@ export async function connectIntegrations(input: ConnectAllInput): Promise<Conne
     if (connected) {
       input.io.info(`integrations.${provider}: already connected`);
       outcomes.push({ provider, status: 'already-connected' });
+      continue;
+    }
+
+    if (statusCheckFailure && isIntegrationAuthFailure(statusCheckFailure)) {
+      input.io.error(`integrations.${provider}: auth failed while checking connection status`);
+      outcomes.push({
+        provider,
+        status: 'failed',
+        message: statusCheckFailure
+      });
       continue;
     }
 
@@ -285,12 +297,23 @@ async function requestJson(
     }
   });
   if (res.status === 401) {
-    throw new Error('cloud integration request failed: unauthorized. Run `agentworkforce login` and retry.');
+    throw new Error(
+      'cloud integration request failed: unauthorized. Verify the active account with `agent-relay cloud whoami`, then run `agentworkforce login` to refresh the active workspace.'
+    );
+  }
+  if (res.status === 403) {
+    throw new Error(
+      'cloud integration request failed: forbidden. The active account is not authorized for this workspace; run `agent-relay cloud whoami` and `agentworkforce login` to refresh the active workspace.'
+    );
   }
   if (!res.ok) {
     throw new Error(`cloud integration request failed: ${res.status} ${await res.text().catch(() => '')}`.trim());
   }
   return await res.json();
+}
+
+function isIntegrationAuthFailure(message: string): boolean {
+  return /cloud integration request failed: (unauthorized|forbidden)\b/i.test(message);
 }
 
 function listHasConnectedProvider(body: unknown, provider: string): boolean {
