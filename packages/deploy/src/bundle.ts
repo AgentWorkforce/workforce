@@ -8,7 +8,7 @@ import type { BundleStageInput, BundleResult, BundleStager } from './types.js';
  * bundle reader can detect format drift. Bumped whenever the runner
  * shape changes incompatibly.
  */
-const RUNNER_FORMAT_VERSION = 1;
+const RUNNER_FORMAT_VERSION = 2;
 
 /**
  * Stage a deploy-ready bundle to `input.outDir`. Output layout:
@@ -134,7 +134,24 @@ if (typeof candidate !== 'function') {
 }
 const handler = candidate.__workforceHandler ? candidate : wrapHandler(candidate);
 
-await startRunner({ persona, handler });
+const agent = readRuntimeContext('WORKFORCE_AGENT_CONTEXT');
+const deployment = readRuntimeContext('WORKFORCE_DEPLOYMENT_CONTEXT');
+
+await startRunner({ persona, agent, deployment, handler });
+
+function readRuntimeContext(name) {
+  const raw = process.env[name];
+  if (!raw) {
+    throw new Error(\`workforce deploy bundle: missing \${name}; the deploy launcher must inject runtime row context\`);
+  }
+  try {
+    return JSON.parse(raw);
+  } catch (err) {
+    throw new Error(
+      \`workforce deploy bundle: \${name} must be valid JSON: \${err instanceof Error ? err.message : String(err)}\`
+    );
+  }
+}
 `;
 }
 

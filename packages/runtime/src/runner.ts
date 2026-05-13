@@ -6,6 +6,8 @@ import type {
   HarnessRunArgs,
   HarnessRunResult,
   SandboxContext,
+  WorkforceAgentContext,
+  WorkforceDeploymentContext,
   WorkforceEvent,
   WorkforceHandler,
   WorkforceHandlerExport
@@ -14,6 +16,13 @@ import type {
 export interface StartRunnerOptions {
   /** Parsed persona JSON. Required. */
   persona: PersonaSpec;
+  /** Agent row metadata for the agent handling this event. */
+  agent: WorkforceAgentContext & {
+    input_values?: Record<string, string | number | boolean | null | undefined>;
+    inputValues?: Record<string, string | number | boolean | null | undefined>;
+  };
+  /** Deployment row metadata for the trigger that fires this handler. */
+  deployment: WorkforceDeploymentContext;
   /**
    * Default-exported handler from the bundled `agent.ts`. The runner
    * accepts both a branded `WorkforceHandlerExport` (preferred) and a raw
@@ -108,6 +117,8 @@ export async function startRunner(options: StartRunnerOptions): Promise<void> {
 
   const ctx = buildCtx({
     persona: options.persona,
+    agent: options.agent,
+    deployment: options.deployment,
     workspaceId,
     sandbox: options.subsystems?.sandbox ?? PROCESS_FS_SANDBOX,
     harnessRunner: options.harnessRunner ?? HARNESS_UNAVAILABLE,
