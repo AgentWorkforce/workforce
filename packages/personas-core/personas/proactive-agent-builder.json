@@ -46,36 +46,14 @@
       "!wrangler.jsonc"
     ]
   },
-  "tiers": {
-    "best": {
-      "harness": "codex",
-      "model": "openai-codex/gpt-5.3-codex",
-      "systemPrompt": "$TASK_DESCRIPTION",
-      "harnessSettings": {
-        "reasoning": "high",
-        "timeoutSeconds": 1200,
-        "sandboxMode": "workspace-write",
-        "approvalPolicy": "on-request",
-        "workspaceWriteNetworkAccess": true
-      }
-    },
-    "best-value": {
-      "harness": "opencode",
-      "model": "opencode/gpt-5-nano",
-      "systemPrompt": "$TASK_DESCRIPTION",
-      "harnessSettings": {
-        "reasoning": "medium",
-        "timeoutSeconds": 900
-      }
-    },
-    "minimum": {
-      "harness": "opencode",
-      "model": "opencode/minimax-m2.5-free",
-      "systemPrompt": "$TASK_DESCRIPTION",
-      "harnessSettings": {
-        "reasoning": "low",
-        "timeoutSeconds": 600
-      }
-    }
+  "harness": "codex",
+  "model": "openai-codex/gpt-5.3-codex",
+  "systemPrompt": "$TASK_DESCRIPTION",
+  "harnessSettings": {
+    "reasoning": "high",
+    "timeoutSeconds": 1200,
+    "sandboxMode": "workspace-write",
+    "approvalPolicy": "on-request",
+    "workspaceWriteNetworkAccess": true
   }
 }

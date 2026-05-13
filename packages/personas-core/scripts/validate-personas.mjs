@@ -8,7 +8,6 @@ const packageJsonPath = join(packageRoot, 'package.json');
 const errors = [];
 const packageJson = readJson(packageJsonPath);
 const personaRelDir = packageJson.agentworkforce?.personas;
-const requiredTiers = ['best', 'best-value', 'minimum'];
 
 if (personaRelDir !== 'personas') {
   errors.push('package.json must declare agentworkforce.personas as "personas"');
@@ -72,25 +71,13 @@ for (const file of personaFiles) {
   if (persona.skills !== undefined && !Array.isArray(persona.skills)) {
     errors.push(`${rel} skills must be an array when present`);
   }
-  if (!isObject(persona.tiers)) {
-    errors.push(`${rel} must declare tiers`);
-    continue;
+  for (const field of ['harness', 'model', 'systemPrompt']) {
+    if (typeof persona[field] !== 'string' || persona[field].trim() === '') {
+      errors.push(`${rel}.${field} must be a non-empty string`);
+    }
   }
-
-  for (const tier of requiredTiers) {
-    const runtime = persona.tiers[tier];
-    if (!isObject(runtime)) {
-      errors.push(`${rel} tiers.${tier} must be an object`);
-      continue;
-    }
-    for (const field of ['harness', 'model', 'systemPrompt']) {
-      if (typeof runtime[field] !== 'string' || runtime[field].trim() === '') {
-        errors.push(`${rel} tiers.${tier}.${field} must be a non-empty string`);
-      }
-    }
-    if (!isObject(runtime.harnessSettings)) {
-      errors.push(`${rel} tiers.${tier}.harnessSettings must be an object`);
-    }
+  if (!isObject(persona.harnessSettings)) {
+    errors.push(`${rel}.harnessSettings must be an object`);
   }
 }
 

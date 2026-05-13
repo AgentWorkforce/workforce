@@ -86,9 +86,73 @@ function hasCodexLaunchSettings(settings: HarnessSettings | undefined): boolean 
     settings.sandboxMode ||
       settings.approvalPolicy ||
       settings.workspaceWriteNetworkAccess !== undefined ||
-      settings.webSearch
+      settings.webSearch ||
+      settings.dangerouslyBypassApprovalsAndSandbox !== undefined
   );
 }
+
+const CODEX_ONLY_WARNING =
+  'persona declares codex-only harnessSettings but the {harness} harness ignores sandboxMode, approvalPolicy, workspaceWriteNetworkAccess, webSearch, and dangerouslyBypassApprovalsAndSandbox.';
+
+
+function toTomlBasicString(value: string): string {
+  // JSON string escaping is compatible with TOML basic strings.
+  return JSON.stringify(value);
+}
+
+function toTomlStringArray(values: readonly string[]): string {
+  return `[${values.map((value) => toTomlBasicString(value)).join(', ')}]`;
+}
+
+function toTomlInlineTable(entries: Record<string, string>): string {
+  const pairs = Object.entries(entries)
+    .sort(([a], [b]) => a.localeCompare(b))
+    .map(([key, value]) => `${toTomlBasicString(key)} = ${toTomlBasicString(value)}`);
+  return `{ ${pairs.join(', ')} }`;
+}
+
+function pushCodexConfigArg(args: string[], key: string, tomlValue: string): void {
+  args.push('--config', `${key}=${tomlValue}`);
+}
+
+function toTomlDottedKeySegment(key: string): string {
+  // Bare keys are simpler/readable; quote only when TOML requires it.
+  return /^[A-Za-z0-9_-]+$/.test(key) ? key : toTomlBasicString(key);
+}
+
+function appendCodexMcpServerArgs(
+  args: string[],
+  mcpServers: Record<string, McpServerSpec>,
+  warnings: string[]
+): void {
+  for (const [name, server] of Object.entries(mcpServers).sort(([a], [b]) => a.localeCompare(b))) {
+    const prefix = `mcp_servers.${toTomlDottedKeySegment(name)}`;
+    if (server.type === 'stdio') {
+      pushCodexConfigArg(args, `${prefix}.command`, toTomlBasicString(server.command));
+      if (server.args && server.args.length > 0) {
+        pushCodexConfigArg(args, `${prefix}.args`, toTomlStringArray(server.args));
+      }
+      if (server.env && Object.keys(server.env).length > 0) {
+        pushCodexConfigArg(args, `${prefix}.env`, toTomlInlineTable(server.env));
+      }
+      continue;
+    }
+
+    if (server.type === 'sse') {
+      warnings.push(
+        `persona declares mcpServers.${name} with type 'sse'; codex expects streamable-http MCP endpoints. Passing url through as-is.`
+      );
+    }
+
+    pushCodexConfigArg(args, `${prefix}.url`, toTomlBasicString(server.url));
+
+    if (server.headers && Object.keys(server.headers).length > 0) {
+      // Codex MCP uses `http_headers` for remote servers in config.toml.
+      pushCodexConfigArg(args, `${prefix}.http_headers`, toTomlInlineTable(server.headers));
+    }
+  }
+}
+
 
 /**
  * Translate a persona's runtime fields into a concrete `{bin, args}` for
@@ -114,9 +178,13 @@ function hasCodexLaunchSettings(settings: HarnessSettings | undefined): boolean 
  * so callers do not append a trailing positional, which opencode would
  * otherwise interpret as a project directory.
  *
- * Both codex and opencode emit a warning if the persona declares
- * `mcpServers` or `permissions` — those features aren't wired for those
- * harnesses yet.
+ * The codex branch translates persona `mcpServers` into repeated
+ * `--config mcp_servers.<name>...` TOML overrides so codex sessions receive
+ * the same declared MCP servers as the persona. Permission wiring remains
+ * claude-only for now.
+ *
+ * The opencode branch emits a warning if the persona declares `mcpServers`
+ * or `permissions` — those features aren't wired for opencode yet.
  */
 export function buildInteractiveSpec(input: BuildInteractiveSpecInput): InteractiveSpec {
   const {
@@ -165,17 +233,12 @@ export function buildInteractiveSpec(input: BuildInteractiveSpecInput): Interact
       }
       if (hasCodexLaunchSettings(harnessSettings)) {
         warnings.push(
-          'persona declares codex-only harnessSettings but the claude harness ignores sandboxMode, approvalPolicy, workspaceWriteNetworkAccess, and webSearch.'
+          CODEX_ONLY_WARNING.replace('{harness}', 'claude')
         );
       }
       return { bin: 'claude', args, initialPrompt: null, warnings, configFiles: [] };
     }
     case 'codex': {
-      if (mcpServers && Object.keys(mcpServers).length > 0) {
-        warnings.push(
-          'persona declares mcpServers but the codex harness is not yet wired for runtime MCP injection; proceeding without MCP.'
-        );
-      }
       if (hasAnyPermission(permissions)) {
         warnings.push(
           'persona declares permissions but the codex harness is not yet wired for runtime permission injection; proceeding with codex defaults.'
@@ -187,19 +250,29 @@ export function buildInteractiveSpec(input: BuildInteractiveSpecInput): Interact
         );
       }
       const args = ['-m', stripProviderPrefix(model)];
-      if (harnessSettings?.sandboxMode) {
-        args.push('--sandbox', harnessSettings.sandboxMode);
+      if (mcpServers && Object.keys(mcpServers).length > 0) {
+        appendCodexMcpServerArgs(args, mcpServers, warnings);
       }
-      if (harnessSettings?.approvalPolicy) {
-        args.push('--ask-for-approval', harnessSettings.approvalPolicy);
-      }
-      if (harnessSettings?.workspaceWriteNetworkAccess !== undefined) {
-        args.push(
-          '-c',
-          `sandbox_workspace_write.network_access=${String(
-            harnessSettings.workspaceWriteNetworkAccess
-          )}`
-        );
+      if (harnessSettings?.dangerouslyBypassApprovalsAndSandbox) {
+        // Single combined flag — collapses "no sandbox + never ask" and
+        // suppresses codex's interactive "are you sure?" startup
+        // confirmation. The two-flag form below still prompts.
+        args.push('--dangerously-bypass-approvals-and-sandbox');
+      } else {
+        if (harnessSettings?.sandboxMode) {
+          args.push('--sandbox', harnessSettings.sandboxMode);
+        }
+        if (harnessSettings?.approvalPolicy) {
+          args.push('--ask-for-approval', harnessSettings.approvalPolicy);
+        }
+        if (harnessSettings?.workspaceWriteNetworkAccess !== undefined) {
+          args.push(
+            '-c',
+            `sandbox_workspace_write.network_access=${String(
+              harnessSettings.workspaceWriteNetworkAccess
+            )}`
+          );
+        }
       }
       if (harnessSettings?.webSearch) {
         args.push('--search');
@@ -230,7 +303,7 @@ export function buildInteractiveSpec(input: BuildInteractiveSpecInput): Interact
       }
       if (hasCodexLaunchSettings(harnessSettings)) {
         warnings.push(
-          'persona declares codex-only harnessSettings but the opencode harness ignores sandboxMode, approvalPolicy, workspaceWriteNetworkAccess, and webSearch.'
+          CODEX_ONLY_WARNING.replace('{harness}', 'opencode')
         );
       }
       // opencode resolves a persona's system prompt + model through its own

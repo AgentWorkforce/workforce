@@ -31,23 +31,16 @@ function readJson(path: string): unknown {
 }
 
 function fullPersona(id: string, description = `${id} persona`): unknown {
-  const runtime = {
-    harness: 'codex',
-    model: 'gpt-5.2',
-    systemPrompt: `You are ${id}.`,
-    harnessSettings: { reasoning: 'medium', timeoutSeconds: 300 }
-  };
   return {
     id,
     intent: 'review',
     tags: ['review'],
     description,
     skills: [],
-    tiers: {
-      best: runtime,
-      'best-value': runtime,
-      minimum: runtime
-    }
+    harness: 'codex',
+    model: 'gpt-5.2',
+    systemPrompt: `You are ${id}.`,
+    harnessSettings: { reasoning: 'medium', timeoutSeconds: 300 }
   };
 }
 

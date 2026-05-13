@@ -15,13 +15,10 @@ const cleanEnv: NodeJS.ProcessEnv = Object.freeze({}) as NodeJS.ProcessEnv;
 function persona(over: Partial<ResolvedPersona> = {}): ResolvedPersona {
   return {
     personaId: 'p',
-    tier: 'best-value',
-    runtime: {
-      harness: 'claude',
-      model: 'anthropic/claude-3-5-sonnet',
-      systemPrompt: 'be helpful',
-      harnessSettings: { reasoning: 'medium', timeoutSeconds: 300 }
-    },
+    harness: 'claude',
+    model: 'anthropic/claude-3-5-sonnet',
+    systemPrompt: 'be helpful',
+    harnessSettings: { reasoning: 'medium', timeoutSeconds: 300 },
     skills: [],
     rationale: 'test',
     ...over
@@ -245,12 +242,8 @@ test('executePersonaSpawnPlan happy path orders side effects and disposes them i
     const plan = buildPersonaSpawnPlan(
       persona({
         personaId: 'sample',
-        runtime: {
-          harness: 'opencode',
-          model: 'anthropic/claude-3-5-sonnet',
-          systemPrompt: 'opencode prompt',
-          harnessSettings: { reasoning: 'medium', timeoutSeconds: 300 }
-        },
+        harness: 'opencode',
+        systemPrompt: 'opencode prompt',
         agentsMdContent: '# persona agents',
         agentsMdMode: 'overwrite'
       }),
@@ -293,12 +286,8 @@ test('executePersonaSpawnPlan disposes prior handles when a later step fails', a
     const plan = buildPersonaSpawnPlan(
       persona({
         personaId: 'sample',
-        runtime: {
-          harness: 'opencode',
-          model: 'anthropic/claude-3-5-sonnet',
-          systemPrompt: 'opencode prompt',
-          harnessSettings: { reasoning: 'medium', timeoutSeconds: 300 }
-        },
+        harness: 'opencode',
+        systemPrompt: 'opencode prompt',
         agentsMdContent: '# persona agents',
         agentsMdMode: 'overwrite'
       }),

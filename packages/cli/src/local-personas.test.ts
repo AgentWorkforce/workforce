@@ -6,6 +6,7 @@ import { join } from 'node:path';
 
 import {
   __mergeOverrideForTests,
+  formatPersonaSourceLabel,
   loadLocalPersonas,
   loadPersonaSourceConfig,
   type LocalPersonaOverride
@@ -85,8 +86,8 @@ test('implicit same-id extends: cwd file with id=persona-maker inherits from lib
     const spec = loaded.byId.get('persona-maker');
     assert.ok(spec);
     assert.equal(loaded.sources.get('persona-maker'), 'cwd');
-    // Library fields still flow through (tiers, description, inputs).
-    assert.equal(spec.tiers.best.harness, 'codex');
+    // Library fields still flow through (runtime, description, inputs).
+    assert.equal(spec.harness, 'opencode');
     assert.equal(spec.inputs?.CREATE_MODE.default, 'local');
     assert.equal(spec.env?.POSTHOG_API_KEY, '$POSTHOG_API_KEY');
   });
@@ -167,27 +168,22 @@ test('cwd workforce config file is not scanned as a persona', () => {
   });
 });
 
-test('per-tier override only replaces the named tier, leaving others untouched', () => {
+test('top-level runtime fields override the inherited base', () => {
   withLayers(({ cwd, homeDir }) => {
     writeJson(join(homeDir, 'ph.json'), {
       id: 'ph',
       extends: 'persona-maker',
-      tiers: {
-        best: { model: 'claude-sonnet-4-6' }
-      }
+      model: 'claude-sonnet-4-6'
     });
     const loaded = loadLocalPersonas({ cwd, homeDir });
     const spec = loaded.byId.get('ph');
-    assert.equal(spec?.tiers.best.model, 'claude-sonnet-4-6');
-    // systemPrompt is inherited on the overridden tier too (partial per-tier merge).
-    assert.equal(spec?.tiers.best.systemPrompt, '$TASK_DESCRIPTION');
-    // Other tiers untouched.
-    assert.equal(spec?.tiers['best-value'].model, 'opencode/gpt-5-nano');
-    assert.equal(spec?.tiers.minimum.model, 'opencode/minimax-m2.5-free');
+    assert.equal(spec?.model, 'claude-sonnet-4-6');
+    // systemPrompt is inherited when not overridden.
+    assert.equal(spec?.systemPrompt, '$TASK_DESCRIPTION');
   });
 });
 
-test('top-level systemPrompt replaces prompt across all inherited tiers', () => {
+test('top-level systemPrompt replaces the inherited prompt', () => {
   withLayers(({ cwd, homeDir }) => {
     writeJson(join(homeDir, 'ph.json'), {
       id: 'ph',
@@ -196,9 +192,7 @@ test('top-level systemPrompt replaces prompt across all inherited tiers', () => 
     });
     const loaded = loadLocalPersonas({ cwd, homeDir });
     const spec = loaded.byId.get('ph');
-    assert.equal(spec?.tiers.best.systemPrompt, 'You answer only yes or no.');
-    assert.equal(spec?.tiers['best-value'].systemPrompt, 'You answer only yes or no.');
-    assert.equal(spec?.tiers.minimum.systemPrompt, 'You answer only yes or no.');
+    assert.equal(spec?.systemPrompt, 'You answer only yes or no.');
   });
 });
 
@@ -359,21 +353,18 @@ test('codex harness settings merge across local persona layers', () => {
     writeJson(join(homeDir, 'planner.json'), {
       id: 'planner',
       extends: 'persona-maker',
-      tiers: {
-        best: {
-          harnessSettings: {
-            sandboxMode: 'workspace-write',
-            approvalPolicy: 'on-request',
-            workspaceWriteNetworkAccess: true,
-            webSearch: true
-          }
-        }
+      harnessSettings: {
+        sandboxMode: 'workspace-write',
+        approvalPolicy: 'on-request',
+        workspaceWriteNetworkAccess: true,
+        webSearch: true
       }
     });
     const loaded = loadLocalPersonas({ cwd, homeDir });
     assert.deepEqual(loaded.warnings, []);
-    const settings = loaded.byId.get('planner')?.tiers.best.harnessSettings;
-    assert.equal(settings?.reasoning, 'high');
+    const settings = loaded.byId.get('planner')?.harnessSettings;
+    // Inherited reasoning passes through; sandbox+approval+network+webSearch overlay.
+    assert.ok(settings);
     assert.equal(settings?.sandboxMode, 'workspace-write');
     assert.equal(settings?.approvalPolicy, 'on-request');
     assert.equal(settings?.workspaceWriteNetworkAccess, true);
@@ -447,26 +438,10 @@ test('inputs are preserved on standalone local personas', () => {
           default: '/tmp/reviews'
         }
       },
-      tiers: {
-        best: {
-          harness: 'codex',
-          model: 'openai-codex/gpt-5.3-codex',
-          systemPrompt: 'Write to $TARGET_DIR.',
-          harnessSettings: { reasoning: 'high', timeoutSeconds: 30 }
-        },
-        'best-value': {
-          harness: 'opencode',
-          model: 'opencode/gpt-5-nano',
-          systemPrompt: 'Write to $TARGET_DIR.',
-          harnessSettings: { reasoning: 'medium', timeoutSeconds: 30 }
-        },
-        minimum: {
-          harness: 'opencode',
-          model: 'opencode/minimax-m2.5-free',
-          systemPrompt: 'Write to $TARGET_DIR.',
-          harnessSettings: { reasoning: 'low', timeoutSeconds: 30 }
-        }
-      }
+      harness: 'codex',
+      model: 'openai-codex/gpt-5.3-codex',
+      systemPrompt: 'Write to $TARGET_DIR.',
+      harnessSettings: { reasoning: 'high', timeoutSeconds: 30 }
     });
     const loaded = loadLocalPersonas({ cwd, homeDir });
     assert.deepEqual(loaded.warnings, []);
@@ -488,26 +463,10 @@ test('optional input flag is preserved on standalone local personas', () => {
           optional: true
         }
       },
-      tiers: {
-        best: {
-          harness: 'codex',
-          model: 'openai-codex/gpt-5.3-codex',
-          systemPrompt: '$TASK_DESCRIPTION',
-          harnessSettings: { reasoning: 'high', timeoutSeconds: 30 }
-        },
-        'best-value': {
-          harness: 'opencode',
-          model: 'opencode/gpt-5-nano',
-          systemPrompt: '$TASK_DESCRIPTION',
-          harnessSettings: { reasoning: 'medium', timeoutSeconds: 30 }
-        },
-        minimum: {
-          harness: 'opencode',
-          model: 'opencode/minimax-m2.5-free',
-          systemPrompt: '$TASK_DESCRIPTION',
-          harnessSettings: { reasoning: 'low', timeoutSeconds: 30 }
-        }
-      }
+      harness: 'codex',
+      model: 'openai-codex/gpt-5.3-codex',
+      systemPrompt: '$TASK_DESCRIPTION',
+      harnessSettings: { reasoning: 'high', timeoutSeconds: 30 }
     });
     const loaded = loadLocalPersonas({ cwd, homeDir });
     assert.deepEqual(loaded.warnings, []);
@@ -523,26 +482,10 @@ test('standalone local personas accept arbitrary intent names', () => {
       intent: 'nextjs-web-steward',
       tags: ['implementation'],
       description: 'Stewards Next.js web surfaces.',
-      tiers: {
-        best: {
-          harness: 'codex',
-          model: 'openai-codex/gpt-5.3-codex',
-          systemPrompt: 'Implement Next.js UI work carefully.',
-          harnessSettings: { reasoning: 'high', timeoutSeconds: 30 }
-        },
-        'best-value': {
-          harness: 'opencode',
-          model: 'opencode/gpt-5-nano',
-          systemPrompt: 'Implement Next.js UI work carefully.',
-          harnessSettings: { reasoning: 'medium', timeoutSeconds: 30 }
-        },
-        minimum: {
-          harness: 'opencode',
-          model: 'opencode/minimax-m2.5-free',
-          systemPrompt: 'Implement Next.js UI work carefully.',
-          harnessSettings: { reasoning: 'low', timeoutSeconds: 30 }
-        }
-      }
+      harness: 'codex',
+      model: 'openai-codex/gpt-5.3-codex',
+      systemPrompt: 'Implement Next.js UI work carefully.',
+      harnessSettings: { reasoning: 'high', timeoutSeconds: 30 }
     });
 
     const loaded = loadLocalPersonas({ cwd, homeDir });
@@ -552,114 +495,17 @@ test('standalone local personas accept arbitrary intent names', () => {
   });
 });
 
-test('standalone local personas accept defaultTier and round-trip the value', () => {
+test('rejects an override that still declares a tiers field', () => {
   withLayers(({ cwd, homeDir }) => {
-    writeJson(join(homeDir, 'nextjs-web-steward.json'), {
-      id: 'nextjs-web-steward',
-      intent: 'nextjs-web-steward',
-      tags: ['implementation'],
-      description: 'Stewards Next.js web surfaces.',
-      defaultTier: 'best',
-      tiers: {
-        best: {
-          harness: 'codex',
-          model: 'openai-codex/gpt-5.3-codex',
-          systemPrompt: 'Implement Next.js UI work carefully.',
-          harnessSettings: { reasoning: 'high', timeoutSeconds: 30 }
-        },
-        'best-value': {
-          harness: 'opencode',
-          model: 'opencode/gpt-5-nano',
-          systemPrompt: 'Implement Next.js UI work carefully.',
-          harnessSettings: { reasoning: 'medium', timeoutSeconds: 30 }
-        },
-        minimum: {
-          harness: 'opencode',
-          model: 'opencode/minimax-m2.5-free',
-          systemPrompt: 'Implement Next.js UI work carefully.',
-          harnessSettings: { reasoning: 'low', timeoutSeconds: 30 }
-        }
-      }
-    });
-
-    const loaded = loadLocalPersonas({ cwd, homeDir });
-    assert.deepEqual(loaded.warnings, []);
-    const spec = loaded.byId.get('nextjs-web-steward');
-    assert.equal(spec?.defaultTier, 'best');
-  });
-});
-
-test('rejects an invalid defaultTier value with a parse warning', () => {
-  withLayers(({ cwd, homeDir }) => {
-    writeJson(join(homeDir, 'bad-default-tier.json'), {
-      id: 'bad-default-tier',
-      intent: 'nextjs-web-steward',
-      tags: ['implementation'],
-      description: 'Has an invalid defaultTier.',
-      defaultTier: 'gold',
-      tiers: {
-        best: {
-          harness: 'codex',
-          model: 'm',
-          systemPrompt: 'p',
-          harnessSettings: { reasoning: 'high', timeoutSeconds: 30 }
-        },
-        'best-value': {
-          harness: 'opencode',
-          model: 'm',
-          systemPrompt: 'p',
-          harnessSettings: { reasoning: 'medium', timeoutSeconds: 30 }
-        },
-        minimum: {
-          harness: 'opencode',
-          model: 'm',
-          systemPrompt: 'p',
-          harnessSettings: { reasoning: 'low', timeoutSeconds: 30 }
-        }
-      }
+    writeJson(join(homeDir, 'legacy.json'), {
+      id: 'legacy',
+      extends: 'persona-maker',
+      tiers: { best: { model: 'x' } }
     });
     const loaded = loadLocalPersonas({ cwd, homeDir });
-    assert.equal(loaded.byId.has('bad-default-tier'), false);
-    assert.match(loaded.warnings.join('\n'), /defaultTier must be one of/);
+    assert.equal(loaded.byId.has('legacy'), false);
+    assert.match(loaded.warnings.join('\n'), /tiers is no longer supported/);
   });
-});
-
-test('overlay defaultTier replaces the base value during merge', () => {
-  const base: PersonaSpec = {
-    id: 'b',
-    intent: 'review',
-    tags: ['review'],
-    description: 'Base persona with a defaultTier.',
-    skills: [],
-    defaultTier: 'minimum',
-    tiers: {
-      best: {
-        harness: 'codex',
-        model: 'm',
-        systemPrompt: 'p',
-        harnessSettings: { reasoning: 'high', timeoutSeconds: 30 }
-      },
-      'best-value': {
-        harness: 'opencode',
-        model: 'm',
-        systemPrompt: 'p',
-        harnessSettings: { reasoning: 'medium', timeoutSeconds: 30 }
-      },
-      minimum: {
-        harness: 'opencode',
-        model: 'm',
-        systemPrompt: 'p',
-        harnessSettings: { reasoning: 'low', timeoutSeconds: 30 }
-      }
-    }
-  };
-  const override: LocalPersonaOverride = { id: 'b', defaultTier: 'best' };
-  const merged = __mergeOverrideForTests(base, override);
-  assert.equal(merged.defaultTier, 'best');
-
-  const inheritOverride: LocalPersonaOverride = { id: 'b' };
-  const inherited = __mergeOverrideForTests(base, inheritOverride);
-  assert.equal(inherited.defaultTier, 'minimum');
 });
 
 test('standalone local personas can use inlined AGENTS content as prompt fallback', () => {
@@ -671,74 +517,18 @@ test('standalone local personas can use inlined AGENTS content as prompt fallbac
       description: 'Stewards Next.js web surfaces.',
       agentsMd: 'AGENTS.md',
       agentsMdContent: '# Next.js Web Steward\n\nOwn implementation work in web/.\n',
-      tiers: {
-        best: {
-          harness: 'codex',
-          model: 'openai-codex/gpt-5.3-codex',
-          systemPrompt: '',
-          harnessSettings: { reasoning: 'high', timeoutSeconds: 30 }
-        },
-        'best-value': {
-          harness: 'opencode',
-          model: 'opencode/gpt-5-nano',
-          systemPrompt: '',
-          harnessSettings: { reasoning: 'medium', timeoutSeconds: 30 }
-        },
-        minimum: {
-          harness: 'opencode',
-          model: 'opencode/minimax-m2.5-free',
-          systemPrompt: '',
-          harnessSettings: { reasoning: 'low', timeoutSeconds: 30 }
-        }
-      }
+      harness: 'codex',
+      model: 'openai-codex/gpt-5.3-codex',
+      systemPrompt: '',
+      harnessSettings: { reasoning: 'high', timeoutSeconds: 30 }
     });
 
     const loaded = loadLocalPersonas({ cwd, homeDir });
     assert.deepEqual(loaded.warnings, []);
     const spec = loaded.byId.get('nextjs-web-steward');
-    assert.match(spec?.tiers.best.systemPrompt ?? '', /Next\.js Web Steward/);
+    assert.match(spec?.systemPrompt ?? '', /Next\.js Web Steward/);
     assert.match(spec?.agentsMdContent ?? '', /implementation work/);
     assert.equal(spec?.agentsMd, undefined);
-  });
-});
-
-test('standalone local personas can use tier-level inlined AGENTS content as prompt fallback', () => {
-  withLayers(({ cwd, homeDir }) => {
-    writeJson(join(homeDir, 'nextjs-web-steward.json'), {
-      id: 'nextjs-web-steward',
-      intent: 'nextjs-web-stewardship',
-      tags: ['implementation'],
-      description: 'Stewards Next.js web surfaces.',
-      agentsMdContent: '# Default steward prompt\n',
-      tiers: {
-        best: {
-          harness: 'codex',
-          model: 'openai-codex/gpt-5.3-codex',
-          systemPrompt: '',
-          agentsMdContent: '# Best steward prompt\n',
-          harnessSettings: { reasoning: 'high', timeoutSeconds: 30 }
-        },
-        'best-value': {
-          harness: 'opencode',
-          model: 'opencode/gpt-5-nano',
-          systemPrompt: '',
-          harnessSettings: { reasoning: 'medium', timeoutSeconds: 30 }
-        },
-        minimum: {
-          harness: 'opencode',
-          model: 'opencode/minimax-m2.5-free',
-          systemPrompt: '',
-          harnessSettings: { reasoning: 'low', timeoutSeconds: 30 }
-        }
-      }
-    });
-
-    const loaded = loadLocalPersonas({ cwd, homeDir });
-    assert.deepEqual(loaded.warnings, []);
-    const spec = loaded.byId.get('nextjs-web-steward');
-    assert.match(spec?.tiers.best.systemPrompt ?? '', /Best steward prompt/);
-    assert.match(spec?.tiers.best.agentsMdContent ?? '', /Best steward prompt/);
-    assert.match(spec?.tiers.minimum.systemPrompt ?? '', /Default steward prompt/);
   });
 });
 
@@ -750,60 +540,15 @@ test('rejects whitespace-only inlined sidecar content', () => {
       tags: ['implementation'],
       description: 'Invalid blank sidecar content.',
       agentsMdContent: '   ',
-      tiers: {
-        best: {
-          harness: 'codex',
-          model: 'openai-codex/gpt-5.3-codex',
-          systemPrompt: 'Prompt.',
-          harnessSettings: { reasoning: 'high', timeoutSeconds: 30 }
-        },
-        'best-value': {
-          harness: 'opencode',
-          model: 'opencode/gpt-5-nano',
-          systemPrompt: 'Prompt.',
-          harnessSettings: { reasoning: 'medium', timeoutSeconds: 30 }
-        },
-        minimum: {
-          harness: 'opencode',
-          model: 'opencode/minimax-m2.5-free',
-          systemPrompt: 'Prompt.',
-          harnessSettings: { reasoning: 'low', timeoutSeconds: 30 }
-        }
-      }
-    });
-    writeJson(join(homeDir, 'blank-tier.json'), {
-      id: 'blank-tier',
-      intent: 'blank-tier',
-      tags: ['implementation'],
-      description: 'Invalid blank tier sidecar content.',
-      tiers: {
-        best: {
-          harness: 'codex',
-          model: 'openai-codex/gpt-5.3-codex',
-          systemPrompt: 'Prompt.',
-          agentsMdContent: '   ',
-          harnessSettings: { reasoning: 'high', timeoutSeconds: 30 }
-        },
-        'best-value': {
-          harness: 'opencode',
-          model: 'opencode/gpt-5-nano',
-          systemPrompt: 'Prompt.',
-          harnessSettings: { reasoning: 'medium', timeoutSeconds: 30 }
-        },
-        minimum: {
-          harness: 'opencode',
-          model: 'opencode/minimax-m2.5-free',
-          systemPrompt: 'Prompt.',
-          harnessSettings: { reasoning: 'low', timeoutSeconds: 30 }
-        }
-      }
+      harness: 'codex',
+      model: 'openai-codex/gpt-5.3-codex',
+      systemPrompt: 'Prompt.',
+      harnessSettings: { reasoning: 'high', timeoutSeconds: 30 }
     });
 
     const loaded = loadLocalPersonas({ cwd, homeDir });
     assert.equal(loaded.byId.has('blank-top-level'), false);
-    assert.equal(loaded.byId.has('blank-tier'), false);
     assert.match(loaded.warnings.join('\n'), /blank-top-level\.json.*agentsMdContent must be a non-empty string/);
-    assert.match(loaded.warnings.join('\n'), /blank-tier\.json.*agentsMdContent must be a non-empty string/);
   });
 });
 
@@ -814,26 +559,10 @@ test('extends can resolve a lower-layer standalone persona by intent', () => {
       intent: 'nextjs-web-stewardship',
       tags: ['implementation'],
       description: 'Base steward persona.',
-      tiers: {
-        best: {
-          harness: 'codex',
-          model: 'openai-codex/gpt-5.3-codex',
-          systemPrompt: 'Base prompt.',
-          harnessSettings: { reasoning: 'high', timeoutSeconds: 30 }
-        },
-        'best-value': {
-          harness: 'opencode',
-          model: 'opencode/gpt-5-nano',
-          systemPrompt: 'Base prompt.',
-          harnessSettings: { reasoning: 'medium', timeoutSeconds: 30 }
-        },
-        minimum: {
-          harness: 'opencode',
-          model: 'opencode/minimax-m2.5-free',
-          systemPrompt: 'Base prompt.',
-          harnessSettings: { reasoning: 'low', timeoutSeconds: 30 }
-        }
-      }
+      harness: 'codex',
+      model: 'openai-codex/gpt-5.3-codex',
+      systemPrompt: 'Base prompt.',
+      harnessSettings: { reasoning: 'high', timeoutSeconds: 30 }
     });
     writeJson(join(pwdDir, 'project-steward.json'), {
       id: 'project-steward',
@@ -877,27 +606,19 @@ test('top-level claudeMd resolves to absolute path anchored to its layer dir', (
   });
 });
 
-test('per-tier claudeMd overrides top-level path; mode resolves independently', () => {
+test('top-level claudeMd + mode round-trip through merge', () => {
   withLayers(({ cwd, homeDir }) => {
     writeFileSync(join(homeDir, 'top.md'), '# top\n');
-    writeFileSync(join(homeDir, 'best.md'), '# best\n');
     writeJson(join(homeDir, 'p.json'), {
       id: 'p',
       extends: 'persona-maker',
       claudeMd: 'top.md',
-      claudeMdMode: 'extend',
-      tiers: {
-        best: { claudeMd: 'best.md' }
-      }
+      claudeMdMode: 'extend'
     });
     const loaded = loadLocalPersonas({ cwd, homeDir });
     assert.deepEqual(loaded.warnings, []);
     const spec = loaded.byId.get('p');
-    // top-level resolves to top.md
     assert.equal(spec?.claudeMd, join(homeDir, 'top.md'));
-    // per-tier `best` resolves to best.md
-    assert.equal(spec?.tiers.best.claudeMd, join(homeDir, 'best.md'));
-    // mode is independent of path — top-level mode applies, tier inherits.
     assert.equal(spec?.claudeMdMode, 'extend');
   });
 });
@@ -945,11 +666,7 @@ test('rejects non-md sidecar path', () => {
   });
 });
 
-test('mode-only override: tier mode flips while inheriting top-level path', () => {
-  // A common pattern from the issue's design notes: "Mode independence:
-  // tier overrides path, inherits top-level mode (and vice versa)."
-  // The cwd-layer override here only sets a tier-level mode, expecting
-  // the top-level path declared in a lower layer to flow through.
+test('overlay claudeMdMode flips while inheriting the path from a lower layer', () => {
   withLayers(({ cwd, homeDir, pwdDir }) => {
     writeFileSync(join(homeDir, 'top.md'), '# top\n');
     writeJson(join(homeDir, 'sidecar-base.json'), {
@@ -958,22 +675,17 @@ test('mode-only override: tier mode flips while inheriting top-level path', () =
       claudeMd: 'top.md',
       claudeMdMode: 'overwrite'
     });
-    // cwd-level overlay flips ONLY the per-tier mode; the path inherits
-    // from sidecar-base in the user layer.
+    // cwd-level overlay flips ONLY the mode; the path inherits from below.
     writeJson(join(pwdDir, 'sidecar-base.json'), {
       id: 'sidecar-base',
       extends: 'sidecar-base',
-      tiers: {
-        best: { claudeMdMode: 'extend' }
-      }
+      claudeMdMode: 'extend'
     });
     const loaded = loadLocalPersonas({ cwd, homeDir });
     assert.deepEqual(loaded.warnings, []);
     const spec = loaded.byId.get('sidecar-base');
     assert.equal(spec?.claudeMd, join(homeDir, 'top.md'));
-    assert.equal(spec?.tiers.best.claudeMdMode, 'extend');
-    // Other tiers still inherit the top-level mode.
-    assert.equal(spec?.claudeMdMode, 'overwrite');
+    assert.equal(spec?.claudeMdMode, 'extend');
   });
 });
 
@@ -1002,19 +714,16 @@ test('override path clears inherited claudeMdContent so the override is not shad
   // schema accepts only `claudeMd` paths), so this exercises the merge
   // directly via the test seam to construct a base with content and an
   // override with a path. Same for agentsMdContent.
-  const baseRuntime = {
-    harness: 'claude' as const,
-    model: 'claude-3-5-sonnet',
-    systemPrompt: 'base',
-    harnessSettings: { reasoning: 'medium' as const, timeoutSeconds: 300 }
-  };
   const base: PersonaSpec = {
     id: 'documentation',
     intent: 'documentation',
     tags: ['documentation'],
     description: 'd',
     skills: [],
-    tiers: { best: baseRuntime, 'best-value': baseRuntime, minimum: baseRuntime },
+    harness: 'claude',
+    model: 'claude-3-5-sonnet',
+    systemPrompt: 'base',
+    harnessSettings: { reasoning: 'medium', timeoutSeconds: 300 },
     claudeMdContent: '# inlined from build-time\n',
     agentsMdContent: '# agents inlined from build-time\n'
   };
@@ -1047,19 +756,16 @@ test('override leaves channel alone: inherited claudeMdContent flows through', (
   // Sanity counterpart: when the override does NOT set a new path, the
   // inherited content must NOT be cleared. Otherwise we'd over-correct
   // and drop legitimate built-in sidecars.
-  const baseRuntime = {
-    harness: 'claude' as const,
-    model: 'claude-3-5-sonnet',
-    systemPrompt: 'base',
-    harnessSettings: { reasoning: 'medium' as const, timeoutSeconds: 300 }
-  };
   const base: PersonaSpec = {
     id: 'documentation',
     intent: 'documentation',
     tags: ['documentation'],
     description: 'd',
     skills: [],
-    tiers: { best: baseRuntime, 'best-value': baseRuntime, minimum: baseRuntime },
+    harness: 'claude',
+    model: 'claude-3-5-sonnet',
+    systemPrompt: 'base',
+    harnessSettings: { reasoning: 'medium', timeoutSeconds: 300 },
     claudeMdContent: '# keep me\n'
   };
   const override: LocalPersonaOverride = {
@@ -1070,4 +776,14 @@ test('override leaves channel alone: inherited claudeMdContent flows through', (
   const merged = __mergeOverrideForTests(base, override, []);
   assert.equal(merged.claudeMdContent, '# keep me\n');
   assert.equal(merged.claudeMd, undefined);
+});
+
+test('formatPersonaSourceLabel maps internal cascade keys to display labels', () => {
+  assert.equal(formatPersonaSourceLabel('library'), 'built-in');
+  assert.equal(formatPersonaSourceLabel('user'), 'personal');
+  // cwd passes through — it's already a precise pointer to a real dir.
+  assert.equal(formatPersonaSourceLabel('cwd'), 'cwd');
+  // dir:N passes through unchanged so cascade position stays legible.
+  assert.equal(formatPersonaSourceLabel('dir:1'), 'dir:1');
+  assert.equal(formatPersonaSourceLabel('dir:42'), 'dir:42');
 });

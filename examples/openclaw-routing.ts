@@ -13,19 +13,18 @@ type OpenClawSpawnPayload = {
 function mapToOpenClawSpawn(intent: PersonaIntent, task: string): OpenClawSpawnPayload {
   const selection = resolvePersona(intent);
 
-  const runtime = selection.runtime.harness === 'codex' ? 'acp' : 'subagent';
+  const runtime = selection.harness === 'codex' ? 'acp' : 'subagent';
 
   return {
     runtime,
     task,
-    model: selection.runtime.model,
-    thinking: selection.runtime.harnessSettings.reasoning,
-    timeoutSeconds: selection.runtime.harnessSettings.timeoutSeconds,
+    model: selection.model,
+    thinking: selection.harnessSettings.reasoning,
+    timeoutSeconds: selection.harnessSettings.timeoutSeconds,
     metadata: {
       personaId: selection.personaId,
-      tier: selection.tier,
       rationale: selection.rationale,
-      systemPrompt: selection.runtime.systemPrompt
+      systemPrompt: selection.systemPrompt
     }
   };
 }

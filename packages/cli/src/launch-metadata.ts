@@ -8,6 +8,14 @@ import * as launchMetadataBackendSdk from '@relayburn/sdk';
 export const LAUNCH_METADATA_INTERVAL_MS = 1_000;
 export const LAUNCH_METADATA_OPT_OUT_ENV = 'AGENTWORKFORCE_LAUNCH_METADATA';
 const LAUNCH_METADATA_BACKEND_CALL_TIMEOUT_MS = 5_000;
+/**
+ * Cold-start ingest can race the harness spawn and sandbox mount setup, so
+ * the first one or two ticks legitimately exceed the 5s timeout on machines
+ * with a large session corpus. Only surface the warning if ingest stays
+ * stuck for several ticks in a row — a real backend outage will still be
+ * visible, but routine cold-start slowness is silent.
+ */
+const LAUNCH_METADATA_INGEST_FAILURE_WARN_AFTER = 3;
 
 export type LaunchMetadataIngestHarness = 'claude-code' | 'codex' | 'opencode';
 export type LaunchMetadataPendingStampHarness = Harness;
@@ -31,7 +39,7 @@ export interface LaunchMetadataBackendLike {
 }
 
 export interface LaunchMetadataStartOptions {
-  selection: Pick<PersonaSelection, 'personaId' | 'tier' | 'runtime'>;
+  selection: Pick<PersonaSelection, 'personaId' | 'harness'>;
   personaSpec: unknown;
   personaSource: string;
   cwd: string;
@@ -79,7 +87,7 @@ export function personaVersionShort(personaSpec: unknown): string {
 }
 
 export function buildLaunchMetadata(input: {
-  selection: Pick<PersonaSelection, 'personaId' | 'tier'>;
+  selection: Pick<PersonaSelection, 'personaId'>;
   personaSpec: unknown;
   personaSource: string;
   /**
@@ -93,7 +101,6 @@ export function buildLaunchMetadata(input: {
   return {
     agentworkforce: '1',
     persona: input.selection.personaId,
-    personaTier: input.selection.tier,
     personaVersion: personaVersionHash(input.personaSpec),
     personaSource: input.personaSource,
     ...(typeof input.spawnerPid === 'number'
@@ -159,10 +166,10 @@ export async function startLaunchMetadataRecording(
   try {
     await withTimeout(
       writePendingStamp({
-        harness: options.selection.runtime.harness,
+        harness: options.selection.harness,
         cwd: options.cwd,
         enrichment: metadata,
-        sessionDirHint: launchMetadataSessionDirHint(options.selection.runtime.harness),
+        sessionDirHint: launchMetadataSessionDirHint(options.selection.harness),
         spawnStartTs: (options.now?.() ?? new Date()).toISOString(),
         spawnerPid: process.pid
       }),
@@ -177,15 +184,18 @@ export async function startLaunchMetadataRecording(
   let stopped = false;
   let inFlight: Promise<void> | undefined;
   let ingestWarned = false;
+  let consecutiveIngestFailures = 0;
   const runIngest = async () => {
     try {
       await withTimeout(
-        ingest({ harness: launchMetadataIngestHarness(options.selection.runtime.harness) }),
+        ingest({ harness: launchMetadataIngestHarness(options.selection.harness) }),
         LAUNCH_METADATA_BACKEND_CALL_TIMEOUT_MS,
         'ingest'
       );
+      consecutiveIngestFailures = 0;
     } catch (err) {
-      if (!ingestWarned) {
+      consecutiveIngestFailures += 1;
+      if (!ingestWarned && consecutiveIngestFailures >= LAUNCH_METADATA_INGEST_FAILURE_WARN_AFTER) {
         ingestWarned = true;
         warn(`launch metadata ingest failed: ${errorMessage(err)}`);
       }

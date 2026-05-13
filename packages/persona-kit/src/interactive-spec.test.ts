@@ -127,18 +127,117 @@ test('codex translates sandbox harness settings to launch flags', () => {
   ]);
 });
 
-test('codex warns when mcpServers / permissions are declared', () => {
+test('codex emits the single bypass flag when dangerouslyBypassApprovalsAndSandbox is set', () => {
   const result = buildInteractiveSpec({
     harness: 'codex',
     personaId: 'test-persona',
     model: 'openai-codex/gpt-5.3-codex',
     systemPrompt: 'x',
-    mcpServers: { foo: { type: 'http', url: 'https://example.com' } },
-    permissions: { allow: ['mcp__foo'] }
+    harnessSettings: {
+      reasoning: 'high',
+      timeoutSeconds: 1200,
+      dangerouslyBypassApprovalsAndSandbox: true,
+      webSearch: true
+    }
+  });
+  assert.deepEqual(result.args, [
+    '-m',
+    'gpt-5.3-codex',
+    '--dangerously-bypass-approvals-and-sandbox',
+    '--search'
+  ]);
+});
+
+test('codex translates http mcpServers into --config mcp_servers.* args', () => {
+  const result = buildInteractiveSpec({
+    harness: 'codex',
+    personaId: 'test-persona',
+    model: 'openai-codex/gpt-5.3-codex',
+    systemPrompt: 'x',
+    mcpServers: {
+      nango: {
+        type: 'http',
+        url: 'https://nango.dev/docs/mcp',
+        headers: {
+          Authorization: 'Bearer token-value',
+          'X-Client': 'agentworkforce'
+        }
+      }
+    }
+  });
+  assert.deepEqual(result.args, [
+    '-m',
+    'gpt-5.3-codex',
+    '--config',
+    'mcp_servers.nango.url="https://nango.dev/docs/mcp"',
+    '--config',
+    'mcp_servers.nango.http_headers={ "Authorization" = "Bearer token-value", "X-Client" = "agentworkforce" }'
+  ]);
+  assert.deepEqual(result.warnings, []);
+});
+
+test('codex translates stdio mcpServers into command/args/env config args', () => {
+  const result = buildInteractiveSpec({
+    harness: 'codex',
+    personaId: 'test-persona',
+    model: 'openai-codex/gpt-5.3-codex',
+    systemPrompt: 'x',
+    mcpServers: {
+      relaycast: {
+        type: 'stdio',
+        command: 'npx',
+        args: ['-y', '@relaycast/mcp'],
+        env: { RELAY_BASE_URL: 'https://api.relaycast.dev', RELAY_API_KEY: 'rk_live' }
+      }
+    }
+  });
+  assert.deepEqual(result.args, [
+    '-m',
+    'gpt-5.3-codex',
+    '--config',
+    'mcp_servers.relaycast.command="npx"',
+    '--config',
+    'mcp_servers.relaycast.args=["-y", "@relaycast/mcp"]',
+    '--config',
+    'mcp_servers.relaycast.env={ "RELAY_API_KEY" = "rk_live", "RELAY_BASE_URL" = "https://api.relaycast.dev" }'
+  ]);
+  assert.deepEqual(result.warnings, []);
+});
+
+test('codex quotes mcp server names in TOML keys when bare-key rules do not allow them', () => {
+  const result = buildInteractiveSpec({
+    harness: 'codex',
+    personaId: 'test-persona',
+    model: 'openai-codex/gpt-5.3-codex',
+    systemPrompt: 'x',
+    mcpServers: {
+      'nango.docs': {
+        type: 'http',
+        url: 'https://nango.dev/docs/mcp'
+      }
+    }
+  });
+  assert.deepEqual(result.args, [
+    '-m',
+    'gpt-5.3-codex',
+    '--config',
+    'mcp_servers."nango.docs".url="https://nango.dev/docs/mcp"'
+  ]);
+  assert.deepEqual(result.warnings, []);
+});
+
+test('codex warns for unsupported permission wiring and sse transport hints', () => {
+  const result = buildInteractiveSpec({
+    harness: 'codex',
+    personaId: 'test-persona',
+    model: 'openai-codex/gpt-5.3-codex',
+    systemPrompt: 'x',
+    mcpServers: { legacy: { type: 'sse', url: 'https://legacy.example.com/sse' } },
+    permissions: { allow: ['mcp__legacy'] }
   });
   assert.equal(result.warnings.length, 2);
-  assert.match(result.warnings[0], /codex harness is not yet wired for runtime MCP/);
-  assert.match(result.warnings[1], /codex harness is not yet wired for runtime permission/);
+  assert.match(result.warnings[0], /codex harness is not yet wired for runtime permission/);
+  assert.match(result.warnings[1], /type 'sse'; codex expects streamable-http/);
 });
 
 test('opencode defines a per-persona agent in opencode.json and selects it with --agent', () => {
@@ -319,7 +418,7 @@ test('warnings are returned, not printed — library consumers route I/O themsel
     personaId: 'test-persona',
     model: 'x',
     systemPrompt: 'x',
-    mcpServers: { a: { type: 'http', url: 'https://x' } }
+    permissions: { allow: ['Bash(*)'] }
   });
   assert.ok(Array.isArray(result.warnings));
   assert.equal(result.warnings.length, 1);

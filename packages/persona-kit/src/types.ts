@@ -5,13 +5,11 @@ import type {
   PERMISSION_MODES,
   PERSONA_INTENTS,
   PERSONA_TAGS,
-  PERSONA_TIERS,
   SIDECAR_MD_MODES,
   SKILL_SOURCE_KINDS
 } from './constants.js';
 
 export type Harness = (typeof HARNESS_VALUES)[number];
-export type PersonaTier = (typeof PERSONA_TIERS)[number];
 export type PersonaIntent = (typeof PERSONA_INTENTS)[number];
 export type PersonaTag = (typeof PERSONA_TAGS)[number];
 export type CodexSandboxMode = (typeof CODEX_SANDBOX_MODES)[number];
@@ -38,35 +36,15 @@ export interface HarnessSettings {
   workspaceWriteNetworkAccess?: boolean;
   /** Enable the Codex live web-search tool for this runtime. */
   webSearch?: boolean;
-}
-
-export interface PersonaRuntime {
-  harness: Harness;
-  model: string;
-  systemPrompt: string;
-  harnessSettings: HarnessSettings;
   /**
-   * Per-tier override of the persona's `claudeMd` path. Resolves to an
-   * absolute filesystem path on the parsed spec — for built-ins, the value
-   * comes from `claudeMdContent` instead of a path. Materialized into the
-   * sandbox mount as `/CLAUDE.md` when running under the claude harness.
+   * Emit codex's single `--dangerously-bypass-approvals-and-sandbox` flag,
+   * which collapses "no sandbox + never ask for approval" and also
+   * suppresses codex's interactive "are you sure?" startup confirmation.
+   * Mutually exclusive with `sandboxMode`, `approvalPolicy`, and
+   * `workspaceWriteNetworkAccess` — those translate to the two-flag form
+   * which still prompts.
    */
-  claudeMd?: string;
-  /** Per-tier override of {@link PersonaSpec.claudeMdMode}. */
-  claudeMdMode?: SidecarMdMode;
-  /** Per-tier override of the persona's `agentsMd` path. */
-  agentsMd?: string;
-  /** Per-tier override of {@link PersonaSpec.agentsMdMode}. */
-  agentsMdMode?: SidecarMdMode;
-  /**
-   * Inlined sidecar content for built-in personas. The catalog generator
-   * reads the sibling `.md` at build time and emits its body here so the
-   * installed package does not need to ship the file separately. Runtime
-   * code prefers this over `claudeMd` when both are set.
-   */
-  claudeMdContent?: string;
-  /** Inlined `AGENTS.md` content for built-in personas (see {@link claudeMdContent}). */
-  agentsMdContent?: string;
+  dangerouslyBypassApprovalsAndSandbox?: boolean;
 }
 
 /**
@@ -156,6 +134,106 @@ export type McpServerSpec =
       env?: Record<string, string>;
     };
 
+/**
+ * A single event trigger declared by an integration. `on` is a Relayfile-
+ * adapter-normalized event name (e.g. `pull_request.opened`,
+ * `issue.created`, `app_mention`). `match` and `where` are filter sugars
+ * the deploy CLI lints against a known registry; unknown values warn but
+ * do not fail parse, so the cloud runtime stays the source of truth.
+ *
+ * Examples:
+ *   { on: "pull_request.opened" }
+ *   { on: "issue_comment.created", match: "@mention" }
+ *   { on: "check_run.completed", where: "conclusion=failure" }
+ */
+export interface PersonaIntegrationTrigger {
+  on: string;
+  match?: string;
+  where?: string;
+}
+
+/**
+ * Per-provider integration configuration. The map key is the Relayfile
+ * provider slug (`github`, `linear`, `slack`, `notion`, `jira`). `scope`
+ * is provider-specific filter metadata (e.g. `{ repo: "org/repo" }` for
+ * github, `{ database: "<id>" }` for notion). `triggers` are flat — all
+ * trigger events for this provider fan into the same `onEvent` handler,
+ * which discriminates on `event.source` + `event.type`.
+ */
+export interface PersonaIntegrationConfig {
+  scope?: Record<string, string>;
+  triggers?: PersonaIntegrationTrigger[];
+}
+
+/**
+ * A cron-style schedule. `name` is unique within the persona and surfaces
+ * to the handler as `event.name`. `cron` is a standard 5-field expression.
+ * `tz` defaults to `UTC` at the runtime layer (the parser keeps it
+ * optional so the spec stays close to what the author wrote).
+ */
+export interface PersonaSchedule {
+  name: string;
+  cron: string;
+  tz?: string;
+}
+
+/**
+ * Long-form sandbox configuration. `enabled` defaults to true when the
+ * object form is present; supply the boolean shorthand `sandbox: false`
+ * to opt out entirely. `timeoutSeconds` caps a single handler invocation
+ * (default 1800s in the runtime). `env` is merged on top of auto-injected
+ * secrets at sandbox-create time.
+ *
+ * Image selection is intentionally not user-configurable in v1 — workforce
+ * picks a standard image. Add `image` later if a real demand surfaces.
+ */
+export interface PersonaSandboxConfig {
+  enabled?: boolean;
+  timeoutSeconds?: number;
+  env?: Record<string, string>;
+}
+
+/**
+ * Sandbox can be specified as `true` / `false` shorthand or as the full
+ * config object. The parser preserves whichever form the author wrote so
+ * round-trips stay lossless; consumers normalize when reading.
+ */
+export type PersonaSandbox = boolean | PersonaSandboxConfig;
+
+/** Memory scope semantics, mirroring @agent-assistant/memory. */
+export type PersonaMemoryScope = 'session' | 'user' | 'workspace' | 'org' | 'object';
+
+/**
+ * Long-form memory configuration. Defaults are applied by the runtime,
+ * not the parser — the spec keeps only what the author actually wrote.
+ * `enabled` defaults to true when the object form is present.
+ */
+export interface PersonaMemoryConfig {
+  enabled?: boolean;
+  scopes?: PersonaMemoryScope[];
+  ttlDays?: number;
+  autoPromote?: boolean;
+  dedupMs?: number;
+}
+
+export type PersonaMemory = boolean | PersonaMemoryConfig;
+
+/**
+ * Conversational traits, applied only when the agent posts to a chat
+ * surface (Slack, Relaycast, GitHub PR comment). Headless agents — the
+ * paraglide "Linear issue → PR" pattern — should omit this field. Mirrors
+ * the trait shape in `@agent-assistant/traits`.
+ */
+export interface PersonaTraits {
+  voice?: string;
+  formality?: 'low' | 'medium' | 'high';
+  proactivity?: 'low' | 'medium' | 'high';
+  riskPosture?: 'conservative' | 'balanced' | 'aggressive';
+  domain?: string;
+  vocabulary?: string[];
+  preferMarkdown?: boolean;
+}
+
 export interface PersonaSpec {
   id: string;
   intent: string;
@@ -173,15 +251,14 @@ export interface PersonaSpec {
    * values are substituted into the persona's system prompt.
    */
   inputs?: Record<string, PersonaInputSpec>;
-  tiers: Record<PersonaTier, PersonaRuntime>;
-  /**
-   * Persona-author's preferred tier when a caller does not request one
-   * explicitly. Selectors like `agentworkforce agent <persona>` (no `@<tier>`
-   * suffix) resolve to this value before falling back to `'best-value'`.
-   * Routing-profile rules continue to override this for built-in personas
-   * resolved through {@link resolvePersona}.
-   */
-  defaultTier?: PersonaTier;
+  /** Harness binary used to run this persona (`claude`, `codex`, `opencode`). */
+  harness: Harness;
+  /** Model identifier passed to the harness. */
+  model: string;
+  /** System prompt body. `$NAME` / `${NAME}` references to inputs are substituted at spawn time. */
+  systemPrompt: string;
+  /** Harness-level knobs (reasoning, timeout, codex sandbox/approval policy, etc.). */
+  harnessSettings: HarnessSettings;
   /**
    * Environment variables injected into the harness child process.
    * Values may be literal strings or `$VAR` references resolved from the
@@ -189,8 +266,10 @@ export interface PersonaSpec {
    */
   env?: Record<string, string>;
   /**
-   * MCP servers to attach to the harness session. Only wired for `claude`
-   * today (via `--mcp-config`); other harnesses warn and skip.
+   * MCP servers to attach to the harness session.
+   * - `claude`: passed via `--mcp-config`
+   * - `codex`: translated into `--config mcp_servers.<name>...` overrides
+   * - `opencode`: currently warns and skips
    */
   mcpServers?: Record<string, McpServerSpec>;
   /**
@@ -209,7 +288,7 @@ export interface PersonaSpec {
    * when the persona runs under the claude harness. The path is relative
    * to the JSON file that declared the field; the loader resolves it to
    * an already-absolute path on the parsed spec. Built-in personas inline
-   * the content into {@link PersonaRuntime.claudeMdContent} at build time.
+   * the content into {@link PersonaSpec.claudeMdContent} at build time.
    */
   claudeMd?: string;
   /** Defaults to `overwrite`. See {@link SidecarMdMode}. */
@@ -222,16 +301,74 @@ export interface PersonaSpec {
   agentsMd?: string;
   /** Defaults to `overwrite`. See {@link SidecarMdMode}. */
   agentsMdMode?: SidecarMdMode;
-  /** Inlined `CLAUDE.md` content for built-in personas (see {@link PersonaRuntime.claudeMdContent}). */
+  /**
+   * Inlined `CLAUDE.md` content for built-in personas. The catalog generator
+   * reads the sibling `.md` at build time and emits its body here so the
+   * installed package does not need to ship the file separately. Runtime
+   * code prefers this over `claudeMd` when both are set.
+   */
   claudeMdContent?: string;
   /** Inlined `AGENTS.md` content for built-in personas. */
   agentsMdContent?: string;
+  /**
+   * Opt this persona into the `workforce deploy` cloud-agent surface.
+   * When `true`, the deploy CLI considers this persona a deployable agent
+   * (validates {@link integrations} / {@link schedules}, prompts for
+   * integration connect, bundles {@link onEvent}, hands off to the runtime).
+   * Local `workforce agent <id>` flows ignore this flag — non-deploy use
+   * keeps working unchanged.
+   */
+  cloud?: boolean;
+  /**
+   * When `true`, inference for this agent uses the user's connected LLM
+   * subscription via `@agent-relay/cloud`'s provider link, rather than
+   * workforce-billed tokens. The deploy CLI calls `connectProvider({...})`
+   * at deploy time. Only meaningful when {@link cloud} is `true`.
+   */
+  useSubscription?: boolean;
+  /**
+   * Per-provider integration declarations keyed by Relayfile provider slug
+   * (`github`, `linear`, `slack`, `notion`, `jira`). At deploy time the CLI
+   * runs `RelayfileSetup.connectIntegration({ allowedIntegrations: [key] })`
+   * for each provider not yet connected to the active workspace.
+   */
+  integrations?: Record<string, PersonaIntegrationConfig>;
+  /** Cron-style schedules. Each `name` is unique within the persona. */
+  schedules?: PersonaSchedule[];
+  /**
+   * Sandbox preference. `true` (default for cloud personas) means the
+   * agent runs inside a Daytona sandbox at deploy time; `false` runs it in
+   * the runner process. The object form lets the author tune timeout / env.
+   */
+  sandbox?: PersonaSandbox;
+  /**
+   * Memory subsystem opt-in. Wires the agent-assistant memory adapter at
+   * runtime; the persona spec only declares intent, not implementation
+   * details (api keys, adapter type, etc. come from workforce env).
+   */
+  memory?: PersonaMemory;
+  /**
+   * Conversational traits, applied only when the agent posts to a chat
+   * surface. Omit for headless agents.
+   */
+  traits?: PersonaTraits;
+  /**
+   * Relative POSIX path to the TypeScript (or compiled .js / .mjs) file
+   * whose default export is the deploy-time event handler. Resolved
+   * relative to the persona JSON's directory at deploy time. Required when
+   * {@link cloud} is `true` and any trigger is declared; the deploy CLI
+   * enforces this at deploy time, the parser keeps it optional so partially-
+   * authored specs still parse.
+   */
+  onEvent?: string;
 }
 
 export interface PersonaSelection {
   personaId: string;
-  tier: PersonaTier;
-  runtime: PersonaRuntime;
+  harness: Harness;
+  model: string;
+  systemPrompt: string;
+  harnessSettings: HarnessSettings;
   skills: PersonaSkill[];
   rationale: string;
   inputs?: Record<string, PersonaInputSpec>;
@@ -241,9 +378,8 @@ export interface PersonaSelection {
   permissions?: PersonaPermissions;
   mount?: PersonaMount;
   /**
-   * Effective sidecar config for the selected (tier, harness). Already-
-   * cascaded across top-level/per-tier so launchers don't have to re-walk
-   * the spec. Modes default to `overwrite`.
+   * Effective sidecar config for the persona. Modes default to `overwrite`
+   * when a path or inlined content exists; otherwise the mode field is omitted.
    */
   claudeMd?: string;
   claudeMdContent?: string;
@@ -278,6 +414,16 @@ export interface HarnessSkillTarget {
  */
 export interface SkillMaterializationOptions {
   installRoot?: string;
+  /**
+   * Filesystem root that relative `local`-kind skill sources are resolved
+   * against. When set, the local provider absolute-ifies a source like
+   * `.agentworkforce/workforce/skills/foo.md` to `<repoRoot>/.agentworkforce/...`
+   * before embedding it into the install command, so the `cp` survives the
+   * `cd <installRoot>` prefix that session-mode installs add. Has no effect on
+   * `prpm` / `skill.sh` skills. When unset, local sources are embedded as-is
+   * and resolve against whatever cwd the caller runs the install command in.
+   */
+  repoRoot?: string;
 }
 
 export interface SkillInstall {
@@ -313,6 +459,12 @@ export interface SkillMaterializationPlan {
    * removes the whole directory instead of individual skill paths.
    */
   sessionInstallRoot?: string;
+  /**
+   * Echoed from {@link SkillMaterializationOptions.repoRoot} so downstream
+   * artifact builders (`buildInstallArtifacts`) can re-resolve `local` skill
+   * sources to the same absolute paths the per-install commands embedded.
+   */
+  repoRoot?: string;
 }
 
 export interface PersonaInstallContext {
@@ -341,7 +493,7 @@ export interface PersonaInstallContext {
  * yourself when you are ready to materialize the persona's skills.
  */
 export interface PersonaContext {
-  /** Resolved persona choice for this intent/profile: identity, tier, runtime, skills, and routing rationale. */
+  /** Resolved persona choice for this intent/profile: identity, runtime, skills, and routing rationale. */
   readonly selection: PersonaSelection;
   /** Grouped install metadata for the resolved persona's skills. */
   readonly install: PersonaInstallContext;
