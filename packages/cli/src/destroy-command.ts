@@ -1,8 +1,13 @@
 import { readFile, stat } from 'node:fs/promises';
 import path from 'node:path';
-import { createTerminalIO, resolveWorkspaceToken } from '@agentworkforce/deploy';
+import {
+  createTerminalIO,
+  formatHttpErrorBody,
+  readActiveWorkspace,
+  resolveCloudUrl,
+  resolveWorkspaceToken
+} from '@agentworkforce/deploy';
 
-const DEFAULT_CLOUD_URL = 'https://agentrelay.com';
 const USER_AGENT = 'agentworkforce-cli/destroy';
 // UUID v1-v5, what the cloud agents.id column emits.
 const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
@@ -12,7 +17,7 @@ export interface DestroyOptions {
   target: string;
   /** Workforce workspace id. Falls back to WORKFORCE_WORKSPACE_ID. */
   workspace?: string;
-  /** Override cloud base URL. Falls back to env, then DEFAULT_CLOUD_URL. */
+  /** Override cloud base URL. Falls back to env, then active.json, then the canonical default. */
   cloudUrl?: string;
   /** Fail instead of opening the browser to log in. */
   noPrompt?: boolean;
@@ -77,28 +82,32 @@ export async function runDestroy(args: readonly string[]): Promise<void> {
 }
 
 async function executeDestroy(opts: DestroyOptions): Promise<void> {
-  const workspace = (opts.workspace ?? process.env.WORKFORCE_WORKSPACE_ID ?? '').trim();
-  if (!workspace) {
-    throw new DestroyExit(
-      1,
-      '\nagentworkforce destroy failed: no workspace resolved: pass --workspace or set WORKFORCE_WORKSPACE_ID\n'
-    );
-  }
-
-  const cloudUrl = normalizeCloudUrl(
-    opts.cloudUrl ??
-      process.env.WORKFORCE_DEPLOY_CLOUD_URL ??
-      process.env.WORKFORCE_CLOUD_URL ??
-      DEFAULT_CLOUD_URL
-  );
+  const active = await readActiveWorkspace().catch(() => null);
+  const cloudUrl = resolveCloudUrl({
+    ...(opts.cloudUrl ? { flag: opts.cloudUrl } : {}),
+    active
+  });
 
   const io = createTerminalIO();
-  const { token } = await resolveWorkspaceToken({
-    workspace,
+  const auth = await resolveWorkspaceToken({
+    ...(opts.workspace ? { workspace: opts.workspace } : {}),
     cloudUrl,
     io,
     ...(opts.noPrompt ? { noPrompt: true } : {})
   });
+  const workspace = (
+    auth.workspace
+    ?? opts.workspace
+    ?? process.env.WORKFORCE_WORKSPACE_ID
+    ?? ''
+  ).trim();
+  if (!workspace) {
+    throw new DestroyExit(
+      1,
+      '\nagentworkforce destroy failed: no workspace resolved: pass --workspace, set WORKFORCE_WORKSPACE_ID, or run `agentworkforce login`\n'
+    );
+  }
+  const token = auth.token;
 
   const agentId = await resolveAgentId({
     target: opts.target,
@@ -260,16 +269,11 @@ async function pathExists(target: string): Promise<boolean> {
 
 async function responseExcerpt(res: Response): Promise<string> {
   try {
-    const text = (await res.text()).trim();
-    return text.length > 200 ? `${text.slice(0, 200)}…` : text;
+    const text = await res.text();
+    return formatHttpErrorBody(text, { url: res.url, maxLength: 200 });
   } catch {
     return '';
   }
-}
-
-function normalizeCloudUrl(url: string): string {
-  const trimmed = url.trim();
-  return trimmed ? trimmed.replace(/\/+$/, '') : DEFAULT_CLOUD_URL;
 }
 
 export const DESTROY_USAGE = `usage: agentworkforce destroy <persona-or-agent-id> [flags]

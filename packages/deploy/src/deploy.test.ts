@@ -708,3 +708,67 @@ test('--mode cloud uses the workspace token resolver before launching', async ()
     await cleanup();
   }
 });
+
+test('deploy: default auth resolver honors env credentials without a workspaceAuth resolver', async () => {
+  // Regression guard for the orchestrator wiring change in this PR. The
+  // previous default (`envWorkspaceAuth()`) only consulted env vars and a
+  // long-dead keychain; the new default delegates to `resolveWorkspaceToken`,
+  // which still honors WORKFORCE_WORKSPACE_TOKEN + WORKFORCE_WORKSPACE_ID
+  // as Tier 1 but additionally falls through to the shared cloud-auth +
+  // active.json pointer. This test exercises the Tier 1 path end-to-end
+  // through `deploy()` with no resolver injection — proving the wiring is
+  // intact for CI users while the filesystem-fallback paths stay covered
+  // by `login.test.ts`.
+  const { personaPath, cleanup } = await withTempPersona(
+    basePersonaJson({ integrations: {} })
+  );
+
+  await withWorkspaceEnv({ workspace: 'env-ws', token: 'env-tok' }, async () => {
+    let launched = false;
+    const result = await deploy(
+      { personaPath, mode: 'dev', noConnect: true, io: createBufferedIO() },
+      {
+        bundle: successfulBundleStager(),
+        modes: { dev: successfulDevLauncher(() => { launched = true; }) }
+      }
+    );
+    assert.equal(result.workspace, 'env-ws');
+    assert.equal(launched, true);
+  });
+
+  await cleanup();
+});
+
+test('deploy: clear error when nothing resolves and noPrompt is set', async () => {
+  // Without env or an explicit resolver, the orchestrator must surface
+  // an actionable error rather than wedging in a prompt loop. Setting
+  // `noPrompt` forces `resolveWorkspaceToken` to throw at Tier 3 instead
+  // of opening a browser, so we get a deterministic error path to assert.
+  const { personaPath, cleanup } = await withTempPersona(
+    basePersonaJson({ integrations: {} })
+  );
+
+  await withWorkspaceEnv({ workspace: undefined, token: undefined }, async () => {
+    // Point active-workspace file at a definitely-missing path so the test
+    // doesn't accidentally pick up the host user's `~/.agentworkforce/active.json`.
+    const previousActiveFile = process.env.WORKFORCE_ACTIVE_WORKSPACE_FILE;
+    process.env.WORKFORCE_ACTIVE_WORKSPACE_FILE = path.join(os.tmpdir(), 'wf-deploy-test-missing-active.json');
+    try {
+      await assert.rejects(
+        deploy(
+          { personaPath, mode: 'dev', noConnect: true, noPrompt: true, io: createBufferedIO() },
+          { bundle: successfulBundleStager(), modes: { dev: successfulDevLauncher() } }
+        ),
+        /no workspace credentials resolved|workspace is required for deploy/
+      );
+    } finally {
+      if (previousActiveFile === undefined) {
+        delete process.env.WORKFORCE_ACTIVE_WORKSPACE_FILE;
+      } else {
+        process.env.WORKFORCE_ACTIVE_WORKSPACE_FILE = previousActiveFile;
+      }
+    }
+  });
+
+  await cleanup();
+});

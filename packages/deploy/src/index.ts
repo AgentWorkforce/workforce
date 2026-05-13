@@ -44,7 +44,8 @@ export {
   type WorkspaceAuth,
   type WorkspaceAuthToken
 } from './login.js';
-export { canonicalizeCloudUrl } from './cloud-url.js';
+export { canonicalizeCloudUrl, resolveCloudUrl, type CloudUrlContext } from './cloud-url.js';
+export { formatHttpErrorBody } from './error-format.js';
 export { createTerminalIO, createBufferedIO, type BufferedIO } from './io.js';
 export { bundleStager } from './bundle.js';
 export { devLauncher } from './modes/dev.js';

@@ -261,8 +261,16 @@ export async function resolveWorkspaceToken(args: {
  * Read the shared @agent-relay/cloud auth, refreshing if the accessToken
  * is expired and a refreshToken is available. Returns `null` on any
  * failure — callers fall through to the next resolution tier.
+ *
+ * Set `WORKFORCE_DISABLE_SHARED_AUTH=1` (or any truthy value) to skip
+ * the shared-auth read entirely. Primary use cases:
+ *   - Hermetic tests that must not pick up the host machine's
+ *     `~/.agent-relay/cloud-auth.json`.
+ *   - Users who want the CLI to behave as if they had never run
+ *     `agent-relay cloud login` (e.g. to force env-only operation in CI).
  */
 async function readSharedAuthForBearer(): Promise<StoredAuth | null> {
+  if (isTruthyEnv(process.env.WORKFORCE_DISABLE_SHARED_AUTH)) return null;
   const auth = await readStoredAuth().catch(() => null);
   if (!auth || !auth.accessToken) return null;
   if (!isExpired(auth.accessTokenExpiresAt)) return auth;
@@ -272,6 +280,12 @@ async function readSharedAuthForBearer(): Promise<StoredAuth | null> {
   } catch {
     return null;
   }
+}
+
+function isTruthyEnv(value: string | undefined): boolean {
+  if (!value) return false;
+  const v = value.trim().toLowerCase();
+  return v === '1' || v === 'true' || v === 'yes' || v === 'on';
 }
 
 export async function loadWorkspaceToken(
@@ -346,6 +360,7 @@ async function readWorkspaceTokenFromCloudAuth(
   cloudUrl?: string
 ): Promise<StoredWorkspaceLogin | null> {
   if (usesWorkspaceLoginFileOverride()) return null;
+  if (isTruthyEnv(process.env.WORKFORCE_DISABLE_SHARED_AUTH)) return null;
   let auth = await readStoredAuth().catch(() => null);
   if (!auth) return null;
 

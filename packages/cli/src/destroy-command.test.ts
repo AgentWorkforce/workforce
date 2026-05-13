@@ -73,6 +73,7 @@ function trapFetch(handler: (call: FetchCall) => Response | Promise<Response>): 
 }
 
 function withTokenEnv(token: string, workspace: string): () => void {
+  const restoreIsolate = isolateAuthFiles();
   const prevToken = process.env.WORKFORCE_WORKSPACE_TOKEN;
   const prevWs = process.env.WORKFORCE_WORKSPACE_ID;
   const prevCloudA = process.env.WORKFORCE_DEPLOY_CLOUD_URL;
@@ -88,6 +89,31 @@ function withTokenEnv(token: string, workspace: string): () => void {
     else process.env.WORKFORCE_WORKSPACE_ID = prevWs;
     if (prevCloudA !== undefined) process.env.WORKFORCE_DEPLOY_CLOUD_URL = prevCloudA;
     if (prevCloudB !== undefined) process.env.WORKFORCE_CLOUD_URL = prevCloudB;
+    restoreIsolate();
+  };
+}
+
+/**
+ * Pin every filesystem-backed auth source to definitely-missing/disabled
+ * paths so the destroy CLI tests don't accidentally pick up the host
+ * developer's `~/.agentworkforce/active.json` or `~/.agent-relay/cloud-auth.json`.
+ * Tests that intentionally exercise the active.json fallback override
+ * `WORKFORCE_ACTIVE_WORKSPACE_FILE` after this runs.
+ */
+function isolateAuthFiles(): () => void {
+  const prevActive = process.env.WORKFORCE_ACTIVE_WORKSPACE_FILE;
+  const prevLogin = process.env.WORKFORCE_LOGIN_FILE;
+  const prevDisable = process.env.WORKFORCE_DISABLE_SHARED_AUTH;
+  process.env.WORKFORCE_ACTIVE_WORKSPACE_FILE = path.join(os.tmpdir(), 'wf-destroy-test-active-MISSING.json');
+  process.env.WORKFORCE_LOGIN_FILE = path.join(os.tmpdir(), 'wf-destroy-test-login-MISSING.json');
+  process.env.WORKFORCE_DISABLE_SHARED_AUTH = '1';
+  return () => {
+    if (prevActive === undefined) delete process.env.WORKFORCE_ACTIVE_WORKSPACE_FILE;
+    else process.env.WORKFORCE_ACTIVE_WORKSPACE_FILE = prevActive;
+    if (prevLogin === undefined) delete process.env.WORKFORCE_LOGIN_FILE;
+    else process.env.WORKFORCE_LOGIN_FILE = prevLogin;
+    if (prevDisable === undefined) delete process.env.WORKFORCE_DISABLE_SHARED_AUTH;
+    else process.env.WORKFORCE_DISABLE_SHARED_AUTH = prevDisable;
   };
 }
 
@@ -227,7 +253,13 @@ test('runDestroy: 401 maps to exit 1 with a login hint', async () => {
 });
 
 test('runDestroy: missing workspace exits 1', async () => {
-  // No WORKFORCE_WORKSPACE_ID, no --workspace.
+  // No WORKFORCE_WORKSPACE_ID, no --workspace, and no on-disk auth state
+  // — destroy should fail fast with an actionable error and never reach
+  // the network. We isolate the filesystem sources because the new code
+  // path also consults `~/.agentworkforce/active.json` and the shared
+  // cloud-auth file, which would otherwise leak from the host machine
+  // running the test.
+  const restoreIsolate = isolateAuthFiles();
   const prevToken = process.env.WORKFORCE_WORKSPACE_TOKEN;
   const prevWs = process.env.WORKFORCE_WORKSPACE_ID;
   process.env.WORKFORCE_WORKSPACE_TOKEN = 'tok-1';
@@ -237,9 +269,12 @@ test('runDestroy: missing workspace exits 1', async () => {
   });
   const trap = trapIO();
   try {
-    await assert.rejects(runDestroy([AGENT_UUID]), /__exit_trap__:1/);
+    await assert.rejects(runDestroy([AGENT_UUID, '--no-prompt']), /__exit_trap__:1/);
     assert.deepEqual(trap.exits, [1]);
-    assert.match(trap.stderr, /no workspace resolved/);
+    // Accept either the orchestrator-level message ("no workspace resolved")
+    // or the auth-resolver message ("no workspace credentials resolved")
+    // — both are valid pre-network failures.
+    assert.match(trap.stderr, /no workspace (credentials )?resolved/);
     assert.equal(fetchTrap.calls.length, 0);
   } finally {
     trap.restore();
@@ -247,6 +282,7 @@ test('runDestroy: missing workspace exits 1', async () => {
     if (prevToken === undefined) delete process.env.WORKFORCE_WORKSPACE_TOKEN;
     else process.env.WORKFORCE_WORKSPACE_TOKEN = prevToken;
     if (prevWs !== undefined) process.env.WORKFORCE_WORKSPACE_ID = prevWs;
+    restoreIsolate();
   }
 });
 
@@ -387,5 +423,119 @@ test('runDestroy: 5xx server error exits 1 and surfaces the status', async () =>
     trap.restore();
     fetchTrap.restore();
     restoreEnv();
+  }
+});
+
+test('runDestroy: HTML 404 body is replaced with a hint, not dumped verbatim', async () => {
+  // Regression guard for the apex-without-/cloud bug: when the CLI hits
+  // `agentrelay.com/api/...` instead of `agentrelay.com/cloud/api/...`,
+  // cloud's marketing site returns a full Next.js 404 page. The error
+  // formatter must summarize that, not dump it into stderr.
+  const restoreEnv = withTokenEnv('tok-1', WORKSPACE);
+  const htmlPage = '<!DOCTYPE html><html lang="en"><head>'
+    + '<title>404</title>'
+    + '<script src="/_next/static/chunks/main.js"></script>'.repeat(20)
+    + '</head><body></body></html>';
+  const fetchTrap = trapFetch(
+    async () => new Response(htmlPage, {
+      status: 404,
+      headers: { 'content-type': 'text/html; charset=utf-8' }
+    })
+  );
+  const trap = trapIO();
+  try {
+    // 404 on a DELETE is the documented "not found / already destroyed"
+    // path (exit 2). That branch produces a clean message that doesn't
+    // surface the body — so this guard is really about the
+    // !res.ok fallthrough. We use 500 here to exercise the generic
+    // formatter instead.
+    fetchTrap.restore();
+    const fetchTrap2 = trapFetch(
+      async () => new Response(htmlPage, {
+        status: 500,
+        headers: { 'content-type': 'text/html; charset=utf-8' }
+      })
+    );
+    try {
+      await assert.rejects(
+        runDestroy([AGENT_UUID, '--cloud-url', CLOUD]),
+        /__exit_trap__:1/
+      );
+      assert.deepEqual(trap.exits, [1]);
+      assert.match(trap.stderr, /500/);
+      assert.match(trap.stderr, /HTML|wrong API root/);
+      // The raw <script> tags must not appear in stderr.
+      assert.equal(trap.stderr.includes('<script'), false);
+      assert.equal(trap.stderr.includes('<!DOCTYPE'), false);
+    } finally {
+      fetchTrap2.restore();
+    }
+  } finally {
+    trap.restore();
+    restoreEnv();
+  }
+});
+
+test('runDestroy: reads active.json cloudUrl when no flag and no env is set', async () => {
+  // The destroy command must consult `~/.agentworkforce/active.json` for
+  // the cloud URL just like the deploy orchestrator does. Without this,
+  // a user who ran `agentworkforce login` (which writes active.json with
+  // the canonical cloud URL) would still hit the legacy default.
+  const restoreIsolate = isolateAuthFiles();
+  const prevToken = process.env.WORKFORCE_WORKSPACE_TOKEN;
+  const prevWs = process.env.WORKFORCE_WORKSPACE_ID;
+  const prevCloudA = process.env.WORKFORCE_DEPLOY_CLOUD_URL;
+  const prevCloudB = process.env.WORKFORCE_CLOUD_URL;
+  process.env.WORKFORCE_WORKSPACE_TOKEN = 'tok-active';
+  process.env.WORKFORCE_WORKSPACE_ID = WORKSPACE;
+  delete process.env.WORKFORCE_DEPLOY_CLOUD_URL;
+  delete process.env.WORKFORCE_CLOUD_URL;
+
+  const tmp = await mkdtemp(path.join(os.tmpdir(), 'aw-destroy-active-'));
+  const activeFile = path.join(tmp, 'active.json');
+  await writeFile(
+    activeFile,
+    JSON.stringify({
+      workspace: WORKSPACE,
+      workspaceId: WORKSPACE,
+      cloudUrl: 'https://active.example.test/cloud',
+      setAt: new Date().toISOString()
+    }),
+    'utf8'
+  );
+  process.env.WORKFORCE_ACTIVE_WORKSPACE_FILE = activeFile;
+
+  const fetchTrap = trapFetch(
+    async () =>
+      new Response(
+        JSON.stringify({
+          agentId: AGENT_UUID,
+          status: 'destroyed',
+          destroyedAt: '2026-05-13T00:00:00.000Z',
+          cancelledScheduleIds: []
+        }),
+        { status: 200, headers: { 'content-type': 'application/json' } }
+      )
+  );
+  const trap = trapIO();
+  try {
+    // No `--cloud-url` flag. The command must derive the URL from active.json.
+    await assert.rejects(runDestroy([AGENT_UUID]), /__exit_trap__:0/);
+    assert.equal(fetchTrap.calls.length, 1);
+    assert.equal(
+      fetchTrap.calls[0].url,
+      `https://active.example.test/cloud/api/v1/workspaces/${WORKSPACE}/deployments/${AGENT_UUID}`
+    );
+  } finally {
+    trap.restore();
+    fetchTrap.restore();
+    if (prevToken === undefined) delete process.env.WORKFORCE_WORKSPACE_TOKEN;
+    else process.env.WORKFORCE_WORKSPACE_TOKEN = prevToken;
+    if (prevWs === undefined) delete process.env.WORKFORCE_WORKSPACE_ID;
+    else process.env.WORKFORCE_WORKSPACE_ID = prevWs;
+    if (prevCloudA !== undefined) process.env.WORKFORCE_DEPLOY_CLOUD_URL = prevCloudA;
+    if (prevCloudB !== undefined) process.env.WORKFORCE_CLOUD_URL = prevCloudB;
+    restoreIsolate();
+    await rm(tmp, { recursive: true, force: true });
   }
 });
