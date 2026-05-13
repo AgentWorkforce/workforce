@@ -59,6 +59,7 @@ import {
 } from '@relayfile/local-mount';
 import ora, { type Ora } from 'ora';
 import { runDeploy, runLogin, runLogout } from './deploy-command.js';
+import { runDestroy } from './destroy-command.js';
 import { runDeploymentList } from './list-command.js';
 import {
   startLaunchMetadataRecording,
@@ -205,6 +206,19 @@ Commands:
                         --input KEY=value   override a declared persona input
                                             (repeat for multiple)
   deployments list    List deployed cloud agents in the active workspace.
+  destroy <persona-or-agent-id> [flags]
+                      Tear down a deployed agent: cancel all schedules and
+                      mark the agent as destroyed in the workspace. Accepts
+                      either a persona JSON path (resolved to an agent id
+                      via the workspace's agents index) or a literal agent
+                      UUID.
+                      Flags:
+                        --workspace <id>    pick a non-default workspace
+                        --cloud-url <url>   override the workforce cloud URL
+                        --no-prompt         fail instead of opening the
+                                            browser login flow
+                      Exit codes: 0 destroyed, 2 not found / already
+                      destroyed, 1 any other error.
   login               Connect this machine to a workforce workspace using
                       browser OAuth and store a workspace token.
   logout              Clear browser OAuth auth and the stored workspace token.
@@ -236,6 +250,8 @@ Examples:
   agentworkforce agent "$(agentworkforce pick "fix the flaky test in foo.test.ts")"
   agentworkforce deploy ./personas/weekly-digest.json --mode cloud
   agentworkforce deploy ./personas/weekly-digest.json --mode sandbox --input TOPIC="Deploy v1"
+  agentworkforce destroy ./personas/weekly-digest.json
+  agentworkforce destroy 11111111-2222-4333-8444-555555555555
   agentworkforce login
 `;
 
@@ -3795,6 +3811,11 @@ export async function main(): Promise<void> {
       die(`deployments: unknown action "${action}". Expected: list`);
     }
     await runDeploymentList(extra);
+    return;
+  }
+
+  if (subcommand === 'destroy') {
+    await runDestroy(rest);
     return;
   }
 
