@@ -13,13 +13,11 @@ import {
   parseOnEvent,
   parsePermissions,
   parsePersonaSpec,
-  parseSandbox,
   parseSchedules,
   parseSkills,
   parseStringList,
   parseStringMap,
-  parseTags,
-  parseTraits
+  parseTags
 } from './parse.js';
 
 function validSpec(over: Record<string, unknown> = {}): Record<string, unknown> {
@@ -66,9 +64,7 @@ test('parsePersonaSpec accepts deploy-v1 optional fields', () => {
         }
       },
       schedules: [{ name: 'weekly', cron: '0 9 * * 6', tz: 'UTC' }],
-      sandbox: { enabled: true, timeoutSeconds: 1800, env: { NODE_ENV: 'production' } },
       memory: { enabled: true, scopes: ['workspace'], ttlDays: 30 },
-      traits: { voice: 'professional-warm', preferMarkdown: true },
       onEvent: './agent.ts'
     }),
     'documentation'
@@ -77,14 +73,26 @@ test('parsePersonaSpec accepts deploy-v1 optional fields', () => {
   assert.equal(spec.cloud, true);
   assert.equal(spec.integrations?.github.triggers?.[0].on, 'pull_request.opened');
   assert.equal(spec.schedules?.[0].name, 'weekly');
-  assert.deepEqual(spec.sandbox, {
-    enabled: true,
-    timeoutSeconds: 1800,
-    env: { NODE_ENV: 'production' }
-  });
   assert.deepEqual(spec.memory, { enabled: true, scopes: ['workspace'], ttlDays: 30 });
-  assert.equal(spec.traits?.preferMarkdown, true);
   assert.equal(spec.onEvent, './agent.ts');
+});
+
+test('parsePersonaSpec rejects traits with the v1 migration error', () => {
+  assert.throws(
+    () => parsePersonaSpec(validSpec({ traits: { voice: 'concise' } }), 'documentation'),
+    /traits was removed in v1; personality is handled by the persona-personality-builder tool \(out of scope for v1\)\. See docs\/plans\/deploy-v1\.md/
+  );
+});
+
+test('parsePersonaSpec rejects sandbox with the v1 migration error', () => {
+  assert.throws(
+    () => parsePersonaSpec(validSpec({ sandbox: true }), 'documentation'),
+    /sandbox was removed in v1; sandbox is on by default at deploy time\. Use 'workforce deploy --no-sandbox' or runtime config to opt out\. See docs\/plans\/deploy-v1\.md/
+  );
+  assert.throws(
+    () => parsePersonaSpec(validSpec({ sandbox: { enabled: true } }), 'documentation'),
+    /sandbox was removed in v1/
+  );
 });
 
 test('parsePersonaSpec throws when intent does not match the expected intent', () => {
@@ -347,33 +355,6 @@ test('parsePersonaSpec rejects a non-object spec', () => {
 
 // --- deploy-v1 schema additions ----------------------------------------------
 
-test('parseSandbox accepts boolean shorthand and round-trips both forms', () => {
-  assert.equal(parseSandbox(true, 'sandbox'), true);
-  assert.equal(parseSandbox(false, 'sandbox'), false);
-  assert.equal(parseSandbox(undefined, 'sandbox'), undefined);
-  const obj = parseSandbox(
-    { enabled: true, timeoutSeconds: 600, env: { FOO: 'bar' } },
-    'sandbox'
-  );
-  assert.deepEqual(obj, { enabled: true, timeoutSeconds: 600, env: { FOO: 'bar' } });
-});
-
-test('parseSandbox rejects malformed objects with field-pointed errors', () => {
-  assert.throws(() => parseSandbox('on', 'sandbox'), /sandbox must be a boolean or an object/);
-  assert.throws(
-    () => parseSandbox({ enabled: 'yes' }, 'sandbox'),
-    /sandbox\.enabled must be a boolean/
-  );
-  assert.throws(
-    () => parseSandbox({ timeoutSeconds: -1 }, 'sandbox'),
-    /sandbox\.timeoutSeconds must be a positive number/
-  );
-  assert.throws(
-    () => parseSandbox({ timeoutSeconds: Number.POSITIVE_INFINITY }, 'sandbox'),
-    /sandbox\.timeoutSeconds must be a positive number/
-  );
-});
-
 test('parseMemory accepts boolean + object forms and validates scopes', () => {
   assert.equal(parseMemory(true, 'memory'), true);
   assert.equal(parseMemory(false, 'memory'), false);
@@ -400,40 +381,6 @@ test('parseMemory rejects unknown scopes and non-positive ttl', () => {
   assert.throws(() => parseMemory({ scopes: [] }, 'memory'), /scopes must be a non-empty array/);
   assert.throws(() => parseMemory({ ttlDays: 0 }, 'memory'), /ttlDays must be a positive number/);
   assert.throws(() => parseMemory({ dedupMs: -1 }, 'memory'), /dedupMs must be a non-negative number/);
-});
-
-test('parseTraits keeps only supplied fields and validates enums', () => {
-  assert.equal(parseTraits(undefined, 'traits'), undefined);
-  assert.equal(parseTraits({}, 'traits'), undefined); // empty object collapses to undefined
-  const t = parseTraits(
-    {
-      voice: 'concise',
-      formality: 'low',
-      proactivity: 'high',
-      riskPosture: 'balanced',
-      domain: 'engineering',
-      vocabulary: ['PR', 'diff'],
-      preferMarkdown: true
-    },
-    'traits'
-  );
-  assert.deepEqual(t, {
-    voice: 'concise',
-    formality: 'low',
-    proactivity: 'high',
-    riskPosture: 'balanced',
-    domain: 'engineering',
-    vocabulary: ['PR', 'diff'],
-    preferMarkdown: true
-  });
-  assert.throws(
-    () => parseTraits({ formality: 'extreme' }, 'traits'),
-    /traits\.formality must be one of: low, medium, high/
-  );
-  assert.throws(
-    () => parseTraits({ riskPosture: 'wild' }, 'traits'),
-    /traits\.riskPosture must be one of: conservative, balanced, aggressive/
-  );
 });
 
 test('parseSchedules validates cron, requires unique names, preserves tz when set', () => {
@@ -568,11 +515,10 @@ test('parsePersonaSpec rejects non-boolean cloud / useSubscription', () => {
   );
 });
 
-test('parsePersonaSpec keeps boolean shorthand sandbox / memory through round-trip', () => {
+test('parsePersonaSpec keeps boolean shorthand memory through round-trip', () => {
   const spec = parsePersonaSpec(
-    validSpec({ cloud: true, sandbox: true, memory: false }),
+    validSpec({ cloud: true, memory: false }),
     'documentation'
   );
-  assert.equal(spec.sandbox, true);
   assert.equal(spec.memory, false);
 });
