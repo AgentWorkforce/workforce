@@ -174,6 +174,8 @@ export interface ConnectAllResult {
  * Behavior summary:
  *   - integrations: {} or undefined → returns immediately, no prompts
  *   - already-connected provider → no prompt; emits `already-connected`
+ *   - auth failure while checking status → fails without prompting
+ *   - not connected + noPrompt=true → fails immediately without prompting
  *   - not connected + noConnect=true → fails the deploy with a clear message
  *   - not connected + noConnect=false → prompts; on yes runs `connect`,
  *     on no marks `skipped`. The orchestrator decides what to do with
@@ -184,11 +186,13 @@ export async function connectIntegrations(input: ConnectAllInput): Promise<Conne
   const outcomes: IntegrationConnectOutcome[] = [];
 
   for (const provider of Object.keys(integrations)) {
+    let statusCheckFailure: string | undefined;
     const connected = await input.integrations
       .isConnected({ workspace: input.workspace, provider })
       .catch((err) => {
+        statusCheckFailure = err instanceof Error ? err.message : String(err);
         input.io.warn(
-          `failed to check connection status for ${provider}: ${err instanceof Error ? err.message : String(err)}`
+          `failed to check connection status for ${provider}: ${statusCheckFailure}`
         );
         return false;
       });
@@ -196,6 +200,16 @@ export async function connectIntegrations(input: ConnectAllInput): Promise<Conne
     if (connected) {
       input.io.info(`integrations.${provider}: already connected`);
       outcomes.push({ provider, status: 'already-connected' });
+      continue;
+    }
+
+    if (statusCheckFailure && isIntegrationAuthFailure(statusCheckFailure)) {
+      input.io.error(`integrations.${provider}: auth failed while checking connection status`);
+      outcomes.push({
+        provider,
+        status: 'failed',
+        message: statusCheckFailure
+      });
       continue;
     }
 
@@ -257,6 +271,11 @@ export async function connectIntegrations(input: ConnectAllInput): Promise<Conne
       .isConnected({ workspace: input.workspace })
       .catch(() => false);
     if (!isConn) {
+      if (input.noPrompt) {
+        throw new Error(
+          'persona requires a subscription provider connection, but --no-prompt was passed. Connect it before deploying or run without --no-prompt.'
+        );
+      }
       if (input.noConnect) {
         throw new Error(
           'persona requires a subscription provider connection, but --no-connect was passed'
@@ -298,12 +317,23 @@ async function requestJson(
     }
   });
   if (res.status === 401) {
-    throw new Error('cloud integration request failed: unauthorized. Run `agentworkforce login` and retry.');
+    throw new Error(
+      'cloud integration request failed: unauthorized. Open https://origin.agentrelay.cloud/cloud to verify your cloud session, then run `agent-relay cloud whoami` and `agentworkforce login` to refresh the active workspace.'
+    );
+  }
+  if (res.status === 403) {
+    throw new Error(
+      'cloud integration request failed: forbidden. The active account is not authorized for this workspace; open https://origin.agentrelay.cloud/cloud to verify account/workspace access, then run `agent-relay cloud whoami` and `agentworkforce login` to refresh the active workspace.'
+    );
   }
   if (!res.ok) {
     throw new Error(`cloud integration request failed: ${res.status} ${await res.text().catch(() => '')}`.trim());
   }
   return await res.json();
+}
+
+function isIntegrationAuthFailure(message: string): boolean {
+  return /cloud integration request failed: (unauthorized|forbidden)\b/i.test(message);
 }
 
 function listHasConnectedProvider(body: unknown, provider: string): boolean {

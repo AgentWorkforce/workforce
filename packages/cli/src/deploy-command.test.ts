@@ -54,7 +54,7 @@ function trapExit(throwOnExit = true): ExitTrap {
   return trap;
 }
 
-test('runLogin uses cloud SDK auth, mints a workspace token, and stores it', async () => {
+test('runLogin uses cloud SDK auth, picks a workspace, and writes the active pointer (no token mint)', async () => {
   const calls: string[] = [];
   const writes: unknown[] = [];
   const restoreDeps = configureDeployCommandForTest({
@@ -79,12 +79,8 @@ test('runLogin uses cloud SDK auth, mints a workspace token, and stores it', asy
         }
       };
     },
-    issueWorkspaceToken: async (workspace: string, options: { apiUrl?: string; name?: string } = {}) => {
-      calls.push(`issue:${workspace}:${options.apiUrl}:${options.name}`);
-      return { key: 'tok-ws', workspaceToken: { workspaceId: 'ws-1', kind: 'workspace_token' } };
-    },
-    writeStoredWorkspaceToken: async (login: unknown) => {
-      writes.push(login);
+    writeActiveWorkspace: async (pointer: unknown) => {
+      writes.push(pointer);
     }
   });
   const trap = trapExit(false);
@@ -93,14 +89,12 @@ test('runLogin uses cloud SDK auth, mints a workspace token, and stores it', asy
     assert.deepEqual(trap.exits, [0]);
     assert.deepEqual(calls, [
       'ensure:https://cloud.example.test',
-      'fetch:/api/v1/workspaces',
-      'issue:acme:https://cloud.example.test:agentworkforce-cli'
+      'fetch:/api/v1/workspaces'
     ]);
     assert.deepEqual(writes, [{
       workspace: 'acme',
       workspaceSlug: 'acme',
       workspaceId: 'ws-1',
-      token: 'tok-ws',
       cloudUrl: 'https://cloud.example.test'
     }]);
     assert.match(trap.stdout, /logged in: acme/);
@@ -110,11 +104,136 @@ test('runLogin uses cloud SDK auth, mints a workspace token, and stores it', asy
   }
 });
 
-test('runLogout clears cloud auth and workspace token even when a workspace is passed', async () => {
+test('runLogin with --workspace skips the workspaces list, skips token mint, writes active pointer', async () => {
+  const calls: string[] = [];
+  const writes: unknown[] = [];
+  const restoreDeps = configureDeployCommandForTest({
+    createTerminalIO: () => createBufferedIO(),
+    ensureAuthenticated: async (apiUrl: string) => {
+      calls.push(`ensure:${apiUrl}`);
+      return {
+        apiUrl,
+        accessToken: 'access',
+        refreshToken: 'refresh',
+        accessTokenExpiresAt: '2999-01-01T00:00:00.000Z'
+      };
+    },
+    createCloudApiClient() {
+      calls.push('createCloudApiClient');
+      return {
+        async fetch(pathname: string) {
+          calls.push(`fetch:${pathname}`);
+          return new Response('should not be called', { status: 500 });
+        }
+      };
+    },
+    writeActiveWorkspace: async (pointer: unknown) => {
+      writes.push(pointer);
+    }
+  });
+  const trap = trapExit(false);
+  try {
+    await runLogin([
+      '--cloud-url',
+      'https://cloud.example.test/',
+      '--workspace',
+      '50587328-441d-4acb-b8f3-dbe1b3c5de99'
+    ]);
+    assert.deepEqual(trap.exits, [0]);
+    assert.ok(
+      !calls.some((c) => c === 'createCloudApiClient' || c.startsWith('fetch:')),
+      `expected workspace-list to be skipped, got calls: ${JSON.stringify(calls)}`
+    );
+    assert.deepEqual(calls, ['ensure:https://cloud.example.test']);
+    assert.deepEqual(writes, [{
+      workspace: '50587328-441d-4acb-b8f3-dbe1b3c5de99',
+      cloudUrl: 'https://cloud.example.test'
+    }]);
+    assert.match(trap.stdout, /logged in: 50587328-441d-4acb-b8f3-dbe1b3c5de99/);
+  } finally {
+    trap.restore();
+    restoreDeps();
+  }
+});
+
+test('runLogin without --workspace surfaces a --workspace hint when the workspaces list returns 403', async () => {
+  const restoreDeps = configureDeployCommandForTest({
+    createTerminalIO: () => createBufferedIO(),
+    ensureAuthenticated: async (apiUrl: string) => ({
+      apiUrl,
+      accessToken: 'access',
+      refreshToken: 'refresh',
+      accessTokenExpiresAt: '2999-01-01T00:00:00.000Z'
+    }),
+    createCloudApiClient() {
+      return {
+        async fetch(_pathname: string) {
+          return new Response(JSON.stringify({ error: 'Forbidden' }), {
+            status: 403,
+            headers: { 'content-type': 'application/json' }
+          });
+        }
+      };
+    },
+    writeActiveWorkspace: async () => {
+      throw new Error('writeActiveWorkspace should not be called when listing fails');
+    }
+  });
+  const trap = trapExit(false);
+  try {
+    await runLogin(['--cloud-url', 'https://cloud.example.test/']);
+    assert.deepEqual(trap.exits, [1]);
+    assert.match(trap.stderr, /workspace list returned 403 Forbidden/);
+    assert.match(trap.stderr, /Pass --workspace <id-or-slug> to skip listing/);
+  } finally {
+    trap.restore();
+    restoreDeps();
+  }
+});
+
+test('runLogin without --workspace surfaces a no-workspaces message when the list comes back empty', async () => {
+  const restoreDeps = configureDeployCommandForTest({
+    createTerminalIO: () => createBufferedIO(),
+    ensureAuthenticated: async (apiUrl: string) => ({
+      apiUrl,
+      accessToken: 'access',
+      refreshToken: 'refresh',
+      accessTokenExpiresAt: '2999-01-01T00:00:00.000Z'
+    }),
+    createCloudApiClient() {
+      return {
+        async fetch(_pathname: string) {
+          return new Response(JSON.stringify({ workspaces: [] }), {
+            status: 200,
+            headers: { 'content-type': 'application/json' }
+          });
+        }
+      };
+    },
+    writeActiveWorkspace: async () => {
+      throw new Error('writeActiveWorkspace should not be called when no workspaces');
+    }
+  });
+  const trap = trapExit(false);
+  try {
+    await runLogin(['--cloud-url', 'https://cloud.example.test/']);
+    assert.deepEqual(trap.exits, [1]);
+    assert.match(trap.stderr, /no workspaces are accessible from this account/);
+    assert.match(trap.stderr, /pass --workspace <id-or-slug>/);
+  } finally {
+    trap.restore();
+    restoreDeps();
+  }
+});
+
+test('runLogout preserves shared cloud auth and clears the active pointer + legacy keychain token by default', async () => {
   const calls: string[] = [];
   const restoreDeps = configureDeployCommandForTest({
     clearStoredAuth: async () => {
       calls.push('clear-auth');
+    },
+    clearActiveWorkspace: async () => {
+      calls.push('clear-active');
     },
     clearStoredWorkspaceToken: async (workspace?: string) => {
       calls.push(`clear-workspace:${workspace ?? ''}`);
@@ -124,7 +243,57 @@ test('runLogout clears cloud auth and workspace token even when a workspace is p
   try {
     await runLogout(['--workspace', 'acme']);
     assert.deepEqual(trap.exits, [0]);
-    assert.deepEqual(calls, ['clear-auth', 'clear-workspace:acme']);
+    assert.deepEqual(calls, ['clear-active', 'clear-workspace:acme']);
+    assert.match(trap.stdout, /workspace login cleared/);
+  } finally {
+    trap.restore();
+    restoreDeps();
+  }
+});
+
+test('runLogout clears shared cloud auth + active pointer when --cloud-auth is passed', async () => {
+  const calls: string[] = [];
+  const restoreDeps = configureDeployCommandForTest({
+    clearStoredAuth: async () => {
+      calls.push('clear-auth');
+    },
+    clearActiveWorkspace: async () => {
+      calls.push('clear-active');
+    },
+    clearStoredWorkspaceToken: async (workspace?: string) => {
+      calls.push(`clear-workspace:${workspace ?? ''}`);
+    }
+  });
+  const trap = trapExit(false);
+  try {
+    await runLogout(['--workspace', 'acme', '--cloud-auth']);
+    assert.deepEqual(trap.exits, [0]);
+    assert.deepEqual(calls, ['clear-auth', 'clear-active', 'clear-workspace:acme']);
+    assert.match(trap.stdout, /logged out/);
+  } finally {
+    trap.restore();
+    restoreDeps();
+  }
+});
+
+test('runLogout treats --all as an alias for clearing shared cloud auth + active pointer', async () => {
+  const calls: string[] = [];
+  const restoreDeps = configureDeployCommandForTest({
+    clearStoredAuth: async () => {
+      calls.push('clear-auth');
+    },
+    clearActiveWorkspace: async () => {
+      calls.push('clear-active');
+    },
+    clearStoredWorkspaceToken: async (workspace?: string) => {
+      calls.push(`clear-workspace:${workspace ?? ''}`);
+    }
+  });
+  const trap = trapExit(false);
+  try {
+    await runLogout(['--all']);
+    assert.deepEqual(trap.exits, [0]);
+    assert.deepEqual(calls, ['clear-auth', 'clear-active', 'clear-workspace:']);
     assert.match(trap.stdout, /logged out/);
   } finally {
     trap.restore();

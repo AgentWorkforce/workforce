@@ -4,14 +4,14 @@ import {
   clearStoredAuth,
   defaultApiUrl,
   ensureAuthenticated,
-  issueWorkspaceToken,
   type StoredAuth
 } from '@agent-relay/cloud';
 import {
+  clearActiveWorkspace,
   clearStoredWorkspaceToken,
   createTerminalIO,
   deploy,
-  writeStoredWorkspaceToken,
+  writeActiveWorkspace,
   type DeployMode,
   type DeployOptions,
   type ModeLaunchHandle
@@ -22,20 +22,20 @@ type LoginApiClient = Pick<CloudApiClient, 'fetch'>;
 
 type DeployCommandDeps = {
   ensureAuthenticated: typeof ensureAuthenticated;
-  issueWorkspaceToken: typeof issueWorkspaceToken;
   clearStoredAuth: typeof clearStoredAuth;
   clearStoredWorkspaceToken: typeof clearStoredWorkspaceToken;
-  writeStoredWorkspaceToken: typeof writeStoredWorkspaceToken;
+  clearActiveWorkspace: typeof clearActiveWorkspace;
+  writeActiveWorkspace: typeof writeActiveWorkspace;
   createTerminalIO: typeof createTerminalIO;
   createCloudApiClient(auth: StoredAuth, apiUrl: string): LoginApiClient;
 };
 
 const defaultDeployCommandDeps: DeployCommandDeps = {
   ensureAuthenticated,
-  issueWorkspaceToken,
   clearStoredAuth,
   clearStoredWorkspaceToken,
-  writeStoredWorkspaceToken,
+  clearActiveWorkspace,
+  writeActiveWorkspace,
   createTerminalIO,
   createCloudApiClient(auth, apiUrl) {
     return new CloudApiClient({
@@ -134,20 +134,30 @@ export async function runLogin(args: readonly string[]): Promise<void> {
   try {
     const auth = await deployCommandDeps.ensureAuthenticated(cloudUrl);
     const apiUrl = normalizeCloudUrl(auth.apiUrl || cloudUrl);
-    const workspaces = await listWorkspacesForLogin(auth, apiUrl);
-    const chosen = opts.workspace
-      ?? await pickWorkspaceInteractive(workspaces, io);
-    const tokenResp = await deployCommandDeps.issueWorkspaceToken(chosen, {
-      apiUrl,
-      name: 'agentworkforce-cli'
-    });
-    const token = readWorkspaceToken(tokenResp);
-    const workspaceId = readWorkspaceId(tokenResp) ?? findWorkspace(workspaces, chosen)?.id ?? chosen;
-    await deployCommandDeps.writeStoredWorkspaceToken({
+    let workspaces: LoginWorkspace[] = [];
+    let chosen: string;
+    if (opts.workspace) {
+      chosen = opts.workspace;
+    } else {
+      workspaces = await listWorkspacesForLogin(auth, apiUrl);
+      if (workspaces.length === 0) {
+        throw new Error(
+          'no workspaces are accessible from this account. Create one at https://agentrelay.cloud, '
+            + 'or pass --workspace <id-or-slug> if you already know the workspace identifier.'
+        );
+      }
+      chosen = await pickWorkspaceInteractive(workspaces, io);
+    }
+    // No workspace-scoped token mint — cloud's resolveRequestAuth accepts
+    // the shared @agent-relay/cloud accessToken as Bearer directly. We just
+    // persist a pointer recording which workspace the user picked so
+    // resolveWorkspaceToken can pair it with the shared accessToken on
+    // each subsequent deploy call.
+    const match = findWorkspace(workspaces, chosen);
+    await deployCommandDeps.writeActiveWorkspace({
       workspace: chosen,
-      workspaceSlug: findWorkspace(workspaces, chosen)?.slug ?? chosen,
-      workspaceId,
-      token,
+      ...(match?.slug ? { workspaceSlug: match.slug } : {}),
+      ...(match?.id ? { workspaceId: match.id } : {}),
       cloudUrl: apiUrl
     });
     process.stdout.write(`\nlogged in: ${chosen}\n`);
@@ -167,9 +177,17 @@ export async function runLogout(args: readonly string[]): Promise<void> {
   }
   const opts = parseLogoutArgs(args);
   try {
-    await deployCommandDeps.clearStoredAuth();
+    if (opts.cloudAuth) {
+      await deployCommandDeps.clearStoredAuth();
+    }
+    // Always drop the active-workspace pointer — `agentworkforce logout`
+    // should detach this machine from any workspace regardless of whether
+    // the user also wants to nuke the shared cloud login.
+    await deployCommandDeps.clearActiveWorkspace();
+    // Legacy keychain workspace token is also cleared so users mid-upgrade
+    // don't end up with a stale minted token after logout.
     await deployCommandDeps.clearStoredWorkspaceToken(opts.workspace);
-    process.stdout.write('logged out\n');
+    process.stdout.write(opts.cloudAuth ? 'logged out\n' : 'workspace login cleared\n');
     process.exit(0);
   } catch (err) {
     process.stderr.write(
@@ -200,22 +218,30 @@ Flags:
 
 const LOGIN_USAGE = `usage: agentworkforce login [flags]
 
-Connect this machine to a workforce workspace using the browser OAuth flow.
-The resulting workspace token is stored in the OS keychain when available,
-falling back to ~/.agentworkforce/login.json.
+Connect this machine to a workforce workspace. Reuses the shared
+Agent Relay Cloud login (\`~/.agent-relay/cloud-auth.json\`) for the bearer
+credential and stores a small pointer at \`~/.agentworkforce/active.json\`
+recording which workspace this machine targets. No separate workspace-scoped
+token is minted; cloud accepts the shared accessToken as Authorization: Bearer
+for deploy endpoints.
 
 Flags:
   --workspace <name>          Workforce workspace; defaults to WORKFORCE_WORKSPACE_ID or prompt
   --cloud-url <url>           Override the workforce cloud base URL
+  When --workspace is set, the CLI skips listing workspaces — useful when your
+  account hits 403 on /api/v1/workspaces but you already know the workspace id.
   -h, --help                  Print this message
 `;
 
 const LOGOUT_USAGE = `usage: agentworkforce logout [flags]
 
-Clear the browser OAuth login and the stored workspace token.
+Clear the stored workforce workspace token. Agent Relay Cloud browser auth is
+shared with agent-relay and is preserved unless --cloud-auth is passed.
 
 Flags:
   --workspace <name>          Optional workspace token entry to clear
+  --cloud-auth                Also clear the shared Agent Relay Cloud login
+  --all                       Alias for --cloud-auth
   -h, --help                  Print this message
 `;
 
@@ -386,8 +412,9 @@ function parseLoginArgs(args: readonly string[]): { workspace?: string; cloudUrl
   };
 }
 
-function parseLogoutArgs(args: readonly string[]): { workspace?: string } {
+function parseLogoutArgs(args: readonly string[]): { workspace?: string; cloudAuth?: boolean } {
   let workspace: string | undefined;
+  let cloudAuth = false;
   for (let i = 0; i < args.length; i += 1) {
     const a = args[i];
     if (a === '-h' || a === '--help') {
@@ -397,12 +424,15 @@ function parseLogoutArgs(args: readonly string[]): { workspace?: string } {
       workspace = expectValue('--workspace', args[++i]);
     } else if (a.startsWith('--workspace=')) {
       workspace = expectInlineValue('--workspace', a.slice('--workspace='.length));
+    } else if (a === '--cloud-auth' || a === '--all') {
+      cloudAuth = true;
     } else {
       die(`logout: unknown argument "${a}"`);
     }
   }
   return {
-    ...(workspace ? { workspace } : {})
+    ...(workspace ? { workspace } : {}),
+    ...(cloudAuth ? { cloudAuth } : {})
   };
 }
 
@@ -417,6 +447,12 @@ async function listWorkspacesForLogin(auth: StoredAuth, apiUrl: string): Promise
   const res = await client.fetch('/api/v1/workspaces');
   if (res.ok) {
     return parseWorkspaceList(await res.json().catch(() => null));
+  }
+  if (res.status === 403) {
+    throw new Error(
+      'workspace list returned 403 Forbidden. Pass --workspace <id-or-slug> to skip listing, '
+        + 'or check that your account has access to a workspace at https://agentrelay.cloud.'
+    );
   }
   if (res.status !== 404 && res.status !== 405) {
     throw new Error(`workspace list failed: ${res.status} ${await res.text().catch(() => '')}`.trim());
@@ -484,28 +520,6 @@ function findWorkspace(workspaces: readonly LoginWorkspace[], value: string): Lo
 
 function workspaceKey(workspace: LoginWorkspace): string {
   return workspace.slug ?? workspace.id;
-}
-
-function readWorkspaceToken(value: unknown): string {
-  if (!value || typeof value !== 'object' || Array.isArray(value)) {
-    throw new Error('workspace token response was not an object');
-  }
-  const record = value as Record<string, unknown>;
-  const token = readString(record, 'token') ?? readString(record, 'key');
-  if (!token) {
-    throw new Error('workspace token response did not include a token');
-  }
-  return token;
-}
-
-function readWorkspaceId(value: unknown): string | undefined {
-  if (!value || typeof value !== 'object' || Array.isArray(value)) return undefined;
-  const record = value as Record<string, unknown>;
-  const direct = readString(record, 'workspaceId');
-  if (direct) return direct;
-  const nested = record.workspaceToken;
-  if (!nested || typeof nested !== 'object' || Array.isArray(nested)) return undefined;
-  return readString(nested as Record<string, unknown>, 'workspaceId');
 }
 
 function readString(record: Record<string, unknown>, key: string): string | undefined {
