@@ -153,12 +153,13 @@ export interface PersonaIntegrationTrigger {
 }
 
 /**
- * Per-provider integration configuration. The map key is the Relayfile
- * provider slug (`github`, `linear`, `slack`, `notion`, `jira`). `scope`
- * is provider-specific filter metadata (e.g. `{ repo: "org/repo" }` for
- * github, `{ database: "<id>" }` for notion). `triggers` are flat — all
- * trigger events for this provider fan into the same `onEvent` handler,
- * which discriminates on `event.source` + `event.type`.
+ * Per-provider integration configuration — the "radio" listener part of a
+ * persona's listener surface. The map key is the Relayfile provider slug
+ * (`github`, `linear`, `slack`, `notion`, `jira`). `scope` is provider-
+ * specific filter metadata (e.g. `{ repo: "org/repo" }` for github,
+ * `{ database: "<id>" }` for notion). `triggers` are flat — all trigger
+ * events for this provider fan into the same `onEvent` handler, which
+ * discriminates on `event.source` + `event.type`.
  */
 export interface PersonaIntegrationConfig {
   scope?: Record<string, string>;
@@ -166,8 +167,9 @@ export interface PersonaIntegrationConfig {
 }
 
 /**
- * A cron-style schedule. `name` is unique within the persona and surfaces
- * to the handler as `event.name`. `cron` is a standard 5-field expression.
+ * A cron-style schedule — the "clock" listener part of a persona's
+ * listener surface. `name` is unique within the persona and surfaces to
+ * the handler as `event.name`. `cron` is a standard 5-field expression.
  * `tz` defaults to `UTC` at the runtime layer (the parser keeps it
  * optional so the spec stays close to what the author wrote).
  */
@@ -176,29 +178,6 @@ export interface PersonaSchedule {
   cron: string;
   tz?: string;
 }
-
-/**
- * Long-form sandbox configuration. `enabled` defaults to true when the
- * object form is present; supply the boolean shorthand `sandbox: false`
- * to opt out entirely. `timeoutSeconds` caps a single handler invocation
- * (default 1800s in the runtime). `env` is merged on top of auto-injected
- * secrets at sandbox-create time.
- *
- * Image selection is intentionally not user-configurable in v1 — workforce
- * picks a standard image. Add `image` later if a real demand surfaces.
- */
-export interface PersonaSandboxConfig {
-  enabled?: boolean;
-  timeoutSeconds?: number;
-  env?: Record<string, string>;
-}
-
-/**
- * Sandbox can be specified as `true` / `false` shorthand or as the full
- * config object. The parser preserves whichever form the author wrote so
- * round-trips stay lossless; consumers normalize when reading.
- */
-export type PersonaSandbox = boolean | PersonaSandboxConfig;
 
 /** Memory scope semantics, mirroring @agent-assistant/memory. */
 export type PersonaMemoryScope = 'session' | 'user' | 'workspace' | 'org' | 'object';
@@ -219,21 +198,19 @@ export interface PersonaMemoryConfig {
 export type PersonaMemory = boolean | PersonaMemoryConfig;
 
 /**
- * Conversational traits, applied only when the agent posts to a chat
- * surface (Slack, Relaycast, GitHub PR comment). Headless agents — the
- * paraglide "Linear issue → PR" pattern — should omit this field. Mirrors
- * the trait shape in `@agent-assistant/traits`.
+ * A persona listens for events. Three listener kinds:
+ * - **clock** (cron schedules — {@link PersonaSchedule}, surfaced as
+ *   `schedules[]`).
+ * - **radio** (RelayFile integration events — see
+ *   {@link PersonaIntegrationConfig}, surfaced as `integrations.<provider>.triggers[]`).
+ * - **inbox** (RelayCast targeted messages — not yet modeled in v1).
+ *
+ * The current top-level shape predates the listeners framing; semantics
+ * are equivalent. `traits` and `sandbox` were removed in v1 — personality
+ * is handled by the persona-personality-builder tool (out of scope for
+ * v1), and sandbox is on by default at deploy time (opt out with
+ * `workforce deploy --no-sandbox` or runtime config).
  */
-export interface PersonaTraits {
-  voice?: string;
-  formality?: 'low' | 'medium' | 'high';
-  proactivity?: 'low' | 'medium' | 'high';
-  riskPosture?: 'conservative' | 'balanced' | 'aggressive';
-  domain?: string;
-  vocabulary?: string[];
-  preferMarkdown?: boolean;
-}
-
 export interface PersonaSpec {
   id: string;
   intent: string;
@@ -333,25 +310,14 @@ export interface PersonaSpec {
    * for each provider not yet connected to the active workspace.
    */
   integrations?: Record<string, PersonaIntegrationConfig>;
-  /** Cron-style schedules. Each `name` is unique within the persona. */
+  /** Cron-style schedules. Each `name` is unique within the persona. The "clock" listener surface. */
   schedules?: PersonaSchedule[];
-  /**
-   * Sandbox preference. `true` (default for cloud personas) means the
-   * agent runs inside a Daytona sandbox at deploy time; `false` runs it in
-   * the runner process. The object form lets the author tune timeout / env.
-   */
-  sandbox?: PersonaSandbox;
   /**
    * Memory subsystem opt-in. Wires the agent-assistant memory adapter at
    * runtime; the persona spec only declares intent, not implementation
    * details (api keys, adapter type, etc. come from workforce env).
    */
   memory?: PersonaMemory;
-  /**
-   * Conversational traits, applied only when the agent posts to a chat
-   * surface. Omit for headless agents.
-   */
-  traits?: PersonaTraits;
   /**
    * Relative POSIX path to the TypeScript (or compiled .js / .mjs) file
    * whose default export is the deploy-time event handler. Resolved

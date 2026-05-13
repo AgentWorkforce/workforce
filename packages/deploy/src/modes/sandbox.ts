@@ -59,7 +59,12 @@ export const sandboxLauncher: ModeLauncher = {
       throw err;
     }
 
-    const sandboxTimeoutSeconds = resolveTimeoutSeconds(input.persona.sandbox);
+    // Per-persona sandbox tuning (`persona.sandbox.timeoutSeconds`) was
+    // removed in deploy-v1; the sandbox-client default (600s, see
+    // sandbox-client.ts) applies to every run. Persona-level harness
+    // timeouts (`harnessSettings.timeoutSeconds`) are honored by the
+    // harness inside the sandbox, not by the sandbox `exec` envelope.
+    const sandboxTimeoutSeconds: number | undefined = undefined;
 
     let stopping = false;
     const stop = async (): Promise<void> => {
@@ -147,14 +152,6 @@ export function resolveSandboxClient(
     workspaceToken,
     personaId: input.persona.id
   });
-}
-
-function resolveTimeoutSeconds(sandbox: ModeLaunchInput['persona']['sandbox']): number | undefined {
-  if (sandbox === undefined || sandbox === true || sandbox === false) return undefined;
-  if (typeof sandbox.timeoutSeconds === 'number' && sandbox.timeoutSeconds > 0) {
-    return sandbox.timeoutSeconds;
-  }
-  return undefined;
 }
 
 // Re-exported for tests + power users wanting to compose the client manually.
