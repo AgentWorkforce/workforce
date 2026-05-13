@@ -12,6 +12,7 @@ import type {
   CodexSandboxMode,
   Harness,
   HarnessSettings,
+  IntegrationSource,
   McpServerSpec,
   PermissionMode,
   PersonaInputSpec,
@@ -463,6 +464,68 @@ export function parseIntegrationTrigger(
   };
 }
 
+/**
+ * Slug rules for `workspace_service_account.name`: kebab-case, ≤64 chars,
+ * lowercase ASCII letters/digits/hyphens, no leading/trailing/consecutive
+ * hyphens. Mirrors the convention used by other persona-kit identifiers.
+ */
+export const INTEGRATION_SOURCE_NAME_RE = /^[a-z0-9]+(?:-[a-z0-9]+)*$/;
+const INTEGRATION_SOURCE_NAME_MAX = 64;
+
+const INTEGRATION_SOURCE_KINDS = [
+  'deployer_user',
+  'workspace',
+  'workspace_service_account'
+] as const;
+
+type IntegrationSourceKind = (typeof INTEGRATION_SOURCE_KINDS)[number];
+
+function isIntegrationSourceKind(value: unknown): value is IntegrationSourceKind {
+  return (
+    typeof value === 'string' &&
+    INTEGRATION_SOURCE_KINDS.includes(value as IntegrationSourceKind)
+  );
+}
+
+export function parseIntegrationSource(
+  value: unknown,
+  context: string
+): IntegrationSource {
+  if (!isObject(value)) {
+    throw new Error(`${context} must be an object`);
+  }
+  const { kind, name } = value;
+  if (!isIntegrationSourceKind(kind)) {
+    throw new Error(
+      `${context}.kind must be one of: ${INTEGRATION_SOURCE_KINDS.join(', ')}`
+    );
+  }
+  if (kind === 'workspace_service_account') {
+    if (typeof name !== 'string' || !name) {
+      throw new Error(
+        `${context}.name must be a non-empty string when kind="workspace_service_account"`
+      );
+    }
+    if (name.length > INTEGRATION_SOURCE_NAME_MAX) {
+      throw new Error(
+        `${context}.name must be ≤${INTEGRATION_SOURCE_NAME_MAX} characters`
+      );
+    }
+    if (!INTEGRATION_SOURCE_NAME_RE.test(name)) {
+      throw new Error(
+        `${context}.name must be kebab-case matching ${INTEGRATION_SOURCE_NAME_RE.source}`
+      );
+    }
+    return { kind, name };
+  }
+  if (name !== undefined) {
+    throw new Error(
+      `${context}.name is only allowed when kind="workspace_service_account"`
+    );
+  }
+  return { kind };
+}
+
 export function parseIntegrationConfig(
   value: unknown,
   context: string
@@ -470,9 +533,17 @@ export function parseIntegrationConfig(
   if (!isObject(value)) {
     throw new Error(`${context} must be an object`);
   }
-  const { scope, triggers } = value;
+  const { source, scope, triggers } = value;
 
   const out: PersonaIntegrationConfig = {};
+
+  // Default-inject `deployer_user` when the persona omits `source` so
+  // pre-discriminator personas keep parsing unchanged. The cloud-side
+  // resolver can then trust `source` is always present on parsed specs.
+  out.source =
+    source === undefined
+      ? { kind: 'deployer_user' }
+      : parseIntegrationSource(source, `${context}.source`);
 
   if (scope !== undefined) {
     const parsedScope = parseStringMap(scope, `${context}.scope`);

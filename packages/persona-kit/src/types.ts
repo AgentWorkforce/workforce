@@ -153,14 +153,39 @@ export interface PersonaIntegrationTrigger {
 }
 
 /**
+ * Discriminator on how the cloud-side integration resolver should look up
+ * the connection backing a persona's declared integration:
+ *
+ * - `deployer_user` — resolve via `user_integrations` keyed by the deploying
+ *   user (the default; matches today's behavior).
+ * - `workspace` — resolve via the workspace's default `workspace_integrations`
+ *   row for this provider.
+ * - `workspace_service_account` — resolve via a named workspace service
+ *   account (e.g. `release-bot`), letting one workspace expose multiple
+ *   provider identities.
+ *
+ * The persona-kit only validates the shape; the cloud resolver enforces
+ * which sources are actually permitted at deploy time.
+ */
+export type IntegrationSource =
+  | { kind: 'deployer_user' }
+  | { kind: 'workspace' }
+  | { kind: 'workspace_service_account'; name: string };
+
+/**
  * Radio listener configuration for a RelayFile provider. The map key is
  * the provider slug (`github`, `linear`, `slack`, `notion`, `jira`).
  * `scope` is provider-specific filter metadata (e.g. `{ repo: "org/repo" }`
  * for github, `{ database: "<id>" }` for notion). `triggers` are flat —
  * all radio listener events for this provider fan into the same `onEvent`
  * handler, which discriminates on `event.source` + `event.type`.
+ *
+ * `source` discriminates the cloud-side resolver between `user_integrations`
+ * and `workspace_integrations`; defaults to `{ kind: 'deployer_user' }` when
+ * omitted so existing personas keep their pre-discriminator behavior.
  */
 export interface PersonaIntegrationConfig {
+  source?: IntegrationSource;
   scope?: Record<string, string>;
   triggers?: PersonaIntegrationTrigger[];
 }

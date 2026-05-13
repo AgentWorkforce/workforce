@@ -1,0 +1,17 @@
+{
+  "id": "integration-source-workspace",
+  "intent": "documentation",
+  "tags": ["documentation"],
+  "description": "Fixture: persona declaring a Slack integration resolved from the workspace's default workspace_integrations row.",
+  "harness": "claude",
+  "model": "anthropic/claude-3-5-sonnet",
+  "systemPrompt": "Fixture persona for IntegrationSource={ kind: 'workspace' }. Not used at runtime.",
+  "harnessSettings": { "reasoning": "medium", "timeoutSeconds": 300 },
+  "cloud": true,
+  "integrations": {
+    "slack": {
+      "source": { "kind": "workspace" },
+      "triggers": [{ "on": "app_mention" }]
+    }
+  }
+}

@@ -1,6 +1,8 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
+import { dirname, resolve } from 'node:path';
+import { fileURLToPath } from 'node:url';
 import {
   assertInputName,
   assertSidecarPath,
@@ -470,7 +472,10 @@ test('parseIntegrations preserves scope + triggers; rejects empty trigger arrays
   assert.equal(i?.github.scope?.repo, 'org/r');
   assert.equal(i?.github.triggers?.length, 2);
   assert.equal(i?.github.triggers?.[1].match, '@mention');
-  assert.deepEqual(i?.linear, {});
+  // Default-injected source keeps existing personas resolving against
+  // the deploying user's `user_integrations` row.
+  assert.deepEqual(i?.github.source, { kind: 'deployer_user' });
+  assert.deepEqual(i?.linear, { source: { kind: 'deployer_user' } });
 
   assert.throws(
     () =>
@@ -487,6 +492,116 @@ test('parseIntegrations preserves scope + triggers; rejects empty trigger arrays
         'integrations'
       ),
     /triggers\[0\]\.on must be a non-empty string/
+  );
+});
+
+test('parseIntegrations default-injects source=deployer_user when the persona omits it', () => {
+  const i = parseIntegrations({ github: {} }, 'integrations');
+  assert.deepEqual(i?.github.source, { kind: 'deployer_user' });
+});
+
+test('parseIntegrations round-trips all three valid IntegrationSource kinds', () => {
+  const i = parseIntegrations(
+    {
+      github: { source: { kind: 'deployer_user' } },
+      slack: { source: { kind: 'workspace' } },
+      linear: {
+        source: { kind: 'workspace_service_account', name: 'release-bot' }
+      }
+    },
+    'integrations'
+  );
+  assert.deepEqual(i?.github.source, { kind: 'deployer_user' });
+  assert.deepEqual(i?.slack.source, { kind: 'workspace' });
+  assert.deepEqual(i?.linear.source, {
+    kind: 'workspace_service_account',
+    name: 'release-bot'
+  });
+});
+
+test('parseIntegrations rejects an unknown source.kind with a precise field path', () => {
+  assert.throws(
+    () =>
+      parseIntegrations(
+        { github: { source: { kind: 'org' } } },
+        'integrations'
+      ),
+    /integrations\.github\.source\.kind must be one of: deployer_user, workspace, workspace_service_account/
+  );
+});
+
+test('parseIntegrations rejects workspace_service_account missing name', () => {
+  assert.throws(
+    () =>
+      parseIntegrations(
+        { github: { source: { kind: 'workspace_service_account' } } },
+        'integrations'
+      ),
+    /integrations\.github\.source\.name must be a non-empty string when kind="workspace_service_account"/
+  );
+});
+
+test('parseIntegrations rejects workspace_service_account with non-kebab-case name', () => {
+  assert.throws(
+    () =>
+      parseIntegrations(
+        {
+          github: {
+            source: { kind: 'workspace_service_account', name: 'Release_Bot' }
+          }
+        },
+        'integrations'
+      ),
+    /integrations\.github\.source\.name must be kebab-case/
+  );
+});
+
+test('IntegrationSource fixtures round-trip through parsePersonaSpec', () => {
+  // Fixtures live under src/__fixtures__/personas/. The compiled test
+  // sits at dist/parse.test.js, so resolve back through the package root.
+  const here = dirname(fileURLToPath(import.meta.url));
+  const fixturesRoot = resolve(here, '..', 'src', '__fixtures__', 'personas');
+  const load = (name: string) =>
+    JSON.parse(readFileSync(resolve(fixturesRoot, name), 'utf8'));
+
+  const deployer = parsePersonaSpec(
+    load('integration-source-deployer.json'),
+    'documentation'
+  );
+  assert.deepEqual(deployer.integrations?.github.source, { kind: 'deployer_user' });
+
+  const workspace = parsePersonaSpec(
+    load('integration-source-workspace.json'),
+    'documentation'
+  );
+  assert.deepEqual(workspace.integrations?.slack.source, { kind: 'workspace' });
+
+  const sa = parsePersonaSpec(
+    load('integration-source-service-account.json'),
+    'documentation'
+  );
+  assert.deepEqual(sa.integrations?.github.source, {
+    kind: 'workspace_service_account',
+    name: 'release-bot'
+  });
+});
+
+test('parseIntegrations rejects extra name on deployer_user / workspace kinds', () => {
+  assert.throws(
+    () =>
+      parseIntegrations(
+        { github: { source: { kind: 'deployer_user', name: 'release-bot' } } },
+        'integrations'
+      ),
+    /integrations\.github\.source\.name is only allowed when kind="workspace_service_account"/
+  );
+  assert.throws(
+    () =>
+      parseIntegrations(
+        { slack: { source: { kind: 'workspace', name: 'release-bot' } } },
+        'integrations'
+      ),
+    /integrations\.slack\.source\.name is only allowed when kind="workspace_service_account"/
   );
 });
 
