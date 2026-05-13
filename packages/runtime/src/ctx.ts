@@ -108,8 +108,15 @@ function defaultLog(level: string, message: string, attrs?: Record<string, unkno
  */
 export function buildCtx(options: CtxBuildOptions): WorkforceCtx {
   const { agent, deployment } = options;
+  // Merge per key so a partial `input_values` (DB row) does not eclipse
+  // keys only present in the camel-case `inputValues` alias. `input_values`
+  // takes precedence on collisions to match the canonical DB shape.
+  const mergedAgentInputValues: Record<string, AgentInputValue> = {
+    ...(agent.inputValues ?? {}),
+    ...(agent.input_values ?? {})
+  };
   const ctx: WorkforceCtx = {
-    persona: buildPersonaContext(options.persona, agent.input_values ?? agent.inputValues),
+    persona: buildPersonaContext(options.persona, mergedAgentInputValues),
     agent: {
       id: agent.id,
       deployedName: agent.deployedName,
@@ -168,14 +175,23 @@ const CORE_CTX_FIELDS: ReadonlySet<string> = new Set([
 
 function buildPersonaContext(
   persona: PersonaSpec,
-  agentInputValues: Record<string, AgentInputValue> | undefined
+  agentInputValues: Record<string, AgentInputValue> | undefined,
+  processEnv: NodeJS.ProcessEnv = process.env
 ): WorkforceCtx['persona'] {
   const inputSpecs = persona.inputs ?? {};
   const inputs: Record<string, string> = {};
 
   for (const [key, spec] of Object.entries(inputSpecs)) {
+    // Mirror the canonical resolution chain used by persona-kit's
+    // `resolvePersonaInputs`: agent-provided value → process env
+    // (`spec.env` or the input key) → spec default. Empty strings are
+    // treated as "missing" so they fall through to later tiers, matching
+    // persona-kit so the runtime and CLI/plan paths stay in lockstep.
+    const envName = spec.env ?? key;
     const agentValue = stringifyInputValue(agentInputValues?.[key]);
-    const resolved = agentValue ?? spec.default;
+    const envValue = stringifyInputValue(processEnv[envName]);
+    const defaultValue = stringifyInputValue(spec.default);
+    const resolved = agentValue ?? envValue ?? defaultValue;
     if (resolved === undefined) {
       if (spec.optional) {
         inputs[key] = '';
@@ -197,5 +213,6 @@ function buildPersonaContext(
 
 function stringifyInputValue(value: AgentInputValue): string | undefined {
   if (value === null || value === undefined) return undefined;
-  return String(value);
+  const text = String(value);
+  return text === '' ? undefined : text;
 }

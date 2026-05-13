@@ -28,14 +28,19 @@ export function runtimeContextEnv(
   };
 }
 
+function nonEmpty(value: string | undefined): string | undefined {
+  const trimmed = value?.trim();
+  return trimmed && trimmed.length > 0 ? trimmed : undefined;
+}
+
 function resolveAgentContext(
   persona: PersonaSpec,
   env: Record<string, string> | undefined
 ): RuntimeAgentContext {
   return {
-    id: env?.WORKFORCE_AGENT_ID ?? persona.id,
-    deployedName: env?.WORKFORCE_AGENT_DEPLOYED_NAME ?? persona.id,
-    spawnedByAgentId: env?.WORKFORCE_SPAWNED_BY_AGENT_ID ?? null
+    id: nonEmpty(env?.WORKFORCE_AGENT_ID) ?? persona.id,
+    deployedName: nonEmpty(env?.WORKFORCE_AGENT_DEPLOYED_NAME) ?? persona.id,
+    spawnedByAgentId: nonEmpty(env?.WORKFORCE_SPAWNED_BY_AGENT_ID) ?? null
   };
 }
 
@@ -44,9 +49,9 @@ function resolveDeploymentContext(
   env: Record<string, string> | undefined
 ): RuntimeDeploymentContext {
   return {
-    id: env?.WORKFORCE_DEPLOYMENT_ID ?? persona.id,
-    triggerKind: parseTriggerKind(env?.WORKFORCE_DEPLOYMENT_TRIGGER_KIND) ?? inferTriggerKind(persona),
-    parentDeploymentId: env?.WORKFORCE_PARENT_DEPLOYMENT_ID ?? null
+    id: nonEmpty(env?.WORKFORCE_DEPLOYMENT_ID) ?? persona.id,
+    triggerKind: parseTriggerKind(nonEmpty(env?.WORKFORCE_DEPLOYMENT_TRIGGER_KIND)) ?? inferTriggerKind(persona),
+    parentDeploymentId: nonEmpty(env?.WORKFORCE_PARENT_DEPLOYMENT_ID) ?? null
   };
 }
 
