@@ -110,7 +110,7 @@ test('runLogin uses cloud SDK auth, mints a workspace token, and stores it', asy
   }
 });
 
-test('runLogout clears cloud auth and workspace token even when a workspace is passed', async () => {
+test('runLogout preserves shared cloud auth and clears only the workspace token by default', async () => {
   const calls: string[] = [];
   const restoreDeps = configureDeployCommandForTest({
     clearStoredAuth: async () => {
@@ -124,7 +124,51 @@ test('runLogout clears cloud auth and workspace token even when a workspace is p
   try {
     await runLogout(['--workspace', 'acme']);
     assert.deepEqual(trap.exits, [0]);
+    assert.deepEqual(calls, ['clear-workspace:acme']);
+    assert.match(trap.stdout, /workspace login cleared/);
+  } finally {
+    trap.restore();
+    restoreDeps();
+  }
+});
+
+test('runLogout clears shared cloud auth when explicitly requested', async () => {
+  const calls: string[] = [];
+  const restoreDeps = configureDeployCommandForTest({
+    clearStoredAuth: async () => {
+      calls.push('clear-auth');
+    },
+    clearStoredWorkspaceToken: async (workspace?: string) => {
+      calls.push(`clear-workspace:${workspace ?? ''}`);
+    }
+  });
+  const trap = trapExit(false);
+  try {
+    await runLogout(['--workspace', 'acme', '--cloud-auth']);
+    assert.deepEqual(trap.exits, [0]);
     assert.deepEqual(calls, ['clear-auth', 'clear-workspace:acme']);
+    assert.match(trap.stdout, /logged out/);
+  } finally {
+    trap.restore();
+    restoreDeps();
+  }
+});
+
+test('runLogout treats --all as an alias for clearing shared cloud auth', async () => {
+  const calls: string[] = [];
+  const restoreDeps = configureDeployCommandForTest({
+    clearStoredAuth: async () => {
+      calls.push('clear-auth');
+    },
+    clearStoredWorkspaceToken: async (workspace?: string) => {
+      calls.push(`clear-workspace:${workspace ?? ''}`);
+    }
+  });
+  const trap = trapExit(false);
+  try {
+    await runLogout(['--all']);
+    assert.deepEqual(trap.exits, [0]);
+    assert.deepEqual(calls, ['clear-auth', 'clear-workspace:']);
     assert.match(trap.stdout, /logged out/);
   } finally {
     trap.restore();
