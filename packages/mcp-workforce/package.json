@@ -1,6 +1,6 @@
 {
   "name": "@agentworkforce/mcp-workforce",
-  "version": "3.0.7",
+  "version": "3.0.8",
   "private": false,
   "type": "module",
   "main": "dist/index.js",
