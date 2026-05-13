@@ -31,12 +31,13 @@ const ENV_KEYS = [
   'WORKFORCE_DEPLOY_RETRY_BACKOFF_MS'
 ] as const;
 
-function persona(overrides: Record<string, unknown> = {}): PersonaSpec {
+function persona(overrides: Partial<PersonaSpec> = {}): PersonaSpec {
   return {
     id: 'demo',
     intent: 'documentation',
     tags: ['documentation'] as const,
     description: 'test persona',
+    skills: [],
     harness: 'codex',
     model: 'openai-codex/test',
     systemPrompt: 'help',
@@ -45,7 +46,7 @@ function persona(overrides: Record<string, unknown> = {}): PersonaSpec {
     schedules: [{ name: 'daily', cron: '0 9 * * *' }],
     onEvent: './agent.ts',
     ...overrides
-  } as PersonaSpec;
+  };
 }
 
 async function withBundle(): Promise<{ bundle: BundleResult; cleanup: () => Promise<void> }> {
