@@ -335,3 +335,43 @@ test('parseDeployArgs: malformed --input exits with clean error', () => {
     trap.restore();
   }
 });
+
+test('runLogin canonicalizes origin.agentrelay.cloud apiUrl before persisting active.json', async () => {
+  // ensureAuthenticated occasionally returns auth.apiUrl pointing at the
+  // SST origin-bypass hostname. If we persist that, every subsequent API
+  // call 401s because session cookies don't cross subdomains. The CLI
+  // must canonicalize before writing.
+  const writes: Array<{ cloudUrl?: string }> = [];
+  const restoreDeps = configureDeployCommandForTest({
+    createTerminalIO: () => createBufferedIO(),
+    ensureAuthenticated: async () => ({
+      apiUrl: 'https://origin.agentrelay.cloud',
+      accessToken: 'access',
+      refreshToken: 'refresh',
+      accessTokenExpiresAt: '2999-01-01T00:00:00.000Z'
+    }),
+    createCloudApiClient() {
+      return {
+        async fetch(_pathname: string) {
+          return new Response(JSON.stringify({ workspaces: [{ id: 'ws-1', slug: 'acme' }] }), {
+            status: 200,
+            headers: { 'content-type': 'application/json' }
+          });
+        }
+      };
+    },
+    writeActiveWorkspace: async (pointer: { cloudUrl?: string }) => {
+      writes.push(pointer);
+    }
+  });
+  const trap = trapExit(false);
+  try {
+    await runLogin(['--cloud-url', 'https://agentrelay.com/cloud']);
+    assert.deepEqual(trap.exits, [0]);
+    assert.equal(writes.length, 1);
+    assert.equal(writes[0].cloudUrl, 'https://agentrelay.com/cloud');
+  } finally {
+    trap.restore();
+    restoreDeps();
+  }
+});

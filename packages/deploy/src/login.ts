@@ -7,6 +7,7 @@ import {
   writeStoredAuth,
   type StoredAuth
 } from '@agent-relay/cloud';
+import { canonicalizeCloudUrl } from './cloud-url.js';
 import type { DeployIO } from './types.js';
 
 /**
@@ -116,11 +117,15 @@ export async function writeActiveWorkspace(
 ): Promise<void> {
   const file = activeWorkspaceFile();
   await mkdir(path.dirname(file), { recursive: true, mode: 0o700 });
+  // Canonicalize at write time so we never persist an edge / origin-bypass
+  // hostname (e.g. origin.agentrelay.cloud) into active.json. Downstream
+  // readers can trust the stored value and skip canonicalization.
+  const cloudUrl = input.cloudUrl ? canonicalizeCloudUrl(input.cloudUrl) : undefined;
   const payload: ActiveWorkspacePointer = {
     workspace: input.workspace,
     ...(input.workspaceSlug ? { workspaceSlug: input.workspaceSlug } : {}),
     ...(input.workspaceId ? { workspaceId: input.workspaceId } : {}),
-    ...(input.cloudUrl ? { cloudUrl: input.cloudUrl } : {}),
+    ...(cloudUrl ? { cloudUrl } : {}),
     setAt: new Date().toISOString()
   };
   await writeFile(file, `${JSON.stringify(payload, null, 2)}\n`, {
@@ -194,6 +199,10 @@ export async function resolveWorkspaceToken(args: {
   io: DeployIO;
   noPrompt?: boolean;
 }): Promise<WorkspaceAuthToken & { workspace?: string }> {
+  // Defensively canonicalize the incoming cloud URL so any per-call
+  // matching (e.g. cloudUrlMatches in loadWorkspaceToken) compares against
+  // the public canonical host rather than an origin-bypass hostname.
+  const cloudUrl = canonicalizeCloudUrl(args.cloudUrl);
   const envWorkspace = (process.env.WORKFORCE_WORKSPACE_ID ?? '').trim();
   const fromEnv = (process.env.WORKFORCE_WORKSPACE_TOKEN ?? '').trim();
   const requestedWorkspace = (args.workspace ?? '').trim();
@@ -228,7 +237,7 @@ export async function resolveWorkspaceToken(args: {
   // Tier 3: legacy keychain / file-stored workspace token. Kept for users
   // mid-upgrade who already have a minted workspace token from the old
   // login flow.
-  const stored = await loadWorkspaceToken(requestedWorkspace || undefined, args.cloudUrl);
+  const stored = await loadWorkspaceToken(requestedWorkspace || undefined, cloudUrl);
   if (stored) {
     return {
       token: stored.token,
