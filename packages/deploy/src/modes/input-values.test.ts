@@ -248,9 +248,12 @@ test('cloud launcher includes inputs in persona bundle POST body', async () => {
       byokKey: 'sk-test'
     });
 
+    // The deploy POST is identified by having a JSON body — the listing
+    // GET that now fires before deploy has no body.
     const deployCall = calls.find(
       (c) =>
         c.url === 'https://cloud.example.com/api/v1/workspaces/ws-test/deployments'
+        && c.body !== undefined
     );
     assert.equal(handle.id, 'agent-1');
     assert.ok(deployCall, 'expected a POST to the deployments endpoint');

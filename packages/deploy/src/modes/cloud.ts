@@ -469,6 +469,26 @@ async function handleExistingPersona(args: {
   return { cancelled: false };
 }
 
+/**
+ * Look up a deployed-persona row in the workspace, if any.
+ *
+ * We call the workspace deployments list — added in cloud#580 — and
+ * filter client-side. Why not `/workspaces/{ws}/agents`? That route is
+ * a dashboard proxy to an external gateway, requires session auth
+ * (cookie), and returns 403 for the cli:auth Bearer tokens this CLI
+ * uses. The deployments list is the actual `agents` table reader and
+ * accepts cli:auth scope.
+ *
+ * Why no `?personaId=` server-side filter? `agents.personaId` is the
+ * persona's UUID, not its slug. The CLI only knows the persona's slug
+ * (the `id` field in the local persona JSON). Sending the slug as
+ * `personaId=` makes cloud's drizzle `eq(agents.personaId, slug)`
+ * predicate throw on the UUID cast → 500. The list is bounded to one
+ * workspace's worth of agents (typically dozens), so a client-side
+ * filter on `deployedName` (which cloud derives from
+ * `persona.slug || persona.name || persona.id`) is the right tradeoff
+ * until cloud teaches the filter to accept slugs.
+ */
 async function findExistingAgent(args: {
   cloudUrl: string;
   workspaceId: string;
@@ -477,7 +497,7 @@ async function findExistingAgent(args: {
 }): Promise<ExistingAgent | null> {
   const url = `${args.cloudUrl}/api/v1/workspaces/${encodeURIComponent(
     args.workspaceId
-  )}/agents?persona_slug=${encodeURIComponent(args.personaId)}`;
+  )}/deployments`;
   const res = await fetch(url, {
     method: 'GET',
     headers: {
@@ -487,12 +507,12 @@ async function findExistingAgent(args: {
   });
   if (res.status === 404 || res.status === 405) return null;
   if (res.status === 401) {
-    throw new Error('cloud existing persona check failed: unauthorized. Run `workforce login` and retry.');
+    throw new Error('cloud existing persona check failed: unauthorized. Run `agentworkforce login` and retry.');
   }
   if (!res.ok) {
     throw new Error(`cloud existing persona check failed: ${res.status} ${await responseExcerpt(res)}`);
   }
-  return parseExistingAgent((await res.json()) as ExistingAgentResponse);
+  return parseExistingAgent((await res.json()) as ExistingAgentResponse, args.personaId);
 }
 
 async function resolveOnExists(args: {
@@ -544,25 +564,63 @@ async function deleteAgent(args: {
   }
 }
 
-function parseExistingAgent(body: ExistingAgentResponse): ExistingAgent | null {
-  const direct = parseAgentLike(body.agent);
+function parseExistingAgent(
+  body: ExistingAgentResponse,
+  expectedPersonaId?: string
+): ExistingAgent | null {
+  const direct = parseAgentLike(body.agent, expectedPersonaId);
   if (direct) return direct;
   if (Array.isArray(body.agents)) {
     for (const agent of body.agents) {
-      const parsed = parseAgentLike(agent);
+      const parsed = parseAgentLike(agent, expectedPersonaId);
       if (parsed) return parsed;
     }
   }
   return null;
 }
 
-function parseAgentLike(value: unknown): ExistingAgent | null {
+/**
+ * Coerce one row from a deploy-list response into the local
+ * `ExistingAgent` shape. Cloud's `/deployments` GET (per cloud#580)
+ * returns rows shaped `{ agentId, personaId (uuid), deployedName, status, ... }`;
+ * older preview routes used `{ id, slug, status }`. We accept both
+ * during the deploy-v1 rollout.
+ *
+ * When `expectedPersonaId` is supplied (the local persona JSON's `id`,
+ * which is a slug), we match against the human-readable identifiers on
+ * the row — `deployedName`, `slug`, or `personaSlug` — and explicitly
+ * skip when `personaId` is a UUID that won't match a slug. This is the
+ * client-side equivalent of the `?personaId=` filter that cloud
+ * doesn't safely accept yet.
+ */
+function parseAgentLike(value: unknown, expectedPersonaId?: string): ExistingAgent | null {
   if (!value || typeof value !== 'object' || Array.isArray(value)) return null;
   const record = value as Record<string, unknown>;
-  if (typeof record.id !== 'string' || !record.id.trim()) return null;
+  const id = readFirstString(record, ['agentId', 'id']);
+  if (!id) return null;
+  if (expectedPersonaId) {
+    const personaCandidates = [
+      readFirstString(record, ['deployedName']),
+      readFirstString(record, ['personaSlug', 'persona_slug', 'slug']),
+      // `personaId` is a UUID on the new endpoint and a slug on the
+      // legacy preview endpoint; trust an exact-string equality test
+      // either way.
+      readFirstString(record, ['personaId', 'persona_id'])
+    ].filter((candidate): candidate is string => Boolean(candidate));
+    // If the row has any persona-identifying field at all, require an
+    // exact match. If the row has none (legacy preview shape — the
+    // server already filtered to one persona via path), let it through.
+    if (personaCandidates.length > 0 && !personaCandidates.includes(expectedPersonaId)) {
+      return null;
+    }
+  }
+  // Treat destroyed rows as "not present" so a re-deploy with the same
+  // persona slug doesn't trip the on-exists prompt against a tombstone.
+  const status = typeof record.status === 'string' ? record.status : undefined;
+  if (status === 'destroyed') return null;
   return {
-    id: record.id,
-    ...(typeof record.status === 'string' ? { status: record.status } : {})
+    id,
+    ...(status ? { status } : {})
   };
 }
 
