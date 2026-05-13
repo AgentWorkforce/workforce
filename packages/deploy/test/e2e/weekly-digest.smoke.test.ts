@@ -315,7 +315,7 @@ async function destroyDeployment({ stagingUrl, stagingToken, workspaceId, agentI
   let lastError;
   for (const url of candidates) {
     const res = await fetch(url, { method: 'DELETE', headers: authHeaders(stagingToken) });
-    if (res.ok || res.status === 404 || res.status === 405 || res.status === 501) return;
+    if (res.ok || res.status === 404 || res.status === 405 || res.status === 501) continue;
     lastError = new Error(`${res.status} ${await res.text()}`);
   }
   if (lastError) throw lastError;
