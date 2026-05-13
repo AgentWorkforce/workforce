@@ -33,30 +33,47 @@ export const cloudLauncher: ModeLauncher = {
   }
 };
 
+const CLOUD_DEPLOY_TIMEOUT_MS = 30_000;
+
 async function postCloudDeployment(
   input: ModeLaunchInput,
   cloudUrl: string,
   workspaceToken: string
 ): Promise<ModeLaunchHandle> {
-  const res = await fetch(
-    `${cloudUrl}/api/v1/workspaces/${encodeURIComponent(input.workspace)}/deployments`,
-    {
-      method: 'POST',
-      headers: {
-        authorization: `Bearer ${workspaceToken}`,
-        'content-type': 'application/json'
-      },
-      body: JSON.stringify({
-        persona: input.persona,
-        bundle: {
-          runner: await readFile(input.bundle.runnerPath, 'utf8'),
-          agent: await readFile(input.bundle.bundlePath, 'utf8'),
-          packageJson: JSON.parse(await readFile(input.bundle.packageJsonPath, 'utf8'))
+  const controller = new AbortController();
+  const timeout = setTimeout(() => controller.abort(), CLOUD_DEPLOY_TIMEOUT_MS);
+  let res: Response;
+  try {
+    res = await fetch(
+      `${cloudUrl}/api/v1/workspaces/${encodeURIComponent(input.workspace)}/deployments`,
+      {
+        method: 'POST',
+        headers: {
+          authorization: `Bearer ${workspaceToken}`,
+          'content-type': 'application/json'
         },
-        ...(input.inputs && Object.keys(input.inputs).length > 0 ? { inputs: input.inputs } : {})
-      })
+        body: JSON.stringify({
+          persona: input.persona,
+          bundle: {
+            runner: await readFile(input.bundle.runnerPath, 'utf8'),
+            agent: await readFile(input.bundle.bundlePath, 'utf8'),
+            packageJson: JSON.parse(await readFile(input.bundle.packageJsonPath, 'utf8'))
+          },
+          ...(input.inputs && Object.keys(input.inputs).length > 0 ? { inputs: input.inputs } : {})
+        }),
+        signal: controller.signal
+      }
+    );
+  } catch (err) {
+    if (err instanceof Error && err.name === 'AbortError') {
+      throw new Error(
+        `Cloud deploy failed: request timed out after ${CLOUD_DEPLOY_TIMEOUT_MS / 1000}s`
+      );
     }
-  );
+    throw err;
+  } finally {
+    clearTimeout(timeout);
+  }
   if (!res.ok) {
     throw new Error(`Cloud deploy failed: ${res.status} ${await res.text()}`);
   }
