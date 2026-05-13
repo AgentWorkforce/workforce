@@ -47,17 +47,23 @@ interface CloudAgentStatusResponse {
   status?: unknown;
 }
 
-interface ProviderCredentialsResponse {
-  credentials?: unknown;
-  providerCredentials?: unknown;
-  credential?: unknown;
-  id?: unknown;
-  authType?: unknown;
-  auth_type?: unknown;
+/**
+ * Shape of `GET /api/v1/cloud-agents` on the cloud side.
+ *
+ * Each entry represents one (user, workspace, harness) row in the
+ * `cloud_agents` table; `status === 'connected'` means the harness OAuth
+ * completion stored a usable credential in S3 (see cloud's
+ * `cli/auth/complete` route handler).
+ */
+interface CloudAgentsListResponse {
+  agents?: unknown;
+}
+
+interface CloudAgentEntry {
+  harness?: unknown;
   status?: unknown;
-  connected?: unknown;
   credentialStoredAt?: unknown;
-  createdAt?: unknown;
+  id?: unknown;
 }
 
 interface ExistingAgentResponse {
@@ -333,6 +339,20 @@ async function resolveHarnessSource(args: {
   return expectHarnessSource(answer);
 }
 
+/**
+ * Check whether the user already has a connected harness credential in
+ * cloud for this persona's model provider.
+ *
+ * Cloud surfaces this via `GET /api/v1/cloud-agents`, which returns one
+ * row per (user, workspace, harness) — `harness` is the provider key
+ * ("anthropic", "openai", …) and `status === 'connected'` means the
+ * OAuth completion route successfully stored a credential.
+ *
+ * We previously called `/api/v1/users/me/provider_credentials?model_provider=...`,
+ * which doesn't exist on cloud at all (the route was never built). That
+ * 404 made every deploy with `--no-prompt` fail with "credentials are
+ * not connected" even when they were — see workforce#118 follow-up.
+ */
 async function isHarnessOauthConnected(args: {
   cloudUrl: string;
   persona: PersonaSpec;
@@ -340,22 +360,19 @@ async function isHarnessOauthConnected(args: {
   const auth = await readUsableCloudAuth(args.cloudUrl);
   if (!auth) return false;
   const client = cloudCredentialDeps.createCloudApiClient(auth, args.cloudUrl);
-  const path = `/api/v1/users/me/provider_credentials?model_provider=${encodeURIComponent(
-    deriveModelProvider(args.persona)
-  )}`;
-  const res = await client.fetch(path, {
+  const res = await client.fetch('/api/v1/cloud-agents', {
     method: 'GET',
     headers: { 'user-agent': USER_AGENT }
   });
   if (res.status === 404 || res.status === 405) return false;
   if (res.status === 401) {
-    throw new Error('cloud harness check failed: unauthorized. Run `workforce login` and retry.');
+    throw new Error('cloud harness check failed: unauthorized. Run `agentworkforce login` and retry.');
   }
   if (!res.ok) {
     throw new Error(`cloud harness check failed: ${res.status} ${await responseExcerpt(res)}`);
   }
-  const body = (await res.json()) as ProviderCredentialsResponse;
-  return providerCredentialsReady(body);
+  const body = (await res.json()) as CloudAgentsListResponse;
+  return hasConnectedHarness(body, deriveModelProvider(args.persona));
 }
 
 async function resolveByokKey(args: {
@@ -626,22 +643,26 @@ function readCredentialId(body: Record<string, unknown>): string {
   throw new Error('cloud provider credentials response missing credential id');
 }
 
-function providerCredentialsReady(body: ProviderCredentialsResponse): boolean {
-  const candidates = [
-    body.credential,
-    ...(Array.isArray(body.credentials) ? body.credentials : []),
-    ...(Array.isArray(body.providerCredentials) ? body.providerCredentials : []),
-    body
-  ];
-  return candidates.some((candidate) => {
-    if (!candidate || typeof candidate !== 'object' || Array.isArray(candidate)) return false;
-    const record = candidate as Record<string, unknown>;
-    return record.connected === true
-      || record.status === 'connected'
-      || record.status === 'active'
-      || Boolean(record.credentialStoredAt)
-      || Boolean(record.createdAt)
-      || typeof record.id === 'string';
+/**
+ * Walk the `/api/v1/cloud-agents` response and decide whether any entry
+ * represents a usable, connected credential for the given harness/provider.
+ *
+ * "Usable" means: the cloud_agents row exists, its `harness` field
+ * matches the persona's derived model provider (case-insensitive), and
+ * its `status` is `connected`. The S3-backed credential write happens
+ * before the row is marked connected, so this single check is enough —
+ * no second probe required.
+ */
+function hasConnectedHarness(body: CloudAgentsListResponse, expectedHarness: string): boolean {
+  if (!body || !Array.isArray(body.agents)) return false;
+  const target = expectedHarness.trim().toLowerCase();
+  if (!target) return false;
+  return body.agents.some((value): boolean => {
+    if (!value || typeof value !== 'object' || Array.isArray(value)) return false;
+    const entry = value as CloudAgentEntry;
+    if (typeof entry.harness !== 'string') return false;
+    if (entry.harness.trim().toLowerCase() !== target) return false;
+    return entry.status === 'connected';
   });
 }
 
