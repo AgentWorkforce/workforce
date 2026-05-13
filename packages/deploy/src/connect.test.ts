@@ -124,7 +124,7 @@ test('connectIntegrations fails fast on auth errors without prompting to connect
     integrations: {
       async isConnected() {
         throw new Error(
-          'cloud integration request failed: unauthorized. Open https://origin.agentrelay.cloud/cloud to verify your cloud session, then run `agent-relay cloud whoami` and `agentworkforce login` to refresh the active workspace.'
+          'cloud integration request failed: unauthorized. Your active workspace session is invalid or expired. Run `agentworkforce login --workspace <id-or-slug>` to refresh, then retry.'
         );
       },
       async connect() {
@@ -136,16 +136,37 @@ test('connectIntegrations fails fast on auth errors without prompting to connect
 
   assert.equal(confirmCalled, false);
   assert.equal(connectCalled, false);
-  assert.deepEqual(result.outcomes, [
-    {
-      provider: 'notion',
-      status: 'failed',
-      message:
-        'cloud integration request failed: unauthorized. Open https://origin.agentrelay.cloud/cloud to verify your cloud session, then run `agent-relay cloud whoami` and `agentworkforce login` to refresh the active workspace.'
-    }
-  ]);
+  assert.equal(result.outcomes.length, 1);
+  const [outcome] = result.outcomes;
+  assert.equal(outcome.provider, 'notion');
+  assert.equal(outcome.status, 'failed');
+  // Future-proofed against copy-edits: the message must point users at the
+  // workforce CLI's own login and must NOT instruct them to reach for the
+  // upstream `agent-relay` binary.
+  assert.match(outcome.message ?? '', /agentworkforce login/i);
+  assert.doesNotMatch(outcome.message ?? '', /agent-relay cloud/);
   assert.ok(io.messages.some((message) => message.level === 'warn' && message.message.includes('failed to check connection status for notion')));
   assert.ok(io.messages.some((message) => message.level === 'error' && message.message.includes('auth failed')));
+});
+
+test('relayfileIntegrationResolver surfaces the agentworkforce-native error on 401', async () => {
+  const resolver = relayfileIntegrationResolver({
+    apiUrl: 'https://cloud.example.test',
+    workspaceId: 'ws-1',
+    workspaceToken: 'tok',
+    fetch: async () => new Response('Unauthorized', { status: 401 })
+  });
+  await assert.rejects(
+    resolver.isConnected({ workspace: 'ws-1', provider: 'notion' }),
+    (err: unknown) => {
+      const message = err instanceof Error ? err.message : String(err);
+      assert.match(message, /unauthorized/i);
+      assert.match(message, /agentworkforce login/i);
+      assert.doesNotMatch(message, /agent-relay cloud/);
+      assert.doesNotMatch(message, /origin\.agentrelay\.cloud/);
+      return true;
+    }
+  );
 });
 
 test('connectIntegrations honors --no-prompt for subscription provider setup', async () => {

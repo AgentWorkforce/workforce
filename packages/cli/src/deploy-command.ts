@@ -7,6 +7,7 @@ import {
   type StoredAuth
 } from '@agent-relay/cloud';
 import {
+  canonicalizeCloudUrl,
   clearActiveWorkspace,
   clearStoredWorkspaceToken,
   createTerminalIO,
@@ -127,13 +128,18 @@ export async function runLogin(args: readonly string[]): Promise<void> {
 
   const opts = parseLoginArgs(args);
   const io = deployCommandDeps.createTerminalIO();
-  const cloudUrl = normalizeCloudUrl(
+  const cloudUrl = canonicalizeCloudUrl(normalizeCloudUrl(
     opts.cloudUrl ?? process.env.WORKFORCE_DEPLOY_CLOUD_URL ?? process.env.WORKFORCE_CLOUD_URL ?? defaultApiUrl()
-  );
+  ));
 
   try {
     const auth = await deployCommandDeps.ensureAuthenticated(cloudUrl);
-    const apiUrl = normalizeCloudUrl(auth.apiUrl || cloudUrl);
+    // Canonicalize what ensureAuthenticated handed back — when the auth
+    // request happens to route through cloud's edge-bypass hostname,
+    // auth.apiUrl can be `https://origin.agentrelay.cloud` even though
+    // the user's session cookies are scoped to `agentrelay.com`. Storing
+    // that URL is what causes every subsequent API call to 401.
+    const apiUrl = canonicalizeCloudUrl(normalizeCloudUrl(auth.apiUrl || cloudUrl));
     let workspaces: LoginWorkspace[] = [];
     let chosen: string;
     if (opts.workspace) {
@@ -142,7 +148,7 @@ export async function runLogin(args: readonly string[]): Promise<void> {
       workspaces = await listWorkspacesForLogin(auth, apiUrl);
       if (workspaces.length === 0) {
         throw new Error(
-          'no workspaces are accessible from this account. Create one at https://agentrelay.cloud, '
+          'no workspaces are accessible from this account. Create one at https://agentrelay.com/cloud, '
             + 'or pass --workspace <id-or-slug> if you already know the workspace identifier.'
         );
       }
@@ -218,12 +224,9 @@ Flags:
 
 const LOGIN_USAGE = `usage: agentworkforce login [flags]
 
-Connect this machine to a workforce workspace. Reuses the shared
-Agent Relay Cloud login (\`~/.agent-relay/cloud-auth.json\`) for the bearer
-credential and stores a small pointer at \`~/.agentworkforce/active.json\`
-recording which workspace this machine targets. No separate workspace-scoped
-token is minted; cloud accepts the shared accessToken as Authorization: Bearer
-for deploy endpoints.
+Connect this machine to a workforce workspace. Opens the browser to sign in
+to the workforce cloud and stores a small pointer at
+\`~/.agentworkforce/active.json\` recording which workspace this machine targets.
 
 Flags:
   --workspace <name>          Workforce workspace; defaults to WORKFORCE_WORKSPACE_ID or prompt
@@ -235,12 +238,12 @@ Flags:
 
 const LOGOUT_USAGE = `usage: agentworkforce logout [flags]
 
-Clear the stored workforce workspace token. Agent Relay Cloud browser auth is
-shared with agent-relay and is preserved unless --cloud-auth is passed.
+Clear the stored workforce workspace pointer. The shared cloud browser auth
+is preserved unless --cloud-auth is passed.
 
 Flags:
   --workspace <name>          Optional workspace token entry to clear
-  --cloud-auth                Also clear the shared Agent Relay Cloud login
+  --cloud-auth                Also clear the shared cloud login
   --all                       Alias for --cloud-auth
   -h, --help                  Print this message
 `;
@@ -451,7 +454,7 @@ async function listWorkspacesForLogin(auth: StoredAuth, apiUrl: string): Promise
   if (res.status === 403) {
     throw new Error(
       'workspace list returned 403 Forbidden. Pass --workspace <id-or-slug> to skip listing, '
-        + 'or check that your account has access to a workspace at https://agentrelay.cloud.'
+        + 'or check that your account has access to a workspace at https://agentrelay.com/cloud.'
     );
   }
   if (res.status !== 404 && res.status !== 405) {
