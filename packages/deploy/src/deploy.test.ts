@@ -749,10 +749,14 @@ test('deploy: clear error when nothing resolves and noPrompt is set', async () =
   );
 
   await withWorkspaceEnv({ workspace: undefined, token: undefined }, async () => {
-    // Point active-workspace file at a definitely-missing path so the test
-    // doesn't accidentally pick up the host user's `~/.agentworkforce/active.json`.
+    // Point filesystem-backed auth at definitely-missing/disabled paths so the
+    // test doesn't accidentally pick up host credentials.
     const previousActiveFile = process.env.WORKFORCE_ACTIVE_WORKSPACE_FILE;
+    const previousLoginFile = process.env.WORKFORCE_LOGIN_FILE;
+    const previousDisableShared = process.env.WORKFORCE_DISABLE_SHARED_AUTH;
     process.env.WORKFORCE_ACTIVE_WORKSPACE_FILE = path.join(os.tmpdir(), 'wf-deploy-test-missing-active.json');
+    process.env.WORKFORCE_LOGIN_FILE = path.join(os.tmpdir(), 'wf-deploy-test-missing-login.json');
+    process.env.WORKFORCE_DISABLE_SHARED_AUTH = '1';
     try {
       await assert.rejects(
         deploy(
@@ -766,6 +770,16 @@ test('deploy: clear error when nothing resolves and noPrompt is set', async () =
         delete process.env.WORKFORCE_ACTIVE_WORKSPACE_FILE;
       } else {
         process.env.WORKFORCE_ACTIVE_WORKSPACE_FILE = previousActiveFile;
+      }
+      if (previousLoginFile === undefined) {
+        delete process.env.WORKFORCE_LOGIN_FILE;
+      } else {
+        process.env.WORKFORCE_LOGIN_FILE = previousLoginFile;
+      }
+      if (previousDisableShared === undefined) {
+        delete process.env.WORKFORCE_DISABLE_SHARED_AUTH;
+      } else {
+        process.env.WORKFORCE_DISABLE_SHARED_AUTH = previousDisableShared;
       }
     }
   });

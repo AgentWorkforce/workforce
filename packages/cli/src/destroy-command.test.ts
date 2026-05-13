@@ -87,8 +87,10 @@ function withTokenEnv(token: string, workspace: string): () => void {
     else process.env.WORKFORCE_WORKSPACE_TOKEN = prevToken;
     if (prevWs === undefined) delete process.env.WORKFORCE_WORKSPACE_ID;
     else process.env.WORKFORCE_WORKSPACE_ID = prevWs;
-    if (prevCloudA !== undefined) process.env.WORKFORCE_DEPLOY_CLOUD_URL = prevCloudA;
-    if (prevCloudB !== undefined) process.env.WORKFORCE_CLOUD_URL = prevCloudB;
+    if (prevCloudA === undefined) delete process.env.WORKFORCE_DEPLOY_CLOUD_URL;
+    else process.env.WORKFORCE_DEPLOY_CLOUD_URL = prevCloudA;
+    if (prevCloudB === undefined) delete process.env.WORKFORCE_CLOUD_URL;
+    else process.env.WORKFORCE_CLOUD_URL = prevCloudB;
     restoreIsolate();
   };
 }

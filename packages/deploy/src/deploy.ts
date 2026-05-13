@@ -231,7 +231,7 @@ export async function deploy(opts: DeployOptions, resolvers: DeployResolvers = {
     ...(activeToken ? { workspaceToken: activeToken } : {}),
     ...(opts.detach ? { detach: true } : {}),
     ...(opts.byoSandbox ? { byoSandbox: true } : {}),
-    ...(opts.cloudUrl ? { cloudUrl: opts.cloudUrl } : {}),
+    ...(cloudUrl ? { cloudUrl } : {}),
     ...(opts.noPrompt ? { noPrompt: true } : {}),
     ...(opts.harnessSource ? { harnessSource: opts.harnessSource } : {}),
     ...(opts.byokKey ? { byokKey: opts.byokKey } : {}),
