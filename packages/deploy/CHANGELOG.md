@@ -7,6 +7,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [3.0.7] - 2026-05-13
+
+### Fixed
+
+- Tags optional + free-form per cloud#553 schema (#553)
+- Cover integration connect preflight (#110)
+
+### Changed
+
+- Fail fast on deploy integration auth errors (#115)
+
 ## [3.0.6] - 2026-05-13
 
 ### Fixed
