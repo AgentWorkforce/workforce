@@ -13,6 +13,7 @@ agentworkforce show <persona>[@<tier>]
 agentworkforce install [flags] <pkg|path>
 agentworkforce sources <list|add|remove>
 agentworkforce harness check
+agentworkforce destroy <persona-or-agent-id> [--workspace <id>] [--cloud-url <url>] [--no-prompt]
 agentworkforce --version
 ```
 
@@ -29,6 +30,11 @@ agentworkforce --version
 - `sources` — list, add, or remove persona source directories.
 - `harness check` — probe which harnesses (`claude`, `codex`, `opencode`)
   are installed. See [`## Harness check`](#harness-check) below.
+- `destroy` — tear down a deployed cloud agent: cancels all relaycron
+  schedules and marks the agent as destroyed. Accepts either a persona
+  JSON path (slug resolved via the workspace's agents index) or a literal
+  agent UUID. Exits `0` on success, `2` when the agent is unknown or
+  already destroyed, `1` for any other failure.
 - `--version` — print the installed package version.
 
 ## Install
