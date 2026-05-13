@@ -36,11 +36,9 @@ export interface MemoryToolDeps {
 }
 
 const VALID_SCOPES: ReadonlySet<PersonaMemoryScope> = new Set([
-  'session',
-  'user',
   'workspace',
-  'org',
-  'object'
+  'user',
+  'global'
 ]);
 
 /**
