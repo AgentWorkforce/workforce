@@ -52,6 +52,36 @@ test('github.createIssue writes a draft issue file under issues/', async () => {
   }
 });
 
+test('github.createPullRequest writes a draft pull request file under pulls/', async () => {
+  const root = await tempMount();
+  try {
+    const client = createGithubClient({ relayfileMountRoot: root });
+    await client.createPullRequest({
+      owner: 'o',
+      repo: 'r',
+      title: 'Essay: Draft',
+      body: 'Adds the essay.',
+      head: 'essay/page-1',
+      base: 'main',
+      files: { 'output/page-1.md': '# Essay' }
+    });
+
+    const dir = path.join(root, 'github/repos/o/r/pulls');
+    const files = await readdir(dir);
+    const drafts = files.filter((name) => name.endsWith('.json'));
+    assert.equal(drafts.length, 1);
+    assert.deepEqual(JSON.parse(await readFile(path.join(dir, drafts[0] ?? ''), 'utf8')), {
+      title: 'Essay: Draft',
+      body: 'Adds the essay.',
+      head: 'essay/page-1',
+      base: 'main',
+      files: { 'output/page-1.md': '# Essay' }
+    });
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
 test('github.upsertIssue updates an existing flat issue match', async () => {
   const root = await tempMount();
   try {

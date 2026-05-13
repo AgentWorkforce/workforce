@@ -58,7 +58,8 @@ import {
   type AutoSyncHandle
 } from '@relayfile/local-mount';
 import ora, { type Ora } from 'ora';
-import { runDeploy, runLogin } from './deploy-command.js';
+import { runDeploy, runLogin, runLogout } from './deploy-command.js';
+import { runDeploymentList } from './list-command.js';
 import {
   startLaunchMetadataRecording,
   type LaunchMetadataRun
@@ -147,6 +148,7 @@ Commands:
                                             inspection.
   list [flags]        List available personas from the cascade (cwd →
                       configured persona dirs → library). Flags:
+                        --deployments                 list deployed cloud agents
                         --json                        emit JSON instead of a table
                         --filter-harness <harness>    only show this harness
                                                       (${HARNESS_VALUES.join(' | ')})
@@ -202,10 +204,10 @@ Commands:
                         --cloud-url <url>   override the workforce cloud URL
                         --input KEY=value   override a declared persona input
                                             (repeat for multiple)
-  login               Connect this machine to a workforce workspace. The
-                      browser-based flow is rolling out; until then it prints
-                      the WORKFORCE_WORKSPACE_ID / WORKFORCE_WORKSPACE_TOKEN
-                      env-var setup instructions and exits non-zero.
+  deployments list    List deployed cloud agents in the active workspace.
+  login               Connect this machine to a workforce workspace using
+                      browser OAuth and store a workspace token.
+  logout              Clear browser OAuth auth and the stored workspace token.
 
 Options:
   -h, --help          Show this help text.
@@ -2093,11 +2095,13 @@ function parseListArgs(args: readonly string[]): {
   filterHarness?: Harness;
   filterTag?: PersonaTag;
   display: ListDisplayOptions;
+  deployments: boolean;
 } {
   let json = false;
   let filterHarness: Harness | undefined;
   let filterTag: PersonaTag | undefined;
   const display: ListDisplayOptions = { description: true };
+  let deployments = false;
 
   const valueOf = (i: number, flag: string): string => {
     const v = args[i + 1];
@@ -2111,9 +2115,11 @@ function parseListArgs(args: readonly string[]): {
     const arg = args[i];
     if (arg === '--json') {
       json = true;
+    } else if (arg === '--deployments') {
+      deployments = true;
     } else if (arg === '-h' || arg === '--help') {
       process.stdout.write(
-        'Usage: agentworkforce list [--json] [--filter-harness <harness>] [--filter-tag <tag>] [--no-display-description]\n'
+        'Usage: agentworkforce list [--deployments] [--status <status>] [--persona <slug>] [--json] [--filter-harness <harness>] [--filter-tag <tag>] [--no-display-description]\n'
       );
       process.exit(0);
     } else if (arg === '--filter-harness') {
@@ -2136,11 +2142,20 @@ function parseListArgs(args: readonly string[]): {
       die(`list: unexpected argument "${arg}".`);
     }
   }
-  return { json, filterHarness, filterTag, display };
+  return { json, filterHarness, filterTag, display, deployments };
 }
 
-function runList(args: readonly string[]): never {
-  const { json, filterHarness, filterTag, display } = parseListArgs(args);
+async function runList(args: readonly string[]): Promise<never> {
+  if (args.includes('--deployments')) {
+    await runDeploymentList(args.filter((arg) => arg !== '--deployments'));
+    process.exit(0);
+  }
+
+  const { json, filterHarness, filterTag, display, deployments } = parseListArgs(args);
+  if (deployments) {
+    await runDeploymentList(args.filter((arg) => arg !== '--deployments'));
+    process.exit(0);
+  }
 
   const rows = collectPersonaRows().filter((r) => {
     if (filterHarness && r.harness !== filterHarness) return false;
@@ -3730,7 +3745,8 @@ export async function main(): Promise<void> {
   }
 
   if (subcommand === 'list') {
-    runList(rest);
+    await runList(rest);
+    return;
   }
 
   if (subcommand === 'show') {
@@ -3773,8 +3789,26 @@ export async function main(): Promise<void> {
     return;
   }
 
+  if (subcommand === 'deployments') {
+    const [action, ...extra] = rest;
+    if (!action || action === '-h' || action === '--help') {
+      process.stdout.write('Usage: agentworkforce deployments list [flags]\n');
+      process.exit(action ? 0 : 1);
+    }
+    if (action !== 'list') {
+      die(`deployments: unknown action "${action}". Expected: list`);
+    }
+    await runDeploymentList(extra);
+    return;
+  }
+
   if (subcommand === 'login') {
     await runLogin(rest);
+    return;
+  }
+
+  if (subcommand === 'logout') {
+    await runLogout(rest);
     return;
   }
 

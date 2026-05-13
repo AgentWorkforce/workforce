@@ -4,6 +4,7 @@ import { bundleStager } from './bundle.js';
 import {
   connectIntegrations,
   envIntegrationResolver,
+  relayfileIntegrationResolver,
   type ConnectAllInput,
   type IntegrationConnectResolver,
   type ProviderSubscriptionResolver
@@ -131,24 +132,26 @@ export async function deploy(opts: DeployOptions, resolvers: DeployResolvers = {
   }
 
   const mode: DeployMode = opts.mode ?? pickMode(opts);
-  const { workspace, token } = mode === 'cloud' && !resolvers.workspaceAuth
-    ? resolveCloudWorkspaceIdentity(opts, io)
-    : await (resolvers.workspaceAuth ?? envWorkspaceAuth()).resolveWorkspace({
-        override: opts.workspace,
-        io
-      });
+  const { workspace, token } = await (resolvers.workspaceAuth ?? envWorkspaceAuth()).resolveWorkspace({
+    override: opts.workspace,
+    io
+  });
   io.info(`workspace: ${workspace}`);
 
-  const connectedIntegrations = mode === 'cloud'
-    ? preflight.integrations
-    : await connectAndCollectIntegrations({
-        persona: preflight.persona,
-        workspace,
-        noConnect: opts.noConnect === true,
-        io,
-        integrations: resolvers.integrations ?? envIntegrationResolver(),
-        ...(resolvers.subscription ? { subscription: resolvers.subscription } : {})
-      });
+  const connectedIntegrations = await connectAndCollectIntegrations({
+    persona: preflight.persona,
+    workspace,
+    noConnect: opts.noConnect === true,
+    io,
+    integrations: resolvers.integrations ?? defaultIntegrationResolver({
+      mode,
+      workspace,
+      token,
+      cloudUrl: opts.cloudUrl,
+      io
+    }),
+    ...(resolvers.subscription ? { subscription: resolvers.subscription } : {})
+  });
 
   const bundleDir = path.resolve(
     path.join(preflight.personaDir, '.workforce', 'build', preflight.persona.id)
@@ -207,25 +210,6 @@ function resolveLauncher(mode: DeployMode, resolvers: DeployResolvers): ModeLaun
   }
 }
 
-function resolveCloudWorkspaceIdentity(
-  opts: DeployOptions,
-  io: DeployIO
-): { workspace: string; token?: string } {
-  const workspace = (opts.workspace ?? process.env.WORKFORCE_WORKSPACE_ID ?? '').trim();
-  if (!workspace) {
-    io.error(
-      'no workspace resolved: pass --workspace, set WORKFORCE_WORKSPACE_ID, or run `workforce login`'
-    );
-    throw new Error('workspace is required for cloud deploy');
-  }
-
-  const token = (process.env.WORKFORCE_WORKSPACE_TOKEN ?? '').trim();
-  return {
-    workspace,
-    ...(token ? { token } : {})
-  };
-}
-
 async function connectAndCollectIntegrations(input: ConnectAllInput): Promise<string[]> {
   const connectResult = await connectIntegrations(input);
   const failed = connectResult.outcomes.filter((o) => o.status === 'failed');
@@ -243,6 +227,32 @@ async function connectAndCollectIntegrations(input: ConnectAllInput): Promise<st
   return connectResult.outcomes
     .filter((o) => o.status === 'already-connected' || o.status === 'connected-now')
     .map((o) => o.provider);
+}
+
+function defaultIntegrationResolver(args: {
+  mode: DeployMode;
+  workspace: string;
+  token: string;
+  cloudUrl?: string;
+  io: DeployIO;
+}): IntegrationConnectResolver {
+  if (args.mode !== 'cloud') return envIntegrationResolver();
+  return relayfileIntegrationResolver({
+    apiUrl: normalizeCloudUrl(
+      args.cloudUrl
+        ?? process.env.WORKFORCE_DEPLOY_CLOUD_URL
+        ?? process.env.WORKFORCE_CLOUD_URL
+        ?? 'https://agentrelay.com'
+    ),
+    workspaceId: args.workspace,
+    workspaceToken: args.token,
+    io: args.io
+  });
+}
+
+function normalizeCloudUrl(url: string): string {
+  const trimmed = url.trim();
+  return trimmed ? trimmed.replace(/\/+$/, '') : 'https://agentrelay.com';
 }
 
 function formatBytes(bytes: number): string {

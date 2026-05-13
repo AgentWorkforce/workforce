@@ -217,12 +217,19 @@ test('cloud launcher includes inputs in persona bundle POST body', async () => {
   try {
     const bundle = await writeBundle(dir);
     process.env.WORKFORCE_WORKSPACE_TOKEN = 'tok-cloud';
-    globalThis.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
-      calls.push({
-        url: typeof input === 'string' ? input : input.toString(),
-        body: init?.body ? JSON.parse(String(init.body)) : undefined
-      });
-      return new Response(
+	    globalThis.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
+	      const url = typeof input === 'string' ? input : input.toString();
+	      calls.push({
+	        url,
+	        body: init?.body ? JSON.parse(String(init.body)) : undefined
+	      });
+	      if (url.includes('/provider-credentials/byok')) {
+	        return new Response(JSON.stringify({ providerCredentialId: 'cred-byok' }), {
+	          status: 200,
+	          headers: { 'content-type': 'application/json' }
+	        });
+	      }
+	      return new Response(
         JSON.stringify({ agentId: 'agent-1', deploymentId: 'dep-1', status: 'starting' }),
         { status: 201, headers: { 'content-type': 'application/json' } }
       );

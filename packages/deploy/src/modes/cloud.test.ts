@@ -1,7 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { mkdtemp, rm, writeFile } from 'node:fs/promises';
-import { get } from 'node:http';
 import os from 'node:os';
 import path from 'node:path';
 import type { PersonaSpec } from '@agentworkforce/persona-kit';
@@ -130,9 +129,9 @@ async function launch(overrides: {
   const { bundle, cleanup } = await withBundle();
   const io = createBufferedIO();
   const fetchMock = installFetch((url, init, calls) => {
-    if (overrides.defaultPlanCredential !== false && url.endsWith('/api/v1/users/me/provider_credentials')) {
+    if (overrides.defaultPlanCredential !== false && url.includes('/provider-credentials/managed')) {
       assert.equal(init?.method, 'POST');
-      return okJson({ id: 'cred-1' });
+      return okJson({ providerCredentialId: 'cred-1' });
     }
     return overrides.fetch(url, init, calls);
   });
@@ -181,7 +180,7 @@ test('cloud launcher POSTs a deploy bundle and returns the cloud handle', async 
   assert.equal(handle.id, 'agent-1');
   assert.equal(handle.deploymentId, 'dep-1');
   assert.equal((await handle.done).code, 0);
-  assert.equal(callsForUrl(calls, '/provider_credentials'), 1);
+  assert.equal(calls.filter((call) => call.url.includes('/provider-credentials/managed')).length, 1);
 });
 
 test('cloud URL precedence is flag env, cloud env, persona deployUrl, then default', async () => {
@@ -225,13 +224,10 @@ test('cloud harness plan and BYOK save provider credentials through the cloud co
     env: { WORKFORCE_DEPLOY_CLOUD_URL: 'https://cloud.example.test' },
     input: { harnessSource: 'plan' },
     fetch(url, init) {
-      if (url.endsWith('/provider_credentials')) {
+      if (url.endsWith('/provider-credentials/managed?provider=openai')) {
         assert.equal(init?.method, 'POST');
-        assert.deepEqual(JSON.parse(String(init?.body)), {
-          model_provider: 'openai-codex',
-          auth_type: 'relay_managed'
-        });
-        return okJson({ id: 'cred-plan' });
+        assert.equal(init?.body, undefined);
+        return okJson({ providerCredentialId: 'cred-plan' });
       }
       if (url.endsWith('/agents?persona_slug=demo')) return okJson({ agents: [] });
       if (url.endsWith('/deployments')) {
@@ -247,14 +243,15 @@ test('cloud harness plan and BYOK save provider credentials through the cloud co
     env: { WORKFORCE_DEPLOY_CLOUD_URL: 'https://cloud.example.test' },
     input: { harnessSource: 'byok', byokKey: 'sk-test' },
     fetch(url, init) {
-      if (url.endsWith('/provider_credentials')) {
+      if (url.endsWith('/provider-credentials/byok')) {
         assert.equal(init?.method, 'POST');
         assert.deepEqual(JSON.parse(String(init?.body)), {
-          model_provider: 'openai-codex',
-          auth_type: 'byo_api_key',
+          modelProvider: 'openai',
+          model_provider: 'openai',
+          key: 'sk-test',
           api_key: 'sk-test'
         });
-        return okJson({ id: 'cred-byok' });
+        return okJson({ providerCredentialId: 'cred-byok' });
       }
       if (url.endsWith('/agents?persona_slug=demo')) return okJson({ agents: [] });
       if (url.endsWith('/deployments')) {
@@ -276,7 +273,7 @@ test('cloud harness OAuth uses provider_credentials readiness and honors no-prom
       },
       input: { harnessSource: 'oauth' },
       fetch(url, init) {
-        assert.equal(url, 'https://cloud.example.test/api/v1/users/me/provider_credentials?model_provider=openai-codex');
+        assert.equal(url, 'https://cloud.example.test/api/v1/users/me/provider_credentials?model_provider=openai');
         assert.equal(init?.method, 'GET');
         return okJson({});
       }
@@ -291,7 +288,7 @@ test('cloud harness OAuth starts auth and polls until provider credentials are c
   io.scriptConfirmations([true]);
   const { bundle, cleanup } = await withBundle();
   const fetchMock = installFetch((url, init) => {
-    if (url.endsWith('/provider_credentials?model_provider=openai-codex')) {
+    if (url.endsWith('/provider_credentials?model_provider=openai')) {
       credentialChecks += 1;
       assert.equal(init?.method, 'GET');
       return okJson(credentialChecks < 3 ? {} : { id: 'cred-oauth', status: 'connected' });
@@ -299,7 +296,7 @@ test('cloud harness OAuth starts auth and polls until provider credentials are c
     if (url.endsWith('/api/v1/users/me/provider_credentials/auth-session')) {
       assert.equal(init?.method, 'POST');
       assert.deepEqual(JSON.parse(String(init?.body)), {
-        model_provider: 'openai-codex',
+        model_provider: 'openai',
         provider: 'codex',
         language: 'typescript'
       });
@@ -372,7 +369,7 @@ test('cloud polling resolves done with code 0 on active and 1 on failed', async 
     const { bundle, cleanup } = await withBundle();
     const io = createBufferedIO();
     const fetchMock = installFetch((url) => {
-        if (url.endsWith('/api/v1/users/me/provider_credentials')) return okJson({ id: 'cred-1' });
+        if (url.includes('/provider-credentials/managed')) return okJson({ providerCredentialId: 'cred-1' });
         if (url.endsWith('/agents?persona_slug=demo')) return okJson({ agents: [] });
         if (url.endsWith('/deployments')) {
           return okJson({ agentId: `agent-${finalStatus}`, deploymentId: `dep-${finalStatus}`, status: 'starting' }, 201);
@@ -411,7 +408,7 @@ test('cloud stop calls the destroy agent endpoint', async () => {
   const { bundle, cleanup } = await withBundle();
   const io = createBufferedIO();
   const fetchMock = installFetch((url, init) => {
-      if (url.endsWith('/api/v1/users/me/provider_credentials')) return okJson({ id: 'cred-1' });
+      if (url.includes('/provider-credentials/managed')) return okJson({ providerCredentialId: 'cred-1' });
       if (url.endsWith('/agents?persona_slug=demo')) return okJson({ agents: [] });
       if (url.endsWith('/deployments')) {
         return okJson({ agentId: 'agent-1', deploymentId: 'dep-1', status: 'active' }, 201);
@@ -442,32 +439,11 @@ test('cloud stop calls the destroy agent endpoint', async () => {
   }
 });
 
-test('cloud integration stage opens OAuth session and waits for readiness', async () => {
-  let statusChecks = 0;
-  const baseIo = createBufferedIO();
-  const io = {
-    ...baseIo,
-    info(message: string) {
-      baseIo.info(message);
-      if (message.includes('/integrations?')) {
-        const rawUrl = message.match(/https:\/\/\S+/)?.[0];
-        if (!rawUrl) return;
-        const connectUrl = new URL(rawUrl);
-        const returnTo = connectUrl.searchParams.get('return_to');
-        if (returnTo) void hitCallback(returnTo);
-      }
-    }
-  };
-  io.scriptConfirmations([true]);
+test('cloud launcher leaves integration preflight to the deploy orchestrator', async () => {
+  const io = createBufferedIO();
   const { bundle, cleanup } = await withBundle();
   const fetchMock = installFetch((url) => {
-    if (url.endsWith('/api/v1/users/me/provider_credentials')) {
-      return okJson({ id: 'cred-1' });
-    }
-    if (url.endsWith('/integrations?provider=github')) {
-      statusChecks += 1;
-      return okJson(statusChecks < 2 ? { ready: false, state: 'pending' } : { ready: true, state: 'ready' });
-    }
+    if (url.includes('/provider-credentials/managed')) return okJson({ providerCredentialId: 'cred-1' });
     if (url.endsWith('/agents?persona_slug=demo')) return okJson({ agents: [] });
     if (url.endsWith('/deployments')) {
       return okJson({ agentId: 'agent-1', deploymentId: 'dep-1', status: 'active' }, 201);
@@ -493,8 +469,7 @@ test('cloud integration stage opens OAuth session and waits for readiness', asyn
     await cleanup();
   }
 
-  assert.equal(statusChecks, 2);
-  assert.ok(io.messages.some((message) => message.message.includes('/integrations?provider=github')));
+  assert.equal(fetchMock.calls.some((call) => call.url.includes('/integrations')), false);
 });
 
 test('cloud existing-persona stage honors destroy and cancel choices', async () => {
@@ -536,13 +511,4 @@ test('cloud existing-persona stage honors destroy and cancel choices', async () 
 
 function callsForUrl(calls: FetchCall[], suffix: string): number {
   return calls.filter((call) => call.url.endsWith(suffix)).length;
-}
-
-function hitCallback(url: string): Promise<void> {
-  return new Promise((resolve, reject) => {
-    get(url, (res) => {
-      res.resume();
-      res.on('end', resolve);
-    }).on('error', reject);
-  });
 }

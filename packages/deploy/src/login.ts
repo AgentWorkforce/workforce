@@ -1,6 +1,6 @@
 import { spawn } from 'node:child_process';
 import { randomUUID } from 'node:crypto';
-import { readFile, mkdir, writeFile } from 'node:fs/promises';
+import { readFile, mkdir, rm, writeFile } from 'node:fs/promises';
 import { createServer } from 'node:http';
 import { homedir, platform } from 'node:os';
 import path from 'node:path';
@@ -26,13 +26,23 @@ export interface WorkspaceAuthToken {
 
 export interface StoredWorkspaceLogin {
   workspace?: string;
+  workspaceSlug?: string;
+  workspaceId?: string;
   token: string;
   refreshToken?: string;
   expiresAt?: string;
   cloudUrl?: string;
 }
 
-const LOGIN_FILE = path.join(homedir(), '.agentworkforce', 'login.json');
+function loginFile(): string {
+  return process.env.WORKFORCE_LOGIN_FILE?.trim()
+    || path.join(homedir(), '.agentworkforce', 'login.json');
+}
+
+function keychainEnabled(): boolean {
+  const raw = process.env.WORKFORCE_DISABLE_KEYCHAIN?.trim().toLowerCase();
+  return raw !== '1' && raw !== 'true' && raw !== 'yes';
+}
 
 /**
  * Environment-backed fallback resolver: reads `WORKFORCE_WORKSPACE_ID`
@@ -48,19 +58,27 @@ export function envWorkspaceAuth(): WorkspaceAuth {
       // error here.
       const workspace = (override ?? process.env.WORKFORCE_WORKSPACE_ID ?? '').trim();
       const token = (process.env.WORKFORCE_WORKSPACE_TOKEN ?? '').trim();
+      if (workspace && token) {
+        return { workspace, token };
+      }
+
+      const stored = await loadWorkspaceToken(workspace || undefined);
+      if (stored) {
+        const storedWorkspace = storedWorkspaceName(stored);
+        if (storedWorkspace) return { workspace: storedWorkspace, token: stored.token };
+      }
+
       if (!workspace) {
         io.error(
-          'no workspace resolved: pass --workspace, set WORKFORCE_WORKSPACE_ID, or run `workforce login`'
+          'no workspace resolved: pass --workspace, set WORKFORCE_WORKSPACE_ID + WORKFORCE_WORKSPACE_TOKEN, or run `agentworkforce login`'
         );
         throw new Error('workspace is required for deploy');
       }
-      if (!token) {
-        io.error(
-          'no workspace token resolved: set WORKFORCE_WORKSPACE_TOKEN, or run `workforce login` to mint one'
-        );
-        throw new Error('workspace token is required for deploy');
-      }
-      return { workspace, token };
+
+      io.error(
+        `no workspace token resolved for ${workspace}: set WORKFORCE_WORKSPACE_TOKEN, or run \`agentworkforce login\``
+      );
+      throw new Error('workspace token is required for deploy');
     }
   };
 }
@@ -82,33 +100,42 @@ export function resolveWorkspaceTokenFromEnv(workspace: string): WorkspaceAuthTo
 }
 
 export async function resolveWorkspaceToken(args: {
-  workspace: string;
+  workspace?: string;
   cloudUrl: string;
   io: DeployIO;
   noPrompt?: boolean;
-}): Promise<WorkspaceAuthToken> {
+}): Promise<WorkspaceAuthToken & { workspace?: string }> {
+  const envWorkspace = (process.env.WORKFORCE_WORKSPACE_ID ?? '').trim();
   const fromEnv = (process.env.WORKFORCE_WORKSPACE_TOKEN ?? '').trim();
-  if (fromEnv) return { token: fromEnv };
+  const requestedWorkspace = (args.workspace ?? '').trim();
+  if (fromEnv && (requestedWorkspace || envWorkspace)) {
+    return {
+      token: fromEnv,
+      workspace: requestedWorkspace || envWorkspace
+    };
+  }
 
-  const stored = await loadWorkspaceToken(args.workspace);
-  if (stored) return { token: stored.token };
+  const stored = await loadWorkspaceToken(requestedWorkspace || undefined);
+  if (stored) {
+    return {
+      token: stored.token,
+      ...(storedWorkspaceName(stored) ? { workspace: storedWorkspaceName(stored) } : {})
+    };
+  }
 
   if (args.noPrompt) {
     throw new Error(
-      `no workspace token resolved for ${args.workspace}: run \`workforce login\` or set WORKFORCE_WORKSPACE_TOKEN`
+      `no workspace token resolved${requestedWorkspace ? ` for ${requestedWorkspace}` : ''}: run \`agentworkforce login\` or set WORKFORCE_WORKSPACE_ID + WORKFORCE_WORKSPACE_TOKEN`
     );
   }
 
-  args.io.info('cloud: no workspace token found; opening workforce login');
-  const login = await loginWithBrowser({
-    cloudUrl: args.cloudUrl,
-    workspace: args.workspace,
-    io: args.io
-  });
-  return { token: login.token };
+  args.io.info('cloud: no workspace token found; run `agentworkforce login` to connect this machine');
+  throw new Error(
+    `no workspace token resolved${requestedWorkspace ? ` for ${requestedWorkspace}` : ''}: run \`agentworkforce login\` or set WORKFORCE_WORKSPACE_ID + WORKFORCE_WORKSPACE_TOKEN`
+  );
 }
 
-export async function loadWorkspaceToken(workspace: string): Promise<StoredWorkspaceLogin | null> {
+export async function loadWorkspaceToken(workspace?: string): Promise<StoredWorkspaceLogin | null> {
   const fromKeychain = await readMacKeychainLogin(workspace);
   if (fromKeychain && !isExpired(fromKeychain.expiresAt)) {
     return fromKeychain;
@@ -122,14 +149,54 @@ export async function loadWorkspaceToken(workspace: string): Promise<StoredWorks
   return null;
 }
 
+export async function loadActiveWorkspaceToken(): Promise<StoredWorkspaceLogin | null> {
+  return loadWorkspaceToken(undefined);
+}
+
 export async function storeWorkspaceToken(login: StoredWorkspaceLogin): Promise<void> {
   if (await writeMacKeychainLogin(login)) return;
 
-  await mkdir(path.dirname(LOGIN_FILE), { recursive: true, mode: 0o700 });
-  await writeFile(LOGIN_FILE, `${JSON.stringify(login, null, 2)}\n`, {
+  const file = loginFile();
+  await mkdir(path.dirname(file), { recursive: true, mode: 0o700 });
+  await writeFile(file, `${JSON.stringify(login, null, 2)}\n`, {
     encoding: 'utf8',
     mode: 0o600
   });
+}
+
+export async function writeStoredWorkspaceToken(login: {
+  workspaceSlug?: string;
+  workspaceId?: string;
+  workspace?: string;
+  token: string;
+  cloudUrl?: string;
+  expiresAt?: string;
+}): Promise<void> {
+  const workspace = login.workspace ?? login.workspaceSlug ?? login.workspaceId;
+  await storeWorkspaceToken({
+    token: login.token,
+    ...(workspace ? { workspace } : {}),
+    ...(login.workspaceSlug ? { workspaceSlug: login.workspaceSlug } : {}),
+    ...(login.workspaceId ? { workspaceId: login.workspaceId } : {}),
+    ...(login.cloudUrl ? { cloudUrl: login.cloudUrl } : {}),
+    ...(login.expiresAt ? { expiresAt: login.expiresAt } : {})
+  });
+}
+
+export async function clearStoredWorkspaceToken(workspace?: string): Promise<void> {
+  const stored = await readLoginFile();
+  await rm(loginFile(), { force: true });
+  if (platform() !== 'darwin' || !keychainEnabled()) return;
+
+  const names = new Set(['agentworkforce:active', 'agentworkforce', 'workforce']);
+  const storedWorkspace = stored ? storedWorkspaceName(stored) : undefined;
+  for (const candidate of [workspace, storedWorkspace]) {
+    if (candidate) {
+      names.add(`agentworkforce:${candidate}`);
+      names.add(`workforce:${candidate}`);
+    }
+  }
+  await Promise.all([...names].map((service) => deleteMacKeychainLogin(service)));
 }
 
 export async function loginWithBrowser(args: {
@@ -223,16 +290,16 @@ export async function loginWithBrowser(args: {
 }
 
 async function readLoginFile(): Promise<StoredWorkspaceLogin | null> {
-  const raw = await readFile(LOGIN_FILE, 'utf8').catch(() => '');
+  const raw = await readFile(loginFile(), 'utf8').catch(() => '');
   if (!raw.trim()) return null;
   return parseStoredLogin(raw);
 }
 
-async function readMacKeychainLogin(workspace: string): Promise<StoredWorkspaceLogin | null> {
-  if (platform() !== 'darwin') return null;
+async function readMacKeychainLogin(workspace?: string): Promise<StoredWorkspaceLogin | null> {
+  if (platform() !== 'darwin' || !keychainEnabled()) return null;
   const serviceNames = [
-    `agentworkforce:${workspace}`,
-    `workforce:${workspace}`,
+    ...(workspace ? [`agentworkforce:${workspace}`, `workforce:${workspace}`] : []),
+    'agentworkforce:active',
     'agentworkforce',
     'workforce'
   ];
@@ -242,7 +309,7 @@ async function readMacKeychainLogin(workspace: string): Promise<StoredWorkspaceL
     const parsed = parseStoredLogin(stdout.trim());
     if (parsed && workspaceMatches(parsed, workspace)) return parsed;
     if (parsed) continue;
-    if (stdout.trim()) {
+    if (stdout.trim() && workspace) {
       return {
         workspace,
         token: stdout.trim()
@@ -253,10 +320,10 @@ async function readMacKeychainLogin(workspace: string): Promise<StoredWorkspaceL
 }
 
 async function writeMacKeychainLogin(login: StoredWorkspaceLogin): Promise<boolean> {
-  if (platform() !== 'darwin') return false;
-  const workspace = login.workspace ?? 'default';
+  if (platform() !== 'darwin' || !keychainEnabled()) return false;
+  const workspace = storedWorkspaceName(login) ?? 'default';
   const payload = JSON.stringify(login);
-  return await execSecurityOk([
+  const wroteWorkspace = await execSecurityOk([
     'add-generic-password',
     '-U',
     '-s',
@@ -266,6 +333,25 @@ async function writeMacKeychainLogin(login: StoredWorkspaceLogin): Promise<boole
     '-w',
     payload
   ]);
+  const wroteActive = await execSecurityOk([
+    'add-generic-password',
+    '-U',
+    '-s',
+    'agentworkforce:active',
+    '-a',
+    'active',
+    '-w',
+    payload
+  ]);
+  return wroteWorkspace && wroteActive;
+}
+
+function deleteMacKeychainLogin(service: string): Promise<void> {
+  return new Promise((resolve) => {
+    const child = spawn('security', ['delete-generic-password', '-s', service], { stdio: 'ignore' });
+    child.on('error', () => resolve());
+    child.on('close', () => resolve());
+  });
 }
 
 function execSecurity(args: string[]): Promise<string> {
@@ -307,9 +393,11 @@ function parseStoredLogin(raw: string): StoredWorkspaceLogin | null {
     if (!token.trim()) return null;
     const workspace = typeof record.workspace === 'string'
       ? record.workspace
-      : typeof record.workspaceId === 'string'
-        ? record.workspaceId
-        : undefined;
+      : typeof record.workspaceSlug === 'string'
+        ? record.workspaceSlug
+        : typeof record.workspaceId === 'string'
+          ? record.workspaceId
+          : undefined;
     const expiresAt = typeof record.expiresAt === 'string'
       ? record.expiresAt
       : typeof record.accessTokenExpiresAt === 'string'
@@ -318,6 +406,8 @@ function parseStoredLogin(raw: string): StoredWorkspaceLogin | null {
     return {
       token: token.trim(),
       ...(workspace ? { workspace } : {}),
+      ...(typeof record.workspaceSlug === 'string' ? { workspaceSlug: record.workspaceSlug } : {}),
+      ...(typeof record.workspaceId === 'string' ? { workspaceId: record.workspaceId } : {}),
       ...(typeof record.refreshToken === 'string' ? { refreshToken: record.refreshToken } : {}),
       ...(expiresAt ? { expiresAt } : {}),
       ...(typeof record.cloudUrl === 'string' ? { cloudUrl: record.cloudUrl } : {})
@@ -327,8 +417,13 @@ function parseStoredLogin(raw: string): StoredWorkspaceLogin | null {
   }
 }
 
-function workspaceMatches(login: StoredWorkspaceLogin, workspace: string): boolean {
-  return !login.workspace || login.workspace === workspace;
+function workspaceMatches(login: StoredWorkspaceLogin, workspace: string | undefined): boolean {
+  if (!workspace) return true;
+  return [login.workspace, login.workspaceSlug, login.workspaceId].some((value) => value === workspace);
+}
+
+function storedWorkspaceName(login: StoredWorkspaceLogin): string | undefined {
+  return login.workspaceSlug ?? login.workspace ?? login.workspaceId;
 }
 
 function isExpired(expiresAt: string | undefined): boolean {

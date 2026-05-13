@@ -19,6 +19,7 @@ export { preflightPersona };
 export {
   connectIntegrations,
   envIntegrationResolver,
+  relayfileIntegrationResolver,
   type ConnectAllInput,
   type ConnectAllResult,
   type IntegrationConnectResolver,
@@ -26,11 +27,14 @@ export {
 } from './connect.js';
 export {
   envWorkspaceAuth,
+  clearStoredWorkspaceToken,
+  loadActiveWorkspaceToken,
   loadWorkspaceToken,
   loginWithBrowser,
   resolveWorkspaceToken,
   resolveWorkspaceTokenFromEnv,
   storeWorkspaceToken,
+  writeStoredWorkspaceToken,
   type StoredWorkspaceLogin,
   type WorkspaceAuth,
   type WorkspaceAuthToken

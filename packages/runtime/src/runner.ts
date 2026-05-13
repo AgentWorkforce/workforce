@@ -40,7 +40,7 @@ export interface StartRunnerOptions {
    * package's mode-specific entry points (`runDev`, `runSandbox`) supply
    * the wired-up versions. Tests pass in-memory fakes here.
    */
-  subsystems?: Partial<Pick<CtxBuildOptions, 'sandbox' | 'llm' | 'memory' | 'workflow' | 'schedule' | 'log' | 'integrations'>>;
+  subsystems?: Partial<Pick<CtxBuildOptions, 'sandbox' | 'files' | 'llm' | 'memory' | 'workflow' | 'schedule' | 'log' | 'integrations'>>;
   /**
    * Source of raw envelopes to dispatch. The default reads NDJSON from
    * stdin so a parent process can write `RawGatewayEnvelope` lines and
@@ -121,6 +121,7 @@ export async function startRunner(options: StartRunnerOptions): Promise<void> {
     deployment: options.deployment,
     workspaceId,
     sandbox: options.subsystems?.sandbox ?? PROCESS_FS_SANDBOX,
+    ...(options.subsystems?.files ? { files: options.subsystems.files } : {}),
     harnessRunner: options.harnessRunner ?? HARNESS_UNAVAILABLE,
     ...(options.subsystems?.llm ? { llm: options.subsystems.llm } : {}),
     ...(options.subsystems?.memory ? { memory: options.subsystems.memory } : {}),

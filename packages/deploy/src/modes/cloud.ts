@@ -1,7 +1,5 @@
 import { spawn } from 'node:child_process';
-import { randomUUID } from 'node:crypto';
 import { readFile } from 'node:fs/promises';
-import { createServer } from 'node:http';
 import { platform } from 'node:os';
 import type { PersonaSpec } from '@agentworkforce/persona-kit';
 import type {
@@ -57,15 +55,6 @@ interface ProviderCredentialsResponse {
   createdAt?: unknown;
 }
 
-interface IntegrationsResponse {
-  integrations?: unknown;
-  provider?: unknown;
-  ready?: unknown;
-  state?: unknown;
-  connectionId?: unknown;
-  currentConnectionId?: unknown;
-}
-
 interface ExistingAgentResponse {
   agent?: unknown;
   agents?: unknown;
@@ -96,7 +85,7 @@ export const cloudLauncher: ModeLauncher = {
           noPrompt
         });
 
-    await ensureHarnessReady({
+    const credentialSelections = await ensureHarnessReady({
       cloudUrl,
       workspaceId: input.workspace,
       token: auth.token,
@@ -105,15 +94,6 @@ export const cloudLauncher: ModeLauncher = {
       noPrompt,
       harnessSource: input.harnessSource,
       byokKey: input.byokKey
-    });
-
-    await ensureCloudIntegrations({
-      cloudUrl,
-      workspaceId: input.workspace,
-      token: auth.token,
-      persona: input.persona,
-      io: input.io,
-      noPrompt
     });
 
     const existingPersona = await handleExistingPersona({
@@ -149,6 +129,8 @@ export const cloudLauncher: ModeLauncher = {
         agent: await readFile(input.bundle.bundlePath, 'utf8'),
         packageJson: JSON.parse(await readFile(input.bundle.packageJsonPath, 'utf8')) as unknown
       },
+      credentialSelections,
+      credential_selections: credentialSelections,
       inputs: input.inputs ?? readInputsOverride()
     });
 
@@ -246,34 +228,37 @@ async function ensureHarnessReady(args: {
   noPrompt: boolean;
   harnessSource?: HarnessSource;
   byokKey?: string;
-}): Promise<void> {
+}): Promise<Record<string, string>> {
   const source = await resolveHarnessSource(args);
   const modelProvider = deriveModelProvider(args.persona);
   if (source === 'plan') {
-    await saveProviderCredential({
+    const credentialId = await saveProviderCredential({
       cloudUrl: args.cloudUrl,
+      workspaceId: args.workspaceId,
       token: args.token,
       modelProvider,
       authType: 'relay_managed'
     });
     args.io.info(`cloud: using workforce plan credentials for ${args.persona.harness}`);
-    return;
+    return { [modelProvider]: credentialId };
   }
 
   if (source === 'byok') {
     const key = await resolveByokKey(args);
-    await saveProviderCredential({
+    const credentialId = await saveProviderCredential({
       cloudUrl: args.cloudUrl,
+      workspaceId: args.workspaceId,
       token: args.token,
       modelProvider,
       authType: 'byo_api_key',
       apiKey: key
     });
     args.io.info(`cloud: using BYOK credentials for ${args.persona.harness}`);
-    return;
+    return { [modelProvider]: credentialId };
   }
 
   await ensureHarnessOauth(args);
+  return {};
 }
 
 async function resolveHarnessSource(args: {
@@ -402,89 +387,6 @@ async function ensureHarnessOauth(args: {
     `timed out waiting for ${args.persona.harness} OAuth credentials`
   );
   args.io.info(`cloud: ${args.persona.harness} credentials connected`);
-}
-
-async function ensureCloudIntegrations(args: {
-  cloudUrl: string;
-  workspaceId: string;
-  token: string;
-  persona: PersonaSpec;
-  io: ModeLaunchInput['io'];
-  noPrompt: boolean;
-}): Promise<void> {
-  const providers = Object.keys(args.persona.integrations ?? {});
-  for (const provider of providers) {
-    const ready = await isIntegrationReady({ ...args, provider });
-    if (ready) {
-      args.io.info(`cloud: integrations.${provider} ready`);
-      continue;
-    }
-    if (args.noPrompt) {
-      throw new Error(
-        `cloud: integrations.${provider} is not connected. Run without --no-prompt or connect it before deploying.`
-      );
-    }
-    const ok = await args.io.confirm(
-      `Connect ${provider} in workforce cloud now? (opens browser)`,
-      { defaultValue: true }
-    );
-    if (!ok) {
-      throw new Error(`cloud: integrations.${provider} is required for deploy`);
-    }
-    await connectIntegration({ ...args, provider });
-    await pollUntil(
-      () => isIntegrationReady({ ...args, provider }),
-      `timed out waiting for integrations.${provider} to become ready`
-    );
-    args.io.info(`cloud: integrations.${provider} connected`);
-  }
-}
-
-async function isIntegrationReady(args: {
-  cloudUrl: string;
-  workspaceId: string;
-  token: string;
-  provider: string;
-}): Promise<boolean> {
-  const url = `${args.cloudUrl}/api/v1/workspaces/${encodeURIComponent(
-    args.workspaceId
-  )}/integrations?provider=${encodeURIComponent(args.provider)}`;
-  const res = await fetch(url, {
-    method: 'GET',
-    headers: {
-      authorization: `Bearer ${args.token}`,
-      'user-agent': USER_AGENT
-    }
-  });
-  if (res.status === 401) {
-    throw new Error('cloud integration check failed: unauthorized. Run `workforce login` and retry.');
-  }
-  if (res.status === 404) return false;
-  if (!res.ok) {
-    throw new Error(`cloud integration check failed: ${res.status} ${await responseExcerpt(res)}`);
-  }
-  const body = (await res.json()) as IntegrationsResponse;
-  return integrationReady(body, args.provider);
-}
-
-async function connectIntegration(args: {
-  cloudUrl: string;
-  workspaceId: string;
-  token: string;
-  provider: string;
-  io: ModeLaunchInput['io'];
-}): Promise<void> {
-  await waitForOAuthCallback({
-    action: `integrations.${args.provider}`,
-    io: args.io,
-    buildUrl(returnTo) {
-      const url = new URL('/integrations', args.cloudUrl);
-      url.searchParams.set('provider', args.provider);
-      url.searchParams.set('workspace', args.workspaceId);
-      url.searchParams.set('return_to', returnTo);
-      return url.toString();
-    }
-  });
 }
 
 async function handleExistingPersona(args: {
@@ -618,31 +520,68 @@ function parseAgentLike(value: unknown): ExistingAgent | null {
 
 async function saveProviderCredential(args: {
   cloudUrl: string;
+  workspaceId: string;
   token: string;
   modelProvider: string;
   authType: 'relay_managed' | 'byo_api_key';
   apiKey?: string;
-}): Promise<void> {
-  await requestJsonWithRetry<Record<string, unknown>>(
-    `${args.cloudUrl}/api/v1/users/me/provider_credentials`,
+}): Promise<string> {
+  if (args.authType === 'relay_managed') {
+    const url = new URL(`${args.cloudUrl}/api/v1/workspaces/${encodeURIComponent(
+      args.workspaceId
+    )}/provider-credentials/managed`);
+    url.searchParams.set('provider', args.modelProvider);
+    const body = await requestJsonWithRetry<Record<string, unknown>>(
+      url.toString(),
+      {
+        method: 'POST',
+        headers: jsonHeaders(args.token)
+      },
+      { action: 'cloud managed provider credentials' }
+    );
+    return readCredentialId(body);
+  }
+
+  const body = await requestJsonWithRetry<Record<string, unknown>>(
+    `${args.cloudUrl}/api/v1/workspaces/${encodeURIComponent(args.workspaceId)}/provider-credentials/byok`,
     {
       method: 'POST',
       headers: jsonHeaders(args.token),
       body: JSON.stringify({
+        modelProvider: args.modelProvider,
         model_provider: args.modelProvider,
-        auth_type: args.authType,
-        ...(args.apiKey ? { api_key: args.apiKey } : {})
+        key: args.apiKey,
+        api_key: args.apiKey
       })
     },
-    { action: 'cloud provider credentials save' }
+    { action: 'cloud BYOK provider credentials' }
   );
+  return readCredentialId(body);
 }
 
 function deriveModelProvider(persona: PersonaSpec): string {
   const model = typeof persona.model === 'string' ? persona.model.trim() : '';
+  const lower = model.toLowerCase();
+  if (lower.includes('anthropic') || lower.includes('claude')) return 'anthropic';
+  if (lower.includes('openai') || lower.includes('codex') || lower.includes('gpt')) return 'openai';
+  if (lower.includes('google') || lower.includes('gemini')) return 'google';
+  if (lower.includes('openrouter') || lower.includes('opencode')) return 'openrouter';
   const [provider] = model.split(/[/:]/, 1);
-  if (provider?.trim()) return provider.trim();
+  if (provider?.trim()) return provider.trim().toLowerCase();
   return persona.harness;
+}
+
+function readCredentialId(body: Record<string, unknown>): string {
+  const direct = readFirstString(body, ['providerCredentialId', 'provider_credential_id', 'credentialId', 'id']);
+  if (direct) return direct;
+  for (const field of ['credential', 'providerCredential']) {
+    const nested = body[field];
+    if (nested && typeof nested === 'object' && !Array.isArray(nested)) {
+      const nestedId = readFirstString(nested, ['id', 'providerCredentialId', 'provider_credential_id']);
+      if (nestedId) return nestedId;
+    }
+  }
+  throw new Error('cloud provider credentials response missing credential id');
 }
 
 function providerCredentialsReady(body: ProviderCredentialsResponse): boolean {
@@ -661,93 +600,6 @@ function providerCredentialsReady(body: ProviderCredentialsResponse): boolean {
       || Boolean(record.credentialStoredAt)
       || Boolean(record.createdAt)
       || typeof record.id === 'string';
-  });
-}
-
-function integrationReady(body: IntegrationsResponse, provider: string): boolean {
-  const candidates = [
-    ...(Array.isArray(body.integrations) ? body.integrations : []),
-    body
-  ];
-  return candidates.some((candidate) => {
-    if (!candidate || typeof candidate !== 'object' || Array.isArray(candidate)) return false;
-    const record = candidate as Record<string, unknown>;
-    const recordProvider = typeof record.provider === 'string' ? record.provider : provider;
-    if (recordProvider !== provider) return false;
-    return record.ready === true
-      || record.state === 'ready'
-      || record.state === 'connected'
-      || typeof record.connectionId === 'string'
-      || typeof record.currentConnectionId === 'string';
-  });
-}
-
-async function waitForOAuthCallback(args: {
-  action: string;
-  io: ModeLaunchInput['io'];
-  buildUrl(returnTo: string): string;
-}): Promise<void> {
-  const state = randomUUID();
-  await new Promise<void>((resolve, reject) => {
-    let settled = false;
-    const timeout = setTimeout(() => {
-      settleError(new Error(`timed out waiting for ${args.action} OAuth callback`));
-    }, pollTimeoutMs()).unref();
-
-    const server = createServer((request, response) => {
-      const requestUrl = new URL(request.url ?? '/', 'http://127.0.0.1');
-      if (requestUrl.pathname !== '/callback') {
-        response.statusCode = 404;
-        response.end('not found');
-        return;
-      }
-      if (requestUrl.searchParams.get('state') !== state) {
-        response.statusCode = 400;
-        response.end('invalid state');
-        settleError(new Error(`${args.action} OAuth callback returned an invalid state`));
-        return;
-      }
-      const error = requestUrl.searchParams.get('error');
-      if (error) {
-        response.statusCode = 400;
-        response.end('OAuth failed');
-        settleError(new Error(error));
-        return;
-      }
-      response.statusCode = 200;
-      response.end('workforce OAuth complete; you can close this tab');
-      settleOk();
-    });
-
-    function settleOk(): void {
-      if (settled) return;
-      settled = true;
-      clearTimeout(timeout);
-      server.close();
-      resolve();
-    }
-
-    function settleError(error: Error): void {
-      if (settled) return;
-      settled = true;
-      clearTimeout(timeout);
-      server.close();
-      reject(error);
-    }
-
-    server.on('error', settleError);
-    server.listen(0, '127.0.0.1', () => {
-      const address = server.address();
-      if (!address || typeof address === 'string') {
-        settleError(new Error(`failed to start ${args.action} OAuth callback server`));
-        return;
-      }
-      const callback = new URL('/callback', `http://127.0.0.1:${address.port}`);
-      callback.searchParams.set('state', state);
-      const connectUrl = args.buildUrl(callback.toString());
-      args.io.info(`cloud: open ${connectUrl} to finish ${args.action} OAuth`);
-      tryOpenBrowser(connectUrl);
-    });
   });
 }
 

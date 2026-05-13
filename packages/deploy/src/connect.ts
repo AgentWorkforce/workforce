@@ -1,3 +1,5 @@
+import { platform } from 'node:os';
+import { spawn } from 'node:child_process';
 import type { PersonaSpec } from '@agentworkforce/persona-kit';
 import type { DeployIO, IntegrationConnectOutcome } from './types.js';
 
@@ -67,6 +69,75 @@ export function envIntegrationResolver(): IntegrationConnectResolver {
   };
 }
 
+export function relayfileIntegrationResolver(opts: {
+  apiUrl: string;
+  workspaceId: string;
+  workspaceToken: string;
+  io?: Pick<DeployIO, 'info' | 'warn'>;
+  pollIntervalMs?: number;
+  timeoutMs?: number;
+  fetch?: typeof fetch;
+  openUrl?: (url: string) => void | Promise<void>;
+  sleep?: (ms: number) => Promise<void>;
+}): IntegrationConnectResolver {
+  const fetchImpl = opts.fetch ?? fetch;
+  const io = opts.io;
+  const sleepImpl = opts.sleep ?? ((ms: number) => new Promise<void>((resolve) => setTimeout(resolve, ms)));
+  const apiUrl = opts.apiUrl.replace(/\/+$/, '');
+
+  return {
+    async isConnected({ provider }) {
+      const body = await requestJson(fetchImpl, `${apiUrl}/api/v1/workspaces/${encodeURIComponent(
+        opts.workspaceId
+      )}/integrations`, opts.workspaceToken);
+      return listHasConnectedProvider(body, provider);
+    },
+    async connect({ provider }) {
+      const session = await requestJson(fetchImpl, `${apiUrl}/api/v1/workspaces/${encodeURIComponent(
+        opts.workspaceId
+      )}/integrations/connect-session`, opts.workspaceToken, {
+        method: 'POST',
+        body: JSON.stringify({ allowedIntegrations: [provider] })
+      });
+      const sessionUrl = readString(session, 'sessionUrl')
+        ?? readString(session, 'connectLink')
+        ?? readString(session, 'url');
+      if (!sessionUrl) {
+        throw new Error(`integration ${provider} connect-session did not return a session URL`);
+      }
+      const sessionId = readString(session, 'sessionId') ?? readString(session, 'connectionId');
+      io?.info(`Connecting ${provider}: opening ${sessionUrl}`);
+      try {
+        await (opts.openUrl ?? openBrowser)(sessionUrl);
+      } catch (err) {
+        io?.warn?.(`Could not open browser automatically: ${err instanceof Error ? err.message : String(err)}`);
+      }
+
+      const deadline = Date.now() + (opts.timeoutMs ?? 5 * 60_000);
+      while (Date.now() < deadline) {
+        await sleepImpl(opts.pollIntervalMs ?? 2_000);
+        const statusUrl = new URL(`${apiUrl}/api/v1/workspaces/${encodeURIComponent(
+          opts.workspaceId
+        )}/integrations/${encodeURIComponent(provider)}/status`);
+        if (sessionId) statusUrl.searchParams.set('connectionId', sessionId);
+        const status = await requestJson(fetchImpl, statusUrl.toString(), opts.workspaceToken);
+        if (isConnectedStatus(status)) {
+          const connectionId = readString(status, 'connectionId')
+            ?? readString(status, 'currentConnectionId')
+            ?? sessionId
+            ?? provider;
+          io?.info(`${provider} connected.`);
+          return { connectionId };
+        }
+      }
+
+      throw new Error(
+        `Timed out waiting for ${provider} OAuth to complete. Re-run \`agentworkforce deploy ...\` after connecting.`
+      );
+    }
+  };
+}
+
 function providerHasEnvCredentials(provider: string): boolean {
   const upper = provider.toUpperCase();
   return Boolean(
@@ -127,12 +198,12 @@ export async function connectIntegrations(input: ConnectAllInput): Promise<Conne
 
     if (input.noConnect) {
       input.io.error(
-        `integrations.${provider}: not connected, and --no-connect was passed`
+        `integrations.${provider}: not connected, and prompts are disabled`
       );
       outcomes.push({
         provider,
         status: 'failed',
-        message: 'not connected (--no-connect was set)'
+        message: 'not connected (prompts are disabled)'
       });
       continue;
     }
@@ -195,4 +266,76 @@ export async function connectIntegrations(input: ConnectAllInput): Promise<Conne
     outcomes,
     ...(subscriptionProvider ? { subscriptionProvider } : {})
   };
+}
+
+async function requestJson(
+  fetchImpl: typeof fetch,
+  url: string,
+  token: string,
+  init: RequestInit = {}
+): Promise<unknown> {
+  const res = await fetchImpl(url, {
+    ...init,
+    headers: {
+      authorization: `Bearer ${token}`,
+      'content-type': 'application/json',
+      ...(init.headers ?? {})
+    }
+  });
+  if (res.status === 401) {
+    throw new Error('cloud integration request failed: unauthorized. Run `agentworkforce login` and retry.');
+  }
+  if (!res.ok) {
+    throw new Error(`cloud integration request failed: ${res.status} ${await res.text().catch(() => '')}`.trim());
+  }
+  return await res.json();
+}
+
+function listHasConnectedProvider(body: unknown, provider: string): boolean {
+  const candidates = Array.isArray(body)
+    ? body
+    : body && typeof body === 'object' && Array.isArray((body as { integrations?: unknown }).integrations)
+      ? (body as { integrations: unknown[] }).integrations
+      : [];
+  return candidates.some((item) => {
+    if (!item || typeof item !== 'object' || Array.isArray(item)) return false;
+    const record = item as Record<string, unknown>;
+    return record.provider === provider && isConnectedStatus(record);
+  });
+}
+
+function isConnectedStatus(value: unknown): boolean {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return false;
+  const record = value as Record<string, unknown>;
+  return record.status === 'connected'
+    || record.status === 'active'
+    || record.status === 'ready'
+    || record.state === 'connected'
+    || record.state === 'ready'
+    || record.ready === true
+    || Boolean(record.connectionId)
+    || Boolean(record.currentConnectionId)
+    || (record.oauth !== null
+      && typeof record.oauth === 'object'
+      && (record.oauth as { connected?: unknown }).connected === true);
+}
+
+function readString(value: unknown, field: string): string | undefined {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return undefined;
+  const raw = (value as Record<string, unknown>)[field];
+  return typeof raw === 'string' && raw.trim() ? raw.trim() : undefined;
+}
+
+function openBrowser(url: string): void {
+  const command = platform() === 'darwin'
+    ? 'open'
+    : platform() === 'win32'
+      ? 'cmd'
+      : 'xdg-open';
+  const args = platform() === 'win32' ? ['/c', 'start', '', url] : [url];
+  const child = spawn(command, args, { stdio: 'ignore', detached: true });
+  child.on('error', () => {
+    // The URL is printed by the caller; browser launch is best-effort.
+  });
+  child.unref();
 }

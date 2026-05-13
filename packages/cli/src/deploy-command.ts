@@ -1,12 +1,22 @@
 import path from 'node:path';
 import {
+  CloudApiClient,
+  clearStoredAuth,
+  defaultApiUrl as defaultAgentRelayApiUrl,
+  ensureAuthenticated,
+  issueWorkspaceToken,
+  type StoredAuth
+} from '@agent-relay/cloud';
+import {
+  clearStoredWorkspaceToken,
   createTerminalIO,
   deploy,
-  resolveWorkspaceToken,
+  writeStoredWorkspaceToken,
   type DeployMode,
   type DeployOptions,
   type ModeLaunchHandle
 } from '@agentworkforce/deploy';
+import { BUILD_YOUR_OWN_RUNTIME_DOCS_URL, pickRuntime } from './runtime-picker.js';
 
 const DEFAULT_CLOUD_URL = 'https://agentrelay.com';
 
@@ -21,7 +31,18 @@ export async function runDeploy(args: readonly string[]): Promise<void> {
     process.exit(args.length === 0 ? 1 : 0);
   }
 
-  const parsed = parseDeployArgs(args);
+  let parsed = parseDeployArgs(args);
+  if (!parsed.mode && (parsed.noPrompt || !process.stdin.isTTY || !process.stdout.isTTY)) {
+    die('deploy: --mode is required when prompts are disabled or stdio is non-interactive');
+  }
+  if (!parsed.mode) {
+    const picked = await pickRuntime();
+    if (picked === 'docs') {
+      process.stdout.write(`${BUILD_YOUR_OWN_RUNTIME_DOCS_URL}\n`);
+      process.exit(0);
+    }
+    parsed = { ...parsed, mode: picked };
+  }
 
   try {
     const result = await deploy(parsed);
@@ -69,24 +90,30 @@ export async function runLogin(args: readonly string[]): Promise<void> {
 
   const opts = parseLoginArgs(args);
   const io = createTerminalIO();
-  const workspace = opts.workspace
-    ?? process.env.WORKFORCE_WORKSPACE_ID?.trim()
-    ?? (await io.prompt('Workspace ID')).trim();
-  if (!workspace) {
-    process.stderr.write('agentworkforce login failed: workspace is required; pass --workspace or set WORKFORCE_WORKSPACE_ID\n');
-    process.exit(1);
-  }
-
   const cloudUrl = normalizeCloudUrl(
-    opts.cloudUrl
-      ?? process.env.WORKFORCE_DEPLOY_CLOUD_URL
-      ?? process.env.WORKFORCE_CLOUD_URL
-      ?? DEFAULT_CLOUD_URL
+    opts.cloudUrl ?? process.env.WORKFORCE_DEPLOY_CLOUD_URL ?? process.env.WORKFORCE_CLOUD_URL ?? defaultAgentRelayApiUrl()
   );
 
   try {
-    await resolveWorkspaceToken({ workspace, cloudUrl, io });
-    process.stdout.write(`\nlogged in: ${workspace}\n`);
+    const auth = await ensureAuthenticated(cloudUrl);
+    const apiUrl = normalizeCloudUrl(auth.apiUrl || cloudUrl);
+    const workspaces = await listWorkspacesForLogin(auth, apiUrl);
+    const chosen = opts.workspace
+      ?? await pickWorkspaceInteractive(workspaces, io);
+    const tokenResp = await issueWorkspaceToken(chosen, {
+      apiUrl,
+      name: 'agentworkforce-cli'
+    });
+    const token = readWorkspaceToken(tokenResp);
+    const workspaceId = readWorkspaceId(tokenResp) ?? findWorkspace(workspaces, chosen)?.id ?? chosen;
+    await writeStoredWorkspaceToken({
+      workspace: chosen,
+      workspaceSlug: findWorkspace(workspaces, chosen)?.slug ?? chosen,
+      workspaceId,
+      token,
+      cloudUrl: apiUrl
+    });
+    process.stdout.write(`\nlogged in: ${chosen}\n`);
     process.exit(0);
   } catch (err) {
     process.stderr.write(
@@ -96,10 +123,29 @@ export async function runLogin(args: readonly string[]): Promise<void> {
   }
 }
 
+export async function runLogout(args: readonly string[]): Promise<void> {
+  if (args.length > 0 && (args[0] === '-h' || args[0] === '--help')) {
+    process.stdout.write(LOGOUT_USAGE);
+    process.exit(0);
+  }
+  const opts = parseLogoutArgs(args);
+  try {
+    await clearStoredAuth();
+    await clearStoredWorkspaceToken(opts.workspace);
+    process.stdout.write('logged out\n');
+    process.exit(0);
+  } catch (err) {
+    process.stderr.write(
+      `\nagentworkforce logout failed: ${err instanceof Error ? err.message : String(err)}\n`
+    );
+    process.exit(1);
+  }
+}
+
 const DEPLOY_USAGE = `usage: agentworkforce deploy <persona-path> [flags]
 
 Flags:
-  --mode dev|sandbox|cloud    Pick a run mode (default: sandbox if Daytona/workspace creds resolve, else dev)
+  --mode dev|sandbox|cloud    Pick a run mode (prompts in an interactive terminal)
   --workspace <name>           Workforce workspace; defaults to the active workspace
   --no-connect                 Skip integration-connect prompts; fail if any are missing
   --byo-sandbox                Force BYO Daytona auth even when logged in
@@ -124,6 +170,15 @@ falling back to ~/.agentworkforce/login.json.
 Flags:
   --workspace <name>          Workforce workspace; defaults to WORKFORCE_WORKSPACE_ID or prompt
   --cloud-url <url>           Override the workforce cloud base URL
+  -h, --help                  Print this message
+`;
+
+const LOGOUT_USAGE = `usage: agentworkforce logout [flags]
+
+Clear the browser OAuth login and the stored workspace token.
+
+Flags:
+  --workspace <name>          Optional workspace token entry to clear
   -h, --help                  Print this message
 `;
 
@@ -292,6 +347,138 @@ function parseLoginArgs(args: readonly string[]): { workspace?: string; cloudUrl
     ...(workspace ? { workspace } : {}),
     ...(cloudUrl ? { cloudUrl } : {})
   };
+}
+
+function parseLogoutArgs(args: readonly string[]): { workspace?: string } {
+  let workspace: string | undefined;
+  for (let i = 0; i < args.length; i += 1) {
+    const a = args[i];
+    if (a === '-h' || a === '--help') {
+      process.stdout.write(LOGOUT_USAGE);
+      process.exit(0);
+    } else if (a === '--workspace') {
+      workspace = expectValue('--workspace', args[++i]);
+    } else if (a.startsWith('--workspace=')) {
+      workspace = expectInlineValue('--workspace', a.slice('--workspace='.length));
+    } else {
+      die(`logout: unknown argument "${a}"`);
+    }
+  }
+  return {
+    ...(workspace ? { workspace } : {})
+  };
+}
+
+type LoginWorkspace = {
+  id: string;
+  slug?: string;
+  name?: string;
+};
+
+async function listWorkspacesForLogin(auth: StoredAuth, apiUrl: string): Promise<LoginWorkspace[]> {
+  const client = new CloudApiClient({
+    apiUrl,
+    accessToken: auth.accessToken,
+    refreshToken: auth.refreshToken,
+    accessTokenExpiresAt: auth.accessTokenExpiresAt
+  });
+  const res = await client.fetch('/api/v1/workspaces');
+  if (res.ok) {
+    return parseWorkspaceList(await res.json().catch(() => null));
+  }
+  if (res.status !== 404 && res.status !== 405) {
+    throw new Error(`workspace list failed: ${res.status} ${await res.text().catch(() => '')}`.trim());
+  }
+
+  const who = await client.fetch('/api/v1/auth/whoami');
+  if (!who.ok) return [];
+  return parseWorkspaceList(await who.json().catch(() => null));
+}
+
+async function pickWorkspaceInteractive(
+  workspaces: readonly LoginWorkspace[],
+  io: ReturnType<typeof createTerminalIO>
+): Promise<string> {
+  if (workspaces.length === 1) {
+    return workspaceKey(workspaces[0]);
+  }
+  if (workspaces.length > 1) {
+    for (let i = 0; i < workspaces.length; i += 1) {
+      const ws = workspaces[i];
+      io.info(`[${i + 1}] ${workspaceKey(ws)}${ws.name ? ` (${ws.name})` : ''}`);
+    }
+    const answer = await io.prompt('Workspace', { defaultValue: '1' });
+    const index = Number(answer.trim());
+    if (Number.isInteger(index) && index >= 1 && index <= workspaces.length) {
+      return workspaceKey(workspaces[index - 1]);
+    }
+    const found = findWorkspace(workspaces, answer.trim());
+    if (found) return workspaceKey(found);
+    throw new Error(`unknown workspace "${answer}"`);
+  }
+  const answer = await io.prompt('Workspace');
+  if (!answer.trim()) {
+    throw new Error('workspace is required');
+  }
+  return answer.trim();
+}
+
+function parseWorkspaceList(payload: unknown): LoginWorkspace[] {
+  const candidates = Array.isArray(payload)
+    ? payload
+    : payload && typeof payload === 'object' && Array.isArray((payload as { workspaces?: unknown }).workspaces)
+      ? (payload as { workspaces: unknown[] }).workspaces
+      : payload && typeof payload === 'object' && Array.isArray((payload as { items?: unknown }).items)
+        ? (payload as { items: unknown[] }).items
+        : payload && typeof payload === 'object' && (payload as { currentWorkspace?: unknown }).currentWorkspace
+          ? [(payload as { currentWorkspace: unknown }).currentWorkspace]
+          : [];
+  return candidates.flatMap((candidate) => {
+    if (!candidate || typeof candidate !== 'object' || Array.isArray(candidate)) return [];
+    const record = candidate as Record<string, unknown>;
+    const id = readString(record, 'id') ?? readString(record, 'workspaceId');
+    if (!id) return [];
+    return [{
+      id,
+      ...(readString(record, 'slug') ? { slug: readString(record, 'slug') } : {}),
+      ...(readString(record, 'name') ? { name: readString(record, 'name') } : {})
+    }];
+  });
+}
+
+function findWorkspace(workspaces: readonly LoginWorkspace[], value: string): LoginWorkspace | undefined {
+  return workspaces.find((workspace) => [workspace.id, workspace.slug, workspace.name].includes(value));
+}
+
+function workspaceKey(workspace: LoginWorkspace): string {
+  return workspace.slug ?? workspace.id;
+}
+
+function readWorkspaceToken(value: unknown): string {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) {
+    throw new Error('workspace token response was not an object');
+  }
+  const record = value as Record<string, unknown>;
+  const token = readString(record, 'token') ?? readString(record, 'key');
+  if (!token) {
+    throw new Error('workspace token response did not include a token');
+  }
+  return token;
+}
+
+function readWorkspaceId(value: unknown): string | undefined {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return undefined;
+  const record = value as Record<string, unknown>;
+  const direct = readString(record, 'workspaceId');
+  if (direct) return direct;
+  const nested = record.workspaceToken;
+  if (!nested || typeof nested !== 'object' || Array.isArray(nested)) return undefined;
+  return readString(nested as Record<string, unknown>, 'workspaceId');
+}
+
+function readString(record: Record<string, unknown>, key: string): string | undefined {
+  const value = record[key];
+  return typeof value === 'string' && value.trim() ? value.trim() : undefined;
 }
 
 function normalizeCloudUrl(url: string): string {

@@ -106,15 +106,25 @@ export interface SandboxContext {
   writeFile(path: string, contents: string): Promise<void>;
 }
 
+export interface FilesContext {
+  /** Read a Relayfile/sandbox-visible file. */
+  read(path: string): Promise<string>;
+  /** Write a Relayfile/sandbox-visible file. */
+  write(path: string, contents: string): Promise<void>;
+}
+
 export interface MemorySaveOptions {
   tags?: string[];
   scope?: PersonaMemoryScope;
+  /** Optional expiry in seconds from now. */
+  ttlSeconds?: number;
   /** Optional expiry in milliseconds from now. */
   expiresInMs?: number;
 }
 
 export interface MemoryRecallOptions {
   limit?: number;
+  scope?: PersonaMemoryScope;
   scopes?: PersonaMemoryScope[];
   tags?: string[];
 }
@@ -128,7 +138,7 @@ export interface MemoryItem {
 }
 
 export interface MemoryContext {
-  save(content: string, opts?: MemorySaveOptions): Promise<void>;
+  save(content: string, opts?: MemorySaveOptions): Promise<{ id: string } | void>;
   recall(query: string, opts?: MemoryRecallOptions): Promise<MemoryItem[]>;
 }
 
@@ -215,6 +225,8 @@ export interface WorkforceCtx extends IntegrationClients {
   };
   /** Sandbox shell + filesystem. */
   sandbox: SandboxContext;
+  /** Relayfile/sandbox file helpers for handlers that should not shell out. */
+  files: FilesContext;
   /** Persistent memory (no-op when persona.memory is false or unset). */
   memory: MemoryContext;
   /** Cloud workflows invocation (HTTP). */
