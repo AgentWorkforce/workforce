@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { relayfileIntegrationResolver } from './connect.js';
+import { connectIntegrations, relayfileIntegrationResolver } from './connect.js';
 import { createBufferedIO } from './io.js';
 
 function okJson(body: unknown, status = 200): Response {
@@ -99,4 +99,51 @@ test('relayfileIntegrationResolver connect times out clearly', async () => {
     resolver.connect({ workspace: 'ws-1', provider: 'github' }),
     /Timed out waiting for github OAuth/
   );
+});
+
+test('connectIntegrations fails fast on auth errors without prompting to connect', async () => {
+  const io = createBufferedIO();
+  let connectCalled = false;
+  let confirmCalled = false;
+  io.confirm = async () => {
+    confirmCalled = true;
+    return true;
+  };
+
+  const result = await connectIntegrations({
+    persona: {
+      id: 'essay',
+      intent: 'essay',
+      description: 'test persona',
+      tags: ['implementation'],
+      integrations: { notion: {} }
+    } as never,
+    workspace: 'ws-1',
+    noConnect: false,
+    io,
+    integrations: {
+      async isConnected() {
+        throw new Error(
+          'cloud integration request failed: unauthorized. Open https://origin.agentrelay.cloud/cloud to verify your cloud session, then run `agent-relay cloud whoami` and `agentworkforce login` to refresh the active workspace.'
+        );
+      },
+      async connect() {
+        connectCalled = true;
+        throw new Error('connect should not be called after auth failure');
+      }
+    }
+  });
+
+  assert.equal(confirmCalled, false);
+  assert.equal(connectCalled, false);
+  assert.deepEqual(result.outcomes, [
+    {
+      provider: 'notion',
+      status: 'failed',
+      message:
+        'cloud integration request failed: unauthorized. Open https://origin.agentrelay.cloud/cloud to verify your cloud session, then run `agent-relay cloud whoami` and `agentworkforce login` to refresh the active workspace.'
+    }
+  ]);
+  assert.ok(io.messages.some((message) => message.level === 'warn' && message.message.includes('failed to check connection status for notion')));
+  assert.ok(io.messages.some((message) => message.level === 'error' && message.message.includes('auth failed')));
 });
