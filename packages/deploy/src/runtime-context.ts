@@ -22,9 +22,10 @@ export function runtimeContextEnv(
   env: Record<string, string> | undefined
 ): Record<string, string> {
   return {
-    [AGENT_CONTEXT_ENV]: env?.[AGENT_CONTEXT_ENV] ?? JSON.stringify(resolveAgentContext(persona, env)),
+    [AGENT_CONTEXT_ENV]:
+      nonEmpty(env?.[AGENT_CONTEXT_ENV]) ?? JSON.stringify(resolveAgentContext(persona, env)),
     [DEPLOYMENT_CONTEXT_ENV]:
-      env?.[DEPLOYMENT_CONTEXT_ENV] ?? JSON.stringify(resolveDeploymentContext(persona, env))
+      nonEmpty(env?.[DEPLOYMENT_CONTEXT_ENV]) ?? JSON.stringify(resolveDeploymentContext(persona, env))
   };
 }
 
