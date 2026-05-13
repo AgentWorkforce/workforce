@@ -185,6 +185,10 @@ export const KNOWN_TRIGGERS = {
 
 Unknown trigger names log a yellow warning but don't fail deploy. The cloud runtime is the source of truth; we don't want to be a gating bottleneck.
 
+### 3.8 Deploy-time persona inputs
+
+Existing `persona.inputs` remain the declaration point for non-secret runtime values. `workforce deploy` supplies deploy-time overrides with repeatable `--input KEY=value` flags; the CLI rejects keys that the persona did not declare and requires each value to be a string. In `--mode dev` and `--mode sandbox`, accepted values are injected into the runner environment as `WORKFORCE_INPUT_<KEY>`. In `--mode cloud`, the same map is sent in the deployment POST body as `inputs`.
+
 ---
 
 ## 4. Runtime substrate — `@agentworkforce/runtime`
@@ -282,11 +286,13 @@ workforce deploy <persona-path>
     [--detach]                            # background the runner
     [--bundle-out <dir>]                  # emit bundle without launching
     [--dry-run]                           # validate only
+    [--input <key>=<value>]               # override declared persona input (repeatable)
 ```
 
 Flow:
 
 1. **Resolve persona**: load the JSON via `parsePersonaSpec` (extended schema). Fail fast on schema errors with field-pointed messages.
+   Deploy-time persona input overrides come from repeated `--input KEY=value` flags. Each key must be declared by `persona.inputs`; values are non-secret strings passed through to the runner as `WORKFORCE_INPUT_<KEY>` and included in cloud deployment requests.
 2. **Login check**: if no workforce auth token in keychain, prompt `workforce login` (browser OAuth via existing relayauth flow).
 3. **Workspace check**: ensure user has a workspace; offer to create one (`relay workspaces create <name>` semantics, called via SDK not subprocess).
 4. **Integrations**: for each `persona.integrations` key, check if connected to the active workspace. If not, **prompt the user before each** (`Connect github now? (Y/n)`). On yes, call `RelayfileSetup.connectIntegration({ allowedIntegrations: [key] })` and open the browser. Block until callback. On no, fail with a clear message.
