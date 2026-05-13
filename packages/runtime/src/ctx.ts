@@ -4,9 +4,23 @@ import type {
   MemoryContext,
   ScheduleContext,
   SandboxContext,
+  WorkforceAgentContext,
   WorkforceCtx,
+  WorkforceDeploymentContext,
   WorkflowContext
 } from './types.js';
+
+type AgentInputValue = string | number | boolean | null | undefined;
+
+interface AgentRowContext extends WorkforceAgentContext {
+  /**
+   * Mirrors agents.input_values. These are agent-level values, not
+   * per-deployment overrides.
+   */
+  input_values?: Record<string, AgentInputValue>;
+  /** Camel-case alias for local callers that do not pass a raw DB row. */
+  inputValues?: Record<string, AgentInputValue>;
+}
 
 /**
  * Options passed to `buildCtx` when the runner cold-starts. The deploy
@@ -25,6 +39,8 @@ export interface CtxBuildOptions {
   persona: PersonaSpec;
   workspaceId: string;
   agentName?: string;
+  agent: AgentRowContext;
+  deployment: WorkforceDeploymentContext;
   sandbox: SandboxContext;
   llm?: LlmContext;
   memory?: MemoryContext;
@@ -91,8 +107,22 @@ function defaultLog(level: string, message: string, attrs?: Record<string, unkno
  * clear runtime error rather than silently dropping work.
  */
 export function buildCtx(options: CtxBuildOptions): WorkforceCtx {
+  const { agent, deployment } = options;
+  // Merge per key so a partial `input_values` (DB row) does not eclipse
+  // keys only present in the camel-case `inputValues` alias. `input_values`
+  // takes precedence on collisions to match the canonical DB shape.
+  const mergedAgentInputValues: Record<string, AgentInputValue> = {
+    ...(agent.inputValues ?? {}),
+    ...(agent.input_values ?? {})
+  };
   const ctx: WorkforceCtx = {
-    persona: options.persona,
+    persona: buildPersonaContext(options.persona, mergedAgentInputValues),
+    agent: {
+      id: agent.id,
+      deployedName: agent.deployedName,
+      spawnedByAgentId: agent.spawnedByAgentId
+    },
+    deployment,
     workspaceId: options.workspaceId,
     agentName: options.agentName ?? options.persona.id,
     llm: options.llm ?? UNAVAILABLE_LLM,
@@ -130,6 +160,8 @@ export function buildCtx(options: CtxBuildOptions): WorkforceCtx {
 
 const CORE_CTX_FIELDS: ReadonlySet<string> = new Set([
   'persona',
+  'agent',
+  'deployment',
   'workspaceId',
   'agentName',
   'llm',
@@ -140,3 +172,47 @@ const CORE_CTX_FIELDS: ReadonlySet<string> = new Set([
   'schedule',
   'log'
 ]);
+
+function buildPersonaContext(
+  persona: PersonaSpec,
+  agentInputValues: Record<string, AgentInputValue> | undefined,
+  processEnv: NodeJS.ProcessEnv = process.env
+): WorkforceCtx['persona'] {
+  const inputSpecs = persona.inputs ?? {};
+  const inputs: Record<string, string> = {};
+
+  for (const [key, spec] of Object.entries(inputSpecs)) {
+    // Mirror the canonical resolution chain used by persona-kit's
+    // `resolvePersonaInputs`: agent-provided value → process env
+    // (`spec.env` or the input key) → spec default. Empty strings are
+    // treated as "missing" so they fall through to later tiers, matching
+    // persona-kit so the runtime and CLI/plan paths stay in lockstep.
+    const envName = spec.env ?? key;
+    const agentValue = stringifyInputValue(agentInputValues?.[key]);
+    const envValue = stringifyInputValue(processEnv[envName]);
+    const defaultValue = stringifyInputValue(spec.default);
+    const resolved = agentValue ?? envValue ?? defaultValue;
+    if (resolved === undefined) {
+      if (spec.optional) {
+        inputs[key] = '';
+        continue;
+      }
+      throw new Error(
+        `Required input '${key}' has no value (no deployment override, no spec default). Set it via 'workforce deploy --input <key>=<value>' or by editing the agent record.`
+      );
+    }
+    inputs[key] = resolved;
+  }
+
+  return {
+    ...persona,
+    inputs,
+    inputSpecs
+  };
+}
+
+function stringifyInputValue(value: AgentInputValue): string | undefined {
+  if (value === null || value === undefined) return undefined;
+  const text = String(value);
+  return text === '' ? undefined : text;
+}

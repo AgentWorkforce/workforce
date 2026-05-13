@@ -7,6 +7,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [3.0.2] - 2026-05-13
+
+### Added
+
+- **JSON Schema export + fixture personas + lint codes** (#94)
+- **Add IntegrationConfig.source discriminator** (#97)
+- **Adopt Relayfile-VFS as the canonical integration-client style** (#92)
+- **Add proactive-agent-builder persona + fix optional-input regression** (#87)
+
+### Dependencies
+
+- Cover new packages in publish.yml allow-list + fix mcp-workforce build (#104)
+
 ## [2.1.4] - 2026-05-11
 
 ### Added

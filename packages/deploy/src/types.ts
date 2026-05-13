@@ -29,7 +29,7 @@ export interface DeployOptions {
   byokKey?: string;
   /** Existing cloud persona behavior. Defaults to `cancel`. */
   onExists?: 'update' | 'destroy' | 'cancel';
-  /** Runtime inputs forwarded to hosted cloud deployments. */
+  /** Deploy-time persona input overrides, supplied as `--input KEY=value`. Forwarded to hosted cloud deployments. */
   inputs?: Record<string, string>;
   /** Runtime log streaming hook. */
   onLog?: (line: string) => void;

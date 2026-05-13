@@ -12,6 +12,7 @@ import type {
   CodexSandboxMode,
   Harness,
   HarnessSettings,
+  IntegrationSource,
   McpServerSpec,
   PermissionMode,
   PersonaInputSpec,
@@ -23,14 +24,11 @@ import type {
   PersonaMemoryScope,
   PersonaMount,
   PersonaPermissions,
-  PersonaSandbox,
-  PersonaSandboxConfig,
   PersonaSchedule,
   PersonaSelection,
   PersonaSkill,
   PersonaSpec,
   PersonaTag,
-  PersonaTraits,
   SidecarMdMode
 } from './types.js';
 
@@ -388,15 +386,10 @@ export function parseMcpServers(
 }
 
 const MEMORY_SCOPE_VALUES: readonly PersonaMemoryScope[] = [
-  'session',
-  'user',
   'workspace',
-  'org',
-  'object'
+  'user',
+  'global'
 ];
-
-const TRAIT_LEVEL_VALUES = ['low', 'medium', 'high'] as const;
-const TRAIT_RISK_VALUES = ['conservative', 'balanced', 'aggressive'] as const;
 
 const ONEVENT_EXT_RE = /\.(?:ts|tsx|mts|cts|js|mjs|cjs)$/i;
 
@@ -471,6 +464,68 @@ export function parseIntegrationTrigger(
   };
 }
 
+/**
+ * Slug rules for `workspace_service_account.name`: kebab-case, ≤64 chars,
+ * lowercase ASCII letters/digits/hyphens, no leading/trailing/consecutive
+ * hyphens. Mirrors the convention used by other persona-kit identifiers.
+ */
+export const INTEGRATION_SOURCE_NAME_RE = /^[a-z0-9]+(?:-[a-z0-9]+)*$/;
+const INTEGRATION_SOURCE_NAME_MAX = 64;
+
+const INTEGRATION_SOURCE_KINDS = [
+  'deployer_user',
+  'workspace',
+  'workspace_service_account'
+] as const;
+
+type IntegrationSourceKind = (typeof INTEGRATION_SOURCE_KINDS)[number];
+
+function isIntegrationSourceKind(value: unknown): value is IntegrationSourceKind {
+  return (
+    typeof value === 'string' &&
+    INTEGRATION_SOURCE_KINDS.includes(value as IntegrationSourceKind)
+  );
+}
+
+export function parseIntegrationSource(
+  value: unknown,
+  context: string
+): IntegrationSource {
+  if (!isObject(value)) {
+    throw new Error(`${context} must be an object`);
+  }
+  const { kind, name } = value;
+  if (!isIntegrationSourceKind(kind)) {
+    throw new Error(
+      `${context}.kind must be one of: ${INTEGRATION_SOURCE_KINDS.join(', ')}`
+    );
+  }
+  if (kind === 'workspace_service_account') {
+    if (typeof name !== 'string' || !name) {
+      throw new Error(
+        `${context}.name must be a non-empty string when kind="workspace_service_account"`
+      );
+    }
+    if (name.length > INTEGRATION_SOURCE_NAME_MAX) {
+      throw new Error(
+        `${context}.name must be ≤${INTEGRATION_SOURCE_NAME_MAX} characters`
+      );
+    }
+    if (!INTEGRATION_SOURCE_NAME_RE.test(name)) {
+      throw new Error(
+        `${context}.name must be kebab-case matching ${INTEGRATION_SOURCE_NAME_RE.source}`
+      );
+    }
+    return { kind, name };
+  }
+  if (name !== undefined) {
+    throw new Error(
+      `${context}.name is only allowed when kind="workspace_service_account"`
+    );
+  }
+  return { kind };
+}
+
 export function parseIntegrationConfig(
   value: unknown,
   context: string
@@ -478,9 +533,17 @@ export function parseIntegrationConfig(
   if (!isObject(value)) {
     throw new Error(`${context} must be an object`);
   }
-  const { scope, triggers } = value;
+  const { source, scope, triggers } = value;
 
   const out: PersonaIntegrationConfig = {};
+
+  // Default-inject `deployer_user` when the persona omits `source` so
+  // pre-discriminator personas keep parsing unchanged. The cloud-side
+  // resolver can then trust `source` is always present on parsed specs.
+  out.source =
+    source === undefined
+      ? { kind: 'deployer_user' }
+      : parseIntegrationSource(source, `${context}.source`);
 
   if (scope !== undefined) {
     const parsedScope = parseStringMap(scope, `${context}.scope`);
@@ -572,39 +635,6 @@ export function parseSchedules(
   return out;
 }
 
-export function parseSandbox(value: unknown, context: string): PersonaSandbox | undefined {
-  if (value === undefined) return undefined;
-  if (typeof value === 'boolean') return value;
-  if (!isObject(value)) {
-    throw new Error(`${context} must be a boolean or an object if provided`);
-  }
-  const { enabled, timeoutSeconds, env } = value;
-  const out: PersonaSandboxConfig = {};
-  if (enabled !== undefined) {
-    if (typeof enabled !== 'boolean') {
-      throw new Error(`${context}.enabled must be a boolean if provided`);
-    }
-    out.enabled = enabled;
-  }
-  if (timeoutSeconds !== undefined) {
-    if (
-      typeof timeoutSeconds !== 'number' ||
-      !Number.isFinite(timeoutSeconds) ||
-      timeoutSeconds <= 0
-    ) {
-      throw new Error(`${context}.timeoutSeconds must be a positive number if provided`);
-    }
-    out.timeoutSeconds = timeoutSeconds;
-  }
-  if (env !== undefined) {
-    const parsedEnv = parseStringMap(env, `${context}.env`);
-    if (parsedEnv && Object.keys(parsedEnv).length > 0) {
-      out.env = parsedEnv;
-    }
-  }
-  return out;
-}
-
 export function parseMemory(value: unknown, context: string): PersonaMemory | undefined {
   if (value === undefined) return undefined;
   if (typeof value === 'boolean') return value;
@@ -658,56 +688,6 @@ export function parseMemory(value: unknown, context: string): PersonaMemory | un
   return out;
 }
 
-export function parseTraits(value: unknown, context: string): PersonaTraits | undefined {
-  if (value === undefined) return undefined;
-  if (!isObject(value)) {
-    throw new Error(`${context} must be an object if provided`);
-  }
-  const { voice, formality, proactivity, riskPosture, domain, vocabulary, preferMarkdown } = value;
-  const out: PersonaTraits = {};
-  if (voice !== undefined) {
-    if (typeof voice !== 'string' || !voice.trim()) {
-      throw new Error(`${context}.voice must be a non-empty string if provided`);
-    }
-    out.voice = voice;
-  }
-  if (formality !== undefined) {
-    if (typeof formality !== 'string' || !TRAIT_LEVEL_VALUES.includes(formality as 'low')) {
-      throw new Error(`${context}.formality must be one of: ${TRAIT_LEVEL_VALUES.join(', ')}`);
-    }
-    out.formality = formality as PersonaTraits['formality'];
-  }
-  if (proactivity !== undefined) {
-    if (typeof proactivity !== 'string' || !TRAIT_LEVEL_VALUES.includes(proactivity as 'low')) {
-      throw new Error(`${context}.proactivity must be one of: ${TRAIT_LEVEL_VALUES.join(', ')}`);
-    }
-    out.proactivity = proactivity as PersonaTraits['proactivity'];
-  }
-  if (riskPosture !== undefined) {
-    if (typeof riskPosture !== 'string' || !TRAIT_RISK_VALUES.includes(riskPosture as 'balanced')) {
-      throw new Error(`${context}.riskPosture must be one of: ${TRAIT_RISK_VALUES.join(', ')}`);
-    }
-    out.riskPosture = riskPosture as PersonaTraits['riskPosture'];
-  }
-  if (domain !== undefined) {
-    if (typeof domain !== 'string' || !domain.trim()) {
-      throw new Error(`${context}.domain must be a non-empty string if provided`);
-    }
-    out.domain = domain;
-  }
-  if (vocabulary !== undefined) {
-    const parsed = parseStringList(vocabulary, `${context}.vocabulary`);
-    if (parsed) out.vocabulary = parsed;
-  }
-  if (preferMarkdown !== undefined) {
-    if (typeof preferMarkdown !== 'boolean') {
-      throw new Error(`${context}.preferMarkdown must be a boolean if provided`);
-    }
-    out.preferMarkdown = preferMarkdown;
-  }
-  return Object.keys(out).length > 0 ? out : undefined;
-}
-
 export function parseOnEvent(value: unknown, context: string): string | undefined {
   if (value === undefined) return undefined;
   return assertOnEventPath(value, context);
@@ -716,6 +696,16 @@ export function parseOnEvent(value: unknown, context: string): string | undefine
 export function parsePersonaSpec(value: unknown, expectedIntent: PersonaIntent): PersonaSpec {
   if (!isObject(value)) {
     throw new Error(`persona[${expectedIntent}] must be an object`);
+  }
+  if ('traits' in value) {
+    throw new Error(
+      'traits was removed in v1; personality is handled by the persona-personality-builder tool (out of scope for v1). See docs/plans/deploy-v1.md'
+    );
+  }
+  if ('sandbox' in value) {
+    throw new Error(
+      "sandbox was removed in v1; sandbox is on by default at deploy time. Use 'workforce deploy --no-sandbox' or runtime config to opt out. See docs/plans/deploy-v1.md"
+    );
   }
 
   const {
@@ -743,9 +733,7 @@ export function parsePersonaSpec(value: unknown, expectedIntent: PersonaIntent):
     useSubscription,
     integrations,
     schedules,
-    sandbox,
     memory,
-    traits,
     onEvent
   } = value;
 
@@ -826,9 +814,7 @@ export function parsePersonaSpec(value: unknown, expectedIntent: PersonaIntent):
     `persona[${expectedIntent}].integrations`
   );
   const parsedSchedules = parseSchedules(schedules, `persona[${expectedIntent}].schedules`);
-  const parsedSandbox = parseSandbox(sandbox, `persona[${expectedIntent}].sandbox`);
   const parsedMemory = parseMemory(memory, `persona[${expectedIntent}].memory`);
-  const parsedTraits = parseTraits(traits, `persona[${expectedIntent}].traits`);
   const parsedOnEvent = parseOnEvent(onEvent, `persona[${expectedIntent}].onEvent`);
 
   return {
@@ -856,9 +842,7 @@ export function parsePersonaSpec(value: unknown, expectedIntent: PersonaIntent):
     ...(typeof useSubscription === 'boolean' ? { useSubscription } : {}),
     ...(parsedIntegrations ? { integrations: parsedIntegrations } : {}),
     ...(parsedSchedules ? { schedules: parsedSchedules } : {}),
-    ...(parsedSandbox !== undefined ? { sandbox: parsedSandbox } : {}),
     ...(parsedMemory !== undefined ? { memory: parsedMemory } : {}),
-    ...(parsedTraits ? { traits: parsedTraits } : {}),
     ...(parsedOnEvent !== undefined ? { onEvent: parsedOnEvent } : {})
   };
 }

@@ -1,6 +1,6 @@
 {
   "name": "@agentworkforce/runtime",
-  "version": "0.0.0",
+  "version": "3.0.2",
   "private": false,
   "type": "module",
   "main": "dist/index.js",
@@ -21,6 +21,10 @@
     "./raw": {
       "types": "./dist/raw.d.ts",
       "default": "./dist/raw.js"
+    },
+    "./proactive": {
+      "types": "./dist/proactive.d.ts",
+      "default": "./dist/proactive.js"
     },
     "./package.json": "./package.json"
   },
@@ -45,6 +49,7 @@
     "lint": "tsc -p tsconfig.json --noEmit"
   },
   "dependencies": {
+    "@agent-assistant/proactive": "^0.4.32",
     "@agentworkforce/persona-kit": "workspace:*"
   }
 }

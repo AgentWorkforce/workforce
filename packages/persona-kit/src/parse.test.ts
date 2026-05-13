@@ -1,9 +1,13 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
+import { readFileSync } from 'node:fs';
+import { dirname, resolve } from 'node:path';
+import { fileURLToPath } from 'node:url';
 import {
   assertInputName,
   assertSidecarPath,
   INPUT_NAME_RE,
+  isIntent,
   parseHarnessSettings,
   parseIntegrations,
   parseInputs,
@@ -13,13 +17,11 @@ import {
   parseOnEvent,
   parsePermissions,
   parsePersonaSpec,
-  parseSandbox,
   parseSchedules,
   parseSkills,
   parseStringList,
   parseStringMap,
-  parseTags,
-  parseTraits
+  parseTags
 } from './parse.js';
 
 function validSpec(over: Record<string, unknown> = {}): Record<string, unknown> {
@@ -34,6 +36,15 @@ function validSpec(over: Record<string, unknown> = {}): Record<string, unknown> 
     harnessSettings: { reasoning: 'medium', timeoutSeconds: 300 },
     ...over
   };
+}
+
+function parsePersonaFixture(path: string) {
+  const fixtureUrl = new URL(`../../../${path}`, import.meta.url);
+  const raw = JSON.parse(readFileSync(fixtureUrl, 'utf8')) as Record<string, unknown>;
+  if (!isIntent(raw.intent)) {
+    throw new Error(`${path} declares an invalid intent`);
+  }
+  return parsePersonaSpec(raw, raw.intent);
 }
 
 test('parsePersonaSpec accepts a minimal valid flat spec', () => {
@@ -66,9 +77,7 @@ test('parsePersonaSpec accepts deploy-v1 optional fields', () => {
         }
       },
       schedules: [{ name: 'weekly', cron: '0 9 * * 6', tz: 'UTC' }],
-      sandbox: { enabled: true, timeoutSeconds: 1800, env: { NODE_ENV: 'production' } },
       memory: { enabled: true, scopes: ['workspace'], ttlDays: 30 },
-      traits: { voice: 'professional-warm', preferMarkdown: true },
       onEvent: './agent.ts'
     }),
     'documentation'
@@ -77,14 +86,39 @@ test('parsePersonaSpec accepts deploy-v1 optional fields', () => {
   assert.equal(spec.cloud, true);
   assert.equal(spec.integrations?.github.triggers?.[0].on, 'pull_request.opened');
   assert.equal(spec.schedules?.[0].name, 'weekly');
-  assert.deepEqual(spec.sandbox, {
-    enabled: true,
-    timeoutSeconds: 1800,
-    env: { NODE_ENV: 'production' }
-  });
   assert.deepEqual(spec.memory, { enabled: true, scopes: ['workspace'], ttlDays: 30 });
-  assert.equal(spec.traits?.preferMarkdown, true);
   assert.equal(spec.onEvent, './agent.ts');
+});
+
+test('parsePersonaSpec rejects removed deploy-v1 traits and sandbox keys', () => {
+  assert.throws(
+    () => parsePersonaSpec(validSpec({ traits: { voice: 'warm' } }), 'documentation'),
+    {
+      message:
+        'traits was removed in v1; personality is handled by the persona-personality-builder tool (out of scope for v1). See docs/plans/deploy-v1.md'
+    }
+  );
+  assert.throws(
+    () => parsePersonaSpec(validSpec({ sandbox: true }), 'documentation'),
+    {
+      message:
+        "sandbox was removed in v1; sandbox is on by default at deploy time. Use 'workforce deploy --no-sandbox' or runtime config to opt out. See docs/plans/deploy-v1.md"
+    }
+  );
+});
+
+test('parsePersonaSpec accepts the Relayfile-VFS example personas', () => {
+  const reviewAgent = parsePersonaFixture('examples/review-agent/persona.json');
+  assert.equal(reviewAgent.id, 'review-agent');
+  assert.equal(reviewAgent.intent, 'review');
+  assert.equal(reviewAgent.integrations?.github.triggers?.length, 4);
+  assert.deepEqual(reviewAgent.memory, { enabled: true, scopes: ['workspace'] });
+
+  const linearShipper = parsePersonaFixture('examples/linear-shipper/persona.json');
+  assert.equal(linearShipper.id, 'linear-shipper');
+  assert.equal(linearShipper.intent, 'implement-frontend');
+  assert.equal(linearShipper.integrations?.linear.triggers?.[0].on, 'issue.created');
+  assert.equal(linearShipper.inputs?.GITHUB_OWNER.default, 'AgentWorkforce');
 });
 
 test('parsePersonaSpec throws when intent does not match the expected intent', () => {
@@ -347,45 +381,24 @@ test('parsePersonaSpec rejects a non-object spec', () => {
 
 // --- deploy-v1 schema additions ----------------------------------------------
 
-test('parseSandbox accepts boolean shorthand and round-trips both forms', () => {
-  assert.equal(parseSandbox(true, 'sandbox'), true);
-  assert.equal(parseSandbox(false, 'sandbox'), false);
-  assert.equal(parseSandbox(undefined, 'sandbox'), undefined);
-  const obj = parseSandbox(
-    { enabled: true, timeoutSeconds: 600, env: { FOO: 'bar' } },
-    'sandbox'
-  );
-  assert.deepEqual(obj, { enabled: true, timeoutSeconds: 600, env: { FOO: 'bar' } });
-});
-
-test('parseSandbox rejects malformed objects with field-pointed errors', () => {
-  assert.throws(() => parseSandbox('on', 'sandbox'), /sandbox must be a boolean or an object/);
-  assert.throws(
-    () => parseSandbox({ enabled: 'yes' }, 'sandbox'),
-    /sandbox\.enabled must be a boolean/
-  );
-  assert.throws(
-    () => parseSandbox({ timeoutSeconds: -1 }, 'sandbox'),
-    /sandbox\.timeoutSeconds must be a positive number/
-  );
-  assert.throws(
-    () => parseSandbox({ timeoutSeconds: Number.POSITIVE_INFINITY }, 'sandbox'),
-    /sandbox\.timeoutSeconds must be a positive number/
-  );
-});
-
 test('parseMemory accepts boolean + object forms and validates scopes', () => {
   assert.equal(parseMemory(true, 'memory'), true);
   assert.equal(parseMemory(false, 'memory'), false);
   assert.equal(parseMemory(undefined, 'memory'), undefined);
   const m = parseMemory(
-    { enabled: true, scopes: ['user', 'user', 'workspace'], ttlDays: 7, autoPromote: true, dedupMs: 0 },
+    {
+      enabled: true,
+      scopes: ['user', 'user', 'workspace', 'global'],
+      ttlDays: 7,
+      autoPromote: true,
+      dedupMs: 0
+    },
     'memory'
   );
   // Duplicates are deduped while preserving first-seen order.
   assert.deepEqual(m, {
     enabled: true,
-    scopes: ['user', 'workspace'],
+    scopes: ['user', 'workspace', 'global'],
     ttlDays: 7,
     autoPromote: true,
     dedupMs: 0
@@ -395,45 +408,15 @@ test('parseMemory accepts boolean + object forms and validates scopes', () => {
 test('parseMemory rejects unknown scopes and non-positive ttl', () => {
   assert.throws(
     () => parseMemory({ scopes: ['planet'] }, 'memory'),
-    /memory\.scopes\[0\] must be one of: session, user, workspace, org, object/
+    /memory\.scopes\[0\] must be one of: workspace, user, global/
+  );
+  assert.throws(
+    () => parseMemory({ scopes: ['session'] }, 'memory'),
+    /memory\.scopes\[0\] must be one of: workspace, user, global/
   );
   assert.throws(() => parseMemory({ scopes: [] }, 'memory'), /scopes must be a non-empty array/);
   assert.throws(() => parseMemory({ ttlDays: 0 }, 'memory'), /ttlDays must be a positive number/);
   assert.throws(() => parseMemory({ dedupMs: -1 }, 'memory'), /dedupMs must be a non-negative number/);
-});
-
-test('parseTraits keeps only supplied fields and validates enums', () => {
-  assert.equal(parseTraits(undefined, 'traits'), undefined);
-  assert.equal(parseTraits({}, 'traits'), undefined); // empty object collapses to undefined
-  const t = parseTraits(
-    {
-      voice: 'concise',
-      formality: 'low',
-      proactivity: 'high',
-      riskPosture: 'balanced',
-      domain: 'engineering',
-      vocabulary: ['PR', 'diff'],
-      preferMarkdown: true
-    },
-    'traits'
-  );
-  assert.deepEqual(t, {
-    voice: 'concise',
-    formality: 'low',
-    proactivity: 'high',
-    riskPosture: 'balanced',
-    domain: 'engineering',
-    vocabulary: ['PR', 'diff'],
-    preferMarkdown: true
-  });
-  assert.throws(
-    () => parseTraits({ formality: 'extreme' }, 'traits'),
-    /traits\.formality must be one of: low, medium, high/
-  );
-  assert.throws(
-    () => parseTraits({ riskPosture: 'wild' }, 'traits'),
-    /traits\.riskPosture must be one of: conservative, balanced, aggressive/
-  );
 });
 
 test('parseSchedules validates cron, requires unique names, preserves tz when set', () => {
@@ -489,7 +472,10 @@ test('parseIntegrations preserves scope + triggers; rejects empty trigger arrays
   assert.equal(i?.github.scope?.repo, 'org/r');
   assert.equal(i?.github.triggers?.length, 2);
   assert.equal(i?.github.triggers?.[1].match, '@mention');
-  assert.deepEqual(i?.linear, {});
+  // Default-injected source keeps existing personas resolving against
+  // the deploying user's `user_integrations` row.
+  assert.deepEqual(i?.github.source, { kind: 'deployer_user' });
+  assert.deepEqual(i?.linear, { source: { kind: 'deployer_user' } });
 
   assert.throws(
     () =>
@@ -506,6 +492,116 @@ test('parseIntegrations preserves scope + triggers; rejects empty trigger arrays
         'integrations'
       ),
     /triggers\[0\]\.on must be a non-empty string/
+  );
+});
+
+test('parseIntegrations default-injects source=deployer_user when the persona omits it', () => {
+  const i = parseIntegrations({ github: {} }, 'integrations');
+  assert.deepEqual(i?.github.source, { kind: 'deployer_user' });
+});
+
+test('parseIntegrations round-trips all three valid IntegrationSource kinds', () => {
+  const i = parseIntegrations(
+    {
+      github: { source: { kind: 'deployer_user' } },
+      slack: { source: { kind: 'workspace' } },
+      linear: {
+        source: { kind: 'workspace_service_account', name: 'release-bot' }
+      }
+    },
+    'integrations'
+  );
+  assert.deepEqual(i?.github.source, { kind: 'deployer_user' });
+  assert.deepEqual(i?.slack.source, { kind: 'workspace' });
+  assert.deepEqual(i?.linear.source, {
+    kind: 'workspace_service_account',
+    name: 'release-bot'
+  });
+});
+
+test('parseIntegrations rejects an unknown source.kind with a precise field path', () => {
+  assert.throws(
+    () =>
+      parseIntegrations(
+        { github: { source: { kind: 'org' } } },
+        'integrations'
+      ),
+    /integrations\.github\.source\.kind must be one of: deployer_user, workspace, workspace_service_account/
+  );
+});
+
+test('parseIntegrations rejects workspace_service_account missing name', () => {
+  assert.throws(
+    () =>
+      parseIntegrations(
+        { github: { source: { kind: 'workspace_service_account' } } },
+        'integrations'
+      ),
+    /integrations\.github\.source\.name must be a non-empty string when kind="workspace_service_account"/
+  );
+});
+
+test('parseIntegrations rejects workspace_service_account with non-kebab-case name', () => {
+  assert.throws(
+    () =>
+      parseIntegrations(
+        {
+          github: {
+            source: { kind: 'workspace_service_account', name: 'Release_Bot' }
+          }
+        },
+        'integrations'
+      ),
+    /integrations\.github\.source\.name must be kebab-case/
+  );
+});
+
+test('IntegrationSource fixtures round-trip through parsePersonaSpec', () => {
+  // Fixtures live under src/__fixtures__/personas/. The compiled test
+  // sits at dist/parse.test.js, so resolve back through the package root.
+  const here = dirname(fileURLToPath(import.meta.url));
+  const fixturesRoot = resolve(here, '..', 'src', '__fixtures__', 'personas');
+  const load = (name: string) =>
+    JSON.parse(readFileSync(resolve(fixturesRoot, name), 'utf8'));
+
+  const deployer = parsePersonaSpec(
+    load('integration-source-deployer.json'),
+    'documentation'
+  );
+  assert.deepEqual(deployer.integrations?.github.source, { kind: 'deployer_user' });
+
+  const workspace = parsePersonaSpec(
+    load('integration-source-workspace.json'),
+    'documentation'
+  );
+  assert.deepEqual(workspace.integrations?.slack.source, { kind: 'workspace' });
+
+  const sa = parsePersonaSpec(
+    load('integration-source-service-account.json'),
+    'documentation'
+  );
+  assert.deepEqual(sa.integrations?.github.source, {
+    kind: 'workspace_service_account',
+    name: 'release-bot'
+  });
+});
+
+test('parseIntegrations rejects extra name on deployer_user / workspace kinds', () => {
+  assert.throws(
+    () =>
+      parseIntegrations(
+        { github: { source: { kind: 'deployer_user', name: 'release-bot' } } },
+        'integrations'
+      ),
+    /integrations\.github\.source\.name is only allowed when kind="workspace_service_account"/
+  );
+  assert.throws(
+    () =>
+      parseIntegrations(
+        { slack: { source: { kind: 'workspace', name: 'release-bot' } } },
+        'integrations'
+      ),
+    /integrations\.slack\.source\.name is only allowed when kind="workspace_service_account"/
   );
 });
 
@@ -568,11 +664,10 @@ test('parsePersonaSpec rejects non-boolean cloud / useSubscription', () => {
   );
 });
 
-test('parsePersonaSpec keeps boolean shorthand sandbox / memory through round-trip', () => {
+test('parsePersonaSpec keeps boolean shorthand memory through round-trip', () => {
   const spec = parsePersonaSpec(
-    validSpec({ cloud: true, sandbox: true, memory: false }),
+    validSpec({ cloud: true, memory: false }),
     'documentation'
   );
-  assert.equal(spec.sandbox, true);
   assert.equal(spec.memory, false);
 });
