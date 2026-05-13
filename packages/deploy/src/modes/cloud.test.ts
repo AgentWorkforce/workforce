@@ -289,7 +289,12 @@ test('cloud BYOK provider detection avoids substring false positives', async () 
   });
 });
 
-test('cloud harness OAuth uses provider_credentials readiness and honors no-prompt failure', async () => {
+test('cloud harness OAuth probe hits /api/v1/cloud-agents and honors no-prompt failure', async () => {
+  // Cloud surfaces "is the harness connected?" via the cloud-agents list,
+  // not the (never-built) /users/me/provider_credentials route. When the
+  // list is empty for the persona's provider, --no-prompt must surface a
+  // clear actionable error rather than reaching the prompt path.
+  let probeCalls = 0;
   const restoreDeps = configureCloudCredentialDepsForTest({
     readStoredAuth: async () => ({
       apiUrl: 'https://cloud.example.test',
@@ -300,9 +305,10 @@ test('cloud harness OAuth uses provider_credentials readiness and honors no-prom
     createCloudApiClient() {
       return {
         async fetch(pathname: string, init?: RequestInit) {
-          assert.equal(pathname, '/api/v1/users/me/provider_credentials?model_provider=openai');
+          probeCalls += 1;
+          assert.equal(pathname, '/api/v1/cloud-agents');
           assert.equal(init?.method, 'GET');
-          return okJson({});
+          return okJson({ agents: [] });
         }
       };
     }
@@ -321,9 +327,110 @@ test('cloud harness OAuth uses provider_credentials readiness and honors no-prom
     }),
     /OAuth credentials are not connected/
   ).finally(restoreDeps);
+  assert.ok(probeCalls >= 1);
 });
 
-test('cloud harness OAuth starts auth and polls until provider credentials are connected', async () => {
+test('cloud harness OAuth probe treats a matching connected entry as ready (skips prompt)', async () => {
+  // Regression for the user-facing M3 bug: an Anthropic-connected user
+  // hit "credentials are not connected" because the probe pointed at a
+  // phantom route. With the probe fixed and a connected entry present,
+  // the harness check resolves silently and the deploy proceeds.
+  const restoreDeps = configureCloudCredentialDepsForTest({
+    readStoredAuth: async () => ({
+      apiUrl: 'https://cloud.example.test',
+      accessToken: 'access',
+      refreshToken: 'refresh',
+      accessTokenExpiresAt: '2999-01-01T00:00:00.000Z'
+    }),
+    createCloudApiClient() {
+      return {
+        async fetch(pathname: string) {
+          assert.equal(pathname, '/api/v1/cloud-agents');
+          return okJson({
+            agents: [
+              {
+                id: 'cloud-agent-1',
+                harness: 'openai', // matches persona's derived provider
+                status: 'connected',
+                credentialStoredAt: '2026-05-13T12:00:00.000Z'
+              }
+            ]
+          });
+        }
+      };
+    }
+  });
+
+  const { calls, handle } = await launch({
+    env: {
+      WORKFORCE_DEPLOY_CLOUD_URL: 'https://cloud.example.test',
+      WORKFORCE_DEPLOY_NO_PROMPT: '1'
+    },
+    input: { harnessSource: 'oauth' },
+    fetch(url) {
+      if (url.endsWith('/agents?persona_slug=demo')) return okJson({ agents: [] });
+      if (url.endsWith('/deployments')) {
+        return okJson(
+          { agentId: 'agent-oauth-connected', deploymentId: 'dep-1', status: 'active' },
+          201
+        );
+      }
+      throw new Error(`unexpected URL ${url}`);
+    }
+  }).finally(restoreDeps);
+
+  assert.equal(handle.id, 'agent-oauth-connected');
+  // No connect-provider call should have fired because the probe already
+  // returned a connected entry.
+  assert.ok(!calls.some((c) => c.url.includes('/cli/auth')));
+});
+
+test('cloud harness OAuth probe ignores entries with the wrong harness', async () => {
+  // If the user has openai connected but the persona's provider is
+  // anthropic, the probe must NOT treat that as readiness — otherwise
+  // the deploy would proceed with cloud expecting an anthropic key it
+  // never received.
+  const restoreDeps = configureCloudCredentialDepsForTest({
+    readStoredAuth: async () => ({
+      apiUrl: 'https://cloud.example.test',
+      accessToken: 'access',
+      refreshToken: 'refresh',
+      accessTokenExpiresAt: '2999-01-01T00:00:00.000Z'
+    }),
+    createCloudApiClient() {
+      return {
+        async fetch() {
+          return okJson({
+            agents: [
+              { harness: 'openai', status: 'connected' },
+              { harness: 'anthropic', status: 'pending' }, // wrong status
+              { harness: 'google', status: 'connected' }   // wrong harness
+            ]
+          });
+        }
+      };
+    }
+  });
+
+  // Override the persona to claude/anthropic so the expected provider mismatches.
+  await assert.rejects(
+    launch({
+      defaultPlanCredential: false,
+      env: {
+        WORKFORCE_DEPLOY_CLOUD_URL: 'https://cloud.example.test',
+        WORKFORCE_DEPLOY_NO_PROMPT: '1'
+      },
+      input: { harnessSource: 'oauth' },
+      persona: persona({ harness: 'claude', model: 'claude-sonnet-4-6' }),
+      fetch(url) {
+        throw new Error(`unexpected URL ${url}`);
+      }
+    }),
+    /OAuth credentials are not connected/
+  ).finally(restoreDeps);
+});
+
+test('cloud harness OAuth starts auth and polls /cloud-agents until the harness is connected', async () => {
   let credentialChecks = 0;
   const connected: string[] = [];
   const restoreDeps = configureCloudCredentialDepsForTest({
@@ -340,10 +447,14 @@ test('cloud harness OAuth starts auth and polls until provider credentials are c
     createCloudApiClient() {
       return {
         async fetch(pathname: string, init?: RequestInit) {
-          if (pathname.endsWith('/provider_credentials?model_provider=openai')) {
+          if (pathname === '/api/v1/cloud-agents') {
             credentialChecks += 1;
             assert.equal(init?.method, 'GET');
-            return okJson(credentialChecks < 3 ? {} : { id: 'cred-oauth', status: 'connected' });
+            // First two polls: harness not yet connected (empty list).
+            // Third poll: openai entry appears with status connected.
+            return okJson(credentialChecks < 3
+              ? { agents: [] }
+              : { agents: [{ id: 'cloud-agent-openai', harness: 'openai', status: 'connected' }] });
           }
           throw new Error(`unexpected path ${pathname}`);
         }
