@@ -1,6 +1,7 @@
 import {
   deploy as deployInternal,
   pickMode,
+  type CloudAuthRecoveryResolver,
   type DeployResolvers
 } from './deploy.js';
 import { preflightPersona } from './preflight.js';
@@ -14,7 +15,7 @@ import type {
   ModeLauncher
 } from './types.js';
 
-export { pickMode, type DeployResolvers };
+export { pickMode, type CloudAuthRecoveryResolver, type DeployResolvers };
 export { preflightPersona };
 export {
   connectIntegrations,
@@ -22,6 +23,7 @@ export {
   relayfileIntegrationResolver,
   type ConnectAllInput,
   type ConnectAllResult,
+  type IntegrationAuthRecoveryResolver,
   type IntegrationConnectResolver,
   type ProviderSubscriptionResolver
 } from './connect.js';

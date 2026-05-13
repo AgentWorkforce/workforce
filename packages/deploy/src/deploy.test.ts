@@ -8,7 +8,9 @@ import { createBufferedIO } from './io.js';
 import { preflightPersona } from './preflight.js';
 import type {
   BundleStager,
+  CloudAuthRecoveryResolver,
   IntegrationConnectResolver,
+  ModeLaunchInput,
   ModeLauncher,
   WorkspaceAuth
 } from './index.js';
@@ -116,6 +118,13 @@ function successfulDevLauncher(onLaunch?: () => void): ModeLauncher {
       };
     }
   };
+}
+
+function jsonResponse(body: unknown, status = 200): Response {
+  return new Response(JSON.stringify(body), {
+    status,
+    headers: { 'content-type': 'application/json' }
+  });
 }
 
 test('preflightPersona accepts a valid deploy-shaped persona', async () => {
@@ -362,6 +371,73 @@ test('deploy treats --no-prompt as fail-fast for missing integration connects', 
       )
     );
   } finally {
+    await cleanup();
+  }
+});
+
+test('deploy can recover cloud integration auth by logging in and retrying with the fresh token', async () => {
+  const { personaPath, cleanup } = await withTempPersona(
+    basePersonaJson({ integrations: { notion: {} } })
+  );
+  const io = createBufferedIO();
+  const originalFetch = globalThis.fetch;
+  const authHeaders: string[] = [];
+  let recovered = false;
+  let launchedToken: string | undefined;
+  const workspaceAuth: WorkspaceAuth = {
+    async resolveWorkspace() {
+      return { workspace: 'ws-test', token: 'stale-token' };
+    }
+  };
+  const authRecovery: CloudAuthRecoveryResolver = {
+    async recover({ workspace, provider, reason }) {
+      recovered = true;
+      assert.equal(workspace, 'ws-test');
+      assert.equal(provider, 'notion');
+      assert.match(reason, /unauthorized/);
+      return { token: 'fresh-token' };
+    }
+  };
+  globalThis.fetch = (async (_input, init) => {
+    authHeaders.push(String(new Headers(init?.headers).get('authorization')));
+    if (authHeaders.length === 1) {
+      return jsonResponse({ error: 'Unauthorized' }, 401);
+    }
+    return jsonResponse([
+      { provider: 'notion', status: 'ready', connectionId: 'conn-notion' }
+    ]);
+  }) as typeof fetch;
+
+  try {
+    const result = await deploy(
+      { personaPath, mode: 'cloud', io },
+      {
+        workspaceAuth,
+        authRecovery,
+        bundle: successfulBundleStager(),
+        modes: {
+          cloud: {
+            async launch(input: ModeLaunchInput) {
+              launchedToken = input.workspaceToken;
+              return {
+                id: 'cloud-1',
+                async stop() {
+                  /* no-op */
+                },
+                done: Promise.resolve({ code: 0 })
+              };
+            }
+          }
+        }
+      }
+    );
+
+    assert.equal(recovered, true);
+    assert.deepEqual(authHeaders, ['Bearer stale-token', 'Bearer fresh-token']);
+    assert.equal(launchedToken, 'fresh-token');
+    assert.deepEqual(result.connectedIntegrations, ['notion']);
+  } finally {
+    globalThis.fetch = originalFetch;
     await cleanup();
   }
 });

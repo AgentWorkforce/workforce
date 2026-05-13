@@ -31,6 +31,33 @@ test('relayfileIntegrationResolver isConnected reads the cloud integration list'
   ]);
 });
 
+test('relayfileIntegrationResolver reads the latest workspace token for each request', async () => {
+  let token = 'old-token';
+  const authHeaders: string[] = [];
+  const resolver = relayfileIntegrationResolver({
+    apiUrl: 'https://cloud.example.test',
+    workspaceId: 'ws-1',
+    workspaceToken: () => token,
+    fetch: async (_url, init) => {
+      authHeaders.push(String(new Headers(init?.headers).get('authorization')));
+      if (authHeaders.length === 1) {
+        return okJson({ error: 'Unauthorized' }, 401);
+      }
+      return okJson([
+        { provider: 'github', status: 'ready', connectionId: 'conn-1' }
+      ]);
+    }
+  });
+
+  await assert.rejects(
+    resolver.isConnected({ workspace: 'ws-runtime', provider: 'github' }),
+    /unauthorized/
+  );
+  token = 'new-token';
+  assert.equal(await resolver.isConnected({ workspace: 'ws-runtime', provider: 'github' }), true);
+  assert.deepEqual(authHeaders, ['Bearer old-token', 'Bearer new-token']);
+});
+
 test('relayfileIntegrationResolver connect opens a session and polls until connected', async () => {
   let polls = 0;
   const opened: string[] = [];
@@ -167,6 +194,99 @@ test('relayfileIntegrationResolver surfaces the agentworkforce-native error on 4
       return true;
     }
   );
+});
+
+test('connectIntegrations prompts auth recovery on unauthorized status checks and retries', async () => {
+  const io = createBufferedIO();
+  let checks = 0;
+  let recoverCalled = false;
+  let connectCalled = false;
+
+  const result = await connectIntegrations({
+    persona: {
+      id: 'essay',
+      intent: 'essay',
+      description: 'test persona',
+      tags: ['implementation'],
+      integrations: { notion: {} }
+    } as never,
+    workspace: 'ws-1',
+    noConnect: false,
+    io,
+    integrations: {
+      async isConnected() {
+        checks += 1;
+        if (checks === 1) {
+          throw new Error(
+            'cloud integration request failed: unauthorized. Your active workspace session is invalid or expired. Run `agentworkforce login --workspace <id-or-slug>` to refresh, then retry.'
+          );
+        }
+        return true;
+      },
+      async connect() {
+        connectCalled = true;
+        throw new Error('connect should not be called after auth recovery');
+      }
+    },
+    authRecovery: {
+      async recover({ workspace, provider }) {
+        recoverCalled = true;
+        assert.equal(workspace, 'ws-1');
+        assert.equal(provider, 'notion');
+        return true;
+      }
+    }
+  });
+
+  assert.equal(recoverCalled, true);
+  assert.equal(connectCalled, false);
+  assert.equal(checks, 2);
+  assert.deepEqual(result.outcomes, [{ provider: 'notion', status: 'already-connected' }]);
+});
+
+test('connectIntegrations does not prompt auth recovery when --no-prompt is set', async () => {
+  const io = createBufferedIO();
+  let recoverCalled = false;
+
+  const result = await connectIntegrations({
+    persona: {
+      id: 'essay',
+      intent: 'essay',
+      description: 'test persona',
+      tags: ['implementation'],
+      integrations: { notion: {} }
+    } as never,
+    workspace: 'ws-1',
+    noConnect: true,
+    noPrompt: true,
+    io,
+    integrations: {
+      async isConnected() {
+        throw new Error(
+          'cloud integration request failed: unauthorized. Your active workspace session is invalid or expired. Run `agentworkforce login --workspace <id-or-slug>` to refresh, then retry.'
+        );
+      },
+      async connect() {
+        throw new Error('connect should not be called after auth failure');
+      }
+    },
+    authRecovery: {
+      async recover() {
+        recoverCalled = true;
+        return true;
+      }
+    }
+  });
+
+  assert.equal(recoverCalled, false);
+  assert.deepEqual(result.outcomes, [
+    {
+      provider: 'notion',
+      status: 'failed',
+      message:
+        'cloud integration request failed: unauthorized. Your active workspace session is invalid or expired. Run `agentworkforce login --workspace <id-or-slug>` to refresh, then retry.'
+    }
+  ]);
 });
 
 test('connectIntegrations honors --no-prompt for subscription provider setup', async () => {
