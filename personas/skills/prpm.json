@@ -9,7 +9,7 @@
   "packages": [
     {
       "name": "persona-relayfile-mount",
-      "version": "1.0.2",
+      "version": "1.0.3",
       "description": "Use when authoring an AgentWorkforce persona's `mount` field — covers when to use mount, the gitignore allow-list idiom and its non-obvious `!web` vs `!web/` walker bug, `readonlyPatterns` scope rules, the per-agent dotfile overlay, and `.git` sandbox behavior",
       "format": "claude",
       "subtype": "skill",
@@ -25,7 +25,7 @@
     },
     {
       "name": "persona-mcp-servers",
-      "version": "1.0.2",
+      "version": "1.0.3",
       "description": "Use when authoring an AgentWorkforce persona's `mcpServers` field — covers the two spec variants (http/sse vs stdio), `$VAR` secret substitution, the claude/codex/opencode harness support matrix that constrains harness selection, and the `permissions.allow` pairing for `mcp__<server>` tools",
       "format": "claude",
       "subtype": "skill",
@@ -41,7 +41,7 @@
     },
     {
       "name": "persona-sidecars",
-      "version": "1.0.2",
+      "version": "1.0.3",
       "description": "Use when authoring an AgentWorkforce persona's sidecar fields (`claudeMd` / `claudeMdContent` / `agentsMd` / `agentsMdContent`) — covers the silent-footgun path-vs-inline distinction the dry-run does NOT catch, which form to pick for local vs built-in personas, and `*Mode` (overwrite vs extend)",
       "format": "claude",
       "subtype": "skill",
