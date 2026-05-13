@@ -47,7 +47,6 @@ jobs:
 
       - name: Run weekly-digest smoke
         id: smoke
-        continue-on-error: true
         run: node --test packages/deploy/test/e2e/weekly-digest.smoke.test.ts
 
       - name: Report smoke result
@@ -60,7 +59,7 @@ jobs:
           fi
 
       - name: Notify #workforce-alerts
-        if: steps.smoke.outcome == 'failure'
+        if: failure() && steps.smoke.outcome == 'failure'
         run: |
           if [ -z "${SLACK_WEBHOOK_URL}" ]; then
             echo "No Slack webhook configured; skipping #workforce-alerts notification."

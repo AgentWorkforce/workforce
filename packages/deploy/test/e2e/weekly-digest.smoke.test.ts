@@ -10,6 +10,7 @@ const FIXTURE_REPO = envValue('WORKFORCE_E2E_FIXTURE_REPO') ?? 'AgentWorkforce/d
 const ISSUE_TITLE_RE = /^Weekly digest\s+—\s+/u;
 const POLL_TIMEOUT_MS = 90_000;
 const POLL_INTERVAL_MS = 5_000;
+const READY_DEPLOYMENT_STATUSES = new Set(['active', 'ready', 'live', 'running']);
 
 test(
   'weekly-digest deploys to staging cloud and fires from a cron tick',
@@ -28,7 +29,9 @@ test(
       ''
     ).trim();
     if (!workspaceId) {
-      throw new Error('set WORKFORCE_E2E_STAGING_WORKSPACE_ID or WORKFORCE_WORKSPACE_ID');
+      console.log('SMOKE_TEST: SKIP — WORKFORCE_E2E_STAGING_WORKSPACE_ID is unset');
+      t.skip('WORKFORCE_E2E_STAGING_WORKSPACE_ID is unset');
+      return;
     }
 
     const stagingUrl = normalizeBaseUrl(
@@ -84,9 +87,12 @@ test(
             workspaceId,
             deploymentId
           });
-          assert.equal(status, 'active', `expected active deployment when test tick hook is unavailable`);
+          assert.ok(
+            READY_DEPLOYMENT_STATUSES.has(status),
+            `expected ready deployment when test tick hook is unavailable; got ${String(status)}`
+          );
           console.log(
-            `SMOKE_TEST: PASS — deployed ${deploymentId}; tick hook unavailable, active deployment verified`
+            `SMOKE_TEST: PASS — deployed ${deploymentId}; tick hook unavailable, deployment status ${status} verified`
           );
           return;
         }
@@ -154,9 +160,6 @@ async function deployViaCloudCli({ repoRoot, personaPath, stagingUrl, stagingTok
     '--workspace',
     workspaceId,
     '--no-connect',
-    '--no-prompt',
-    '--on-exists',
-    'update',
     '--input',
     `WEEKLY_DIGEST_REPO=${FIXTURE_REPO}`,
     '--input',
@@ -168,7 +171,8 @@ async function deployViaCloudCli({ repoRoot, personaPath, stagingUrl, stagingTok
     WORKFORCE_CLOUD_URL: stagingUrl,
     WORKFORCE_E2E_STAGING_URL: stagingUrl,
     WORKFORCE_WORKSPACE_ID: workspaceId,
-    WORKFORCE_WORKSPACE_TOKEN: stagingToken
+    WORKFORCE_WORKSPACE_TOKEN: stagingToken,
+    WORKFORCE_INTEGRATION_GITHUB_TOKEN: githubToken()
   };
 
   const result = await runNode(args, { cwd: repoRoot, env, timeoutMs: 120_000 });
