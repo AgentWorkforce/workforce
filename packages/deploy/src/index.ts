@@ -26,14 +26,18 @@ export {
   type ProviderSubscriptionResolver
 } from './connect.js';
 export {
-  envWorkspaceAuth,
+  clearActiveWorkspace,
   clearStoredWorkspaceToken,
+  envWorkspaceAuth,
   loadActiveWorkspaceToken,
   loadWorkspaceToken,
+  readActiveWorkspace,
   resolveWorkspaceToken,
   resolveWorkspaceTokenFromEnv,
   storeWorkspaceToken,
+  writeActiveWorkspace,
   writeStoredWorkspaceToken,
+  type ActiveWorkspacePointer,
   type StoredWorkspaceLogin,
   type WorkspaceAuth,
   type WorkspaceAuthToken
