@@ -2146,10 +2146,11 @@ function parseListArgs(args: readonly string[]): {
       filterHarness = v as Harness;
     } else if (arg === '--filter-tag') {
       const v = valueOf(i++, arg);
-      if (!v.trim()) {
+      const trimmed = v.trim();
+      if (!trimmed) {
         die('list: --filter-tag requires a non-empty value.');
       }
-      filterTag = v as PersonaTag;
+      filterTag = trimmed as PersonaTag;
     } else if (arg === '--display-description') {
       display.description = true;
     } else if (arg === '--no-display-description') {

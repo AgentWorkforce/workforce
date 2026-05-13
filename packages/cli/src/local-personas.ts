@@ -422,17 +422,24 @@ function parseOverride(value: unknown, context: string): LocalPersonaOverride {
   if (raw.description !== undefined && typeof raw.description !== 'string') {
     throw new Error(`${context}.description must be a string if provided`);
   }
+  let normalizedTags: PersonaTag[] | undefined;
   if (raw.tags !== undefined && raw.tags !== null) {
     if (!Array.isArray(raw.tags)) {
       throw new Error(`${context}.tags must be an array of strings if provided`);
     }
+    const tags = new Set<string>();
     for (const [idx, tag] of raw.tags.entries()) {
       if (typeof tag !== 'string' || !tag.trim()) {
         throw new Error(`${context}.tags[${idx}] must be a non-empty string`);
       }
-      if (tag.trim().length > 64) {
+      const trimmed = tag.trim();
+      if (trimmed.length > 64) {
         throw new Error(`${context}.tags[${idx}] must be ≤64 characters`);
       }
+      tags.add(trimmed);
+    }
+    if (tags.size > 0) {
+      normalizedTags = Array.from(tags).sort() as PersonaTag[];
     }
   }
 
@@ -489,7 +496,7 @@ function parseOverride(value: unknown, context: string): LocalPersonaOverride {
     id: raw.id,
     extends: raw.extends as string | undefined,
     intent: raw.intent as string | undefined,
-    tags: raw.tags as PersonaTag[] | undefined,
+    tags: normalizedTags,
     description: raw.description as string | undefined,
     skills: raw.skills as PersonaSpec['skills'] | undefined,
     inputs,

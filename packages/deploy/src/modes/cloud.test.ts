@@ -35,7 +35,7 @@ function persona(overrides: Record<string, unknown> = {}): PersonaSpec {
   return {
     id: 'demo',
     intent: 'documentation',
-    tags: ['documentation'],
+    tags: ['documentation'] as const,
     description: 'test persona',
     harness: 'codex',
     model: 'openai-codex/test',
@@ -45,7 +45,7 @@ function persona(overrides: Record<string, unknown> = {}): PersonaSpec {
     schedules: [{ name: 'daily', cron: '0 9 * * *' }],
     onEvent: './agent.ts',
     ...overrides
-  } as unknown as PersonaSpec;
+  } as PersonaSpec;
 }
 
 async function withBundle(): Promise<{ bundle: BundleResult; cleanup: () => Promise<void> }> {
