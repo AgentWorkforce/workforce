@@ -1,4 +1,5 @@
 import type {
+  PersonaInputSpec,
   PersonaSpec,
   PersonaMemoryScope
 } from '@agentworkforce/persona-kit';
@@ -170,6 +171,25 @@ export interface IntegrationClients {
   jira?: JiraClient;
 }
 
+export interface WorkforcePersonaContext extends Omit<PersonaSpec, 'inputs'> {
+  /** Resolved input values from the agent row and persona defaults. */
+  readonly inputs: Record<string, string>;
+  /** Raw persona input declarations for consumers that need metadata/defaults. */
+  readonly inputSpecs: Record<string, PersonaInputSpec>;
+}
+
+export interface WorkforceAgentContext {
+  readonly id: string;
+  readonly deployedName: string;
+  readonly spawnedByAgentId: string | null;
+}
+
+export interface WorkforceDeploymentContext {
+  readonly id: string;
+  readonly triggerKind: 'inbox' | 'clock' | 'radio';
+  readonly parentDeploymentId: string | null;
+}
+
 /**
  * The context object handlers receive on every event invocation. Per-
  * integration fields are populated only for providers the persona
@@ -177,8 +197,12 @@ export interface IntegrationClients {
  * integration fields undefined.
  */
 export interface WorkforceCtx extends IntegrationClients {
-  /** Read-only persona metadata, useful for branching on traits. */
-  readonly persona: PersonaSpec;
+  /** Read-only persona metadata plus resolved runtime inputs. */
+  readonly persona: WorkforcePersonaContext;
+  /** Agent row metadata for the agent handling this event. */
+  readonly agent: WorkforceAgentContext;
+  /** Deployment row metadata for the trigger that fired this handler. */
+  readonly deployment: WorkforceDeploymentContext;
   /** Workspace the agent is deployed into. */
   readonly workspaceId: string;
   /** Logical agent name (defaults to `persona.id`). */

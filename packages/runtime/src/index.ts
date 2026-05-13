@@ -18,8 +18,10 @@ export type {
   ScheduleContext,
   WorkflowContext,
   WorkflowRunHandle,
+  WorkforceAgentContext,
   WorkforceCronEvent,
   WorkforceCtx,
+  WorkforceDeploymentContext,
   WorkforceEvent,
   WorkforceEventSource,
   WorkforceHandler,
@@ -65,6 +67,5 @@ export type {
   PersonaIntegrationTrigger,
   PersonaMemoryScope,
   PersonaSchedule,
-  PersonaSpec,
-  PersonaTraits
+  PersonaSpec
 } from '@agentworkforce/persona-kit';

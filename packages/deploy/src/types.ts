@@ -21,6 +21,8 @@ export interface DeployOptions {
   dryRun?: boolean;
   /** Override the WORKFORCE_CLOUD_URL; defaults to env or production. */
   cloudUrl?: string;
+  /** Deploy-time persona input overrides, supplied as `--input KEY=value`. */
+  inputs?: Record<string, string>;
   /** Override stdout writer for tests + structured outputs. */
   io?: DeployIO;
 }
@@ -99,6 +101,8 @@ export interface ModeLaunchInput {
   bundle: BundleResult;
   workspace: string;
   env?: Record<string, string>;
+  inputs?: Record<string, string>;
+  cloudUrl?: string;
   io: DeployIO;
   detach?: boolean;
   /**

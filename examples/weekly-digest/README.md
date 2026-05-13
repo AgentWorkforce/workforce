@@ -54,12 +54,16 @@ workforce deploy ./examples/weekly-digest/persona.json --mode dev
 
 The runner reads NDJSON envelopes from stdin. To trigger the handler from
 the command line against a Relayfile mount you've already set up, drive
-the bundle directly:
+the bundle directly. The env assignment goes in front of `node` so the
+runner — not the `echo` upstream of the pipe — sees `RELAYFILE_MOUNT_ROOT`.
+
+> **Prerequisite:** manual firing only produces real GitHub writes when
+> the Relayfile writeback worker is active for that mount. Without it,
+> drafts land on disk under the mount but no GitHub call is ever made.
 
 ```sh
-RELAYFILE_MOUNT_ROOT=/path/to/mount \
 echo '{"id":"manual-1","workspace":"ws_demo","type":"cron.tick","occurredAt":"2026-05-12T09:00:00Z","name":"weekly","cron":"0 9 * * 6"}' \
-  | node /tmp/wf-weekly-digest/runner.mjs
+  | RELAYFILE_MOUNT_ROOT=/path/to/mount node /tmp/wf-weekly-digest/runner.mjs
 ```
 
 The handler will:

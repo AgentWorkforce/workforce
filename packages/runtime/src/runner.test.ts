@@ -4,7 +4,12 @@ import type { PersonaSpec } from '@agentworkforce/persona-kit';
 import { startRunner } from './runner.js';
 import { handler } from './handler.js';
 import type { RawGatewayEnvelope } from './shim.js';
-import type { SandboxContext, WorkforceEvent } from './types.js';
+import type {
+  SandboxContext,
+  WorkforceAgentContext,
+  WorkforceDeploymentContext,
+  WorkforceEvent
+} from './types.js';
 
 const persona: PersonaSpec = {
   id: 'demo',
@@ -33,6 +38,18 @@ const stubSandbox: SandboxContext = {
   }
 };
 
+const runtimeAgent: WorkforceAgentContext = {
+  id: 'agent_123',
+  deployedName: 'docs-demo',
+  spawnedByAgentId: null
+};
+
+const runtimeDeployment: WorkforceDeploymentContext = {
+  id: 'deployment_456',
+  triggerKind: 'clock',
+  parentDeploymentId: null
+};
+
 async function* streamOf(envelopes: RawGatewayEnvelope[]): AsyncGenerator<RawGatewayEnvelope> {
   for (const env of envelopes) yield env;
 }
@@ -42,6 +59,8 @@ test('startRunner dispatches a cron envelope to the handler', async () => {
   const logs: Array<{ level: string; message: string }> = [];
   await startRunner({
     persona,
+    agent: runtimeAgent,
+    deployment: runtimeDeployment,
     workspaceId: 'ws-test',
     handler: handler(async (_ctx, event) => {
       received.push(event);
@@ -73,6 +92,8 @@ test('startRunner logs and continues when the handler throws', async () => {
   let invocations = 0;
   await startRunner({
     persona,
+    agent: runtimeAgent,
+    deployment: runtimeDeployment,
     workspaceId: 'ws-test',
     handler: handler(async () => {
       invocations += 1;
@@ -97,6 +118,8 @@ test('startRunner skips envelopes that the shim can not translate', async () => 
   const logs: Array<{ level: string; message: string }> = [];
   await startRunner({
     persona,
+    agent: runtimeAgent,
+    deployment: runtimeDeployment,
     workspaceId: 'ws-test',
     handler: handler(async (_ctx, event) => {
       received.push(event);
@@ -120,6 +143,8 @@ test('buildCtx rejects integrations that collide with core fields', async () => 
     () =>
       buildCtx({
         persona,
+        agent: runtimeAgent,
+        deployment: runtimeDeployment,
         workspaceId: 'ws',
         sandbox: stubSandbox,
         harnessRunner: async () => ({ output: '', exitCode: 0, durationMs: 0 }),
@@ -137,6 +162,8 @@ test('startRunner throws when workspaceId is missing from both options and env',
       () =>
         startRunner({
           persona,
+          agent: runtimeAgent,
+          deployment: runtimeDeployment,
           handler: handler(async () => {}),
           subsystems: { sandbox: stubSandbox },
           envelopes: streamOf([])

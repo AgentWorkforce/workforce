@@ -8,6 +8,7 @@ import type {
   ModeLaunchHandle,
   ModeLauncher
 } from '../types.js';
+import { runtimeContextEnv } from '../runtime-context.js';
 
 const SIGTERM_TO_SIGKILL_MS = 5_000;
 
@@ -37,6 +38,7 @@ export const devLauncher: ModeLauncher = {
     const env: NodeJS.ProcessEnv = {
       ...process.env,
       ...(input.env ?? {}),
+      ...runtimeContextEnv(input.persona, input.env),
       WORKFORCE_WORKSPACE_ID: input.workspace,
       WORKFORCE_PERSONA_ID: input.persona.id
     };

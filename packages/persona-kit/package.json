@@ -1,6 +1,6 @@
 {
   "name": "@agentworkforce/persona-kit",
-  "version": "2.1.4",
+  "version": "3.0.1",
   "private": false,
   "type": "module",
   "main": "dist/index.js",
@@ -10,10 +10,12 @@
       "types": "./dist/index.d.ts",
       "default": "./dist/index.js"
     },
-    "./package.json": "./package.json"
+    "./package.json": "./package.json",
+    "./schemas/persona.schema.json": "./schemas/persona.schema.json"
   },
   "files": [
     "dist",
+    "schemas",
     "README.md",
     "package.json"
   ],
@@ -26,13 +28,17 @@
     "access": "public"
   },
   "scripts": {
-    "build": "tsc -p tsconfig.json",
+    "build": "tsc -p tsconfig.json && npm run emit:schema",
     "dev": "tsc -p tsconfig.json --watch --preserveWatchOutput",
     "typecheck": "tsc -p tsconfig.json --noEmit",
     "test": "tsc -p tsconfig.json && node --test dist/*.test.js",
+    "emit:schema": "node ./scripts/emit-schema.mjs",
     "lint": "tsc -p tsconfig.json --noEmit"
   },
   "dependencies": {
     "@relayfile/local-mount": "^0.7.0"
+  },
+  "devDependencies": {
+    "ts-json-schema-generator": "^2.3.0"
   }
 }

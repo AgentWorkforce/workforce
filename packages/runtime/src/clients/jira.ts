@@ -1,3 +1,4 @@
+import { WorkforceIntegrationError } from '../errors.js';
 import {
   draftFile,
   encodeSegment,
@@ -53,6 +54,14 @@ export function createJiraClient(opts: IntegrationClientOptions): JiraClient {
 
     async transition(target, transition) {
       const id = typeof transition === 'string' ? transition.trim() : transition.id.trim();
+      if (id.length === 0) {
+        throw new WorkforceIntegrationError({
+          provider: 'jira',
+          operation: 'transition',
+          cause: new Error('Jira transition id must be a non-empty string'),
+          retryable: false
+        });
+      }
       await writeJsonFile(
         opts,
         'jira',
