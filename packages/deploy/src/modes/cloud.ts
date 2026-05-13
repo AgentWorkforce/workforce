@@ -169,6 +169,8 @@ export const cloudLauncher: ModeLauncher = {
         agent: await readFile(input.bundle.bundlePath, 'utf8'),
         packageJson: JSON.parse(await readFile(input.bundle.packageJsonPath, 'utf8')) as unknown
       },
+      // Keep both casings until all cloud deploy endpoints converge; older
+      // previews read snake_case, while current routes read camelCase.
       credentialSelections,
       credential_selections: credentialSelections,
       inputs: input.inputs ?? readInputsOverride()
@@ -577,6 +579,8 @@ async function saveProviderCredential(args: {
       method: 'POST',
       headers: jsonHeaders(args.token),
       body: JSON.stringify({
+        // Keep both casings during the deploy-v1 rollout for the same mixed
+        // preview/production route compatibility as the deploy payload above.
         modelProvider: args.modelProvider,
         model_provider: args.modelProvider,
         key: args.apiKey,
@@ -590,14 +594,23 @@ async function saveProviderCredential(args: {
 
 function deriveModelProvider(persona: PersonaSpec): string {
   const model = typeof persona.model === 'string' ? persona.model.trim() : '';
+  if (!model) return persona.harness;
   const lower = model.toLowerCase();
-  if (lower.includes('anthropic') || lower.includes('claude')) return 'anthropic';
-  if (lower.includes('openai') || lower.includes('codex') || lower.includes('gpt')) return 'openai';
-  if (lower.includes('google') || lower.includes('gemini')) return 'google';
-  if (lower.includes('openrouter') || lower.includes('opencode')) return 'openrouter';
+  if (matchesProviderToken(lower, ['anthropic', 'claude'])) return 'anthropic';
+  if (matchesProviderToken(lower, ['openai', 'codex', 'gpt'])) return 'openai';
+  if (matchesProviderToken(lower, ['google', 'gemini'])) return 'google';
+  if (matchesProviderToken(lower, ['openrouter', 'opencode'])) return 'openrouter';
   const [provider] = model.split(/[/:]/, 1);
   if (provider?.trim()) return provider.trim().toLowerCase();
   return persona.harness;
+}
+
+function matchesProviderToken(model: string, tokens: readonly string[]): boolean {
+  return tokens.some((token) => new RegExp(`^${escapeRegExp(token)}($|[/:._-])`).test(model));
+}
+
+function escapeRegExp(value: string): string {
+  return value.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
 }
 
 function readCredentialId(body: Record<string, unknown>): string {
@@ -695,13 +708,20 @@ async function readUsableCloudAuth(apiUrl: string): Promise<StoredAuth | null> {
   let auth = await cloudCredentialDeps.readStoredAuth().catch(() => null);
   if (!auth) return null;
   if (isAuthExpired(auth.accessTokenExpiresAt)) {
-    auth = await cloudCredentialDeps.refreshStoredAuth(auth).catch(() => null);
+    auth = await cloudCredentialDeps.refreshStoredAuth(auth).catch((err) => {
+      console.warn(`cloud: stored auth refresh failed: ${formatErrorMessage(err)}`);
+      return null;
+    });
   }
   if (!auth) return null;
   return {
     ...auth,
     apiUrl
   };
+}
+
+function formatErrorMessage(err: unknown): string {
+  return err instanceof Error ? err.message : String(err);
 }
 
 function isAuthExpired(expiresAt: string): boolean {

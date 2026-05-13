@@ -267,6 +267,26 @@ test('cloud harness plan and BYOK save provider credentials through the cloud co
   assert.equal(byok.handle.id, 'agent-byok');
 });
 
+test('cloud BYOK provider detection avoids substring false positives', async () => {
+  await launch({
+    defaultPlanCredential: false,
+    persona: persona({ model: 'my-openai-alternative' }),
+    env: { WORKFORCE_DEPLOY_CLOUD_URL: 'https://cloud.example.test' },
+    input: { harnessSource: 'byok', byokKey: 'sk-test' },
+    fetch(url, init) {
+      if (url.endsWith('/provider-credentials/byok')) {
+        assert.equal(JSON.parse(String(init?.body)).modelProvider, 'my-openai-alternative');
+        return okJson({ providerCredentialId: 'cred-byok' });
+      }
+      if (url.endsWith('/agents?persona_slug=demo')) return okJson({ agents: [] });
+      if (url.endsWith('/deployments')) {
+        return okJson({ agentId: 'agent-byok', deploymentId: 'dep-byok', status: 'active' }, 201);
+      }
+      throw new Error(`unexpected URL ${url}`);
+    }
+  });
+});
+
 test('cloud harness OAuth uses provider_credentials readiness and honors no-prompt failure', async () => {
   const restoreDeps = configureCloudCredentialDepsForTest({
     readStoredAuth: async () => ({

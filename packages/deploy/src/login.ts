@@ -221,7 +221,11 @@ async function readWorkspaceTokenFromCloudAuth(
   if (!auth) return null;
 
   if (isExpired(auth.accessTokenExpiresAt)) {
-    auth = await refreshStoredAuth(auth).catch(() => auth);
+    try {
+      auth = await refreshStoredAuth(auth);
+    } catch {
+      return null;
+    }
   }
 
   const stored = auth as WorkforceStoredAuth;
@@ -269,14 +273,14 @@ async function clearWorkspaceTokenFromCloudAuth(workspace?: string): Promise<voi
   if (!auth) return;
 
   const current = auth as WorkforceStoredAuth;
-  const tokens: Record<string, StoredWorkspaceLogin> = { ...(current.workforce?.workspaceTokens ?? {}) };
+  let tokens: Record<string, StoredWorkspaceLogin> = { ...(current.workforce?.workspaceTokens ?? {}) };
   const target = workspace?.trim();
   if (target) {
-    for (const [key, login] of Object.entries(tokens)) {
-      if (key === target || workspaceMatches(login, target)) delete tokens[key];
-    }
+    tokens = Object.fromEntries(
+      Object.entries(tokens).filter(([key, login]) => key !== target && !workspaceMatches(login, target))
+    );
   } else {
-    for (const key of Object.keys(tokens)) delete tokens[key];
+    tokens = {};
   }
 
   const next: WorkforceStoredAuth = {

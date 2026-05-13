@@ -24,6 +24,7 @@ import type {
 } from './types.js';
 
 type AgentInputValue = string | number | boolean | null | undefined;
+const USAGE_REPORT_TIMEOUT_MS = 5_000;
 
 interface AgentRowContext extends WorkforceAgentContext {
   input_values?: Record<string, AgentInputValue>;
@@ -432,9 +433,12 @@ async function reportHarnessUsage(args: {
   const usageUrl = firstNonEmpty(args.env.WORKFORCE_USAGE_URL);
   const token = firstNonEmpty(args.env.WORKFORCE_DEPLOYMENT_TOKEN);
   if (!usageUrl || !token || !args.result.usage) return;
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), USAGE_REPORT_TIMEOUT_MS);
   try {
     const response = await fetch(usageUrl, {
       method: 'POST',
+      signal: controller.signal,
       headers: {
         authorization: `Bearer ${token}`,
         'content-type': 'application/json'
@@ -456,8 +460,12 @@ async function reportHarnessUsage(args: {
     }
   } catch (err) {
     args.log('warn', 'harness.usage.report.failed', {
-      error: err instanceof Error ? err.message : String(err)
+      error: err instanceof Error && err.name === 'AbortError'
+        ? `timeout after ${USAGE_REPORT_TIMEOUT_MS}ms`
+        : err instanceof Error ? err.message : String(err)
     });
+  } finally {
+    clearTimeout(timer);
   }
 }
 
