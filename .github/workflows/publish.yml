@@ -85,11 +85,17 @@ jobs:
       - name: Resolve target packages
         id: targets
         run: |
-          # Dependency order: persona-kit → workload-router → cli → agentworkforce.
-          # persona-kit is a leaf dep consumed by workload-router and cli, so it
-          # must publish first. The top-level `agentworkforce` wrapper depends on
-          # `@agentworkforce/cli`, so it must publish last.
-          echo "packages=persona-kit workload-router cli daytona-runner agentworkforce" >> "$GITHUB_OUTPUT"
+          # Dependency order (topological):
+          #   persona-kit     (leaf — consumed by everyone)
+          #   runtime         (→ persona-kit; consumed by deploy + mcp-workforce)
+          #   workload-router (→ persona-kit; consumed by cli)
+          #   deploy          (→ persona-kit + runtime; consumed by cli)
+          #   mcp-workforce   (→ persona-kit + runtime)
+          #   daytona-runner  (no workspace deps)
+          #   cli             (→ persona-kit + workload-router + deploy)
+          #   agentworkforce  (→ cli — umbrella wrapper, must publish last)
+          # personas-core publishes via the separate publish-personas.yml workflow.
+          echo "packages=persona-kit runtime workload-router deploy mcp-workforce daytona-runner cli agentworkforce" >> "$GITHUB_OUTPUT"
 
       # Lockstep baseline heal. The workspace publishes every package at the
       # same version, so if any package's local version lags either its own
