@@ -59,6 +59,7 @@ test('lintTriggers warns once per unknown provider', () => {
   );
   assert.equal(issues.length, 1);
   assert.equal(issues[0].level, 'warning');
+  assert.equal(issues[0].code, 'unknown_provider');
   assert.equal(issues[0].provider, 'mysteryapp');
   assert.equal(issues[0].path, 'integrations.mysteryapp');
 });
@@ -79,6 +80,7 @@ test('lintTriggers warns per unknown trigger for a known provider', () => {
   assert.deepEqual(triggers, ['made.up', 'pull_request.really_truly_new_event']);
   for (const issue of issues) {
     assert.equal(issue.level, 'warning');
+    assert.equal(issue.code, 'unknown_trigger');
     assert.equal(issue.provider, 'github');
     assert.match(issue.path, /integrations\.github\.triggers\[\d+\]\.on/);
   }

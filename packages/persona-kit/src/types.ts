@@ -202,7 +202,12 @@ export interface PersonaSchedule {
   tz?: string;
 }
 
-/** Memory scope semantics, mirroring @agent-assistant/memory. */
+/**
+ * Memory scope semantics, mirroring the agent-assistant memory adapter:
+ * `workspace` memory persists across users in a workspace, `user` memory
+ * follows an individual user's invocations, and `global` memory is shared
+ * across every invocation of the deployed agent.
+ */
 export type PersonaMemoryScope = 'workspace' | 'user' | 'global';
 
 /**
@@ -337,10 +342,11 @@ export interface PersonaSpec {
   /**
    * Relative POSIX path to the TypeScript (or compiled .js / .mjs) file
    * whose default export is the deploy-time event handler. Resolved
-   * relative to the persona JSON's directory at deploy time. Required when
-   * {@link cloud} is `true` and any trigger is declared; the deploy CLI
-   * enforces this at deploy time, the parser keeps it optional so partially-
-   * authored specs still parse.
+   * relative to the persona JSON's directory at deploy time. Required by
+   * the JSON Schema whenever {@link cloud} is `true` (any cloud persona
+   * needs an entrypoint, regardless of whether triggers are declared); the
+   * deploy CLI enforces the same rule. The parser itself keeps the field
+   * optional so partially-authored specs still parse.
    */
   onEvent?: string;
 }

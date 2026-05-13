@@ -84,6 +84,7 @@ export {
   lintTriggers,
   type KnownProviderName,
   type KnownTriggerName,
+  type TriggerLintCode,
   type TriggerLintIssue,
   type TriggerLintLevel
 } from './triggers.js';
