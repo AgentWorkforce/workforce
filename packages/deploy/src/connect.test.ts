@@ -104,6 +104,11 @@ test('relayfileIntegrationResolver connect times out clearly', async () => {
 test('connectIntegrations fails fast on auth errors without prompting to connect', async () => {
   const io = createBufferedIO();
   let connectCalled = false;
+  let confirmCalled = false;
+  io.confirm = async () => {
+    confirmCalled = true;
+    return true;
+  };
 
   const result = await connectIntegrations({
     persona: {
@@ -119,7 +124,7 @@ test('connectIntegrations fails fast on auth errors without prompting to connect
     integrations: {
       async isConnected() {
         throw new Error(
-          'cloud integration request failed: unauthorized. Verify the active account with `agent-relay cloud whoami`, then run `agentworkforce login` to refresh the active workspace.'
+          'cloud integration request failed: unauthorized. Open https://origin.agentrelay.cloud/cloud to verify your cloud session, then run `agent-relay cloud whoami` and `agentworkforce login` to refresh the active workspace.'
         );
       },
       async connect() {
@@ -129,13 +134,14 @@ test('connectIntegrations fails fast on auth errors without prompting to connect
     }
   });
 
+  assert.equal(confirmCalled, false);
   assert.equal(connectCalled, false);
   assert.deepEqual(result.outcomes, [
     {
       provider: 'notion',
       status: 'failed',
       message:
-        'cloud integration request failed: unauthorized. Verify the active account with `agent-relay cloud whoami`, then run `agentworkforce login` to refresh the active workspace.'
+        'cloud integration request failed: unauthorized. Open https://origin.agentrelay.cloud/cloud to verify your cloud session, then run `agent-relay cloud whoami` and `agentworkforce login` to refresh the active workspace.'
     }
   ]);
   assert.ok(io.messages.some((message) => message.level === 'warn' && message.message.includes('failed to check connection status for notion')));

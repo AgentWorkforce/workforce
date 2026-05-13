@@ -298,12 +298,12 @@ async function requestJson(
   });
   if (res.status === 401) {
     throw new Error(
-      'cloud integration request failed: unauthorized. Verify the active account with `agent-relay cloud whoami`, then run `agentworkforce login` to refresh the active workspace.'
+      'cloud integration request failed: unauthorized. Open https://origin.agentrelay.cloud/cloud to verify your cloud session, then run `agent-relay cloud whoami` and `agentworkforce login` to refresh the active workspace.'
     );
   }
   if (res.status === 403) {
     throw new Error(
-      'cloud integration request failed: forbidden. The active account is not authorized for this workspace; run `agent-relay cloud whoami` and `agentworkforce login` to refresh the active workspace.'
+      'cloud integration request failed: forbidden. The active account is not authorized for this workspace; open https://origin.agentrelay.cloud/cloud to verify account/workspace access, then run `agent-relay cloud whoami` and `agentworkforce login` to refresh the active workspace.'
     );
   }
   if (!res.ok) {
