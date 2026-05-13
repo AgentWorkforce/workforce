@@ -14,9 +14,11 @@
         "tags": {
           "type": "array",
           "items": {
-            "$ref": "#/definitions/PersonaTag"
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 64
           },
-          "description": "Free-form classification labels (from  {@link  PERSONA_TAGS } ). Every persona has at least one; a persona may carry multiple tags when it spans concerns (e.g. `['testing', 'implementation']`)."
+          "description": "Free-form catalog labels mirroring `tags text[]` in cloud#553. Tags are denormalized metadata for catalog filtering — they are NOT a closed enum and do NOT overlap with  {@link  intent } . Authors are free to label personas with provider names, project codes, or workflow shapes (e.g. `['proactive', 'notion', 'github']`). Optional; omitted, `null`, and empty-array values are treated identically."
         },
         "description": {
           "type": "string"
@@ -130,7 +132,6 @@
       "required": [
         "id",
         "intent",
-        "tags",
         "description",
         "skills",
         "harness",
@@ -158,20 +159,6 @@
             ]
           }
         }
-      ]
-    },
-    "PersonaTag": {
-      "type": "string",
-      "enum": [
-        "planning",
-        "implementation",
-        "review",
-        "testing",
-        "debugging",
-        "documentation",
-        "release",
-        "discovery",
-        "analytics"
       ]
     },
     "PersonaSkill": {

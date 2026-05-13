@@ -31,12 +31,13 @@ const ENV_KEYS = [
   'WORKFORCE_DEPLOY_RETRY_BACKOFF_MS'
 ] as const;
 
-function persona(overrides: Record<string, unknown> = {}): PersonaSpec {
+function persona(overrides: Partial<PersonaSpec> = {}): PersonaSpec {
   return {
     id: 'demo',
     intent: 'documentation',
-    tags: ['documentation'],
+    tags: ['documentation'] as const,
     description: 'test persona',
+    skills: [],
     harness: 'codex',
     model: 'openai-codex/test',
     systemPrompt: 'help',
@@ -45,7 +46,7 @@ function persona(overrides: Record<string, unknown> = {}): PersonaSpec {
     schedules: [{ name: 'daily', cron: '0 9 * * *' }],
     onEvent: './agent.ts',
     ...overrides
-  } as PersonaSpec;
+  };
 }
 
 async function withBundle(): Promise<{ bundle: BundleResult; cleanup: () => Promise<void> }> {
@@ -200,20 +201,21 @@ test('cloud URL precedence is flag env, cloud env, persona deployUrl, then defau
     return calls.find((call) => call.url.endsWith('/deployments'))?.url;
   }
 
-  const personaWithUrl = persona({ cloud: { deployUrl: 'https://persona.example.test/' } as unknown });
+  const personaWithUrl = persona() as unknown as Omit<PersonaSpec, 'cloud'> & { cloud: { deployUrl: string } };
+  personaWithUrl.cloud = { deployUrl: 'https://persona.example.test/' };
   assert.equal(
     await deployedUrl({
       WORKFORCE_DEPLOY_CLOUD_URL: 'https://flag.example.test/',
       WORKFORCE_CLOUD_URL: 'https://env.example.test/'
-    }, personaWithUrl),
+    }, personaWithUrl as unknown as PersonaSpec),
     'https://flag.example.test/api/v1/workspaces/ws-test/deployments'
   );
   assert.equal(
-    await deployedUrl({ WORKFORCE_CLOUD_URL: 'https://env.example.test/' }, personaWithUrl),
+    await deployedUrl({ WORKFORCE_CLOUD_URL: 'https://env.example.test/' }, personaWithUrl as unknown as PersonaSpec),
     'https://env.example.test/api/v1/workspaces/ws-test/deployments'
   );
   assert.equal(
-    await deployedUrl({}, personaWithUrl),
+    await deployedUrl({}, personaWithUrl as unknown as PersonaSpec),
     'https://persona.example.test/api/v1/workspaces/ws-test/deployments'
   );
   assert.equal(

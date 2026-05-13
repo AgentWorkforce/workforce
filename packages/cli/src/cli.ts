@@ -154,7 +154,7 @@ Commands:
                         --filter-harness <harness>    only show this harness
                                                       (${HARNESS_VALUES.join(' | ')})
                         --filter-tag <tag>            only show personas carrying this tag
-                                                      (${PERSONA_TAGS.join(' | ')})
+                                                      (free-form; common built-in tags: ${PERSONA_TAGS.join(' | ')})
                         --no-display-description      hide the DESCRIPTION column
   show <persona>      Print the fully-resolved spec for a single persona,
                       including which cascade layer defined it (cwd, user,
@@ -2010,7 +2010,7 @@ interface PersonaListRow {
   harness: string;
   model: string;
   intent: string;
-  tags: PersonaTag[];
+  tags: readonly PersonaTag[];
   description: string;
 }
 
@@ -2023,7 +2023,7 @@ function collectPersonaRows(): PersonaListRow[] {
       harness: spec.harness,
       model: spec.model,
       intent: spec.intent,
-      tags: spec.tags,
+      tags: spec.tags ?? [],
       description: spec.description
     });
   };
@@ -2146,10 +2146,11 @@ function parseListArgs(args: readonly string[]): {
       filterHarness = v as Harness;
     } else if (arg === '--filter-tag') {
       const v = valueOf(i++, arg);
-      if (!(PERSONA_TAGS as readonly string[]).includes(v)) {
-        die(`list: invalid --filter-tag "${v}". Must be one of: ${PERSONA_TAGS.join(', ')}`);
+      const trimmed = v.trim();
+      if (!trimmed) {
+        die('list: --filter-tag requires a non-empty value.');
       }
-      filterTag = v as PersonaTag;
+      filterTag = trimmed as PersonaTag;
     } else if (arg === '--display-description') {
       display.description = true;
     } else if (arg === '--no-display-description') {
@@ -2254,7 +2255,7 @@ function formatPersonaShow(spec: PersonaSpec, source: PersonaSource): string {
   lines.push(`PERSONA      ${spec.id}`);
   lines.push(`SOURCE       ${source}`);
   lines.push(`INTENT       ${spec.intent}`);
-  lines.push(`TAGS         ${spec.tags.length ? spec.tags.join(', ') : '(none)'}`);
+  lines.push(`TAGS         ${spec.tags && spec.tags.length ? spec.tags.join(', ') : '(none)'}`);
   lines.push(`DESCRIPTION  ${spec.description}`);
 
   lines.push('');
@@ -3593,7 +3594,7 @@ export function buildPickCandidates(): PickCandidate[] {
     byId.set(spec.id, {
       id: spec.id,
       intent: spec.intent,
-      tags: [...spec.tags],
+      tags: spec.tags ? [...spec.tags] : [],
       description: spec.description
     });
   }
@@ -3601,7 +3602,7 @@ export function buildPickCandidates(): PickCandidate[] {
     byId.set(id, {
       id,
       intent: spec.intent,
-      tags: [...spec.tags],
+      tags: spec.tags ? [...spec.tags] : [],
       description: spec.description
     });
   }

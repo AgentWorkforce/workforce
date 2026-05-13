@@ -80,6 +80,26 @@ function tightenWorkspaceServiceAccountName(node) {
 }
 tightenWorkspaceServiceAccountName(schema);
 
+// Post-process: tighten the persona `tags[]` items to match parseTags
+// (non-empty, ≤64 chars). The TS type widens to `readonly string[]` after
+// cloud#553 — the generator emits a bare `{ "type": "string" }` because
+// the bounds live in the parser. Without this, the schema accepts empty
+// or 1MB tag strings that the parser would then reject. Match the
+// `tightenWorkspaceServiceAccountName` post-process pattern above.
+const PERSONA_TAG_MAX_LEN = 64;
+const personaSpecForTags = schema.definitions?.PersonaSpec;
+if (
+  personaSpecForTags &&
+  personaSpecForTags.properties?.tags?.type === 'array' &&
+  personaSpecForTags.properties.tags.items?.type === 'string'
+) {
+  personaSpecForTags.properties.tags.items = {
+    ...personaSpecForTags.properties.tags.items,
+    minLength: 1,
+    maxLength: PERSONA_TAG_MAX_LEN
+  };
+}
+
 const serialized = `${JSON.stringify(schema, null, 2)}\n`;
 await mkdir(dirname(schemaPath), { recursive: true });
 
