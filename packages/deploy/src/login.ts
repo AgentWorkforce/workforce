@@ -55,6 +55,85 @@ function loginFile(): string {
 }
 
 /**
+ * Tiny pointer file recording the workspace + cloud URL the user picked at
+ * `agentworkforce login`. The access token itself lives in the shared
+ * `@agent-relay/cloud` auth store (`~/.agent-relay/cloud-auth.json`); this
+ * file just remembers which workspace to target so `resolveWorkspaceToken`
+ * can pair "user identity" (shared accessToken) with "which workspace to
+ * deploy to" without re-prompting on every invocation.
+ *
+ * This file is non-secret. The actual bearer credential lives in the
+ * shared auth file, which `@agent-relay/cloud` manages.
+ */
+export interface ActiveWorkspacePointer {
+  /** Whatever the user passed at login time (slug, id, or display name). */
+  workspace: string;
+  /** Canonical slug, if known. */
+  workspaceSlug?: string;
+  /** Canonical workspace id (uuid), if known. */
+  workspaceId?: string;
+  /** Cloud base URL we authed against. */
+  cloudUrl?: string;
+  /** ISO timestamp of the most recent write. */
+  setAt: string;
+}
+
+function activeWorkspaceFile(): string {
+  return process.env.WORKFORCE_ACTIVE_WORKSPACE_FILE?.trim()
+    || path.join(homedir(), '.agentworkforce', 'active.json');
+}
+
+export async function readActiveWorkspace(): Promise<ActiveWorkspacePointer | null> {
+  const raw = await readFile(activeWorkspaceFile(), 'utf8').catch(() => '');
+  const trimmed = raw.trim();
+  if (!trimmed) return null;
+  try {
+    const parsed = JSON.parse(trimmed) as unknown;
+    if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) return null;
+    const record = parsed as Record<string, unknown>;
+    const workspace = typeof record.workspace === 'string' ? record.workspace.trim() : '';
+    if (!workspace) return null;
+    return {
+      workspace,
+      setAt: typeof record.setAt === 'string' ? record.setAt : new Date(0).toISOString(),
+      ...(typeof record.workspaceSlug === 'string' && record.workspaceSlug.trim()
+        ? { workspaceSlug: record.workspaceSlug.trim() }
+        : {}),
+      ...(typeof record.workspaceId === 'string' && record.workspaceId.trim()
+        ? { workspaceId: record.workspaceId.trim() }
+        : {}),
+      ...(typeof record.cloudUrl === 'string' && record.cloudUrl.trim()
+        ? { cloudUrl: record.cloudUrl.trim() }
+        : {})
+    };
+  } catch {
+    return null;
+  }
+}
+
+export async function writeActiveWorkspace(
+  input: Omit<ActiveWorkspacePointer, 'setAt'>
+): Promise<void> {
+  const file = activeWorkspaceFile();
+  await mkdir(path.dirname(file), { recursive: true, mode: 0o700 });
+  const payload: ActiveWorkspacePointer = {
+    workspace: input.workspace,
+    ...(input.workspaceSlug ? { workspaceSlug: input.workspaceSlug } : {}),
+    ...(input.workspaceId ? { workspaceId: input.workspaceId } : {}),
+    ...(input.cloudUrl ? { cloudUrl: input.cloudUrl } : {}),
+    setAt: new Date().toISOString()
+  };
+  await writeFile(file, `${JSON.stringify(payload, null, 2)}\n`, {
+    encoding: 'utf8',
+    mode: 0o600
+  });
+}
+
+export async function clearActiveWorkspace(): Promise<void> {
+  await rm(activeWorkspaceFile(), { force: true });
+}
+
+/**
  * Environment-backed fallback resolver: reads `WORKFORCE_WORKSPACE_ID`
  * and `WORKFORCE_WORKSPACE_TOKEN` from `process.env`. Useful in CI and as
  * a sane default before the CLI wires up the OAuth flow.
@@ -118,6 +197,9 @@ export async function resolveWorkspaceToken(args: {
   const envWorkspace = (process.env.WORKFORCE_WORKSPACE_ID ?? '').trim();
   const fromEnv = (process.env.WORKFORCE_WORKSPACE_TOKEN ?? '').trim();
   const requestedWorkspace = (args.workspace ?? '').trim();
+
+  // Tier 1: explicit env vars (CI / headless). Preserved untouched so
+  // pipelines that already set WORKFORCE_WORKSPACE_TOKEN keep working.
   if (fromEnv && (requestedWorkspace || envWorkspace)) {
     return {
       token: fromEnv,
@@ -125,6 +207,27 @@ export async function resolveWorkspaceToken(args: {
     };
   }
 
+  // Tier 2: shared @agent-relay/cloud accessToken + active.json pointer.
+  // This is the interactive-CLI default after `agentworkforce login`: the
+  // user already has a valid accessToken in ~/.agent-relay/cloud-auth.json
+  // and cloud's resolveRequestAuth accepts that token as Bearer for the
+  // deployment endpoints — no workspace-scoped token mint required.
+  const sharedAuth = await readSharedAuthForBearer().catch(() => null);
+  if (sharedAuth?.accessToken) {
+    const active = await readActiveWorkspace().catch(() => null);
+    const workspace = requestedWorkspace
+      || envWorkspace
+      || active?.workspaceSlug
+      || active?.workspaceId
+      || active?.workspace;
+    if (workspace) {
+      return { token: sharedAuth.accessToken, workspace };
+    }
+  }
+
+  // Tier 3: legacy keychain / file-stored workspace token. Kept for users
+  // mid-upgrade who already have a minted workspace token from the old
+  // login flow.
   const stored = await loadWorkspaceToken(requestedWorkspace || undefined, args.cloudUrl);
   if (stored) {
     return {
@@ -135,14 +238,31 @@ export async function resolveWorkspaceToken(args: {
 
   if (args.noPrompt) {
     throw new Error(
-      `no workspace token resolved${requestedWorkspace ? ` for ${requestedWorkspace}` : ''}: run \`agentworkforce login\` or set WORKFORCE_WORKSPACE_ID + WORKFORCE_WORKSPACE_TOKEN`
+      `no workspace credentials resolved${requestedWorkspace ? ` for ${requestedWorkspace}` : ''}: run \`agentworkforce login\` or set WORKFORCE_WORKSPACE_ID + WORKFORCE_WORKSPACE_TOKEN`
     );
   }
 
-  args.io.info('cloud: no workspace token found; run `agentworkforce login` to connect this machine');
+  args.io.info('cloud: no workspace credentials found; run `agentworkforce login` to connect this machine');
   throw new Error(
-    `no workspace token resolved${requestedWorkspace ? ` for ${requestedWorkspace}` : ''}: run \`agentworkforce login\` or set WORKFORCE_WORKSPACE_ID + WORKFORCE_WORKSPACE_TOKEN`
+    `no workspace credentials resolved${requestedWorkspace ? ` for ${requestedWorkspace}` : ''}: run \`agentworkforce login\` or set WORKFORCE_WORKSPACE_ID + WORKFORCE_WORKSPACE_TOKEN`
   );
+}
+
+/**
+ * Read the shared @agent-relay/cloud auth, refreshing if the accessToken
+ * is expired and a refreshToken is available. Returns `null` on any
+ * failure — callers fall through to the next resolution tier.
+ */
+async function readSharedAuthForBearer(): Promise<StoredAuth | null> {
+  const auth = await readStoredAuth().catch(() => null);
+  if (!auth || !auth.accessToken) return null;
+  if (!isExpired(auth.accessTokenExpiresAt)) return auth;
+  if (!auth.refreshToken) return null;
+  try {
+    return await refreshStoredAuth(auth);
+  } catch {
+    return null;
+  }
 }
 
 export async function loadWorkspaceToken(
