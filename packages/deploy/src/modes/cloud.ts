@@ -564,19 +564,60 @@ async function deleteAgent(args: {
   }
 }
 
+/**
+ * Pick the best-matching deployed-persona row out of a list response.
+ *
+ * Two shapes to handle:
+ *
+ *   * Legacy preview: `{ agent: {...} }` — a single object the server
+ *     already filtered by persona via the URL path. We accept it without
+ *     persona-side matching (back-compat); destroyed-status guard still
+ *     applies.
+ *   * New workspace deployments list (cloud#580): `{ agents: [...] }` —
+ *     workspace-scoped, NOT persona-scoped. We must filter each row by
+ *     `expectedPersonaId` ourselves, must not assume rows have persona
+ *     fields populated, and must prefer the newest `active` row when
+ *     multiple match (rare but possible during destroy/redeploy races).
+ */
 function parseExistingAgent(
   body: ExistingAgentResponse,
   expectedPersonaId?: string
 ): ExistingAgent | null {
-  const direct = parseAgentLike(body.agent, expectedPersonaId);
+  // Legacy single-object envelope: trust the server's path-level filter.
+  const direct = parseAgentLike(body.agent, expectedPersonaId, {
+    requirePersonaMatch: false
+  });
   if (direct) return direct;
-  if (Array.isArray(body.agents)) {
-    for (const agent of body.agents) {
-      const parsed = parseAgentLike(agent, expectedPersonaId);
-      if (parsed) return parsed;
-    }
+
+  if (!Array.isArray(body.agents)) return null;
+  // The list endpoint is workspace-scoped, not persona-scoped, so every
+  // matching row MUST identify the right persona. Skip rows that don't.
+  const matches: Array<{ agent: ExistingAgent; createdAt: number }> = [];
+  for (const value of body.agents) {
+    const parsed = parseAgentLike(value, expectedPersonaId, {
+      requirePersonaMatch: Boolean(expectedPersonaId)
+    });
+    if (!parsed) continue;
+    const createdAtSrc = value && typeof value === 'object' && !Array.isArray(value)
+      ? (value as Record<string, unknown>).createdAt
+      : undefined;
+    const createdAtMs = typeof createdAtSrc === 'string' ? Date.parse(createdAtSrc) : NaN;
+    matches.push({
+      agent: parsed,
+      createdAt: Number.isFinite(createdAtMs) ? createdAtMs : 0
+    });
   }
-  return null;
+  if (matches.length === 0) return null;
+  // Prefer active rows; within each tier, prefer the most recently
+  // created row so a destroy+redeploy race lands on the new agent
+  // instead of the stale one.
+  matches.sort((a, b) => {
+    const aActive = a.agent.status === 'active' ? 1 : 0;
+    const bActive = b.agent.status === 'active' ? 1 : 0;
+    if (aActive !== bActive) return bActive - aActive;
+    return b.createdAt - a.createdAt;
+  });
+  return matches[0].agent;
 }
 
 /**
@@ -586,14 +627,19 @@ function parseExistingAgent(
  * older preview routes used `{ id, slug, status }`. We accept both
  * during the deploy-v1 rollout.
  *
- * When `expectedPersonaId` is supplied (the local persona JSON's `id`,
- * which is a slug), we match against the human-readable identifiers on
- * the row — `deployedName`, `slug`, or `personaSlug` — and explicitly
- * skip when `personaId` is a UUID that won't match a slug. This is the
- * client-side equivalent of the `?personaId=` filter that cloud
- * doesn't safely accept yet.
+ * When `expectedPersonaId` is supplied and `requirePersonaMatch` is
+ * true, we match against the human-readable identifiers on the row —
+ * `deployedName`, `slug`/`personaSlug`, or `personaId` (slug form on
+ * the legacy endpoint). On the new workspace-scoped endpoint a row
+ * without any persona-identifying field is NOT treated as a match —
+ * the legacy "server pre-filtered the path so trust it" rationale
+ * doesn't apply when the listing covers the whole workspace.
  */
-function parseAgentLike(value: unknown, expectedPersonaId?: string): ExistingAgent | null {
+function parseAgentLike(
+  value: unknown,
+  expectedPersonaId?: string,
+  opts: { requirePersonaMatch?: boolean } = {}
+): ExistingAgent | null {
   if (!value || typeof value !== 'object' || Array.isArray(value)) return null;
   const record = value as Record<string, unknown>;
   const id = readFirstString(record, ['agentId', 'id']);
@@ -607,10 +653,11 @@ function parseAgentLike(value: unknown, expectedPersonaId?: string): ExistingAge
       // either way.
       readFirstString(record, ['personaId', 'persona_id'])
     ].filter((candidate): candidate is string => Boolean(candidate));
-    // If the row has any persona-identifying field at all, require an
-    // exact match. If the row has none (legacy preview shape — the
-    // server already filtered to one persona via path), let it through.
-    if (personaCandidates.length > 0 && !personaCandidates.includes(expectedPersonaId)) {
+    if (personaCandidates.length === 0) {
+      // Caller decides: legacy `{agent: ...}` path may trust the server
+      // filter; workspace-scoped list must NOT.
+      if (opts.requirePersonaMatch) return null;
+    } else if (!personaCandidates.includes(expectedPersonaId)) {
       return null;
     }
   }

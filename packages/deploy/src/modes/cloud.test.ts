@@ -649,7 +649,20 @@ test('cloud existing-persona stage honors destroy and cancel choices', async () 
       WORKFORCE_DEPLOY_ON_EXISTS: 'destroy'
     },
     fetch(url, init) {
-      if (init?.method === 'GET' && url.endsWith('/deployments')) return okJson({ agents: [{ id: 'agent-old' }] });
+      if (init?.method === 'GET' && url.endsWith('/deployments')) {
+        // Workspace-scoped listing must identify the persona it belongs to
+        // (deployedName is what cloud derives from the slug). A row without
+        // any persona-identifying field is intentionally NOT treated as a
+        // match by the post-cloud#580 client-side filter.
+        return okJson({
+          agents: [{
+            id: 'agent-old',
+            deployedName: 'demo',
+            status: 'active',
+            createdAt: '2026-05-12T00:00:00.000Z'
+          }]
+        });
+      }
       if (url.endsWith('/agents/agent-old/destroy')) {
         assert.equal(init?.method, 'POST');
         return okJson({ ok: true });
@@ -757,6 +770,145 @@ test('findExistingAgent: empty agents array means "no existing deployment"', asy
   assert.notEqual(getIndex, -1);
   assert.notEqual(postIndex, -1);
   assert.ok(getIndex < postIndex, 'listing GET must precede deploy POST');
+});
+
+test('findExistingAgent: workspace-scoped list rows without persona-identifying fields are NOT matched', async () => {
+  // The new /deployments endpoint is workspace-scoped, not persona-scoped.
+  // A row that lacks deployedName/personaSlug/personaId could belong to
+  // any persona in the workspace; client-side matching MUST refuse to
+  // treat it as "the persona we're deploying". Otherwise on-exists could
+  // act on the wrong agent. (Legacy `{agent:{id}}` envelope keeps its
+  // back-compat because the URL path implied persona-scoping; that
+  // path is exercised by the "cloud existing-persona stage" test.)
+  const result = await launch({
+    env: {
+      WORKFORCE_DEPLOY_CLOUD_URL: 'https://cloud.example.test'
+    },
+    fetch(url, init) {
+      if (init?.method === 'GET' && url.endsWith('/deployments')) {
+        return okJson({
+          agents: [
+            // Row with NO persona-identifying field — must be ignored.
+            { agentId: 'agent-mystery', status: 'active' }
+          ],
+          nextCursor: null
+        });
+      }
+      if (init?.method === 'POST' && url.endsWith('/deployments')) {
+        // Deploy proceeds as if no existing agent was found.
+        return okJson({ agentId: 'agent-fresh', deploymentId: 'dep-1', status: 'active' }, 201);
+      }
+      throw new Error(`unexpected URL ${url} (${init?.method})`);
+    }
+  });
+  assert.equal(result.handle.id, 'agent-fresh');
+});
+
+test('findExistingAgent: multiple active rows for the same persona — newest wins', async () => {
+  // During a destroy+redeploy race or a soft-delete window, the workspace
+  // can briefly hold two active rows for the same persona slug. The CLI
+  // should act on the newest one, not whichever cloud returns first in
+  // the unordered array.
+  const result = await launch({
+    env: {
+      WORKFORCE_DEPLOY_CLOUD_URL: 'https://cloud.example.test',
+      WORKFORCE_DEPLOY_ON_EXISTS: 'cancel'
+    },
+    fetch(url, init) {
+      if (init?.method === 'GET' && url.endsWith('/deployments')) {
+        return okJson({
+          agents: [
+            {
+              agentId: 'agent-stale',
+              deployedName: 'demo',
+              status: 'active',
+              createdAt: '2026-05-12T00:00:00.000Z'
+            },
+            {
+              agentId: 'agent-current',
+              deployedName: 'demo',
+              status: 'active',
+              createdAt: '2026-05-13T12:00:00.000Z'
+            },
+            {
+              agentId: 'agent-tombstone',
+              deployedName: 'demo',
+              status: 'destroyed',
+              createdAt: '2026-05-13T13:00:00.000Z'
+            }
+          ],
+          nextCursor: null
+        });
+      }
+      throw new Error(`unexpected URL ${url} (${init?.method})`);
+    }
+  });
+  assert.equal(result.handle.id, 'agent-current', 'newest active row should win');
+  assert.equal(result.handle.status, 'cancelled');
+});
+
+test('findExistingAgent: active row wins over an older active and over inactive rows', async () => {
+  // Status tier (active > anything else) outranks createdAt — guards
+  // against picking a newer `failed` row over an older `active` one.
+  const result = await launch({
+    env: {
+      WORKFORCE_DEPLOY_CLOUD_URL: 'https://cloud.example.test',
+      WORKFORCE_DEPLOY_ON_EXISTS: 'cancel'
+    },
+    fetch(url, init) {
+      if (init?.method === 'GET' && url.endsWith('/deployments')) {
+        return okJson({
+          agents: [
+            {
+              agentId: 'agent-active-old',
+              deployedName: 'demo',
+              status: 'active',
+              createdAt: '2026-05-10T00:00:00.000Z'
+            },
+            {
+              agentId: 'agent-failed-new',
+              deployedName: 'demo',
+              status: 'failed',
+              createdAt: '2026-05-13T00:00:00.000Z'
+            }
+          ],
+          nextCursor: null
+        });
+      }
+      throw new Error(`unexpected URL ${url} (${init?.method})`);
+    }
+  });
+  assert.equal(result.handle.id, 'agent-active-old');
+});
+
+test('findExistingAgent: malformed array entries (null/empty) are skipped without throwing', async () => {
+  const result = await launch({
+    env: {
+      WORKFORCE_DEPLOY_CLOUD_URL: 'https://cloud.example.test',
+      WORKFORCE_DEPLOY_ON_EXISTS: 'cancel'
+    },
+    fetch(url, init) {
+      if (init?.method === 'GET' && url.endsWith('/deployments')) {
+        return okJson({
+          agents: [
+            null,
+            undefined,
+            {},
+            { agentId: '' },
+            {
+              agentId: 'agent-valid',
+              deployedName: 'demo',
+              status: 'active',
+              createdAt: '2026-05-13T00:00:00.000Z'
+            }
+          ],
+          nextCursor: null
+        });
+      }
+      throw new Error(`unexpected URL ${url} (${init?.method})`);
+    }
+  });
+  assert.equal(result.handle.id, 'agent-valid');
 });
 
 function callsForUrl(calls: FetchCall[], suffix: string): number {
