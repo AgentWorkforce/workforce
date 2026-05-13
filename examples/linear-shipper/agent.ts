@@ -6,11 +6,20 @@ type LinearIssueEvent = {
 
 function inputDefault(ctx: Parameters<Parameters<typeof handler>[0]>[0], name: string): string {
   // Mirror `resolvePersonaInputs` precedence (packages/persona-kit/src/inputs.ts):
-  // explicit env var (spec.env ?? input name) wins over the static JSON default.
-  const spec = ctx.persona.inputs?.[name];
+  // explicit env var (spec.env ?? input name) wins over the runtime-resolved
+  // value, which in turn wins over the static spec default.
+  //
+  // NOTE: the raw spec lives at `ctx.persona.inputSpecs` (Record<string, PersonaInputSpec>);
+  // `ctx.persona.inputs` is the already-resolved Record<string, string>. The earlier
+  // version of this helper read .env / .default off `inputs` directly, which only
+  // worked because the type was looser before the WorkforceCtx readonly tightening.
+  const spec = ctx.persona.inputSpecs?.[name];
   const envName = spec?.env ?? name;
   const fromEnv = process.env[envName];
-  const value = (fromEnv !== undefined && fromEnv !== '' ? fromEnv : undefined) ?? spec?.default;
+  const value =
+    (fromEnv !== undefined && fromEnv !== '' ? fromEnv : undefined) ??
+    ctx.persona.inputs?.[name] ??
+    spec?.default;
   if (!value) throw new Error(`${name} input is required`);
   return value;
 }
