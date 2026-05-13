@@ -11,24 +11,30 @@ function okJson(body: unknown, status = 200): Response {
 }
 
 test('relayfileIntegrationResolver isConnected reads the cloud integration list', async () => {
+  const urls: string[] = [];
   const resolver = relayfileIntegrationResolver({
     apiUrl: 'https://cloud.example.test',
     workspaceId: 'ws-1',
     workspaceToken: 'tok',
     fetch: async (url) => {
-      assert.equal(url, 'https://cloud.example.test/api/v1/workspaces/ws-1/integrations');
+      urls.push(String(url));
       return okJson([
         { provider: 'github', status: 'ready', connectionId: 'conn-1' }
       ]);
     }
   });
-  assert.equal(await resolver.isConnected({ workspace: 'ws-1', provider: 'github' }), true);
-  assert.equal(await resolver.isConnected({ workspace: 'ws-1', provider: 'notion' }), false);
+  assert.equal(await resolver.isConnected({ workspace: 'ws-runtime', provider: 'github' }), true);
+  assert.equal(await resolver.isConnected({ workspace: 'ws-runtime', provider: 'notion' }), false);
+  assert.deepEqual(urls, [
+    'https://cloud.example.test/api/v1/workspaces/ws-runtime/integrations',
+    'https://cloud.example.test/api/v1/workspaces/ws-runtime/integrations'
+  ]);
 });
 
 test('relayfileIntegrationResolver connect opens a session and polls until connected', async () => {
   let polls = 0;
   const opened: string[] = [];
+  const urls: string[] = [];
   const io = createBufferedIO();
   const resolver = relayfileIntegrationResolver({
     apiUrl: 'https://cloud.example.test',
@@ -43,6 +49,7 @@ test('relayfileIntegrationResolver connect opens a session and polls until conne
     sleep: async () => undefined,
     fetch: async (input, init) => {
       const url = input.toString();
+      urls.push(url);
       if (url.endsWith('/integrations/connect-session')) {
         assert.equal(init?.method, 'POST');
         assert.deepEqual(JSON.parse(String(init?.body)), {
@@ -62,10 +69,11 @@ test('relayfileIntegrationResolver connect opens a session and polls until conne
     }
   });
 
-  assert.deepEqual(await resolver.connect({ workspace: 'ws-1', provider: 'notion' }), {
+  assert.deepEqual(await resolver.connect({ workspace: 'ws-runtime', provider: 'notion' }), {
     connectionId: 'conn-1'
   });
   assert.deepEqual(opened, ['https://connect.example.test/session']);
+  assert.ok(urls.every((url) => url.includes('/workspaces/ws-runtime/')));
   assert.equal(polls, 3);
   assert.ok(io.messages.some((message) => message.message.includes('notion connected')));
 });

@@ -2151,11 +2151,7 @@ async function runList(args: readonly string[]): Promise<never> {
     process.exit(0);
   }
 
-  const { json, filterHarness, filterTag, display, deployments } = parseListArgs(args);
-  if (deployments) {
-    await runDeploymentList(args.filter((arg) => arg !== '--deployments'));
-    process.exit(0);
-  }
+  const { json, filterHarness, filterTag, display } = parseListArgs(args);
 
   const rows = collectPersonaRows().filter((r) => {
     if (filterHarness && r.harness !== filterHarness) return false;

@@ -1,6 +1,12 @@
-import { spawn } from 'node:child_process';
 import { readFile } from 'node:fs/promises';
-import { platform } from 'node:os';
+import {
+  CloudApiClient,
+  connectProvider,
+  defaultApiUrl,
+  readStoredAuth,
+  refreshStoredAuth,
+  type StoredAuth
+} from '@agent-relay/cloud';
 import type { PersonaSpec } from '@agentworkforce/persona-kit';
 import type {
   ModeLaunchInput,
@@ -12,7 +18,6 @@ import {
   type WorkspaceAuthToken
 } from '../login.js';
 
-const DEFAULT_CLOUD_URL = 'https://agentrelay.com';
 const BUILD_YOUR_OWN_CLOUD_DOCS_URL = 'https://docs.agentworkforce.com/deploy/build-your-own-cloud';
 const USER_AGENT = 'workforce-deploy';
 const MAX_ATTEMPTS = 3;
@@ -63,6 +68,41 @@ interface ExistingAgentResponse {
 interface ExistingAgent {
   id: string;
   status?: string;
+}
+
+type CloudApiClientLike = Pick<CloudApiClient, 'fetch'>;
+
+type CloudCredentialDeps = {
+  readStoredAuth: typeof readStoredAuth;
+  refreshStoredAuth: typeof refreshStoredAuth;
+  connectProvider: typeof connectProvider;
+  createCloudApiClient(auth: StoredAuth, apiUrl: string): CloudApiClientLike;
+};
+
+const defaultCloudCredentialDeps: CloudCredentialDeps = {
+  readStoredAuth,
+  refreshStoredAuth,
+  connectProvider,
+  createCloudApiClient(auth, apiUrl) {
+    return new CloudApiClient({
+      apiUrl,
+      accessToken: auth.accessToken,
+      refreshToken: auth.refreshToken,
+      accessTokenExpiresAt: auth.accessTokenExpiresAt
+    });
+  }
+};
+
+let cloudCredentialDeps = defaultCloudCredentialDeps;
+
+export function configureCloudCredentialDepsForTest(
+  overrides: Partial<CloudCredentialDeps>
+): () => void {
+  const previous = cloudCredentialDeps;
+  cloudCredentialDeps = { ...cloudCredentialDeps, ...overrides };
+  return () => {
+    cloudCredentialDeps = previous;
+  };
 }
 
 /**
@@ -203,9 +243,9 @@ function resolveCloudUrl(input: ModeLaunchInput): string {
   const fromEnv = process.env.WORKFORCE_DEPLOY_CLOUD_URL?.trim()
     || process.env.WORKFORCE_CLOUD_URL?.trim();
   const fromPersona = readPersonaCloudDeployUrl(input.persona);
-  const raw = fromInput || fromEnv || fromPersona || DEFAULT_CLOUD_URL;
+  const raw = fromInput || fromEnv || fromPersona || defaultApiUrl();
   const resolved = normalizeCloudUrl(raw);
-  if (resolved !== DEFAULT_CLOUD_URL) {
+  if (resolved !== normalizeCloudUrl(defaultApiUrl())) {
     input.io.info(
       `cloud: using custom cloud URL ${resolved}. Build your own cloud docs: ${BUILD_YOUR_OWN_CLOUD_DOCS_URL}`
     );
@@ -293,18 +333,17 @@ async function resolveHarnessSource(args: {
 
 async function isHarnessOauthConnected(args: {
   cloudUrl: string;
-  token: string;
   persona: PersonaSpec;
 }): Promise<boolean> {
-  const url = `${args.cloudUrl}/api/v1/users/me/provider_credentials?model_provider=${encodeURIComponent(
+  const auth = await readUsableCloudAuth(args.cloudUrl);
+  if (!auth) return false;
+  const client = cloudCredentialDeps.createCloudApiClient(auth, args.cloudUrl);
+  const path = `/api/v1/users/me/provider_credentials?model_provider=${encodeURIComponent(
     deriveModelProvider(args.persona)
   )}`;
-  const res = await fetch(url, {
+  const res = await client.fetch(path, {
     method: 'GET',
-    headers: {
-      authorization: `Bearer ${args.token}`,
-      'user-agent': USER_AGENT
-    }
+    headers: { 'user-agent': USER_AGENT }
   });
   if (res.status === 404 || res.status === 405) return false;
   if (res.status === 401) {
@@ -363,25 +402,15 @@ async function ensureHarnessOauth(args: {
     throw new Error(`cloud: ${args.persona.harness} credentials are required for deploy`);
   }
   const modelProvider = deriveModelProvider(args.persona);
-  const startUrl = `${args.cloudUrl}/api/v1/users/me/provider_credentials/auth-session`;
-  const body = await requestJsonWithRetry<Record<string, unknown>>(
-    startUrl,
-    {
-      method: 'POST',
-      headers: jsonHeaders(args.token),
-      body: JSON.stringify({
-        model_provider: modelProvider,
-        provider: args.persona.harness,
-        language: 'typescript'
-      })
-    },
-    { action: 'cloud harness OAuth start' }
-  );
-  const connectUrl = readFirstString(body, ['connectLink', 'authUrl', 'url', 'sandboxUrl']);
-  if (connectUrl) {
-    args.io.info(`cloud: open ${connectUrl} to finish ${args.persona.harness} OAuth`);
-    tryOpenBrowser(connectUrl);
-  }
+  await cloudCredentialDeps.connectProvider({
+    provider: modelProvider,
+    apiUrl: args.cloudUrl,
+    language: 'typescript',
+    io: {
+      log: (...parts: unknown[]) => args.io.info(parts.map(String).join(' ')),
+      error: (...parts: unknown[]) => args.io.error(parts.map(String).join(' '))
+    }
+  });
   await pollUntil(
     () => isHarnessOauthConnected(args),
     `timed out waiting for ${args.persona.harness} OAuth credentials`
@@ -658,8 +687,26 @@ function readPersonaCloudDeployUrl(persona: PersonaSpec): string | undefined {
 
 function normalizeCloudUrl(url: string): string {
   const trimmed = url.trim();
-  if (!trimmed) return DEFAULT_CLOUD_URL;
+  if (!trimmed) return normalizeCloudUrl(defaultApiUrl());
   return trimmed.replace(/\/+$/, '');
+}
+
+async function readUsableCloudAuth(apiUrl: string): Promise<StoredAuth | null> {
+  let auth = await cloudCredentialDeps.readStoredAuth().catch(() => null);
+  if (!auth) return null;
+  if (isAuthExpired(auth.accessTokenExpiresAt)) {
+    auth = await cloudCredentialDeps.refreshStoredAuth(auth).catch(() => null);
+  }
+  if (!auth) return null;
+  return {
+    ...auth,
+    apiUrl
+  };
+}
+
+function isAuthExpired(expiresAt: string): boolean {
+  const millis = Date.parse(expiresAt);
+  return Number.isNaN(millis) || millis <= Date.now() + 60_000;
 }
 
 function readInputsOverride(): Record<string, string> | undefined {
@@ -783,20 +830,6 @@ function emitLog(args: {
 }, line: string): void {
   args.onLog?.(line);
   args.io.info(line);
-}
-
-function tryOpenBrowser(url: string): void {
-  const command = platform() === 'darwin'
-    ? 'open'
-    : platform() === 'win32'
-      ? 'cmd'
-      : 'xdg-open';
-  const args = platform() === 'win32' ? ['/c', 'start', '', url] : [url];
-  const child = spawn(command, args, { stdio: 'ignore', detached: true });
-  child.on('error', () => {
-    // URL is printed; browser launch is best-effort.
-  });
-  child.unref();
 }
 
 function pollTimeoutMs(): number {

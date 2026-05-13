@@ -2,7 +2,7 @@
   "id": "notion-essay-pr",
   "version": "1.0.0",
   "intent": "documentation",
-  "tags": ["documentation", "release"],
+  "tags": ["proactive", "notion", "github"],
   "description": "Listens for new Notion pages and drafts a GitHub pull request with a markdown essay.",
   "harness": "claude",
   "model": "claude-sonnet-4-6",

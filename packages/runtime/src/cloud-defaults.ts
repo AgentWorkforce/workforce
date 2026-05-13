@@ -1,0 +1,534 @@
+import { spawn } from 'node:child_process';
+import { constants } from 'node:fs';
+import { accessSync, statSync } from 'node:fs';
+import { access, mkdir, readFile, stat, writeFile } from 'node:fs/promises';
+import path from 'node:path';
+import {
+  buildNonInteractiveSpec,
+  renderPersonaInputs,
+  resolveMcpServersLenient,
+  resolvePersonaInputs,
+  resolveStringMapLenient,
+  type PersonaSpec
+} from '@agentworkforce/persona-kit';
+import { createGithubClient } from './clients/github.js';
+import type {
+  FilesContext,
+  HarnessRunArgs,
+  HarnessRunResult,
+  HarnessUsage,
+  SandboxContext,
+  WorkforceAgentContext,
+  WorkforceCtx,
+  WorkforceDeploymentContext
+} from './types.js';
+
+type AgentInputValue = string | number | boolean | null | undefined;
+
+interface AgentRowContext extends WorkforceAgentContext {
+  input_values?: Record<string, AgentInputValue>;
+  inputValues?: Record<string, AgentInputValue>;
+}
+
+export interface CloudDefaultOptions {
+  persona: PersonaSpec;
+  agent: AgentRowContext;
+  deployment: WorkforceDeploymentContext;
+  workspaceId: string;
+  log: WorkforceCtx['log'];
+  env?: NodeJS.ProcessEnv;
+}
+
+export interface CloudRuntimeDefaults {
+  sandbox: SandboxContext;
+  files: FilesContext;
+  integrations?: Record<string, unknown>;
+  harnessRunner: (args: HarnessRunArgs) => Promise<HarnessRunResult>;
+}
+
+export function createCloudRuntimeDefaults(options: CloudDefaultOptions): CloudRuntimeDefaults {
+  const env = options.env ?? process.env;
+  const root = resolveCloudWorkspaceRoot(env);
+  const sandbox = createProcessSandbox(root, env);
+  const files = filesFromSandbox(sandbox);
+  const integrations = createDefaultIntegrations({
+    persona: options.persona,
+    workspaceId: options.workspaceId,
+    workspaceRoot: root,
+    env
+  });
+  return {
+    sandbox,
+    files,
+    ...(integrations ? { integrations } : {}),
+    harnessRunner: createProcessHarnessRunner({
+      ...options,
+      workspaceRoot: root,
+      env
+    })
+  };
+}
+
+function resolveCloudWorkspaceRoot(env: NodeJS.ProcessEnv): string {
+  const configured = firstNonEmpty(
+    env.WORKFORCE_SANDBOX_ROOT,
+    env.WORKFORCE_WORKSPACE_DIR,
+    env.RELAYFILE_MOUNT_ROOT,
+    env.RELAYFILE_ROOT
+  );
+  if (configured) return path.resolve(configured);
+  return canAccessSync('/workspace') ? '/workspace' : process.cwd();
+}
+
+function canAccessSync(candidate: string): boolean {
+  try {
+    accessSync(candidate, constants.R_OK | constants.W_OK);
+    return statSync(candidate).isDirectory();
+  } catch {
+    return false;
+  }
+}
+
+function createProcessSandbox(root: string, env: NodeJS.ProcessEnv): SandboxContext {
+  const cwd = path.resolve(root);
+  return {
+    cwd,
+    async exec(cmd, opts) {
+      const execCwd = resolveWorkspacePath(cwd, opts?.cwd ?? cwd);
+      await assertDirectory(execCwd);
+      const startedAt = Date.now();
+      const result = await spawnAndCapture({
+        bin: process.platform === 'win32' ? 'cmd.exe' : '/bin/sh',
+        args: process.platform === 'win32' ? ['/d', '/s', '/c', cmd] : ['-lc', cmd],
+        cwd: execCwd,
+        env: { ...env, ...(opts?.env ?? {}) },
+        timeoutMs: opts?.timeoutMs
+      });
+      return {
+        output: result.output || result.stderr,
+        exitCode: result.exitCode
+      };
+    },
+    async readFile(filePath) {
+      return readFile(resolveWorkspacePath(cwd, filePath), 'utf8');
+    },
+    async writeFile(filePath, contents) {
+      const target = resolveWorkspacePath(cwd, filePath);
+      await mkdir(path.dirname(target), { recursive: true });
+      await writeFile(target, contents, 'utf8');
+    }
+  };
+}
+
+function filesFromSandbox(sandbox: SandboxContext): FilesContext {
+  return {
+    read(path) {
+      return sandbox.readFile(path);
+    },
+    write(path, contents) {
+      return sandbox.writeFile(path, contents);
+    }
+  };
+}
+
+function createDefaultIntegrations(args: {
+  persona: PersonaSpec;
+  workspaceId: string;
+  workspaceRoot: string;
+  env: NodeJS.ProcessEnv;
+}): Record<string, unknown> | undefined {
+  const integrations: Record<string, unknown> = {};
+  if (args.persona.integrations?.github) {
+    integrations.github = createGithubClient({
+      relayfileMountRoot: firstNonEmpty(args.env.RELAYFILE_MOUNT_ROOT, args.env.RELAYFILE_ROOT) ?? args.workspaceRoot,
+      workspaceCwd: args.workspaceRoot,
+      workspaceId: args.workspaceId,
+      writebackTimeoutMs: numberFromEnv(args.env.WORKFORCE_RELAYFILE_WRITEBACK_TIMEOUT_MS),
+      writebackPollMs: numberFromEnv(args.env.WORKFORCE_RELAYFILE_WRITEBACK_POLL_MS),
+      connectionId: args.env.WORKFORCE_INTEGRATION_GITHUB_CONNECTION_ID,
+      relayfileBaseUrl: args.env.RELAYFILE_BASE_URL,
+      relayfileApiToken: args.env.RELAYFILE_TOKEN,
+      cloudApiToken: firstNonEmpty(args.env.WORKFORCE_AGENT_TOKEN, args.env.WORKFORCE_WORKSPACE_TOKEN)
+    });
+  }
+  return Object.keys(integrations).length > 0 ? integrations : undefined;
+}
+
+function createProcessHarnessRunner(args: CloudDefaultOptions & {
+  workspaceRoot: string;
+  env: NodeJS.ProcessEnv;
+}): (run: HarnessRunArgs) => Promise<HarnessRunResult> {
+  return async (run) => {
+    const inputValues = resolveAgentInputValues(args.agent);
+    const inputResolution = resolvePersonaInputs(args.persona.inputs, inputValues, args.env);
+    const callerEnv = { ...args.env, ...inputResolution.values };
+    const envResolution = resolveStringMapLenient(args.persona.env, callerEnv, 'env');
+    const mcpResolution = resolveMcpServersLenient(args.persona.mcpServers, callerEnv);
+    for (const warning of [
+      ...envResolution.dropped.map((drop) => `${drop.field} dropped (env var ${drop.ref} is not set)`),
+      ...mcpResolution.dropped.map((drop) => `${drop.field} dropped (env var ${drop.ref} is not set)`),
+      ...mcpResolution.droppedServers.map((drop) =>
+        `mcpServers.${drop.name} dropped entirely (required refs missing: ${drop.refs.join(', ')})`
+      )
+    ]) {
+      args.log('warn', 'harness.config.dropped', { warning });
+    }
+
+    const renderedSystemPrompt = renderPersonaInputs(args.persona.systemPrompt, inputResolution.values);
+    const cwd = resolveWorkspacePath(args.workspaceRoot, run.cwd ?? args.workspaceRoot);
+    await assertDirectory(cwd);
+    await materializeSidecar({
+      persona: args.persona,
+      inputValues: inputResolution.values,
+      cwd,
+      log: args.log
+    });
+    const task = run.prompt;
+    const spec = buildNonInteractiveSpec({
+      harness: args.persona.harness,
+      personaId: args.persona.id,
+      model: args.persona.model,
+      systemPrompt: renderedSystemPrompt,
+      harnessSettings: args.persona.harnessSettings,
+      mcpServers: mcpResolution.servers,
+      permissions: args.persona.permissions,
+      task,
+      name: args.persona.id,
+      workingDirectory: cwd
+    });
+    for (const warning of spec.warnings) {
+      args.log('warn', 'harness.spec.warning', { warning });
+    }
+    for (const file of spec.configFiles) {
+      await writeWorkspaceRelativeFile(cwd, file.path, file.contents);
+    }
+    const startedAt = Date.now();
+    const childEnv = {
+      ...callerEnv,
+      ...(envResolution.value ?? {}),
+      ...inputResolution.values,
+      ...(run.inputs ?? {}),
+      ...(run.env ?? {}),
+      WORKFORCE_PERSONA_ID: args.persona.id,
+      WORKFORCE_AGENT_ID: args.agent.id,
+      WORKFORCE_DEPLOYMENT_ID: args.deployment.id,
+      WORKFORCE_WORKSPACE_ID: args.workspaceId
+    };
+    const result = await spawnAndCapture({
+      bin: spec.bin,
+      args: [...spec.args],
+      cwd,
+      env: childEnv,
+      timeoutMs: args.persona.harnessSettings.timeoutSeconds
+        ? args.persona.harnessSettings.timeoutSeconds * 1000
+        : undefined
+    });
+    const parsed = extractUsage(result.output, result.stderr);
+    const harnessResult: HarnessRunResult = {
+      output: parsed.output.trimEnd(),
+      exitCode: result.exitCode,
+      durationMs: Date.now() - startedAt,
+      ...(parsed.usage ? { usage: parsed.usage } : {})
+    };
+    await reportHarnessUsage({
+      result: harnessResult,
+      persona: args.persona,
+      agent: args.agent,
+      deployment: args.deployment,
+      workspaceId: args.workspaceId,
+      env: args.env,
+      log: args.log
+    });
+    return harnessResult;
+  };
+}
+
+async function materializeSidecar(args: {
+  persona: PersonaSpec;
+  inputValues: Record<string, string>;
+  cwd: string;
+  log: WorkforceCtx['log'];
+}): Promise<void> {
+  const sidecar = sidecarForPersona(args.persona, args.inputValues);
+  if (!sidecar) return;
+  const target = resolveWorkspacePath(args.cwd, sidecar.file);
+  let body = sidecar.content;
+  if (sidecar.mode === 'extend') {
+    try {
+      const existing = await readFile(target, 'utf8');
+      body = `${existing}\n\n---\n\n${sidecar.content}`;
+    } catch (err) {
+      if (!isNoEntry(err)) throw err;
+    }
+  }
+  await writeWorkspaceRelativeFile(args.cwd, sidecar.file, body.endsWith('\n') ? body : `${body}\n`);
+  args.log('debug', 'harness.sidecar.materialized', { file: sidecar.file, mode: sidecar.mode });
+}
+
+function sidecarForPersona(
+  persona: PersonaSpec,
+  inputValues: Record<string, string>
+): { file: 'CLAUDE.md' | 'AGENTS.md'; content: string; mode: 'overwrite' | 'extend' } | undefined {
+  if (persona.harness === 'claude' && persona.claudeMdContent) {
+    return {
+      file: 'CLAUDE.md',
+      content: renderPersonaInputs(persona.claudeMdContent, inputValues),
+      mode: persona.claudeMdMode ?? 'overwrite'
+    };
+  }
+  if ((persona.harness === 'codex' || persona.harness === 'opencode') && persona.agentsMdContent) {
+    return {
+      file: 'AGENTS.md',
+      content: renderPersonaInputs(persona.agentsMdContent, inputValues),
+      mode: persona.agentsMdMode ?? 'overwrite'
+    };
+  }
+  return undefined;
+}
+
+async function spawnAndCapture(args: {
+  bin: string;
+  args: string[];
+  cwd: string;
+  env: NodeJS.ProcessEnv;
+  timeoutMs?: number;
+}): Promise<{ output: string; stderr: string; exitCode: number }> {
+  return new Promise((resolve) => {
+    const child = spawn(args.bin, args.args, {
+      cwd: args.cwd,
+      env: args.env,
+      stdio: ['ignore', 'pipe', 'pipe'],
+      shell: false
+    });
+    let stdout = '';
+    let stderr = '';
+    let forceKillTimeout: NodeJS.Timeout | undefined;
+    child.stdout?.setEncoding('utf8');
+    child.stderr?.setEncoding('utf8');
+    child.stdout?.on('data', (chunk: string) => {
+      stdout += chunk;
+    });
+    child.stderr?.on('data', (chunk: string) => {
+      stderr += chunk;
+    });
+    const timeout =
+      args.timeoutMs !== undefined
+        ? setTimeout(() => {
+            child.kill('SIGTERM');
+            forceKillTimeout = setTimeout(() => child.kill('SIGKILL'), 1000);
+          }, args.timeoutMs)
+        : undefined;
+    const clearTimers = () => {
+      if (timeout) clearTimeout(timeout);
+      if (forceKillTimeout) clearTimeout(forceKillTimeout);
+    };
+    child.on('error', (err) => {
+      clearTimers();
+      resolve({ output: stdout, stderr: `${stderr}${err.message}\n`, exitCode: 1 });
+    });
+    child.on('close', (code, signal) => {
+      clearTimers();
+      resolve({
+        output: stdout,
+        stderr,
+        exitCode: typeof code === 'number' ? code : signal ? signalExitCode(signal) : 1
+      });
+    });
+  });
+}
+
+function signalExitCode(signal: NodeJS.Signals): number {
+  const code = signal.startsWith('SIG') ? signalCode(signal.slice(3)) : undefined;
+  return code ? 128 + code : 1;
+}
+
+function signalCode(name: string): number | undefined {
+  const signals: Record<string, number> = {
+    HUP: 1,
+    INT: 2,
+    QUIT: 3,
+    ILL: 4,
+    TRAP: 5,
+    ABRT: 6,
+    BUS: 7,
+    FPE: 8,
+    KILL: 9,
+    USR1: 10,
+    SEGV: 11,
+    USR2: 12,
+    PIPE: 13,
+    ALRM: 14,
+    TERM: 15
+  };
+  return signals[name];
+}
+
+function extractUsage(output: string, stderr: string): { output: string; usage?: HarnessUsage } {
+  let usage: HarnessUsage | undefined;
+  const cleaned = output
+    .split(/\r?\n/)
+    .filter((line) => {
+      const parsed = parseUsageLine(line);
+      if (parsed) {
+        usage = parsed;
+        return false;
+      }
+      return true;
+    })
+    .join('\n');
+  if (!usage) {
+    for (const line of stderr.split(/\r?\n/)) {
+      const parsed = parseUsageLine(line);
+      if (parsed) {
+        usage = parsed;
+        break;
+      }
+    }
+  }
+  return { output: cleaned, ...(usage ? { usage } : {}) };
+}
+
+function parseUsageLine(line: string): HarnessUsage | undefined {
+  const trimmed = line.trim();
+  const raw = trimmed.startsWith('WORKFORCE_USAGE_JSON=')
+    ? trimmed.slice('WORKFORCE_USAGE_JSON='.length)
+    : trimmed.startsWith('__WORKFORCE_USAGE__=')
+      ? trimmed.slice('__WORKFORCE_USAGE__='.length)
+      : undefined;
+  if (!raw) return undefined;
+  try {
+    return normalizeUsage(JSON.parse(raw));
+  } catch {
+    return undefined;
+  }
+}
+
+function normalizeUsage(value: unknown): HarnessUsage {
+  if (!isRecord(value)) return { raw: value };
+  const inputTokens = finiteNumber(value.inputTokens ?? value.input_tokens ?? value.promptTokens ?? value.prompt_tokens);
+  const outputTokens = finiteNumber(value.outputTokens ?? value.output_tokens ?? value.completionTokens ?? value.completion_tokens);
+  const totalTokens = finiteNumber(value.totalTokens ?? value.total_tokens);
+  const costUsd = finiteNumber(value.costUsd ?? value.cost_usd);
+  return {
+    ...(inputTokens !== undefined ? { inputTokens } : {}),
+    ...(outputTokens !== undefined ? { outputTokens } : {}),
+    ...(totalTokens !== undefined ? { totalTokens } : {}),
+    ...(typeof value.model === 'string' ? { model: value.model } : {}),
+    ...(typeof value.provider === 'string' ? { provider: value.provider } : {}),
+    ...(costUsd !== undefined ? { costUsd } : {}),
+    raw: value
+  };
+}
+
+async function reportHarnessUsage(args: {
+  result: HarnessRunResult;
+  persona: PersonaSpec;
+  agent: WorkforceAgentContext;
+  deployment: WorkforceDeploymentContext;
+  workspaceId: string;
+  env: NodeJS.ProcessEnv;
+  log: WorkforceCtx['log'];
+}): Promise<void> {
+  const usageUrl = firstNonEmpty(args.env.WORKFORCE_USAGE_URL);
+  const token = firstNonEmpty(args.env.WORKFORCE_DEPLOYMENT_TOKEN);
+  if (!usageUrl || !token || !args.result.usage) return;
+  try {
+    const response = await fetch(usageUrl, {
+      method: 'POST',
+      headers: {
+        authorization: `Bearer ${token}`,
+        'content-type': 'application/json'
+      },
+      body: JSON.stringify({
+        workspaceId: args.workspaceId,
+        deploymentId: args.deployment.id,
+        agentId: args.agent.id,
+        personaId: args.persona.id,
+        harness: args.persona.harness,
+        model: args.result.usage.model ?? args.persona.model,
+        durationMs: args.result.durationMs,
+        exitCode: args.result.exitCode,
+        usage: args.result.usage
+      })
+    });
+    if (!response.ok) {
+      args.log('warn', 'harness.usage.report.failed', { status: response.status });
+    }
+  } catch (err) {
+    args.log('warn', 'harness.usage.report.failed', {
+      error: err instanceof Error ? err.message : String(err)
+    });
+  }
+}
+
+function resolveWorkspacePath(root: string, inputPath: string): string {
+  const normalizedRoot = path.resolve(root);
+  const candidate = inputPath.startsWith(normalizedRoot)
+    ? path.resolve(inputPath)
+    : inputPath === '/workspace'
+      ? normalizedRoot
+      : inputPath.startsWith('/workspace/')
+        ? path.resolve(normalizedRoot, inputPath.slice('/workspace/'.length))
+        : inputPath.startsWith('/')
+          ? path.resolve(normalizedRoot, inputPath.slice(1))
+          : path.resolve(normalizedRoot, inputPath);
+  const relative = path.relative(normalizedRoot, candidate);
+  if (relative.startsWith('..') || path.isAbsolute(relative)) {
+    throw new Error(`sandbox path escapes workspace root: ${inputPath}`);
+  }
+  return candidate;
+}
+
+async function writeWorkspaceRelativeFile(root: string, relativePath: string, contents: string): Promise<void> {
+  const target = resolveWorkspacePath(root, relativePath);
+  await mkdir(path.dirname(target), { recursive: true });
+  await writeFile(target, contents, 'utf8');
+}
+
+async function assertDirectory(dir: string): Promise<void> {
+  const info = await stat(dir).catch(async (err) => {
+    if (isNoEntry(err)) {
+      await mkdir(dir, { recursive: true });
+      return stat(dir);
+    }
+    throw err;
+  });
+  if (!info.isDirectory()) {
+    throw new Error(`sandbox cwd is not a directory: ${dir}`);
+  }
+  await access(dir, constants.R_OK | constants.W_OK);
+}
+
+function resolveAgentInputValues(agent: AgentRowContext): Record<string, AgentInputValue> {
+  return {
+    ...(agent.inputValues ?? {}),
+    ...(agent.input_values ?? {})
+  };
+}
+
+function finiteNumber(value: unknown): number | undefined {
+  const number = typeof value === 'number' ? value : typeof value === 'string' ? Number(value) : NaN;
+  return Number.isFinite(number) ? number : undefined;
+}
+
+function numberFromEnv(value: string | undefined): number | undefined {
+  if (!value?.trim()) return undefined;
+  const parsed = Number(value);
+  return Number.isFinite(parsed) && parsed >= 0 ? parsed : undefined;
+}
+
+function firstNonEmpty(...values: Array<string | undefined>): string | undefined {
+  for (const value of values) {
+    const trimmed = value?.trim();
+    if (trimmed) return trimmed;
+  }
+  return undefined;
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === 'object' && value !== null && !Array.isArray(value);
+}
+
+function isNoEntry(error: unknown): boolean {
+  return isRecord(error) && (error.code === 'ENOENT' || error.code === 'ENOTDIR');
+}

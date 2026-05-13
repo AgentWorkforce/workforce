@@ -1,5 +1,6 @@
 import path from 'node:path';
 import { mkdir } from 'node:fs/promises';
+import { defaultApiUrl } from '@agent-relay/cloud';
 import { bundleStager } from './bundle.js';
 import {
   connectIntegrations,
@@ -242,7 +243,7 @@ function defaultIntegrationResolver(args: {
       args.cloudUrl
         ?? process.env.WORKFORCE_DEPLOY_CLOUD_URL
         ?? process.env.WORKFORCE_CLOUD_URL
-        ?? 'https://agentrelay.com'
+        ?? defaultApiUrl()
     ),
     workspaceId: args.workspace,
     workspaceToken: args.token,
@@ -252,7 +253,7 @@ function defaultIntegrationResolver(args: {
 
 function normalizeCloudUrl(url: string): string {
   const trimmed = url.trim();
-  return trimmed ? trimmed.replace(/\/+$/, '') : 'https://agentrelay.com';
+  return trimmed ? trimmed.replace(/\/+$/, '') : defaultApiUrl().replace(/\/+$/, '');
 }
 
 function formatBytes(bytes: number): string {

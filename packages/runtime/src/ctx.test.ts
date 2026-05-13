@@ -277,6 +277,45 @@ test('ctx.memory.recall falls back to [] on network failure', async () => {
   );
 });
 
+test('ctx.memory logs a bounded timeout when cloud memory fetch aborts', async () => {
+  await withEnv(
+    {
+      WORKFORCE_CLOUD_URL: 'https://cloud.example.test',
+      WORKFORCE_AGENT_TOKEN: 'agent-token'
+    },
+    async () => {
+      const logs: Array<{ level: string; message: string; attrs?: Record<string, unknown> }> = [];
+      await withFetch(async (_url, init) => {
+        init?.signal?.dispatchEvent(new Event('abort'));
+        const err = new Error('aborted');
+        err.name = 'AbortError';
+        throw err;
+      }, async () => {
+        const ctx = buildCtx({
+          persona: { ...basePersona, memory: true },
+          workspaceId: 'ws-test',
+          sandbox: stubSandbox,
+          harnessRunner: async () => ({ output: '', exitCode: 0, durationMs: 0 }),
+          log: (level, message, attrs) => logs.push({ level, message, attrs }),
+          agent: {
+            id: 'agent_123',
+            deployedName: 'docs-demo',
+            spawnedByAgentId: null
+          },
+          deployment: {
+            id: 'deployment_456',
+            triggerKind: 'inbox',
+            parentDeploymentId: null
+          }
+        });
+        assert.equal(await ctx.memory.save('anything'), undefined);
+      });
+      assert.equal(logs[0].message, 'memory.save.failed');
+      assert.match(String(logs[0].attrs?.error), /timeout after \d+ms/);
+    }
+  );
+});
+
 test('ctx.memory stays a safe no-op when cloud auth is absent', async () => {
   await withEnv(
     {

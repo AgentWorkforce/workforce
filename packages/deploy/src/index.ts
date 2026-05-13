@@ -30,7 +30,6 @@ export {
   clearStoredWorkspaceToken,
   loadActiveWorkspaceToken,
   loadWorkspaceToken,
-  loginWithBrowser,
   resolveWorkspaceToken,
   resolveWorkspaceTokenFromEnv,
   storeWorkspaceToken,

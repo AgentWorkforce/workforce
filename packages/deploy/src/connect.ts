@@ -86,15 +86,17 @@ export function relayfileIntegrationResolver(opts: {
   const apiUrl = opts.apiUrl.replace(/\/+$/, '');
 
   return {
-    async isConnected({ provider }) {
+    async isConnected({ workspace, provider }) {
+      const workspaceId = workspace || opts.workspaceId;
       const body = await requestJson(fetchImpl, `${apiUrl}/api/v1/workspaces/${encodeURIComponent(
-        opts.workspaceId
+        workspaceId
       )}/integrations`, opts.workspaceToken);
       return listHasConnectedProvider(body, provider);
     },
-    async connect({ provider }) {
+    async connect({ workspace, provider }) {
+      const workspaceId = workspace || opts.workspaceId;
       const session = await requestJson(fetchImpl, `${apiUrl}/api/v1/workspaces/${encodeURIComponent(
-        opts.workspaceId
+        workspaceId
       )}/integrations/connect-session`, opts.workspaceToken, {
         method: 'POST',
         body: JSON.stringify({ allowedIntegrations: [provider] })
@@ -117,7 +119,7 @@ export function relayfileIntegrationResolver(opts: {
       while (Date.now() < deadline) {
         await sleepImpl(opts.pollIntervalMs ?? 2_000);
         const statusUrl = new URL(`${apiUrl}/api/v1/workspaces/${encodeURIComponent(
-          opts.workspaceId
+          workspaceId
         )}/integrations/${encodeURIComponent(provider)}/status`);
         if (sessionId) statusUrl.searchParams.set('connectionId', sessionId);
         const status = await requestJson(fetchImpl, statusUrl.toString(), opts.workspaceToken);

@@ -65,6 +65,7 @@ const NOOP_MEMORY: MemoryContext = {
 };
 
 const DEFAULT_CLOUD_BASE_URL = 'https://agentrelay.com';
+const MEMORY_HTTP_TIMEOUT_MS = 15_000;
 
 const UNAVAILABLE_LLM: LlmContext = {
   async complete() {
@@ -241,7 +242,7 @@ function createCloudMemoryContext(args: {
   return {
     async save(content, opts) {
       try {
-        const response = await fetch(endpoint, {
+        const response = await fetchWithTimeout(endpoint, {
           method: 'POST',
           headers: {
             authorization: `Bearer ${args.agentToken}`,
@@ -261,7 +262,7 @@ function createCloudMemoryContext(args: {
         const body = await response.json().catch(() => ({})) as { id?: unknown };
         return typeof body.id === 'string' ? { id: body.id } : undefined;
       } catch (err) {
-        args.log('warn', 'memory.save.failed', { error: err instanceof Error ? err.message : String(err) });
+        args.log('warn', 'memory.save.failed', { error: memoryFetchErrorMessage(err) });
         return undefined;
       }
     },
@@ -272,7 +273,7 @@ function createCloudMemoryContext(args: {
         url.searchParams.set('query', query);
         if (opts?.limit !== undefined) url.searchParams.set('limit', String(opts.limit));
         if (opts?.tags?.length) url.searchParams.set('tags', opts.tags.join(','));
-        const response = await fetch(url, {
+        const response = await fetchWithTimeout(url, {
           headers: { authorization: `Bearer ${args.agentToken}` }
         });
         if (!response.ok) {
@@ -282,11 +283,30 @@ function createCloudMemoryContext(args: {
         const body = await response.json().catch(() => ({})) as { items?: unknown };
         return normalizeMemoryItems(body.items);
       } catch (err) {
-        args.log('warn', 'memory.recall.failed', { error: err instanceof Error ? err.message : String(err) });
+        args.log('warn', 'memory.recall.failed', { error: memoryFetchErrorMessage(err) });
         return [];
       }
     }
   };
+}
+
+async function fetchWithTimeout(input: URL | string, init: RequestInit): Promise<Response> {
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), MEMORY_HTTP_TIMEOUT_MS);
+  try {
+    return await fetch(input, { ...init, signal: controller.signal });
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
+function memoryFetchErrorMessage(error: unknown): string {
+  if (isAbortError(error)) return `timeout after ${MEMORY_HTTP_TIMEOUT_MS}ms`;
+  return error instanceof Error ? error.message : String(error);
+}
+
+function isAbortError(error: unknown): boolean {
+  return error instanceof Error && error.name === 'AbortError';
 }
 
 function memoryTtl(opts: Parameters<MemoryContext['save']>[1]): { ttlSeconds?: number } {

@@ -2,7 +2,7 @@ import path from 'node:path';
 import {
   CloudApiClient,
   clearStoredAuth,
-  defaultApiUrl as defaultAgentRelayApiUrl,
+  defaultApiUrl,
   ensureAuthenticated,
   issueWorkspaceToken,
   type StoredAuth
@@ -18,7 +18,44 @@ import {
 } from '@agentworkforce/deploy';
 import { BUILD_YOUR_OWN_RUNTIME_DOCS_URL, pickRuntime } from './runtime-picker.js';
 
-const DEFAULT_CLOUD_URL = 'https://agentrelay.com';
+type LoginApiClient = Pick<CloudApiClient, 'fetch'>;
+
+type DeployCommandDeps = {
+  ensureAuthenticated: typeof ensureAuthenticated;
+  issueWorkspaceToken: typeof issueWorkspaceToken;
+  clearStoredAuth: typeof clearStoredAuth;
+  clearStoredWorkspaceToken: typeof clearStoredWorkspaceToken;
+  writeStoredWorkspaceToken: typeof writeStoredWorkspaceToken;
+  createTerminalIO: typeof createTerminalIO;
+  createCloudApiClient(auth: StoredAuth, apiUrl: string): LoginApiClient;
+};
+
+const defaultDeployCommandDeps: DeployCommandDeps = {
+  ensureAuthenticated,
+  issueWorkspaceToken,
+  clearStoredAuth,
+  clearStoredWorkspaceToken,
+  writeStoredWorkspaceToken,
+  createTerminalIO,
+  createCloudApiClient(auth, apiUrl) {
+    return new CloudApiClient({
+      apiUrl,
+      accessToken: auth.accessToken,
+      refreshToken: auth.refreshToken,
+      accessTokenExpiresAt: auth.accessTokenExpiresAt
+    });
+  }
+};
+
+let deployCommandDeps = defaultDeployCommandDeps;
+
+export function configureDeployCommandForTest(overrides: Partial<DeployCommandDeps>): () => void {
+  const previous = deployCommandDeps;
+  deployCommandDeps = { ...deployCommandDeps, ...overrides };
+  return () => {
+    deployCommandDeps = previous;
+  };
+}
 
 /**
  * Argv parser + dispatcher for `agentworkforce deploy <persona-path> [flags]`.
@@ -89,24 +126,24 @@ export async function runLogin(args: readonly string[]): Promise<void> {
   }
 
   const opts = parseLoginArgs(args);
-  const io = createTerminalIO();
+  const io = deployCommandDeps.createTerminalIO();
   const cloudUrl = normalizeCloudUrl(
-    opts.cloudUrl ?? process.env.WORKFORCE_DEPLOY_CLOUD_URL ?? process.env.WORKFORCE_CLOUD_URL ?? defaultAgentRelayApiUrl()
+    opts.cloudUrl ?? process.env.WORKFORCE_DEPLOY_CLOUD_URL ?? process.env.WORKFORCE_CLOUD_URL ?? defaultApiUrl()
   );
 
   try {
-    const auth = await ensureAuthenticated(cloudUrl);
+    const auth = await deployCommandDeps.ensureAuthenticated(cloudUrl);
     const apiUrl = normalizeCloudUrl(auth.apiUrl || cloudUrl);
     const workspaces = await listWorkspacesForLogin(auth, apiUrl);
     const chosen = opts.workspace
       ?? await pickWorkspaceInteractive(workspaces, io);
-    const tokenResp = await issueWorkspaceToken(chosen, {
+    const tokenResp = await deployCommandDeps.issueWorkspaceToken(chosen, {
       apiUrl,
       name: 'agentworkforce-cli'
     });
     const token = readWorkspaceToken(tokenResp);
     const workspaceId = readWorkspaceId(tokenResp) ?? findWorkspace(workspaces, chosen)?.id ?? chosen;
-    await writeStoredWorkspaceToken({
+    await deployCommandDeps.writeStoredWorkspaceToken({
       workspace: chosen,
       workspaceSlug: findWorkspace(workspaces, chosen)?.slug ?? chosen,
       workspaceId,
@@ -130,8 +167,8 @@ export async function runLogout(args: readonly string[]): Promise<void> {
   }
   const opts = parseLogoutArgs(args);
   try {
-    await clearStoredAuth();
-    await clearStoredWorkspaceToken(opts.workspace);
+    await deployCommandDeps.clearStoredAuth();
+    await deployCommandDeps.clearStoredWorkspaceToken(opts.workspace);
     process.stdout.write('logged out\n');
     process.exit(0);
   } catch (err) {
@@ -376,12 +413,7 @@ type LoginWorkspace = {
 };
 
 async function listWorkspacesForLogin(auth: StoredAuth, apiUrl: string): Promise<LoginWorkspace[]> {
-  const client = new CloudApiClient({
-    apiUrl,
-    accessToken: auth.accessToken,
-    refreshToken: auth.refreshToken,
-    accessTokenExpiresAt: auth.accessTokenExpiresAt
-  });
+  const client = deployCommandDeps.createCloudApiClient(auth, apiUrl);
   const res = await client.fetch('/api/v1/workspaces');
   if (res.ok) {
     return parseWorkspaceList(await res.json().catch(() => null));
@@ -483,7 +515,7 @@ function readString(record: Record<string, unknown>, key: string): string | unde
 
 function normalizeCloudUrl(url: string): string {
   const trimmed = url.trim();
-  return trimmed ? trimmed.replace(/\/+$/, '') : DEFAULT_CLOUD_URL;
+  return trimmed ? trimmed.replace(/\/+$/, '') : defaultApiUrl().replace(/\/+$/, '');
 }
 
 function die(message: string): never {

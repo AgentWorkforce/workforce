@@ -1,6 +1,6 @@
 # Deploy-v1 Credentials + Runtime Checklist
 
-Source spec: `/Users/khaliqgant/Projects/AgentWorkforce/workforce/docs/plans/deploy-v1-credentials-and-runtime-spec.md`
+Source spec: `docs/plans/deploy-v1-credentials-and-runtime-spec.md`
 
 ## Acceptance
 
@@ -26,7 +26,7 @@ Source spec: `/Users/khaliqgant/Projects/AgentWorkforce/workforce/docs/plans/dep
 - [x] Add `provider_credentials.label`.
 - [x] Backfill `model_provider` from `harness`.
 - [x] Add `provider_credentials_auth_type_check`.
-- [x] Add `provider_credentials_unique_per_user`.
+- [x] Add provider credential uniqueness for user, workspace, provider, auth type, label, and key fingerprint.
 - [x] Create `harness_spend_events`.
 - [x] Add spend-event indexes by credential/time and user/time.
 - [x] Rename `cli_auth_sessions` to `cloud_cli_bootstrap_sessions`.
@@ -49,7 +49,7 @@ Source spec: `/Users/khaliqgant/Projects/AgentWorkforce/workforce/docs/plans/dep
 
 - [x] Replace `runLogin` env-var stub with `@agent-relay/cloud` auth flow.
 - [x] Parse login options including `--cloud-url` and `--workspace`.
-- [x] Call `ensureAuthenticated({ apiUrl, openBrowser: true })`.
+- [x] Call the published `@agent-relay/cloud` `ensureAuthenticated` SDK entrypoint for PKCE login.
 - [x] List workspaces with `CloudApiClient`.
 - [x] Pick the single workspace automatically.
 - [x] Add interactive workspace picker when multiple workspaces exist.
@@ -257,4 +257,3 @@ Source spec: `/Users/khaliqgant/Projects/AgentWorkforce/workforce/docs/plans/dep
 - [x] Preserve memory outage fallback behavior.
 - [x] Ensure keychain first-write UX errors are actionable.
 - [x] Verify Notion and GitHub not-connected errors are covered.
-

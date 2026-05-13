@@ -74,6 +74,18 @@ export interface HarnessRunResult {
   exitCode: number;
   /** Wall-clock duration in milliseconds. */
   durationMs: number;
+  /** Optional usage metadata emitted by a harness or launcher. */
+  usage?: HarnessUsage;
+}
+
+export interface HarnessUsage {
+  inputTokens?: number;
+  outputTokens?: number;
+  totalTokens?: number;
+  model?: string;
+  provider?: string;
+  costUsd?: number;
+  raw?: unknown;
 }
 
 export interface HarnessRunArgs {

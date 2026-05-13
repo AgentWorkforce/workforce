@@ -6,7 +6,11 @@ import path from 'node:path';
 import type { PersonaSpec } from '@agentworkforce/persona-kit';
 import { createBufferedIO } from '../io.js';
 import type { BundleResult, ModeLaunchInput } from '../types.js';
-import { cloudLauncher, type CloudRunHandle } from './cloud.js';
+import {
+  cloudLauncher,
+  configureCloudCredentialDepsForTest,
+  type CloudRunHandle
+} from './cloud.js';
 
 type FetchCall = {
   url: string;
@@ -214,7 +218,7 @@ test('cloud URL precedence is flag env, cloud env, persona deployUrl, then defau
   );
   assert.equal(
     await deployedUrl({}),
-    'https://agentrelay.com/api/v1/workspaces/ws-test/deployments'
+    'https://agentrelay.com/cloud/api/v1/workspaces/ws-test/deployments'
   );
 });
 
@@ -264,6 +268,23 @@ test('cloud harness plan and BYOK save provider credentials through the cloud co
 });
 
 test('cloud harness OAuth uses provider_credentials readiness and honors no-prompt failure', async () => {
+  const restoreDeps = configureCloudCredentialDepsForTest({
+    readStoredAuth: async () => ({
+      apiUrl: 'https://cloud.example.test',
+      accessToken: 'access',
+      refreshToken: 'refresh',
+      accessTokenExpiresAt: '2999-01-01T00:00:00.000Z'
+    }),
+    createCloudApiClient() {
+      return {
+        async fetch(pathname: string, init?: RequestInit) {
+          assert.equal(pathname, '/api/v1/users/me/provider_credentials?model_provider=openai');
+          assert.equal(init?.method, 'GET');
+          return okJson({});
+        }
+      };
+    }
+  });
   await assert.rejects(
     launch({
       defaultPlanCredential: false,
@@ -272,36 +293,45 @@ test('cloud harness OAuth uses provider_credentials readiness and honors no-prom
         WORKFORCE_DEPLOY_NO_PROMPT: '1'
       },
       input: { harnessSource: 'oauth' },
-      fetch(url, init) {
-        assert.equal(url, 'https://cloud.example.test/api/v1/users/me/provider_credentials?model_provider=openai');
-        assert.equal(init?.method, 'GET');
-        return okJson({});
+      fetch(url) {
+        throw new Error(`unexpected URL ${url}`);
       }
     }),
     /OAuth credentials are not connected/
-  );
+  ).finally(restoreDeps);
 });
 
 test('cloud harness OAuth starts auth and polls until provider credentials are connected', async () => {
   let credentialChecks = 0;
+  const connected: string[] = [];
+  const restoreDeps = configureCloudCredentialDepsForTest({
+    readStoredAuth: async () => ({
+      apiUrl: 'https://cloud.example.test',
+      accessToken: 'access',
+      refreshToken: 'refresh',
+      accessTokenExpiresAt: '2999-01-01T00:00:00.000Z'
+    }),
+    connectProvider: async (options: { provider: string }) => {
+      connected.push(options.provider);
+      return { provider: options.provider, success: true };
+    },
+    createCloudApiClient() {
+      return {
+        async fetch(pathname: string, init?: RequestInit) {
+          if (pathname.endsWith('/provider_credentials?model_provider=openai')) {
+            credentialChecks += 1;
+            assert.equal(init?.method, 'GET');
+            return okJson(credentialChecks < 3 ? {} : { id: 'cred-oauth', status: 'connected' });
+          }
+          throw new Error(`unexpected path ${pathname}`);
+        }
+      };
+    }
+  });
   const io = createBufferedIO();
   io.scriptConfirmations([true]);
   const { bundle, cleanup } = await withBundle();
-  const fetchMock = installFetch((url, init) => {
-    if (url.endsWith('/provider_credentials?model_provider=openai')) {
-      credentialChecks += 1;
-      assert.equal(init?.method, 'GET');
-      return okJson(credentialChecks < 3 ? {} : { id: 'cred-oauth', status: 'connected' });
-    }
-    if (url.endsWith('/api/v1/users/me/provider_credentials/auth-session')) {
-      assert.equal(init?.method, 'POST');
-      assert.deepEqual(JSON.parse(String(init?.body)), {
-        model_provider: 'openai',
-        provider: 'codex',
-        language: 'typescript'
-      });
-      return okJson({ authUrl: 'https://cloud.example.test/oauth/codex' });
-    }
+  const fetchMock = installFetch((url) => {
     if (url.endsWith('/agents?persona_slug=demo')) return okJson({ agents: [] });
     if (url.endsWith('/deployments')) {
       return okJson({ agentId: 'agent-oauth', deploymentId: 'dep-oauth', status: 'active' }, 201);
@@ -326,11 +356,12 @@ test('cloud harness OAuth starts auth and polls until provider credentials are c
     assert.equal(handle.id, 'agent-oauth');
   } finally {
     fetchMock.restore();
+    restoreDeps();
     await cleanup();
   }
 
   assert.equal(credentialChecks, 3);
-  assert.ok(io.messages.some((message) => message.message.includes('/oauth/codex')));
+  assert.deepEqual(connected, ['openai']);
 });
 
 test('cloud launcher maps 401 deploy responses to the workforce login guidance', async () => {

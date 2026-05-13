@@ -56,6 +56,9 @@ importers:
 
   packages/deploy:
     dependencies:
+      '@agent-relay/cloud':
+        specifier: ^6.0.17
+        version: 6.0.19
       '@agentworkforce/persona-kit':
         specifier: workspace:*
         version: link:../persona-kit
