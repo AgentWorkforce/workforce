@@ -5,7 +5,12 @@ type LinearIssueEvent = {
 };
 
 function inputDefault(ctx: Parameters<Parameters<typeof handler>[0]>[0], name: string): string {
-  const value = ctx.persona.inputs?.[name]?.default;
+  // Mirror `resolvePersonaInputs` precedence (packages/persona-kit/src/inputs.ts):
+  // explicit env var (spec.env ?? input name) wins over the static JSON default.
+  const spec = ctx.persona.inputs?.[name];
+  const envName = spec?.env ?? name;
+  const fromEnv = process.env[envName];
+  const value = (fromEnv !== undefined && fromEnv !== '' ? fromEnv : undefined) ?? spec?.default;
   if (!value) throw new Error(`${name} input is required`);
   return value;
 }
