@@ -45,7 +45,7 @@ function persona(overrides: Record<string, unknown> = {}): PersonaSpec {
     schedules: [{ name: 'daily', cron: '0 9 * * *' }],
     onEvent: './agent.ts',
     ...overrides
-  } as PersonaSpec;
+  } as unknown as PersonaSpec;
 }
 
 async function withBundle(): Promise<{ bundle: BundleResult; cleanup: () => Promise<void> }> {

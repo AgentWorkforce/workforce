@@ -6,7 +6,6 @@ import {
   CODEX_APPROVAL_POLICIES,
   CODEX_SANDBOX_MODES,
   HARNESS_VALUES,
-  PERSONA_TAGS,
   SIDECAR_MD_MODES,
   type CodexApprovalPolicy,
   type CodexSandboxMode,
@@ -423,15 +422,16 @@ function parseOverride(value: unknown, context: string): LocalPersonaOverride {
   if (raw.description !== undefined && typeof raw.description !== 'string') {
     throw new Error(`${context}.description must be a string if provided`);
   }
-  if (raw.tags !== undefined) {
-    if (!Array.isArray(raw.tags) || raw.tags.length === 0) {
-      throw new Error(`${context}.tags must be a non-empty array of tags if provided`);
+  if (raw.tags !== undefined && raw.tags !== null) {
+    if (!Array.isArray(raw.tags)) {
+      throw new Error(`${context}.tags must be an array of strings if provided`);
     }
     for (const [idx, tag] of raw.tags.entries()) {
-      if (!PERSONA_TAGS.includes(tag as PersonaTag)) {
-        throw new Error(
-          `${context}.tags[${idx}] must be one of: ${PERSONA_TAGS.join(', ')}`
-        );
+      if (typeof tag !== 'string' || !tag.trim()) {
+        throw new Error(`${context}.tags[${idx}] must be a non-empty string`);
+      }
+      if (tag.trim().length > 64) {
+        throw new Error(`${context}.tags[${idx}] must be ≤64 characters`);
       }
     }
   }
@@ -804,7 +804,8 @@ function standaloneSpecFromOverride(
   return {
     id: override.id,
     intent: override.intent,
-    tags: requireStandaloneField(override.tags, `${context}.tags`),
+    // Tags are optional per cloud#553 (denormalized catalog metadata).
+    ...(override.tags ? { tags: override.tags } : {}),
     description: requireStandaloneField(override.description, `${context}.description`),
     skills: override.skills ?? [],
     ...(inputs ? { inputs } : {}),
@@ -1009,10 +1010,11 @@ function mergeOverride(
   const claudeMdMode = override.claudeMdMode ?? base.claudeMdMode;
   const agentsMdMode = override.agentsMdMode ?? base.agentsMdMode;
 
+  const mergedTags = override.tags ?? base.tags;
   return {
     id: override.id,
     intent: base.intent,
-    tags: override.tags ?? base.tags,
+    ...(mergedTags ? { tags: mergedTags } : {}),
     description: override.description ?? base.description,
     skills: override.skills ?? base.skills,
     ...(inputs ? { inputs } : {}),

@@ -1,6 +1,11 @@
 import type { Harness, HarnessSkillTarget } from './types.js';
 
 export const HARNESS_VALUES = ['opencode', 'codex', 'claude'] as const;
+/**
+ * Suggested persona tags used by built-in personas. Tags are free-form
+ * (`tags text[]` in cloud#553) — this tuple is kept only as a UX hint for
+ * built-in catalog filtering. New personas may use any string.
+ */
 export const PERSONA_TAGS = [
   'planning',
   'implementation',

@@ -4,14 +4,18 @@ import type {
   HARNESS_VALUES,
   PERMISSION_MODES,
   PERSONA_INTENTS,
-  PERSONA_TAGS,
   SIDECAR_MD_MODES,
   SKILL_SOURCE_KINDS
 } from './constants.js';
 
 export type Harness = (typeof HARNESS_VALUES)[number];
 export type PersonaIntent = (typeof PERSONA_INTENTS)[number];
-export type PersonaTag = (typeof PERSONA_TAGS)[number];
+/**
+ * Persona tag. Denormalized catalog metadata (mirrors `tags text[]` in
+ * cloud#553) — free-form, not a closed enum. The legacy {@link PERSONA_TAGS}
+ * tuple is preserved only for back-compat hints in list/filter UIs.
+ */
+export type PersonaTag = string;
 export type CodexSandboxMode = (typeof CODEX_SANDBOX_MODES)[number];
 export type CodexApprovalPolicy = (typeof CODEX_APPROVAL_POLICIES)[number];
 export type SidecarMdMode = (typeof SIDECAR_MD_MODES)[number];
@@ -236,11 +240,14 @@ export interface PersonaSpec {
   id: string;
   intent: string;
   /**
-   * Free-form classification labels (from {@link PERSONA_TAGS}). Every persona
-   * has at least one; a persona may carry multiple tags when it spans concerns
-   * (e.g. `['testing', 'implementation']`).
+   * Free-form catalog labels mirroring `tags text[]` in cloud#553. Tags are
+   * denormalized metadata for catalog filtering — they are NOT a closed enum
+   * and do NOT overlap with {@link intent}. Authors are free to label personas
+   * with provider names, project codes, or workflow shapes
+   * (e.g. `['proactive', 'notion', 'github']`). Optional; omitted, `null`,
+   * and empty-array values are treated identically.
    */
-  tags: PersonaTag[];
+  tags?: readonly string[];
   description: string;
   skills: PersonaSkill[];
   /**

@@ -32,6 +32,13 @@ import type {
   SidecarMdMode
 } from './types.js';
 
+/**
+ * Max byte/char length for a single persona tag. Tags are denormalized
+ * catalog metadata (mirroring `tags text[]` in cloud#553); they should
+ * stay short enough to render in list/table UIs without truncation.
+ */
+const PERSONA_TAG_MAX_LEN = 64;
+
 export function isObject(value: unknown): value is Record<string, unknown> {
   return typeof value === 'object' && value !== null;
 }
@@ -44,28 +51,66 @@ export function isIntent(value: unknown): value is PersonaIntent {
   return typeof value === 'string' && PERSONA_INTENTS.includes(value as PersonaIntent);
 }
 
+/**
+ * Backwards-compat shim. Tags were briefly modeled as a closed enum (the
+ * intent enum, mistakenly); they are denormalized free-form catalog
+ * metadata per cloud#553's `tags text[]`. Kept exported only because
+ * earlier package versions surfaced this helper — every reachable string
+ * is a valid tag now.
+ *
+ * @deprecated Tags are free-form. Validate shape with {@link parseTags}.
+ */
 export function isTag(value: unknown): value is PersonaTag {
-  return typeof value === 'string' && PERSONA_TAGS.includes(value as PersonaTag);
+  return typeof value === 'string' && value.trim().length > 0;
 }
 
 export function isSidecarMode(value: unknown): value is SidecarMdMode {
   return typeof value === 'string' && SIDECAR_MD_MODES.includes(value as SidecarMdMode);
 }
 
-export function parseTags(value: unknown, context: string): PersonaTag[] {
-  if (!Array.isArray(value) || value.length === 0) {
-    throw new Error(`${context} must be a non-empty array of tags`);
+/**
+ * Parse the persona-level `tags` field. Tags are denormalized catalog
+ * metadata (mirroring `tags text[]` in cloud#553), not a closed enum —
+ * authors are free to label personas with provider names, intents, or
+ * project codes (`["proactive", "notion", "github"]`).
+ *
+ * Shape rules:
+ *  - `undefined` / `null` → `undefined` (tags are optional)
+ *  - `[]` → `undefined` (an empty array is the same as "no tags")
+ *  - otherwise must be a `string[]`; each entry must trim to a non-empty
+ *    string ≤ {@link PERSONA_TAG_MAX_LEN} chars
+ *  - entries are trimmed, deduped, and sorted for stable serialization
+ *
+ * Returns `readonly string[]` so callers can treat the result as
+ * immutable; the closed `PersonaTag` enum no longer applies.
+ */
+export function parseTags(
+  value: unknown,
+  context: string
+): readonly string[] | undefined {
+  if (value === undefined || value === null) return undefined;
+  if (!Array.isArray(value)) {
+    throw new Error(`${context} must be an array of strings if provided`);
   }
-  const out: PersonaTag[] = [];
+  if (value.length === 0) return undefined;
+
+  const out = new Set<string>();
   for (const [idx, entry] of value.entries()) {
-    if (!isTag(entry)) {
+    if (typeof entry !== 'string') {
+      throw new Error(`${context}[${idx}] must be a string`);
+    }
+    const trimmed = entry.trim();
+    if (!trimmed) {
+      throw new Error(`${context}[${idx}] must be a non-empty string`);
+    }
+    if (trimmed.length > PERSONA_TAG_MAX_LEN) {
       throw new Error(
-        `${context}[${idx}] must be one of: ${PERSONA_TAGS.join(', ')}`
+        `${context}[${idx}] must be ≤${PERSONA_TAG_MAX_LEN} characters`
       );
     }
-    if (!out.includes(entry)) out.push(entry);
+    out.add(trimmed);
   }
-  return out;
+  return Array.from(out).sort();
 }
 
 export function assertSidecarPath(value: unknown, context: string): void {
@@ -820,7 +865,7 @@ export function parsePersonaSpec(value: unknown, expectedIntent: PersonaIntent):
   return {
     id,
     intent,
-    tags: parsedTags,
+    ...(parsedTags ? { tags: parsedTags } : {}),
     description,
     skills: parsedSkills,
     ...(parsedInputs ? { inputs: parsedInputs } : {}),

@@ -325,9 +325,70 @@ test('parseHarnessSettings rejects non-boolean dangerouslyBypassApprovalsAndSand
   );
 });
 
-test('parseTags rejects empty arrays and unknown tags', () => {
-  assert.throws(() => parseTags([], 'tags'), /must be a non-empty array/);
-  assert.throws(() => parseTags(['nonsense-tag'], 'tags'), /tags\[0\] must be one of:/);
+test('parseTags accepts an array of arbitrary string tags', () => {
+  // Free-form per cloud#553 `tags text[]` — no closed-enum check.
+  // Output is deduped and sorted for stable serialization.
+  assert.deepEqual(
+    parseTags(['proactive', 'notion', 'github'], 'tags'),
+    ['github', 'notion', 'proactive']
+  );
+});
+
+test('parseTags returns undefined when tags is missing', () => {
+  assert.equal(parseTags(undefined, 'tags'), undefined);
+});
+
+test('parseTags returns undefined when tags is null', () => {
+  assert.equal(parseTags(null, 'tags'), undefined);
+});
+
+test('parseTags returns undefined when tags is an empty array', () => {
+  // Empty array and "no tags" are semantically identical — both collapse
+  // to undefined so the field stays omitted from the parsed spec.
+  assert.equal(parseTags([], 'tags'), undefined);
+});
+
+test('parseTags rejects non-string entries', () => {
+  assert.throws(
+    () => parseTags(['proactive', 123], 'tags'),
+    /tags\[1\] must be a string/
+  );
+});
+
+test('parseTags rejects empty / whitespace-only strings', () => {
+  assert.throws(
+    () => parseTags(['proactive', '   '], 'tags'),
+    /tags\[1\] must be a non-empty string/
+  );
+  assert.throws(
+    () => parseTags([''], 'tags'),
+    /tags\[0\] must be a non-empty string/
+  );
+});
+
+test('parseTags rejects entries over 64 characters', () => {
+  const tooLong = 'x'.repeat(65);
+  assert.throws(
+    () => parseTags(['proactive', tooLong], 'tags'),
+    /tags\[1\] must be ≤64 characters/
+  );
+});
+
+test('parseTags rejects non-array input', () => {
+  assert.throws(
+    () => parseTags('proactive', 'tags'),
+    /tags must be an array of strings if provided/
+  );
+});
+
+test('parsePersonaSpec omits tags from the spec when the field is missing', () => {
+  // Tags are optional; the parsed spec should not synthesize an empty array
+  // when the input omits the field — the schema treats absence and `[]`
+  // identically per cloud#553's denormalized `tags text[]`.
+  const raw = { ...validSpec() } as Record<string, unknown>;
+  delete raw.tags;
+  const spec = parsePersonaSpec(raw, 'documentation');
+  assert.equal(spec.tags, undefined);
 });
 
 test('parseSkills returns [] for undefined, validates shape per entry', () => {
