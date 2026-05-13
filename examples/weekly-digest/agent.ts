@@ -89,12 +89,10 @@ export default handler(async (ctx, event) => {
   });
 });
 
-function readConfig(): { topics: string; repo: string; braveApiKey: string; githubToken: string } {
+function readConfig(): { topics: string; repo: string; braveApiKey: string } {
   const topics = process.env.WEEKLY_DIGEST_TOPICS;
   const repo = process.env.WEEKLY_DIGEST_REPO;
   const braveApiKey = process.env.BRAVE_API_KEY;
-  const githubToken =
-    process.env.WORKFORCE_INTEGRATION_GITHUB_TOKEN ?? process.env.GITHUB_TOKEN ?? '';
   if (!topics || !topics.trim()) {
     throw new Error('WEEKLY_DIGEST_TOPICS is required (comma-separated list)');
   }
@@ -104,24 +102,21 @@ function readConfig(): { topics: string; repo: string; braveApiKey: string; gith
   if (!braveApiKey) {
     throw new Error('BRAVE_API_KEY is required to query Brave Search');
   }
-  if (!githubToken) {
-    throw new Error(
-      'WORKFORCE_INTEGRATION_GITHUB_TOKEN (or GITHUB_TOKEN) is required to upsert the digest issue'
-    );
-  }
-  return { topics, repo, braveApiKey, githubToken };
+  return { topics, repo, braveApiKey };
 }
 
 function resolveGithubClient(ctx: WorkforceCtx): GithubClient {
+  // The runtime injects a Relayfile-VFS-backed github client whenever
+  // the persona declares the `github` integration. For stand-alone
+  // dev runs without the runtime, fall back to a client rooted at the
+  // configured Relayfile mount (or cwd if RELAYFILE_MOUNT_ROOT is
+  // unset). The fallback path is mostly useful for local smoke tests
+  // — production handlers always get `ctx.github`.
   if (ctx.github) return ctx.github;
-  const token =
-    process.env.WORKFORCE_INTEGRATION_GITHUB_TOKEN ?? process.env.GITHUB_TOKEN ?? '';
-  if (!token) {
-    throw new Error(
-      'no GitHub client on ctx and no GITHUB_TOKEN in env — set WORKFORCE_INTEGRATION_GITHUB_TOKEN before deploy'
-    );
-  }
-  return createGithubClient({ token });
+  return createGithubClient({
+    ...(process.env.RELAYFILE_MOUNT_ROOT ? { relayfileMountRoot: process.env.RELAYFILE_MOUNT_ROOT } : {}),
+    writebackTimeoutMs: 30_000
+  });
 }
 
 function parseTopics(raw: string): string[] {
@@ -144,8 +139,7 @@ async function searchBrave(query: string, apiKey: string): Promise<DigestItem[]>
     throw new WorkforceIntegrationError({
       provider: 'brave',
       operation: 'search',
-      message: `${response.status} ${response.statusText}`,
-      status: response.status,
+      cause: new Error(`${response.status} ${response.statusText}`),
       retryable: response.status >= 500 || response.status === 429
     });
   }

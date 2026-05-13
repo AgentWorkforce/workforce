@@ -4,6 +4,20 @@ Weekly competitive-intel agent. Runs every Saturday at 09:00 UTC, queries
 Brave Search for the configured topics, dedupes + clusters by source host,
 and upserts a single GitHub issue per ISO week into `WEEKLY_DIGEST_REPO`.
 
+## How GitHub writes happen
+
+Workforce integration clients **don't make direct REST calls to GitHub**.
+The handler calls `ctx.github.upsertIssue(...)`, which writes a draft
+JSON file at the canonical Relayfile path
+`/github/repos/<owner>/<repo>/issues/...` inside the Relayfile mount.
+Relayfile's writeback worker picks up the draft, makes the real GitHub
+call, and writes a receipt back to the same file. The handler reads the
+receipt to populate issue numbers, URLs, etc.
+
+This matches the rest of the workforce/cloud stack and gets writeback
+durability + retry semantics for free. There's no `GITHUB_TOKEN` to
+manage — Relayfile holds the GitHub App / OAuth credentials.
+
 ## Required env
 
 ```sh
@@ -11,14 +25,14 @@ export WEEKLY_DIGEST_TOPICS="agentworkforce,relayfile,proactive-agents"
 export WEEKLY_DIGEST_REPO="YourOrg/weekly-digest"
 export BRAVE_API_KEY="brave_..."
 
-# GitHub credentials — either path works:
-export WORKFORCE_INTEGRATION_GITHUB_TOKEN="ghp_..."
-# or, for a quick demo without Relayfile:
-export GITHUB_TOKEN="ghp_..."
-
 # Workspace (only needed when actually launching, not for --dry-run):
 export WORKFORCE_WORKSPACE_ID="ws_demo"
 export WORKFORCE_WORKSPACE_TOKEN="ws_token_..."
+
+# Relayfile mount root the handler writes into. The workforce runtime
+# sets this automatically when it spawns the handler. Only set it
+# manually when running the bundle stand-alone (smoke tests).
+export RELAYFILE_MOUNT_ROOT="/path/to/your/relayfile/mount"
 ```
 
 ## Deploy
@@ -39,17 +53,26 @@ workforce deploy ./examples/weekly-digest/persona.json --mode dev
 ## Firing the handler manually
 
 The runner reads NDJSON envelopes from stdin. To trigger the handler from
-the command line, drive the bundle directly:
+the command line against a Relayfile mount you've already set up, drive
+the bundle directly. The env assignment goes in front of `node` so the
+runner — not the `echo` upstream of the pipe — sees `RELAYFILE_MOUNT_ROOT`.
+
+> **Prerequisite:** manual firing only produces real GitHub writes when
+> the Relayfile writeback worker is active for that mount. Without it,
+> drafts land on disk under the mount but no GitHub call is ever made.
 
 ```sh
 echo '{"id":"manual-1","workspace":"ws_demo","type":"cron.tick","occurredAt":"2026-05-12T09:00:00Z","name":"weekly","cron":"0 9 * * 6"}' \
-  | node /tmp/wf-weekly-digest/runner.mjs
+  | RELAYFILE_MOUNT_ROOT=/path/to/mount node /tmp/wf-weekly-digest/runner.mjs
 ```
 
 The handler will:
 
-1. Resolve topics + repo + tokens from env.
+1. Resolve topics + repo from env.
 2. Query Brave Search per topic.
 3. Dedupe by URL and cluster results by source host.
-4. Upsert a single `Weekly digest — YYYY-WNN` issue in the target repo.
+4. Write a draft (or update an existing) `Weekly digest — YYYY-WNN`
+   issue under `<mount>/github/repos/<owner>/<repo>/issues/...`.
+   Relayfile's writeback worker turns the file write into the actual
+   GitHub call.
 5. Save a memory note tagged `weekly-digest` + `week:<W>`.
