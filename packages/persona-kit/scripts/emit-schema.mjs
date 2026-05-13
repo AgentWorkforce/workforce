@@ -46,6 +46,40 @@ if (personaSpecSchema) {
   ];
 }
 
+// Post-process: walk the schema and tighten the workspace_service_account.name
+// constraint to match parse.ts (INTEGRATION_SOURCE_NAME_RE, max 64). The generator
+// emits a bare `{ "type": "string" }` because the constraints live in the parser,
+// not in the TS type. Without this, the schema accepts `""` which the parser then
+// rejects at deploy time — better to fail at validation.
+const SOURCE_NAME_PATTERN = '^[a-z0-9]+(?:-[a-z0-9]+)*$';
+const SOURCE_NAME_MAX = 64;
+function tightenWorkspaceServiceAccountName(node) {
+  if (!node || typeof node !== 'object') return;
+  if (Array.isArray(node)) {
+    for (const child of node) tightenWorkspaceServiceAccountName(child);
+    return;
+  }
+  // Match the object-literal variant: { kind: { const: 'workspace_service_account' }, name: { type: 'string' } }
+  const props = node.properties;
+  if (
+    node.type === 'object' &&
+    props &&
+    props.kind &&
+    props.kind.const === 'workspace_service_account' &&
+    props.name &&
+    props.name.type === 'string'
+  ) {
+    props.name = {
+      ...props.name,
+      minLength: 1,
+      maxLength: SOURCE_NAME_MAX,
+      pattern: SOURCE_NAME_PATTERN
+    };
+  }
+  for (const value of Object.values(node)) tightenWorkspaceServiceAccountName(value);
+}
+tightenWorkspaceServiceAccountName(schema);
+
 const serialized = `${JSON.stringify(schema, null, 2)}\n`;
 await mkdir(dirname(schemaPath), { recursive: true });
 
