@@ -813,7 +813,12 @@ function normalizeCloudUrl(url: string): string {
 function readInputsOverride(): Record<string, string> | undefined {
   const raw = process.env.WORKFORCE_DEPLOY_INPUTS_JSON?.trim();
   if (!raw) return undefined;
-  const parsed = JSON.parse(raw) as unknown;
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(raw);
+  } catch {
+    throw new Error('WORKFORCE_DEPLOY_INPUTS_JSON is not valid JSON');
+  }
   if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) {
     throw new Error('WORKFORCE_DEPLOY_INPUTS_JSON must be a JSON object');
   }

@@ -241,6 +241,7 @@ async function readMacKeychainLogin(workspace: string): Promise<StoredWorkspaceL
     const stdout = await execSecurity(['find-generic-password', '-s', service, '-w']);
     const parsed = parseStoredLogin(stdout.trim());
     if (parsed && workspaceMatches(parsed, workspace)) return parsed;
+    if (parsed) continue;
     if (stdout.trim()) {
       return {
         workspace,
