@@ -1,177 +1,242 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
+import { mkdir, mkdtemp, readFile, readdir, rm, writeFile } from 'node:fs/promises';
+import { tmpdir } from 'node:os';
+import path from 'node:path';
 import { createGithubClient } from './github.js';
-import { WorkforceIntegrationError } from './errors.js';
 
-interface RecordedCall {
-  url: string;
-  method: string;
-  headers: Record<string, string>;
-  body?: unknown;
+async function tempMount(): Promise<string> {
+  return mkdtemp(path.join(tmpdir(), 'workforce-runtime-github-'));
 }
 
-function fakeFetch(
-  handlers: Array<(call: RecordedCall) => Response | Promise<Response>>
-): { fetch: typeof fetch; calls: RecordedCall[] } {
-  const calls: RecordedCall[] = [];
-  let i = 0;
-  const fakeImpl = (async (input: RequestInfo | URL, init?: RequestInit) => {
-    const url = typeof input === 'string' ? input : input.toString();
-    const headers: Record<string, string> = {};
-    if (init?.headers) {
-      const entries =
-        init.headers instanceof Headers
-          ? Array.from(init.headers.entries())
-          : Array.isArray(init.headers)
-            ? init.headers
-            : Object.entries(init.headers);
-      for (const [k, v] of entries) headers[k.toLowerCase()] = String(v);
-    }
-    const body = init?.body ? JSON.parse(init.body.toString()) : undefined;
-    const call: RecordedCall = {
-      url,
-      method: init?.method ?? 'GET',
-      headers,
-      ...(body !== undefined ? { body } : {})
-    };
-    calls.push(call);
-    const handler = handlers[i];
-    if (!handler) throw new Error(`fakeFetch: no handler at call index ${i}`);
-    i += 1;
-    return handler(call);
-  }) as typeof fetch;
-  return { fetch: fakeImpl, calls };
-}
+test('github.comment writes a draft comment file under issues/<n>/comments/', async () => {
+  const root = await tempMount();
+  try {
+    const client = createGithubClient({ relayfileMountRoot: root });
+    await client.comment({ owner: 'o', repo: 'r', number: 2 }, 'hello');
 
-test('createGithubClient.comment POSTs the issue comment endpoint with the right headers', async () => {
-  const { fetch: fakeImpl, calls } = fakeFetch([
-    () =>
-      new Response(JSON.stringify({ id: 1, html_url: 'https://github.com/o/r/issues/2#issuecomment-1' }), {
-        status: 201
-      })
-  ]);
-  const client = createGithubClient({ token: 'pat_abc', fetchImpl: fakeImpl });
-  const ref = await client.comment({ owner: 'o', repo: 'r', number: 2 }, 'hello');
-
-  assert.equal(ref.number, 2);
-  assert.equal(ref.url, 'https://github.com/o/r/issues/2#issuecomment-1');
-  assert.equal(calls[0].url, 'https://api.github.com/repos/o/r/issues/2/comments');
-  assert.equal(calls[0].method, 'POST');
-  assert.equal(calls[0].headers.authorization, 'Bearer pat_abc');
-  assert.equal(calls[0].headers['x-github-api-version'], '2022-11-28');
-  assert.deepEqual(calls[0].body, { body: 'hello' });
-});
-
-test('createGithubClient.upsertIssue creates when no open match is found', async () => {
-  const { fetch: fakeImpl, calls } = fakeFetch([
-    () => new Response(JSON.stringify({ items: [] }), { status: 200 }),
-    () => new Response(JSON.stringify({ number: 99, html_url: 'https://github.com/o/r/issues/99' }), { status: 201 })
-  ]);
-  const client = createGithubClient({ token: 't', fetchImpl: fakeImpl });
-  const result = await client.upsertIssue({
-    owner: 'o',
-    repo: 'r',
-    title: 'fresh',
-    body: 'body',
-    matchTitle: 'fresh',
-    labels: ['digest']
-  });
-  assert.equal(result.created, true);
-  assert.equal(result.number, 99);
-  assert.equal(calls[0].method, 'GET');
-  assert.match(calls[0].url, /\/search\/issues\?q=/);
-  assert.equal(calls[1].method, 'POST');
-  assert.deepEqual(calls[1].body, { title: 'fresh', body: 'body', labels: ['digest'] });
-});
-
-test('createGithubClient.upsertIssue PATCHes when an open match exists', async () => {
-  const { fetch: fakeImpl, calls } = fakeFetch([
-    () =>
-      new Response(
-        JSON.stringify({
-          items: [{ number: 7, title: 'weekly-digest', state: 'open', html_url: 'https://github.com/o/r/issues/7' }]
-        }),
-        { status: 200 }
-      ),
-    () => new Response(null, { status: 204 })
-  ]);
-  const client = createGithubClient({ token: 't', fetchImpl: fakeImpl });
-  const result = await client.upsertIssue({
-    owner: 'o',
-    repo: 'r',
-    title: 'weekly-digest',
-    body: 'refreshed',
-    matchTitle: 'weekly-digest'
-  });
-  assert.equal(result.created, false);
-  assert.equal(result.number, 7);
-  assert.equal(calls[1].method, 'PATCH');
-  assert.deepEqual(calls[1].body, { body: 'refreshed' });
-});
-
-test('createGithubClient surfaces non-2xx with WorkforceIntegrationError', async () => {
-  const { fetch: fakeImpl } = fakeFetch([
-    () => new Response('rate limited', { status: 429, statusText: 'Too Many Requests' })
-  ]);
-  const client = createGithubClient({ token: 't', fetchImpl: fakeImpl });
-  await assert.rejects(
-    () => client.comment({ owner: 'o', repo: 'r', number: 1 }, 'x'),
-    (err: unknown) => {
-      assert.ok(err instanceof WorkforceIntegrationError);
-      assert.equal(err.provider, 'github');
-      assert.equal(err.operation, 'comment');
-      assert.equal(err.status, 429);
-      assert.equal(err.retryable, true);
-      return true;
-    }
-  );
-});
-
-test('createGithubClient.getPr fetches the diff through the canonical API endpoint (not pr.diff_url)', async () => {
-  const { fetch: fakeImpl, calls } = fakeFetch([
-    () =>
-      new Response(
-        JSON.stringify({
-          title: 't',
-          body: 'b',
-          head: { ref: 'feature' },
-          base: { ref: 'main' },
-          user: { login: 'alice' },
-          // Untrusted hint the client must ignore.
-          diff_url: 'https://attacker.example.com/leaked.diff'
-        }),
-        { status: 200 }
-      ),
-    () =>
-      new Response('diff --git a/x b/x\n', {
-        status: 200,
-        headers: { 'content-type': 'application/vnd.github.v3.diff' }
-      })
-  ]);
-  const client = createGithubClient({ token: 'pat_secret', fetchImpl: fakeImpl });
-  const pr = await client.getPr({ owner: 'o', repo: 'r', number: 5 });
-  assert.match(pr.diff, /^diff --git/);
-  // Both requests target api.github.com, never the untrusted diff_url host.
-  for (const call of calls) {
-    assert.match(call.url, /^https:\/\/api\.github\.com\//);
-    assert.ok(!call.url.includes('attacker.example.com'));
-    assert.equal(call.headers.authorization, 'Bearer pat_secret');
+    const dir = path.join(root, 'github/repos/o/r/issues/2/comments');
+    const files = await readdir(dir);
+    assert.equal(files.length, 1);
+    assert.deepEqual(JSON.parse(await readFile(path.join(dir, files[0] ?? ''), 'utf8')), {
+      body: 'hello'
+    });
+  } finally {
+    await rm(root, { recursive: true, force: true });
   }
-  // Diff call uses the diff accept header.
-  assert.equal(calls[1].headers.accept, 'application/vnd.github.v3.diff');
 });
 
-test('createGithubClient surfaces 4xx as non-retryable', async () => {
-  const { fetch: fakeImpl } = fakeFetch([
-    () => new Response('not found', { status: 404, statusText: 'Not Found' })
-  ]);
-  const client = createGithubClient({ token: 't', fetchImpl: fakeImpl });
-  await assert.rejects(
-    () => client.comment({ owner: 'o', repo: 'r', number: 1 }, 'x'),
-    (err: unknown) => {
-      assert.ok(err instanceof WorkforceIntegrationError);
-      assert.equal(err.retryable, false);
-      return true;
+test('github.createIssue writes a draft issue file under issues/', async () => {
+  const root = await tempMount();
+  try {
+    const client = createGithubClient({ relayfileMountRoot: root });
+    await client.createIssue({
+      owner: 'o',
+      repo: 'r',
+      title: 'Track A',
+      body: 'do the thing',
+      labels: ['digest']
+    });
+
+    const dir = path.join(root, 'github/repos/o/r/issues');
+    const files = await readdir(dir);
+    const drafts = files.filter((name) => name.endsWith('.json'));
+    assert.equal(drafts.length, 1);
+    assert.deepEqual(JSON.parse(await readFile(path.join(dir, drafts[0] ?? ''), 'utf8')), {
+      title: 'Track A',
+      body: 'do the thing',
+      labels: ['digest']
+    });
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
+test('github.upsertIssue updates an existing flat issue match', async () => {
+  const root = await tempMount();
+  try {
+    const issueDir = path.join(root, 'github/repos/o/r/issues');
+    await mkdir(issueDir, { recursive: true });
+    await writeFile(
+      path.join(issueDir, '7.json'),
+      JSON.stringify({
+        number: 7,
+        state: 'open',
+        title: 'Weekly digest — 2026-W20',
+        html_url: 'https://github.com/o/r/issues/7'
+      })
+    );
+
+    const client = createGithubClient({ relayfileMountRoot: root });
+    const result = await client.upsertIssue({
+      owner: 'o',
+      repo: 'r',
+      title: 'Weekly digest — 2026-W20',
+      body: 'refreshed',
+      matchTitle: 'Weekly digest — 2026-W20'
+    });
+    assert.equal(result.created, false);
+    assert.equal(result.number, 7);
+    // Update wrote the canonical issue file in place.
+    const updated = JSON.parse(await readFile(path.join(issueDir, '7.json'), 'utf8'));
+    assert.equal(updated.body, 'refreshed');
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
+test('github.upsertIssue ignores a closed issue title match', async () => {
+  const root = await tempMount();
+  try {
+    const issueDir = path.join(root, 'github/repos/o/r/issues');
+    await mkdir(issueDir, { recursive: true });
+    await writeFile(
+      path.join(issueDir, '7.json'),
+      JSON.stringify({
+        number: 7,
+        state: 'closed',
+        title: 'Weekly digest — 2026-W20',
+        html_url: 'https://github.com/o/r/issues/7'
+      })
+    );
+
+    const client = createGithubClient({ relayfileMountRoot: root });
+    const result = await client.upsertIssue({
+      owner: 'o',
+      repo: 'r',
+      title: 'Weekly digest — 2026-W20',
+      body: 'fresh open issue',
+      matchTitle: 'Weekly digest — 2026-W20'
+    });
+    assert.equal(result.created, true);
+
+    const files = await readdir(issueDir);
+    const drafts = files.filter((name) => name.endsWith('.json') && name !== '7.json');
+    assert.equal(drafts.length, 1);
+    const closed = JSON.parse(await readFile(path.join(issueDir, '7.json'), 'utf8'));
+    assert.equal(closed.body, undefined);
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
+test('github.upsertIssue creates a draft when no open match exists', async () => {
+  const root = await tempMount();
+  try {
+    const client = createGithubClient({ relayfileMountRoot: root });
+    const result = await client.upsertIssue({
+      owner: 'o',
+      repo: 'r',
+      title: 'fresh',
+      body: 'b',
+      matchTitle: 'fresh'
+    });
+    assert.equal(result.created, true);
+
+    const dir = path.join(root, 'github/repos/o/r/issues');
+    const drafts = (await readdir(dir)).filter((name) => name.endsWith('.json'));
+    assert.equal(drafts.length, 1);
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
+test('github.getPr reads meta + diff from canonical paths', async () => {
+  const root = await tempMount();
+  try {
+    const pullRoot = path.join(root, 'github/repos/o/r/pulls/42');
+    await mkdir(pullRoot, { recursive: true });
+    await writeFile(
+      path.join(pullRoot, 'meta.json'),
+      JSON.stringify({
+        title: 'Add deploy v1',
+        body: 'ships it',
+        head: { ref: 'feature' },
+        base: { ref: 'main' },
+        user: { login: 'kgnt' }
+      })
+    );
+    await writeFile(path.join(pullRoot, 'diff.patch'), 'diff --git a/x b/x\n');
+
+    const client = createGithubClient({ relayfileMountRoot: root });
+    const pr = await client.getPr({ owner: 'o', repo: 'r', number: 42 });
+    assert.equal(pr.title, 'Add deploy v1');
+    assert.equal(pr.head, 'feature');
+    assert.equal(pr.base, 'main');
+    assert.equal(pr.author, 'kgnt');
+    assert.match(pr.diff, /^diff --git/);
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
+test('github.getPr reads a flat canonical pull request file', async () => {
+  const root = await tempMount();
+  try {
+    const pullDir = path.join(root, 'github/repos/o/r/pulls');
+    await mkdir(pullDir, { recursive: true });
+    await writeFile(
+      path.join(pullDir, '42.json'),
+      JSON.stringify({
+        title: 'Add deploy v1',
+        body: 'ships it',
+        head: { ref: 'feature' },
+        base: { ref: 'main' },
+        user: { login: 'kgnt' },
+        diff: 'diff --git a/x b/x\n'
+      })
+    );
+
+    const client = createGithubClient({ relayfileMountRoot: root });
+    const pr = await client.getPr({ owner: 'o', repo: 'r', number: 42 });
+    assert.equal(pr.title, 'Add deploy v1');
+    assert.equal(pr.head, 'feature');
+    assert.equal(pr.base, 'main');
+    assert.equal(pr.author, 'kgnt');
+    assert.match(pr.diff, /^diff --git/);
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
+test('github.postReview writes a review draft under pulls/<n>/reviews/', async () => {
+  const root = await tempMount();
+  try {
+    const client = createGithubClient({ relayfileMountRoot: root });
+    await client.postReview(
+      { owner: 'o', repo: 'r', number: 42 },
+      {
+        body: 'lgtm',
+        event: 'APPROVE',
+        comments: [{ path: 'src/x.ts', line: 7, body: 'nit' }]
+      }
+    );
+
+    const reviewsDir = path.join(root, 'github/repos/o/r/pulls/42/reviews');
+    const drafts = (await readdir(reviewsDir)).filter((name) => name.endsWith('.json'));
+    assert.equal(drafts.length, 1);
+    const payload = JSON.parse(await readFile(path.join(reviewsDir, drafts[0] ?? ''), 'utf8'));
+    assert.equal(payload.event, 'APPROVE');
+    assert.equal(payload.comments.length, 1);
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
+test('github.postReview accepts COMMENT/APPROVE/REQUEST_CHANGES events', async () => {
+  const root = await tempMount();
+  try {
+    const client = createGithubClient({ relayfileMountRoot: root });
+    for (const event of ['COMMENT', 'APPROVE', 'REQUEST_CHANGES'] as const) {
+      await client.postReview({ owner: 'o', repo: 'r', number: event === 'COMMENT' ? 1 : event === 'APPROVE' ? 2 : 3 }, {
+        body: event.toLowerCase(),
+        event
+      });
     }
-  );
+    // Three review drafts landed across three different PR review dirs.
+    const dirs = await readdir(path.join(root, 'github/repos/o/r/pulls'));
+    assert.deepEqual(dirs.sort(), ['1', '2', '3']);
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
 });

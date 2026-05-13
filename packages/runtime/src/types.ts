@@ -3,6 +3,10 @@ import type {
   PersonaMemoryScope
 } from '@agentworkforce/persona-kit';
 import type { GithubClient } from './clients/github.js';
+import type { LinearClient } from './clients/linear.js';
+import type { SlackClient } from './clients/slack.js';
+import type { NotionClient } from './clients/notion.js';
+import type { JiraClient } from './clients/jira.js';
 
 /**
  * Source of an event delivered to a persona's `onEvent` handler. The
@@ -153,19 +157,17 @@ export interface LlmContext {
 }
 
 /**
- * Per-integration clients attached to the ctx. `github` is concrete today;
- * `linear`/`slack`/`notion`/`jira` are typed as `unknown` until they ship
- * — handlers narrow them with a runtime check (`if (ctx.linear)`) and
- * cast against the future client interface. Adding a typed client is a
- * one-file change here, no breaking change for personas already on the
- * runtime.
+ * Per-integration clients attached to the ctx. All Tier-1 providers
+ * (github, linear, slack, notion, jira) ship typed VFS-backed clients;
+ * a persona only sees the fields its `integrations` block declared, so
+ * cron-only handlers get an undefined field across the board.
  */
 export interface IntegrationClients {
   github?: GithubClient;
-  linear?: unknown;
-  slack?: unknown;
-  notion?: unknown;
-  jira?: unknown;
+  linear?: LinearClient;
+  slack?: SlackClient;
+  notion?: NotionClient;
+  jira?: JiraClient;
 }
 
 /**
@@ -175,7 +177,7 @@ export interface IntegrationClients {
  * integration fields undefined.
  */
 export interface WorkforceCtx extends IntegrationClients {
-  /** Read-only persona metadata for handler-level branching. */
+  /** Read-only persona metadata for handler decisions. */
   readonly persona: PersonaSpec;
   /** Workspace the agent is deployed into. */
   readonly workspaceId: string;

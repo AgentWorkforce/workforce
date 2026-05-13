@@ -83,6 +83,7 @@ Flags:
   --bundle-out <dir>           Emit the bundle to <dir> and exit (no launch)
   --dry-run                    Validate the persona and exit before any side effects
   --cloud-url <url>            Override the workforce cloud base URL
+  --input <key>=<value>        Override a declared persona input (repeatable)
   -h, --help                   Print this message
 `;
 
@@ -105,6 +106,7 @@ export function parseDeployArgs(args: readonly string[]): DeployOptions {
   let bundleOut: string | undefined;
   let dryRun = false;
   let cloudUrl: string | undefined;
+  const inputs: Record<string, string> = {};
 
   for (let i = 0; i < args.length; i += 1) {
     const a = args[i];
@@ -131,6 +133,10 @@ export function parseDeployArgs(args: readonly string[]): DeployOptions {
       dryRun = true;
     } else if (a === '--cloud-url') {
       cloudUrl = expectValue('--cloud-url', args[++i]);
+    } else if (a === '--input') {
+      parseDeployInputValue(expectDeployInputValue(args[++i]), inputs);
+    } else if (a.startsWith('--input=')) {
+      parseDeployInputValue(a.slice('--input='.length), inputs);
     } else if (a.startsWith('--')) {
       die(`deploy: unknown flag "${a}"`);
     } else if (!personaPath) {
@@ -153,8 +159,25 @@ export function parseDeployArgs(args: readonly string[]): DeployOptions {
     ...(detach ? { detach: true } : {}),
     ...(bundleOut ? { bundleOut } : {}),
     ...(dryRun ? { dryRun: true } : {}),
-    ...(cloudUrl ? { cloudUrl } : {})
+    ...(cloudUrl ? { cloudUrl } : {}),
+    ...(Object.keys(inputs).length > 0 ? { inputs } : {})
   };
+}
+
+function expectDeployInputValue(value: string | undefined): string {
+  if (typeof value !== 'string' || value.length === 0 || value.startsWith('--')) {
+    die('--input: expected <key>=<value>');
+  }
+  return value;
+}
+
+function parseDeployInputValue(raw: string, inputs: Record<string, string>): void {
+  const eq = raw.indexOf('=');
+  if (eq <= 0) {
+    die(`--input: expected <key>=<value>; got "${raw}"`);
+  }
+  const key = raw.slice(0, eq);
+  inputs[key] = raw.slice(eq + 1);
 }
 
 function expectValue(flag: string, value: string | undefined): string {
