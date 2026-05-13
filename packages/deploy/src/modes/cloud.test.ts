@@ -201,7 +201,7 @@ test('cloud URL precedence is flag env, cloud env, persona deployUrl, then defau
     return calls.find((call) => call.url.endsWith('/deployments'))?.url;
   }
 
-  const personaWithUrl = persona() as PersonaSpec & { cloud: { deployUrl: string } };
+  const personaWithUrl = persona() as Omit<PersonaSpec, 'cloud'> & { cloud: { deployUrl: string } };
   personaWithUrl.cloud = { deployUrl: 'https://persona.example.test/' };
   assert.equal(
     await deployedUrl({
