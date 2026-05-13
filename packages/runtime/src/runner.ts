@@ -1,11 +1,11 @@
 import type { PersonaSpec } from '@agentworkforce/persona-kit';
+import { createCloudRuntimeDefaults } from './cloud-defaults.js';
 import { buildCtx, type CtxBuildOptions } from './ctx.js';
 import { isWorkforceHandler } from './handler.js';
 import { shimEnvelope, type RawGatewayEnvelope } from './shim.js';
 import type {
   HarnessRunArgs,
   HarnessRunResult,
-  SandboxContext,
   WorkforceAgentContext,
   WorkforceDeploymentContext,
   WorkforceEvent,
@@ -40,7 +40,7 @@ export interface StartRunnerOptions {
    * package's mode-specific entry points (`runDev`, `runSandbox`) supply
    * the wired-up versions. Tests pass in-memory fakes here.
    */
-  subsystems?: Partial<Pick<CtxBuildOptions, 'sandbox' | 'llm' | 'memory' | 'workflow' | 'schedule' | 'log' | 'integrations'>>;
+  subsystems?: Partial<Pick<CtxBuildOptions, 'sandbox' | 'files' | 'llm' | 'memory' | 'workflow' | 'schedule' | 'log' | 'integrations'>>;
   /**
    * Source of raw envelopes to dispatch. The default reads NDJSON from
    * stdin so a parent process can write `RawGatewayEnvelope` lines and
@@ -49,37 +49,12 @@ export interface StartRunnerOptions {
    */
   envelopes?: AsyncIterable<RawGatewayEnvelope>;
   /**
-   * Harness runner. Required because spawning a harness inside a sandbox
-   * is mode-specific (Daytona exec vs local child_process). When omitted,
-   * `ctx.harness.run` throws a clear error.
+   * Harness runner override. When omitted, the runtime spawns the persona's
+   * declared harness in the cloud workspace root (`/workspace` when present,
+   * otherwise cwd).
    */
   harnessRunner?: (args: HarnessRunArgs) => Promise<HarnessRunResult>;
 }
-
-const HARNESS_UNAVAILABLE: (args: HarnessRunArgs) => Promise<HarnessRunResult> = async () => {
-  throw new Error(
-    'ctx.harness.run is unavailable: this runner was started without a harnessRunner. Use `workforce deploy --mode sandbox` to run inside Daytona, or supply a harnessRunner via StartRunnerOptions.'
-  );
-};
-
-const PROCESS_FS_SANDBOX: SandboxContext = {
-  cwd: process.cwd(),
-  async exec() {
-    throw new Error(
-      'ctx.sandbox.exec is unavailable: this runner was started without a SandboxContext. Use `workforce deploy --mode sandbox` to enable a Daytona sandbox.'
-    );
-  },
-  async readFile() {
-    throw new Error(
-      'ctx.sandbox.readFile is unavailable: this runner was started without a SandboxContext.'
-    );
-  },
-  async writeFile() {
-    throw new Error(
-      'ctx.sandbox.writeFile is unavailable: this runner was started without a SandboxContext.'
-    );
-  }
-};
 
 /**
  * Cold-start the agent. Returns a promise that resolves once the envelope
@@ -115,19 +90,33 @@ export async function startRunner(options: StartRunnerOptions): Promise<void> {
     );
   }
 
+  const log = options.subsystems?.log;
+  const cloudDefaults = createCloudRuntimeDefaults({
+    persona: options.persona,
+    agent: options.agent,
+    deployment: options.deployment,
+    workspaceId,
+    log: log ?? defaultRunnerLog
+  });
+  const integrations = {
+    ...(cloudDefaults.integrations ?? {}),
+    ...(options.subsystems?.integrations ?? {})
+  };
+
   const ctx = buildCtx({
     persona: options.persona,
     agent: options.agent,
     deployment: options.deployment,
     workspaceId,
-    sandbox: options.subsystems?.sandbox ?? PROCESS_FS_SANDBOX,
-    harnessRunner: options.harnessRunner ?? HARNESS_UNAVAILABLE,
+    sandbox: options.subsystems?.sandbox ?? cloudDefaults.sandbox,
+    files: options.subsystems?.files ?? cloudDefaults.files,
+    harnessRunner: options.harnessRunner ?? cloudDefaults.harnessRunner,
     ...(options.subsystems?.llm ? { llm: options.subsystems.llm } : {}),
     ...(options.subsystems?.memory ? { memory: options.subsystems.memory } : {}),
     ...(options.subsystems?.workflow ? { workflow: options.subsystems.workflow } : {}),
     ...(options.subsystems?.schedule ? { schedule: options.subsystems.schedule } : {}),
     ...(options.subsystems?.log ? { log: options.subsystems.log } : {}),
-    ...(options.subsystems?.integrations ? { integrations: options.subsystems.integrations } : {})
+    ...(Object.keys(integrations).length > 0 ? { integrations } : {})
   });
 
   ctx.log('info', 'runner.started', {
@@ -148,6 +137,11 @@ export async function startRunner(options: StartRunnerOptions): Promise<void> {
   }
 
   ctx.log('info', 'runner.envelope-stream.ended', { persona: options.persona.id });
+}
+
+function defaultRunnerLog(level: 'debug' | 'info' | 'warn' | 'error', message: string, attrs?: Record<string, unknown>): void {
+  const stream = level === 'error' || level === 'warn' ? process.stderr : process.stdout;
+  stream.write(`${JSON.stringify({ t: new Date().toISOString(), level, message, ...(attrs ?? {}) })}\n`);
 }
 
 async function dispatch(

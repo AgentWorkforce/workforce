@@ -2,6 +2,8 @@ import type { PersonaSpec } from '@agentworkforce/persona-kit';
 import type {
   LlmContext,
   MemoryContext,
+  FilesContext,
+  MemoryItem,
   ScheduleContext,
   SandboxContext,
   WorkforceAgentContext,
@@ -30,7 +32,8 @@ interface AgentRowContext extends WorkforceAgentContext {
  * provided — there is no sensible default for spawning a harness or
  * executing inside an isolated filesystem. Optional subsystems
  * (`llm`, `memory`, `workflow`, `schedule`, `log`, `integrations`)
- * fall back to documented defaults: `memory` becomes a no-op (so
+ * fall back to documented defaults: `memory` becomes a cloud-backed
+ * adapter when the sandbox env has enough auth, otherwise a no-op (so
  * `ctx.memory.save(...)` is safe to call from any handler), the rest
  * throw with a single-line "not configured" message that names the
  * persona-side flag a caller would set to enable them.
@@ -42,6 +45,7 @@ export interface CtxBuildOptions {
   agent: AgentRowContext;
   deployment: WorkforceDeploymentContext;
   sandbox: SandboxContext;
+  files?: FilesContext;
   llm?: LlmContext;
   memory?: MemoryContext;
   workflow?: WorkflowContext;
@@ -59,6 +63,9 @@ const NOOP_MEMORY: MemoryContext = {
     return [];
   }
 };
+
+const DEFAULT_CLOUD_BASE_URL = 'https://agentrelay.com';
+const MEMORY_HTTP_TIMEOUT_MS = 15_000;
 
 const UNAVAILABLE_LLM: LlmContext = {
   async complete() {
@@ -115,6 +122,8 @@ export function buildCtx(options: CtxBuildOptions): WorkforceCtx {
     ...(agent.inputValues ?? {}),
     ...(agent.input_values ?? {})
   };
+  const log = options.log ?? defaultLog;
+  const files = options.files ?? filesFromSandbox(options.sandbox);
   const ctx: WorkforceCtx = {
     persona: buildPersonaContext(options.persona, mergedAgentInputValues),
     agent: {
@@ -128,10 +137,11 @@ export function buildCtx(options: CtxBuildOptions): WorkforceCtx {
     llm: options.llm ?? UNAVAILABLE_LLM,
     harness: { run: options.harnessRunner },
     sandbox: options.sandbox,
-    memory: options.memory ?? NOOP_MEMORY,
+    files,
+    memory: options.memory ?? defaultMemoryFor(options.persona.memory, options.workspaceId, log),
     workflow: options.workflow ?? UNAVAILABLE_WORKFLOW,
     schedule: options.schedule ?? UNAVAILABLE_SCHEDULE,
-    log: options.log ?? defaultLog
+    log
   };
 
   // Per-integration clients attach as named ctx fields. The deploy step
@@ -167,11 +177,204 @@ const CORE_CTX_FIELDS: ReadonlySet<string> = new Set([
   'llm',
   'harness',
   'sandbox',
+  'files',
   'memory',
   'workflow',
   'schedule',
   'log'
 ]);
+
+function filesFromSandbox(sandbox: SandboxContext): FilesContext {
+  return {
+    read(path) {
+      return sandbox.readFile(path);
+    },
+    write(path, contents) {
+      return sandbox.writeFile(path, contents);
+    }
+  };
+}
+
+function defaultMemoryFor(
+  memoryConfig: PersonaSpec['memory'],
+  workspaceId: string,
+  log: WorkforceCtx['log'],
+  processEnv: NodeJS.ProcessEnv = process.env
+): MemoryContext {
+  if (
+    memoryConfig === false ||
+    memoryConfig === undefined ||
+    (typeof memoryConfig === 'object' && memoryConfig !== null && 'enabled' in memoryConfig && memoryConfig.enabled === false)
+  ) {
+    return NOOP_MEMORY;
+  }
+  const cloudBaseUrl = firstNonEmpty(
+    processEnv.WORKFORCE_CLOUD_URL,
+    processEnv.WORKFORCE_DEPLOY_CLOUD_URL,
+    processEnv.AGENTRELAY_CLOUD_URL
+  ) ?? DEFAULT_CLOUD_BASE_URL;
+  const agentToken = resolveAgentToken(processEnv);
+  const resolvedWorkspaceId = firstNonEmpty(
+    processEnv.WORKFORCE_WORKSPACE_ID,
+    processEnv.RELAY_WORKSPACE_ID,
+    processEnv.RELAY_DEFAULT_WORKSPACE,
+    workspaceId
+  ) ?? workspaceId;
+  if (!agentToken || !resolvedWorkspaceId) return NOOP_MEMORY;
+  return createCloudMemoryContext({
+    cloudBaseUrl,
+    workspaceId: resolvedWorkspaceId,
+    agentToken,
+    log
+  });
+}
+
+function createCloudMemoryContext(args: {
+  cloudBaseUrl: string;
+  workspaceId: string;
+  agentToken: string;
+  log: WorkforceCtx['log'];
+}): MemoryContext {
+  const endpoint = new URL(
+    `/api/v1/workspaces/${encodeURIComponent(args.workspaceId)}/memory`,
+    normalizeBaseUrl(args.cloudBaseUrl)
+  );
+  return {
+    async save(content, opts) {
+      try {
+        const response = await fetchWithTimeout(endpoint, {
+          method: 'POST',
+          headers: {
+            authorization: `Bearer ${args.agentToken}`,
+            'content-type': 'application/json'
+          },
+          body: JSON.stringify({
+            scope: opts?.scope ?? 'workspace',
+            content,
+            ...(opts?.tags ? { tags: opts.tags } : {}),
+            ...memoryTtl(opts)
+          })
+        });
+        if (!response.ok) {
+          args.log('warn', 'memory.save.failed', { status: response.status });
+          return undefined;
+        }
+        const body = await response.json().catch(() => ({})) as { id?: unknown };
+        return typeof body.id === 'string' ? { id: body.id } : undefined;
+      } catch (err) {
+        args.log('warn', 'memory.save.failed', { error: memoryFetchErrorMessage(err) });
+        return undefined;
+      }
+    },
+    async recall(query, opts) {
+      try {
+        const url = new URL(endpoint);
+        url.searchParams.set('scope', opts?.scope ?? opts?.scopes?.[0] ?? 'workspace');
+        url.searchParams.set('query', query);
+        if (opts?.limit !== undefined) url.searchParams.set('limit', String(opts.limit));
+        if (opts?.tags?.length) url.searchParams.set('tags', opts.tags.join(','));
+        const response = await fetchWithTimeout(url, {
+          headers: { authorization: `Bearer ${args.agentToken}` }
+        });
+        if (!response.ok) {
+          args.log('warn', 'memory.recall.failed', { status: response.status });
+          return [];
+        }
+        const body = await response.json().catch(() => ({})) as { items?: unknown };
+        return normalizeMemoryItems(body.items);
+      } catch (err) {
+        args.log('warn', 'memory.recall.failed', { error: memoryFetchErrorMessage(err) });
+        return [];
+      }
+    }
+  };
+}
+
+async function fetchWithTimeout(input: URL | string, init: RequestInit): Promise<Response> {
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), MEMORY_HTTP_TIMEOUT_MS);
+  try {
+    return await fetch(input, { ...init, signal: controller.signal });
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
+function memoryFetchErrorMessage(error: unknown): string {
+  if (isAbortError(error)) return `timeout after ${MEMORY_HTTP_TIMEOUT_MS}ms`;
+  return error instanceof Error ? error.message : String(error);
+}
+
+function isAbortError(error: unknown): boolean {
+  return error instanceof Error && error.name === 'AbortError';
+}
+
+function memoryTtl(opts: Parameters<MemoryContext['save']>[1]): { ttlSeconds?: number } {
+  if (typeof opts?.ttlSeconds === 'number' && Number.isFinite(opts.ttlSeconds) && opts.ttlSeconds > 0) {
+    return { ttlSeconds: Math.ceil(opts.ttlSeconds) };
+  }
+  if (typeof opts?.expiresInMs === 'number' && Number.isFinite(opts.expiresInMs) && opts.expiresInMs > 0) {
+    return { ttlSeconds: Math.ceil(opts.expiresInMs / 1000) };
+  }
+  return {};
+}
+
+function normalizeMemoryItems(value: unknown): MemoryItem[] {
+  if (!Array.isArray(value)) return [];
+  return value.flatMap((item) => {
+    if (typeof item !== 'object' || item === null) return [];
+    const record = item as Record<string, unknown>;
+    if (typeof record.id !== 'string' || typeof record.content !== 'string') return [];
+    const scope = record.scope === 'user' || record.scope === 'global' ? record.scope : 'workspace';
+    return [{
+      id: record.id,
+      content: record.content,
+      tags: Array.isArray(record.tags) ? record.tags.filter((tag): tag is string => typeof tag === 'string') : [],
+      scope,
+      createdAt: typeof record.createdAt === 'string' ? record.createdAt : ''
+    }];
+  });
+}
+
+function firstNonEmpty(...values: Array<string | undefined>): string | undefined {
+  for (const value of values) {
+    const trimmed = value?.trim();
+    if (trimmed) return trimmed;
+  }
+  return undefined;
+}
+
+function resolveAgentToken(processEnv: NodeJS.ProcessEnv): string | undefined {
+  return firstNonEmpty(
+    processEnv.WORKFORCE_AGENT_TOKEN,
+    processEnv.RELAY_AGENT_TOKEN,
+    processEnv.RELAYFILE_TOKEN,
+    tokenFromAgentTokenMap(processEnv.RELAY_AGENT_TOKENS, processEnv.RELAY_AGENT_NAME),
+    processEnv.RELAY_API_KEY,
+    processEnv.WORKFORCE_WORKSPACE_TOKEN
+  );
+}
+
+function tokenFromAgentTokenMap(raw: string | undefined, agentName: string | undefined): string | undefined {
+  const value = raw?.trim();
+  if (!value) return undefined;
+  if (!value.startsWith('{')) return value;
+  try {
+    const parsed = JSON.parse(value) as unknown;
+    if (typeof parsed !== 'object' || parsed === null || Array.isArray(parsed)) return undefined;
+    const tokens = parsed as Record<string, unknown>;
+    const namedToken = agentName ? tokens[agentName] : undefined;
+    if (typeof namedToken === 'string' && namedToken.trim()) return namedToken.trim();
+    const singleToken = Object.values(tokens).find((entry): entry is string => typeof entry === 'string' && entry.trim().length > 0);
+    return singleToken?.trim();
+  } catch {
+    return undefined;
+  }
+}
+
+function normalizeBaseUrl(value: string): string {
+  return value.replace(/\/+$/, '');
+}
 
 function buildPersonaContext(
   persona: PersonaSpec,

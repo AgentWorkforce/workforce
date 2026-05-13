@@ -30,6 +30,15 @@ export interface GithubClient {
     body: string;
     labels?: string[];
   }): Promise<{ number: number; url: string }>;
+  createPullRequest(args: {
+    owner: string;
+    repo: string;
+    title: string;
+    body: string;
+    head: string;
+    base: string;
+    files?: Record<string, string>;
+  }): Promise<{ number: number; url: string }>;
   upsertIssue(args: {
     owner: string;
     repo: string;
@@ -125,6 +134,24 @@ export function createGithubClient(opts: IntegrationClientOptions): GithubClient
         'createIssue',
         `${repoRoot(args.owner, args.repo)}/issues/${draftFile('create issue')}`,
         { title: args.title, body: args.body, labels: args.labels }
+      );
+      const number = Number(result.receipt?.created ?? result.receipt?.id ?? 0);
+      return { number: Number.isFinite(number) ? number : 0, url: result.receipt?.url ?? result.path };
+    },
+
+    async createPullRequest(args) {
+      const result = await writeJsonFile(
+        opts,
+        'github',
+        'createPullRequest',
+        `${repoRoot(args.owner, args.repo)}/pulls/${draftFile('create pull request')}`,
+        {
+          title: args.title,
+          body: args.body,
+          head: args.head,
+          base: args.base,
+          ...(args.files ? { files: args.files } : {})
+        }
       );
       const number = Number(result.receipt?.created ?? result.receipt?.id ?? 0);
       return { number: Number.isFinite(number) ? number : 0, url: result.receipt?.url ?? result.path };

@@ -6,6 +6,7 @@ export { handler, isWorkforceHandler } from './handler.js';
 export type {
   HarnessRunArgs,
   HarnessRunResult,
+  FilesContext,
   IntegrationClients,
   LlmContext,
   MemoryContext,

@@ -1,5 +1,10 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
+import http from 'node:http';
+import { chmod, mkdir, mkdtemp, readFile, readdir, rm, writeFile } from 'node:fs/promises';
+import path from 'node:path';
+import os from 'node:os';
+import type { AddressInfo } from 'node:net';
 import type { PersonaSpec } from '@agentworkforce/persona-kit';
 import { startRunner } from './runner.js';
 import { handler } from './handler.js';
@@ -137,6 +142,137 @@ test('startRunner skips envelopes that the shim can not translate', async () => 
   assert.ok(logs.find((l) => l.message === 'runner.envelope.unsupported'));
 });
 
+test('startRunner supplies cloud github and harness defaults when generated runner passes none', async () => {
+  const dir = await mkdtemp(path.join(os.tmpdir(), 'wf-runtime-cloud-defaults-'));
+  const binDir = path.join(dir, 'bin');
+  const workspaceRoot = path.join(dir, 'workspace');
+  const usageRequests: unknown[] = [];
+  const usageServer = http.createServer((req, res) => {
+    let body = '';
+    req.setEncoding('utf8');
+    req.on('data', (chunk) => {
+      body += chunk;
+    });
+    req.on('end', () => {
+      usageRequests.push({
+        authorization: req.headers.authorization,
+        body: JSON.parse(body)
+      });
+      res.writeHead(204).end();
+    });
+  });
+  await new Promise<void>((resolve) => usageServer.listen(0, '127.0.0.1', resolve));
+  const usageAddress = usageServer.address();
+  assert.ok(usageAddress && typeof usageAddress === 'object');
+  const usageUrl = `http://127.0.0.1:${(usageAddress as AddressInfo).port}/usage`;
+
+  const previousEnv = snapshotEnv([
+    'PATH',
+    'WORKFORCE_SANDBOX_ROOT',
+    'RELAYFILE_MOUNT_ROOT',
+    'WORKFORCE_USAGE_URL',
+    'WORKFORCE_DEPLOYMENT_TOKEN'
+  ]);
+  try {
+    await writeFakeHarness(binDir, 'claude', [
+      'Generated essay from fake harness',
+      'WORKFORCE_USAGE_JSON={"inputTokens":11,"outputTokens":7,"totalTokens":18,"model":"fake-model"}'
+    ].join('\n'));
+    process.env.PATH = `${binDir}${path.delimiter}${process.env.PATH ?? ''}`;
+    process.env.WORKFORCE_SANDBOX_ROOT = workspaceRoot;
+    process.env.RELAYFILE_MOUNT_ROOT = workspaceRoot;
+    process.env.WORKFORCE_USAGE_URL = usageUrl;
+    process.env.WORKFORCE_DEPLOYMENT_TOKEN = 'deployment-token';
+
+    let harnessOutput = '';
+    let pullRequestUrl = '';
+    await startRunner({
+      persona: {
+        ...persona,
+        integrations: { github: { triggers: [{ on: 'pull_request.opened' }] } }
+      },
+      agent: runtimeAgent,
+      deployment: runtimeDeployment,
+      workspaceId: 'ws-test',
+      handler: handler(async (ctx) => {
+        assert.ok(ctx.github, 'github client should be attached from persona integrations');
+        const result = await ctx.harness.run({ cwd: '/workspace', prompt: 'draft the essay' });
+        harnessOutput = result.output;
+        const pr = await ctx.github.createPullRequest({
+          owner: 'AgentWorkforce',
+          repo: 'proactive-agents',
+          title: 'Essay: Launch notes',
+          body: 'Drafted by test',
+          head: 'essay/launch-notes',
+          base: 'main',
+          files: { 'output/launch-notes.md': result.output }
+        });
+        pullRequestUrl = pr.url;
+      }),
+      subsystems: {
+        log: () => {
+          /* keep test output quiet */
+        }
+      },
+      envelopes: streamOf([
+        { id: 'e1', workspace: 'ws-test', type: 'cron.tick', occurredAt: 'x', name: 'tick' }
+      ])
+    });
+
+    assert.equal(harnessOutput, 'Generated essay from fake harness');
+    assert.match(pullRequestUrl, /^\/github\/repos\/AgentWorkforce\/proactive-agents\/pulls\//);
+    const pullDrafts = await readdir(
+      path.join(workspaceRoot, 'github/repos/AgentWorkforce/proactive-agents/pulls')
+    );
+    assert.equal(pullDrafts.length, 1);
+    const pullDraft = JSON.parse(
+      await readFile(
+        path.join(workspaceRoot, 'github/repos/AgentWorkforce/proactive-agents/pulls', pullDrafts[0]),
+        'utf8'
+      )
+    ) as { title?: string; files?: Record<string, string> };
+    assert.equal(pullDraft.title, 'Essay: Launch notes');
+    assert.equal(pullDraft.files?.['output/launch-notes.md'], 'Generated essay from fake harness');
+    assert.equal(usageRequests.length, 1);
+    const usageRequest = usageRequests[0] as {
+      authorization?: string;
+      body?: {
+        durationMs?: number;
+        usage?: { raw?: unknown };
+        [key: string]: unknown;
+      };
+    };
+    assert.equal(usageRequest.authorization, 'Bearer deployment-token');
+    assert.equal(typeof usageRequest.body?.durationMs, 'number');
+    assert.deepEqual(usageRequest.body, {
+      workspaceId: 'ws-test',
+      deploymentId: 'deployment_456',
+      agentId: 'agent_123',
+      personaId: 'demo',
+      harness: 'claude',
+      model: 'fake-model',
+      durationMs: usageRequest.body?.durationMs,
+      exitCode: 0,
+      usage: {
+        inputTokens: 11,
+        outputTokens: 7,
+        totalTokens: 18,
+        model: 'fake-model',
+        raw: {
+          inputTokens: 11,
+          outputTokens: 7,
+          totalTokens: 18,
+          model: 'fake-model'
+        }
+      }
+    });
+  } finally {
+    restoreEnv(previousEnv);
+    await new Promise<void>((resolve) => usageServer.close(() => resolve()));
+    await rm(dir, { recursive: true, force: true });
+  }
+});
+
 test('buildCtx rejects integrations that collide with core fields', async () => {
   const { buildCtx } = await import('./ctx.js');
   assert.throws(
@@ -174,3 +310,32 @@ test('startRunner throws when workspaceId is missing from both options and env',
     if (previous !== undefined) process.env.WORKFORCE_WORKSPACE_ID = previous;
   }
 });
+
+async function writeFakeHarness(binDir: string, name: string, stdout: string): Promise<void> {
+  await mkdir(binDir, { recursive: true });
+  await writeFile(
+    path.join(binDir, name),
+    [
+      '#!/usr/bin/env node',
+      `process.stdout.write(${JSON.stringify(stdout.endsWith('\n') ? stdout : `${stdout}\n`)});`
+    ].join('\n'),
+    'utf8'
+  );
+  await chmod(path.join(binDir, name), 0o755);
+}
+
+function snapshotEnv(keys: string[]): Record<string, string | undefined> {
+  const out: Record<string, string | undefined> = {};
+  for (const key of keys) out[key] = process.env[key];
+  return out;
+}
+
+function restoreEnv(snapshot: Record<string, string | undefined>): void {
+  for (const [key, value] of Object.entries(snapshot)) {
+    if (value === undefined) {
+      delete process.env[key];
+    } else {
+      process.env[key] = value;
+    }
+  }
+}

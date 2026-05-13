@@ -42,6 +42,14 @@ function fakeCtx(over: Partial<WorkforceCtx> = {}): WorkforceCtx {
         /* no-op */
       }
     },
+    files: {
+      async read() {
+        return '';
+      },
+      async write() {
+        /* no-op */
+      }
+    },
     memory: {
       async save() {
         /* no-op */

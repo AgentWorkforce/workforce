@@ -181,7 +181,7 @@ test('deploy fails clearly when integration is not connected and --no-connect is
     );
     assert.ok(
       io.messages.find(
-        (m) => m.level === 'error' && m.message.includes('--no-connect was passed')
+        (m) => m.level === 'error' && m.message.includes('prompts are disabled')
       )
     );
   } finally {
@@ -395,14 +395,19 @@ test('--mode cloud skips local integration resolver and hands off to the cloud l
   }
 });
 
-test('--mode cloud does not require an env workspace token before launching', async () => {
+test('--mode cloud uses the workspace token resolver before launching', async () => {
   const { personaPath, cleanup } = await withTempPersona(basePersonaJson());
   const io = createBufferedIO();
   let launched = false;
   try {
-    const result = await withWorkspaceEnv({ workspace: 'w-cloud' }, () => deploy(
+    const result = await withWorkspaceEnv({}, () => deploy(
       { personaPath, mode: 'cloud', io },
       {
+        workspaceAuth: {
+          async resolveWorkspace() {
+            return { workspace: 'w-cloud', token: 'tok-cloud' };
+          }
+        },
         bundle: {
           async stage(input) {
             await mkdir(input.outDir, { recursive: true });
@@ -430,7 +435,7 @@ test('--mode cloud does not require an env workspace token before launching', as
             async launch(input) {
               launched = true;
               assert.equal(input.workspace, 'w-cloud');
-              assert.equal(input.workspaceToken, undefined);
+              assert.equal(input.workspaceToken, 'tok-cloud');
               return {
                 id: 'agent-cloud',
                 async stop() {
