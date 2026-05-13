@@ -110,6 +110,144 @@ test('runLogin uses cloud SDK auth, mints a workspace token, and stores it', asy
   }
 });
 
+test('runLogin with --workspace skips the workspace list call and uses the provided workspace', async () => {
+  const calls: string[] = [];
+  const writes: unknown[] = [];
+  const restoreDeps = configureDeployCommandForTest({
+    createTerminalIO: () => createBufferedIO(),
+    ensureAuthenticated: async (apiUrl: string) => {
+      calls.push(`ensure:${apiUrl}`);
+      return {
+        apiUrl,
+        accessToken: 'access',
+        refreshToken: 'refresh',
+        accessTokenExpiresAt: '2999-01-01T00:00:00.000Z'
+      };
+    },
+    createCloudApiClient() {
+      calls.push('createCloudApiClient');
+      return {
+        async fetch(pathname: string) {
+          calls.push(`fetch:${pathname}`);
+          return new Response('should not be called', { status: 500 });
+        }
+      };
+    },
+    issueWorkspaceToken: async (workspace: string, options: { apiUrl?: string; name?: string } = {}) => {
+      calls.push(`issue:${workspace}:${options.apiUrl}:${options.name}`);
+      return { key: 'tok-ws', workspaceToken: { workspaceId: 'ws-explicit', kind: 'workspace_token' } };
+    },
+    writeStoredWorkspaceToken: async (login: unknown) => {
+      writes.push(login);
+    }
+  });
+  const trap = trapExit(false);
+  try {
+    await runLogin([
+      '--cloud-url',
+      'https://cloud.example.test/',
+      '--workspace',
+      '50587328-441d-4acb-b8f3-dbe1b3c5de99'
+    ]);
+    assert.deepEqual(trap.exits, [0]);
+    assert.ok(
+      !calls.some((c) => c === 'createCloudApiClient' || c.startsWith('fetch:')),
+      `expected workspace-list to be skipped, got calls: ${JSON.stringify(calls)}`
+    );
+    assert.deepEqual(calls, [
+      'ensure:https://cloud.example.test',
+      'issue:50587328-441d-4acb-b8f3-dbe1b3c5de99:https://cloud.example.test:agentworkforce-cli'
+    ]);
+    assert.deepEqual(writes, [{
+      workspace: '50587328-441d-4acb-b8f3-dbe1b3c5de99',
+      workspaceSlug: '50587328-441d-4acb-b8f3-dbe1b3c5de99',
+      workspaceId: 'ws-explicit',
+      token: 'tok-ws',
+      cloudUrl: 'https://cloud.example.test'
+    }]);
+    assert.match(trap.stdout, /logged in: 50587328-441d-4acb-b8f3-dbe1b3c5de99/);
+  } finally {
+    trap.restore();
+    restoreDeps();
+  }
+});
+
+test('runLogin without --workspace surfaces a --workspace hint when the workspaces list returns 403', async () => {
+  const restoreDeps = configureDeployCommandForTest({
+    createTerminalIO: () => createBufferedIO(),
+    ensureAuthenticated: async (apiUrl: string) => ({
+      apiUrl,
+      accessToken: 'access',
+      refreshToken: 'refresh',
+      accessTokenExpiresAt: '2999-01-01T00:00:00.000Z'
+    }),
+    createCloudApiClient() {
+      return {
+        async fetch(_pathname: string) {
+          return new Response(JSON.stringify({ error: 'Forbidden' }), {
+            status: 403,
+            headers: { 'content-type': 'application/json' }
+          });
+        }
+      };
+    },
+    issueWorkspaceToken: async () => {
+      throw new Error('issueWorkspaceToken should not be called when listing fails');
+    },
+    writeStoredWorkspaceToken: async () => {
+      throw new Error('writeStoredWorkspaceToken should not be called when listing fails');
+    }
+  });
+  const trap = trapExit(false);
+  try {
+    await runLogin(['--cloud-url', 'https://cloud.example.test/']);
+    assert.deepEqual(trap.exits, [1]);
+    assert.match(trap.stderr, /workspace list returned 403 Forbidden/);
+    assert.match(trap.stderr, /Pass --workspace <id-or-slug> to skip listing/);
+  } finally {
+    trap.restore();
+    restoreDeps();
+  }
+});
+
+test('runLogin without --workspace surfaces a no-workspaces message when the list comes back empty', async () => {
+  const restoreDeps = configureDeployCommandForTest({
+    createTerminalIO: () => createBufferedIO(),
+    ensureAuthenticated: async (apiUrl: string) => ({
+      apiUrl,
+      accessToken: 'access',
+      refreshToken: 'refresh',
+      accessTokenExpiresAt: '2999-01-01T00:00:00.000Z'
+    }),
+    createCloudApiClient() {
+      return {
+        async fetch(_pathname: string) {
+          return new Response(JSON.stringify({ workspaces: [] }), {
+            status: 200,
+            headers: { 'content-type': 'application/json' }
+          });
+        }
+      };
+    },
+    issueWorkspaceToken: async () => {
+      throw new Error('issueWorkspaceToken should not be called when no workspaces');
+    },
+    writeStoredWorkspaceToken: async () => {
+      throw new Error('writeStoredWorkspaceToken should not be called when no workspaces');
+    }
+  });
+  const trap = trapExit(false);
+  try {
+    await runLogin(['--cloud-url', 'https://cloud.example.test/']);
+    assert.deepEqual(trap.exits, [1]);
+    assert.match(trap.stderr, /no workspaces are accessible from this account/);
+    assert.match(trap.stderr, /pass --workspace <id-or-slug>/);
+  } finally {
+    trap.restore();
+    restoreDeps();
+  }
+});
+
 test('runLogout preserves shared cloud auth and clears only the workspace token by default', async () => {
   const calls: string[] = [];
   const restoreDeps = configureDeployCommandForTest({

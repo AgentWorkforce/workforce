@@ -134,9 +134,20 @@ export async function runLogin(args: readonly string[]): Promise<void> {
   try {
     const auth = await deployCommandDeps.ensureAuthenticated(cloudUrl);
     const apiUrl = normalizeCloudUrl(auth.apiUrl || cloudUrl);
-    const workspaces = await listWorkspacesForLogin(auth, apiUrl);
-    const chosen = opts.workspace
-      ?? await pickWorkspaceInteractive(workspaces, io);
+    let workspaces: LoginWorkspace[] = [];
+    let chosen: string;
+    if (opts.workspace) {
+      chosen = opts.workspace;
+    } else {
+      workspaces = await listWorkspacesForLogin(auth, apiUrl);
+      if (workspaces.length === 0) {
+        throw new Error(
+          'no workspaces are accessible from this account. Create one at https://agentrelay.cloud, '
+            + 'or pass --workspace <id-or-slug> if you already know the workspace identifier.'
+        );
+      }
+      chosen = await pickWorkspaceInteractive(workspaces, io);
+    }
     const tokenResp = await deployCommandDeps.issueWorkspaceToken(chosen, {
       apiUrl,
       name: 'agentworkforce-cli'
@@ -210,6 +221,8 @@ legacy ~/.agentworkforce/login.json-style fallback instead.
 Flags:
   --workspace <name>          Workforce workspace; defaults to WORKFORCE_WORKSPACE_ID or prompt
   --cloud-url <url>           Override the workforce cloud base URL
+  When --workspace is set, the CLI skips listing workspaces — useful when your
+  account hits 403 on /api/v1/workspaces but you already know the workspace id.
   -h, --help                  Print this message
 `;
 
@@ -427,6 +440,12 @@ async function listWorkspacesForLogin(auth: StoredAuth, apiUrl: string): Promise
   const res = await client.fetch('/api/v1/workspaces');
   if (res.ok) {
     return parseWorkspaceList(await res.json().catch(() => null));
+  }
+  if (res.status === 403) {
+    throw new Error(
+      'workspace list returned 403 Forbidden. Pass --workspace <id-or-slug> to skip listing, '
+        + 'or check that your account has access to a workspace at https://agentrelay.cloud.'
+    );
   }
   if (res.status !== 404 && res.status !== 405) {
     throw new Error(`workspace list failed: ${res.status} ${await res.text().catch(() => '')}`.trim());
