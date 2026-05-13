@@ -7,6 +7,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [3.0.4] - 2026-05-13
+
+### Added
+
+- **Add destroy command for tearing down deployed agents** (#107)
+
+### Changed
+
+- Deploy v1 CLI runtime credentials and customer example (#109)
+
 ## [3.0.3] - 2026-05-13
 
 ### Added
