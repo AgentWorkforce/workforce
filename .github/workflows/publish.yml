@@ -695,7 +695,19 @@ jobs:
           // didn't publish an umbrella stamp (e.g. version: none re-runs).
           const releaseVersion = process.env.RELEASE_VERSION || canonicalVersion;
 
-          const packageOrder = ['persona-kit', 'workload-router', 'cli', 'daytona-runner', 'agentworkforce'];
+          // Mirrors the topological order used in the "Resolve target
+          // packages" step. Sorting release-notes entries by this order
+          // ensures missing packages don't all collapse to indexOf=-1.
+          const packageOrder = [
+            'persona-kit',
+            'runtime',
+            'workload-router',
+            'deploy',
+            'mcp-workforce',
+            'daytona-runner',
+            'cli',
+            'agentworkforce',
+          ];
           const entries = versionsRaw.trim().split(/\s+/).filter(Boolean).map((entry) => {
             const idx = entry.indexOf(':');
             return { pkg: entry.slice(0, idx), ver: entry.slice(idx + 1) };
