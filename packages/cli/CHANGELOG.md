@@ -7,6 +7,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [3.0.3] - 2026-05-13
+
+### Added
+
+- **--mode cloud (OSS-generic persona+bundle POST)** (#102)
+
+### Fixed
+
+- Use the real binary name (agentworkforce) in help text, add deploy + login to Commands (#106)
+
 ## [3.0.2] - 2026-05-13
 
 ### Added
