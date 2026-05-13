@@ -496,7 +496,7 @@ function parseOverride(value: unknown, context: string): LocalPersonaOverride {
     id: raw.id,
     extends: raw.extends as string | undefined,
     intent: raw.intent as string | undefined,
-    tags: normalizedTags,
+    ...(normalizedTags !== undefined ? { tags: normalizedTags } : {}),
     description: raw.description as string | undefined,
     skills: raw.skills as PersonaSpec['skills'] | undefined,
     inputs,

@@ -201,21 +201,21 @@ test('cloud URL precedence is flag env, cloud env, persona deployUrl, then defau
     return calls.find((call) => call.url.endsWith('/deployments'))?.url;
   }
 
-  const personaWithUrl = persona() as Omit<PersonaSpec, 'cloud'> & { cloud: { deployUrl: string } };
+  const personaWithUrl = persona() as unknown as Omit<PersonaSpec, 'cloud'> & { cloud: { deployUrl: string } };
   personaWithUrl.cloud = { deployUrl: 'https://persona.example.test/' };
   assert.equal(
     await deployedUrl({
       WORKFORCE_DEPLOY_CLOUD_URL: 'https://flag.example.test/',
       WORKFORCE_CLOUD_URL: 'https://env.example.test/'
-    }, personaWithUrl),
+    }, personaWithUrl as unknown as PersonaSpec),
     'https://flag.example.test/api/v1/workspaces/ws-test/deployments'
   );
   assert.equal(
-    await deployedUrl({ WORKFORCE_CLOUD_URL: 'https://env.example.test/' }, personaWithUrl),
+    await deployedUrl({ WORKFORCE_CLOUD_URL: 'https://env.example.test/' }, personaWithUrl as unknown as PersonaSpec),
     'https://env.example.test/api/v1/workspaces/ws-test/deployments'
   );
   assert.equal(
-    await deployedUrl({}, personaWithUrl),
+    await deployedUrl({}, personaWithUrl as unknown as PersonaSpec),
     'https://persona.example.test/api/v1/workspaces/ws-test/deployments'
   );
   assert.equal(
