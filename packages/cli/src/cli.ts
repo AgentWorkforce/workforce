@@ -59,6 +59,7 @@ import {
 } from '@relayfile/local-mount';
 import ora, { type Ora } from 'ora';
 import { runDeploy, runLogin } from './deploy-command.js';
+import { runDestroy } from './destroy-command.js';
 import {
   startLaunchMetadataRecording,
   type LaunchMetadataRun
@@ -202,6 +203,19 @@ Commands:
                         --cloud-url <url>   override the workforce cloud URL
                         --input KEY=value   override a declared persona input
                                             (repeat for multiple)
+  destroy <persona-or-agent-id> [flags]
+                      Tear down a deployed agent: cancel all schedules and
+                      mark the agent as destroyed in the workspace. Accepts
+                      either a persona JSON path (resolved to an agent id
+                      via the workspace's agents index) or a literal agent
+                      UUID.
+                      Flags:
+                        --workspace <id>    pick a non-default workspace
+                        --cloud-url <url>   override the workforce cloud URL
+                        --no-prompt         fail instead of opening the
+                                            browser login flow
+                      Exit codes: 0 destroyed, 2 not found / already
+                      destroyed, 1 any other error.
   login               Connect this machine to a workforce workspace. The
                       browser-based flow is rolling out; until then it prints
                       the WORKFORCE_WORKSPACE_ID / WORKFORCE_WORKSPACE_TOKEN
@@ -234,6 +248,8 @@ Examples:
   agentworkforce agent "$(agentworkforce pick "fix the flaky test in foo.test.ts")"
   agentworkforce deploy ./personas/weekly-digest.json --mode cloud
   agentworkforce deploy ./personas/weekly-digest.json --mode sandbox --input TOPIC="Deploy v1"
+  agentworkforce destroy ./personas/weekly-digest.json
+  agentworkforce destroy 11111111-2222-4333-8444-555555555555
   agentworkforce login
 `;
 
@@ -3770,6 +3786,11 @@ export async function main(): Promise<void> {
 
   if (subcommand === 'deploy') {
     await runDeploy(rest);
+    return;
+  }
+
+  if (subcommand === 'destroy') {
+    await runDestroy(rest);
     return;
   }
 
