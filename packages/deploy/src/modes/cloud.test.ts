@@ -682,7 +682,17 @@ test('cloud existing-persona stage honors destroy and cancel choices', async () 
       WORKFORCE_DEPLOY_ON_EXISTS: 'cancel'
     },
     fetch(url, init) {
-      if (init?.method === 'GET' && url.endsWith('/deployments')) return okJson({ agent: { id: 'agent-old' } });
+      if (init?.method === 'GET' && url.endsWith('/deployments')) {
+        return okJson({
+          agents: [{
+            agentId: 'agent-old',
+            deployedName: 'demo',
+            status: 'active',
+            createdAt: '2026-05-13T00:00:00.000Z'
+          }],
+          nextCursor: null
+        });
+      }
       throw new Error(`unexpected URL ${url}`);
     }
   });
