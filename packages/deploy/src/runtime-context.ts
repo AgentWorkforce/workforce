@@ -56,6 +56,10 @@ function parseTriggerKind(value: string | undefined): RuntimeTriggerKind | undef
 }
 
 function inferTriggerKind(persona: PersonaSpec): RuntimeTriggerKind {
-  if (persona.integrations && Object.keys(persona.integrations).length > 0) return 'inbox';
+  if (hasIntegrationTriggers(persona)) return 'radio';
   return 'clock';
+}
+
+function hasIntegrationTriggers(persona: PersonaSpec): boolean {
+  return Object.values(persona.integrations ?? {}).some((integration) => (integration.triggers?.length ?? 0) > 0);
 }

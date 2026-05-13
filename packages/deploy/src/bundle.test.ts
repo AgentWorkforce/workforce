@@ -140,3 +140,18 @@ test('runtimeContextEnv preserves precomputed row context JSON', () => {
   assert.equal(env.WORKFORCE_AGENT_CONTEXT, '{"id":"agent_real"}');
   assert.equal(env.WORKFORCE_DEPLOYMENT_CONTEXT, '{"id":"deployment_real"}');
 });
+
+test('runtimeContextEnv infers radio for integration-triggered agents', () => {
+  const env = runtimeContextEnv(
+    persona({
+      integrations: {
+        github: {
+          triggers: [{ on: 'pull_request.opened' }]
+        }
+      }
+    }),
+    undefined
+  );
+
+  assert.equal(JSON.parse(env.WORKFORCE_DEPLOYMENT_CONTEXT).triggerKind, 'radio');
+});
