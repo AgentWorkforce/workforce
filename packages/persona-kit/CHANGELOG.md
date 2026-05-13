@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [3.0.10] - 2026-05-13
+
+### Fixed
+
+- Defer @relayfile/local-mount import to call site (#121)
+
 ## [3.0.7] - 2026-05-13
 
 ### Fixed
