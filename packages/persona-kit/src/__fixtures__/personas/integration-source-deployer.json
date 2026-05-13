@@ -3,11 +3,13 @@
   "intent": "documentation",
   "tags": ["documentation"],
   "description": "Fixture: persona declaring a GitHub integration with no explicit source. Exercises the default-injection path that fills in { kind: 'deployer_user' } during parse.",
+  "skills": [],
   "harness": "claude",
   "model": "anthropic/claude-3-5-sonnet",
   "systemPrompt": "Fixture persona for IntegrationSource default-injection. Not used at runtime.",
   "harnessSettings": { "reasoning": "medium", "timeoutSeconds": 300 },
   "cloud": true,
+  "onEvent": "./agent.ts",
   "integrations": {
     "github": {
       "scope": { "repo": "AgentWorkforce/workforce" },

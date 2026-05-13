@@ -19,6 +19,9 @@ test('persona fixtures validate against generated schema and parse', async () =>
   assert.deepEqual(fixtureNames, [
     'cron-only.json',
     'full.json',
+    'integration-source-deployer.json',
+    'integration-source-service-account.json',
+    'integration-source-workspace.json',
     'invalid-unknown-trigger.json',
     'minimal.json'
   ]);

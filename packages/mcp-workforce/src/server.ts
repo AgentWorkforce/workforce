@@ -10,7 +10,7 @@ import {
   type IntegrationToolName
 } from './tools/integrations.js';
 
-const MEMORY_SCOPE_ENUM = z.enum(['session', 'user', 'workspace', 'org', 'object']);
+const MEMORY_SCOPE_ENUM = z.enum(['workspace', 'user', 'global']);
 
 /**
  * Build an `McpServer` with workforce-flavored tools registered. Exposed
@@ -62,7 +62,7 @@ export function createWorkforceMcpServer(config: WorkforceMcpConfig): McpServer 
     {
       title: 'Save a memory entry',
       description:
-        'Persist a memory entry for the active workspace. Scopes follow @agent-assistant/memory semantics: session, user, workspace, org, object. Tags are deduped; workspace/scope tags are added automatically.',
+        'Persist a memory entry for the active workspace. Scope is one of workspace (default) / user / global, matching @agentworkforce/persona-kit\'s PersonaMemoryScope. Tags are deduped; workspace/scope tags are added automatically.',
       inputSchema: {
         content: z.string().min(1),
         tags: z.array(z.string()).optional(),
