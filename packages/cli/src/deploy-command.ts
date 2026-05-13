@@ -4,14 +4,14 @@ import {
   clearStoredAuth,
   defaultApiUrl,
   ensureAuthenticated,
-  issueWorkspaceToken,
   type StoredAuth
 } from '@agent-relay/cloud';
 import {
+  clearActiveWorkspace,
   clearStoredWorkspaceToken,
   createTerminalIO,
   deploy,
-  writeStoredWorkspaceToken,
+  writeActiveWorkspace,
   type DeployMode,
   type DeployOptions,
   type ModeLaunchHandle
@@ -22,20 +22,20 @@ type LoginApiClient = Pick<CloudApiClient, 'fetch'>;
 
 type DeployCommandDeps = {
   ensureAuthenticated: typeof ensureAuthenticated;
-  issueWorkspaceToken: typeof issueWorkspaceToken;
   clearStoredAuth: typeof clearStoredAuth;
   clearStoredWorkspaceToken: typeof clearStoredWorkspaceToken;
-  writeStoredWorkspaceToken: typeof writeStoredWorkspaceToken;
+  clearActiveWorkspace: typeof clearActiveWorkspace;
+  writeActiveWorkspace: typeof writeActiveWorkspace;
   createTerminalIO: typeof createTerminalIO;
   createCloudApiClient(auth: StoredAuth, apiUrl: string): LoginApiClient;
 };
 
 const defaultDeployCommandDeps: DeployCommandDeps = {
   ensureAuthenticated,
-  issueWorkspaceToken,
   clearStoredAuth,
   clearStoredWorkspaceToken,
-  writeStoredWorkspaceToken,
+  clearActiveWorkspace,
+  writeActiveWorkspace,
   createTerminalIO,
   createCloudApiClient(auth, apiUrl) {
     return new CloudApiClient({
@@ -148,17 +148,16 @@ export async function runLogin(args: readonly string[]): Promise<void> {
       }
       chosen = await pickWorkspaceInteractive(workspaces, io);
     }
-    const tokenResp = await deployCommandDeps.issueWorkspaceToken(chosen, {
-      apiUrl,
-      name: 'agentworkforce-cli'
-    });
-    const token = readWorkspaceToken(tokenResp);
-    const workspaceId = readWorkspaceId(tokenResp) ?? findWorkspace(workspaces, chosen)?.id ?? chosen;
-    await deployCommandDeps.writeStoredWorkspaceToken({
+    // No workspace-scoped token mint — cloud's resolveRequestAuth accepts
+    // the shared @agent-relay/cloud accessToken as Bearer directly. We just
+    // persist a pointer recording which workspace the user picked so
+    // resolveWorkspaceToken can pair it with the shared accessToken on
+    // each subsequent deploy call.
+    const match = findWorkspace(workspaces, chosen);
+    await deployCommandDeps.writeActiveWorkspace({
       workspace: chosen,
-      workspaceSlug: findWorkspace(workspaces, chosen)?.slug ?? chosen,
-      workspaceId,
-      token,
+      ...(match?.slug ? { workspaceSlug: match.slug } : {}),
+      ...(match?.id ? { workspaceId: match.id } : {}),
       cloudUrl: apiUrl
     });
     process.stdout.write(`\nlogged in: ${chosen}\n`);
@@ -181,6 +180,12 @@ export async function runLogout(args: readonly string[]): Promise<void> {
     if (opts.cloudAuth) {
       await deployCommandDeps.clearStoredAuth();
     }
+    // Always drop the active-workspace pointer — `agentworkforce logout`
+    // should detach this machine from any workspace regardless of whether
+    // the user also wants to nuke the shared cloud login.
+    await deployCommandDeps.clearActiveWorkspace();
+    // Legacy keychain workspace token is also cleared so users mid-upgrade
+    // don't end up with a stale minted token after logout.
     await deployCommandDeps.clearStoredWorkspaceToken(opts.workspace);
     process.stdout.write(opts.cloudAuth ? 'logged out\n' : 'workspace login cleared\n');
     process.exit(0);
@@ -213,10 +218,12 @@ Flags:
 
 const LOGIN_USAGE = `usage: agentworkforce login [flags]
 
-Connect this machine to a workforce workspace using the browser OAuth flow.
-If an Agent Relay Cloud login already exists, it is reused and the workforce
-workspace token is stored beside it. Set WORKFORCE_LOGIN_FILE to force the
-legacy ~/.agentworkforce/login.json-style fallback instead.
+Connect this machine to a workforce workspace. Reuses the shared
+Agent Relay Cloud login (\`~/.agent-relay/cloud-auth.json\`) for the bearer
+credential and stores a small pointer at \`~/.agentworkforce/active.json\`
+recording which workspace this machine targets. No separate workspace-scoped
+token is minted; cloud accepts the shared accessToken as Authorization: Bearer
+for deploy endpoints.
 
 Flags:
   --workspace <name>          Workforce workspace; defaults to WORKFORCE_WORKSPACE_ID or prompt
@@ -513,28 +520,6 @@ function findWorkspace(workspaces: readonly LoginWorkspace[], value: string): Lo
 
 function workspaceKey(workspace: LoginWorkspace): string {
   return workspace.slug ?? workspace.id;
-}
-
-function readWorkspaceToken(value: unknown): string {
-  if (!value || typeof value !== 'object' || Array.isArray(value)) {
-    throw new Error('workspace token response was not an object');
-  }
-  const record = value as Record<string, unknown>;
-  const token = readString(record, 'token') ?? readString(record, 'key');
-  if (!token) {
-    throw new Error('workspace token response did not include a token');
-  }
-  return token;
-}
-
-function readWorkspaceId(value: unknown): string | undefined {
-  if (!value || typeof value !== 'object' || Array.isArray(value)) return undefined;
-  const record = value as Record<string, unknown>;
-  const direct = readString(record, 'workspaceId');
-  if (direct) return direct;
-  const nested = record.workspaceToken;
-  if (!nested || typeof nested !== 'object' || Array.isArray(nested)) return undefined;
-  return readString(nested as Record<string, unknown>, 'workspaceId');
 }
 
 function readString(record: Record<string, unknown>, key: string): string | undefined {
