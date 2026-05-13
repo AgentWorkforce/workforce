@@ -167,9 +167,11 @@ export async function runLogout(args: readonly string[]): Promise<void> {
   }
   const opts = parseLogoutArgs(args);
   try {
-    await deployCommandDeps.clearStoredAuth();
+    if (opts.cloudAuth) {
+      await deployCommandDeps.clearStoredAuth();
+    }
     await deployCommandDeps.clearStoredWorkspaceToken(opts.workspace);
-    process.stdout.write('logged out\n');
+    process.stdout.write(opts.cloudAuth ? 'logged out\n' : 'workspace login cleared\n');
     process.exit(0);
   } catch (err) {
     process.stderr.write(
@@ -201,8 +203,9 @@ Flags:
 const LOGIN_USAGE = `usage: agentworkforce login [flags]
 
 Connect this machine to a workforce workspace using the browser OAuth flow.
-The resulting workspace token is stored in the OS keychain when available,
-falling back to ~/.agentworkforce/login.json.
+If an Agent Relay Cloud login already exists, it is reused and the workforce
+workspace token is stored beside it. Set WORKFORCE_LOGIN_FILE to force the
+legacy ~/.agentworkforce/login.json-style fallback instead.
 
 Flags:
   --workspace <name>          Workforce workspace; defaults to WORKFORCE_WORKSPACE_ID or prompt
@@ -212,10 +215,13 @@ Flags:
 
 const LOGOUT_USAGE = `usage: agentworkforce logout [flags]
 
-Clear the browser OAuth login and the stored workspace token.
+Clear the stored workforce workspace token. Agent Relay Cloud browser auth is
+shared with agent-relay and is preserved unless --cloud-auth is passed.
 
 Flags:
   --workspace <name>          Optional workspace token entry to clear
+  --cloud-auth                Also clear the shared Agent Relay Cloud login
+  --all                       Alias for --cloud-auth
   -h, --help                  Print this message
 `;
 
@@ -386,8 +392,9 @@ function parseLoginArgs(args: readonly string[]): { workspace?: string; cloudUrl
   };
 }
 
-function parseLogoutArgs(args: readonly string[]): { workspace?: string } {
+function parseLogoutArgs(args: readonly string[]): { workspace?: string; cloudAuth?: boolean } {
   let workspace: string | undefined;
+  let cloudAuth = false;
   for (let i = 0; i < args.length; i += 1) {
     const a = args[i];
     if (a === '-h' || a === '--help') {
@@ -397,12 +404,15 @@ function parseLogoutArgs(args: readonly string[]): { workspace?: string } {
       workspace = expectValue('--workspace', args[++i]);
     } else if (a.startsWith('--workspace=')) {
       workspace = expectInlineValue('--workspace', a.slice('--workspace='.length));
+    } else if (a === '--cloud-auth' || a === '--all') {
+      cloudAuth = true;
     } else {
       die(`logout: unknown argument "${a}"`);
     }
   }
   return {
-    ...(workspace ? { workspace } : {})
+    ...(workspace ? { workspace } : {}),
+    ...(cloudAuth ? { cloudAuth } : {})
   };
 }
 
