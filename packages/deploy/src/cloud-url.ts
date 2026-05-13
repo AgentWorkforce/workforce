@@ -1,3 +1,6 @@
+import { defaultApiUrl } from '@agent-relay/cloud';
+import type { ActiveWorkspacePointer } from './login.js';
+
 /**
  * Canonicalize the workforce cloud URL to the public host the user logged
  * into, regardless of which edge / origin-bypass URL the auth response
@@ -16,6 +19,9 @@
  * Rules:
  *   - Map known-bypass hostnames (`origin.agentrelay.cloud`,
  *     `*.agentrelay.cloud`) → canonical `https://agentrelay.com/cloud`.
+ *   - Map the apex `agentrelay.com` (no `/cloud` basePath) → canonical
+ *     `https://agentrelay.com/cloud` so callers that hardcoded the apex
+ *     don't land on the Next.js marketing 404 page.
  *   - Leave other hostnames untouched (dev `localhost:*`, custom tenants,
  *     etc.) — only the cloud-bypass family is remapped.
  *   - Strip a trailing slash so equality comparisons in the rest of the
@@ -37,7 +43,62 @@ export function canonicalizeCloudUrl(input: string): string {
   if (host === 'agentrelay.cloud' || host.endsWith('.agentrelay.cloud')) {
     return 'https://agentrelay.com/cloud';
   }
+  if (
+    host === 'agentrelay.com'
+    && (url.pathname === '' || url.pathname === '/')
+  ) {
+    // Apex without the /cloud basePath would route to the marketing site
+    // and 404 every API call. Public docs/login flows always include the
+    // /cloud prefix — treat the bare apex as a user mistake and fix it
+    // before it produces a wall of HTML in error messages.
+    return 'https://agentrelay.com/cloud';
+  }
   return stripTrailingSlash(url.toString());
+}
+
+/**
+ * Single source of truth for "which cloud URL should this CLI invocation
+ * talk to?" Resolution order, top wins:
+ *
+ *   1. Explicit `--cloud-url` flag.
+ *   2. `WORKFORCE_DEPLOY_CLOUD_URL` (preferred env override).
+ *   3. `WORKFORCE_CLOUD_URL` (legacy env override).
+ *   4. `cloudUrl` recorded in `~/.agentworkforce/active.json` by
+ *      `agentworkforce login`.
+ *   5. `defaultApiUrl()` from `@agent-relay/cloud` (the public canonical
+ *      URL — currently `https://agentrelay.com/cloud`).
+ *
+ * The result is always run through {@link canonicalizeCloudUrl} so
+ * downstream consumers never see an origin-bypass hostname or the
+ * `/cloud`-less apex.
+ */
+export function resolveCloudUrl(context: CloudUrlContext = {}): string {
+  const env = context.env ?? process.env;
+  const raw = firstTruthy(
+    context.flag,
+    env.WORKFORCE_DEPLOY_CLOUD_URL,
+    env.WORKFORCE_CLOUD_URL,
+    context.active?.cloudUrl,
+    defaultApiUrl()
+  );
+  return canonicalizeCloudUrl(raw);
+}
+
+export interface CloudUrlContext {
+  /** Explicit `--cloud-url` flag value, if any. */
+  flag?: string | undefined;
+  /** Process env override; defaults to `process.env`. Pass `{}` to ignore env. */
+  env?: NodeJS.ProcessEnv;
+  /** Active workspace pointer read from `~/.agentworkforce/active.json`. */
+  active?: Pick<ActiveWorkspacePointer, 'cloudUrl'> | null | undefined;
+}
+
+function firstTruthy(...candidates: Array<string | undefined>): string {
+  for (const candidate of candidates) {
+    const trimmed = candidate?.trim();
+    if (trimmed) return trimmed;
+  }
+  return '';
 }
 
 function stripTrailingSlash(value: string): string {

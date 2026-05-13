@@ -1,9 +1,10 @@
 import {
   createTerminalIO,
+  formatHttpErrorBody,
+  readActiveWorkspace,
+  resolveCloudUrl,
   resolveWorkspaceToken
 } from '@agentworkforce/deploy';
-
-const DEFAULT_CLOUD_URL = 'https://agentrelay.com';
 
 type DeploymentListOptions = {
   workspace?: string;
@@ -38,17 +39,16 @@ export async function runDeploymentList(args: readonly string[]): Promise<void> 
   try {
     const opts = parseDeploymentListArgs(args);
     const io = createTerminalIO();
-    const cloudUrl = normalizeCloudUrl(
-      opts.cloudUrl
-        ?? process.env.WORKFORCE_DEPLOY_CLOUD_URL
-        ?? process.env.WORKFORCE_CLOUD_URL
-        ?? DEFAULT_CLOUD_URL
-    );
+    const active = await readActiveWorkspace().catch(() => null);
+    const cloudUrl = resolveCloudUrl({
+      ...(opts.cloudUrl ? { flag: opts.cloudUrl } : {}),
+      active
+    });
     const auth = await resolveWorkspaceToken({
-      workspace: opts.workspace,
+      ...(opts.workspace ? { workspace: opts.workspace } : {}),
       cloudUrl,
       io,
-      noPrompt: opts.noPrompt
+      ...(opts.noPrompt ? { noPrompt: true } : {})
     });
     const workspace = auth.workspace?.trim() || opts.workspace?.trim();
     if (!workspace) {
@@ -70,7 +70,9 @@ export async function runDeploymentList(args: readonly string[]): Promise<void> 
       throw new Error('unauthorized. Run `agentworkforce login` and retry.');
     }
     if (!res.ok) {
-      throw new Error(`list failed: ${res.status} ${await res.text().catch(() => '')}`.trim());
+      const body = await res.text().catch(() => '');
+      const hint = formatHttpErrorBody(body, { url: url.toString() });
+      throw new Error(`list failed: ${res.status}${hint ? ` ${hint}` : ''}`);
     }
     const agents = parseAgents((await res.json()) as ListResponse);
     if (opts.json) {
@@ -222,11 +224,6 @@ function readString(record: Record<string, unknown>, key: string): string | unde
 function readNullableString(record: Record<string, unknown>, key: string): string | null {
   const value = record[key];
   return typeof value === 'string' && value.trim() ? value.trim() : null;
-}
-
-function normalizeCloudUrl(url: string): string {
-  const trimmed = url.trim();
-  return trimmed ? trimmed.replace(/\/+$/, '') : DEFAULT_CLOUD_URL;
 }
 
 function expectValue(flag: string, value: string | undefined): string {

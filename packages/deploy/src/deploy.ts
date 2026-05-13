@@ -2,6 +2,7 @@ import path from 'node:path';
 import { mkdir } from 'node:fs/promises';
 import { defaultApiUrl } from '@agent-relay/cloud';
 import { bundleStager } from './bundle.js';
+import { resolveCloudUrl } from './cloud-url.js';
 import {
   connectIntegrations,
   envIntegrationResolver,
@@ -12,7 +13,11 @@ import {
   type ProviderSubscriptionResolver
 } from './connect.js';
 import { createTerminalIO } from './io.js';
-import { envWorkspaceAuth, type WorkspaceAuth } from './login.js';
+import {
+  readActiveWorkspace,
+  resolveWorkspaceToken,
+  type WorkspaceAuth
+} from './login.js';
 import { devLauncher } from './modes/dev.js';
 import { sandboxLauncher } from './modes/sandbox.js';
 import { cloudLauncher } from './modes/cloud.js';
@@ -145,18 +150,37 @@ export async function deploy(opts: DeployOptions, resolvers: DeployResolvers = {
   }
 
   const mode: DeployMode = opts.mode ?? pickMode(opts);
-  const { workspace, token } = await (resolvers.workspaceAuth ?? envWorkspaceAuth()).resolveWorkspace({
-    override: opts.workspace,
-    io
+  const active = await readActiveWorkspace().catch(() => null);
+  const cloudUrl = resolveCloudUrl({
+    ...(opts.cloudUrl ? { flag: opts.cloudUrl } : {}),
+    active
   });
+
+  // Auth resolution: an explicit `resolvers.workspaceAuth` (used by tests
+  // and bespoke harnesses) wins. Otherwise consult the shared resolver
+  // that walks env → cloud-auth.json → active.json → legacy keychain,
+  // which is the same path `list`/`destroy` and the cloud launcher use.
+  // The orchestrator historically called `envWorkspaceAuth()` directly,
+  // which only honoured WORKFORCE_WORKSPACE_TOKEN + a long-dead keychain —
+  // a user who freshly ran `agentworkforce login` would hit "no workspace
+  // resolved" because that flow only writes the shared accessToken and
+  // active.json pointer.
+  const resolvedAuth = resolvers.workspaceAuth
+    ? await resolvers.workspaceAuth.resolveWorkspace({ override: opts.workspace, io })
+    : await resolveWorkspaceToken({
+        ...(opts.workspace ? { workspace: opts.workspace } : {}),
+        cloudUrl,
+        io,
+        ...(opts.noPrompt ? { noPrompt: true } : {})
+      });
+  const workspace = (resolvedAuth.workspace ?? opts.workspace ?? '').trim();
+  if (!workspace) {
+    throw new Error(
+      'workspace is required for deploy: pass --workspace, set WORKFORCE_WORKSPACE_ID, or run `agentworkforce login`'
+    );
+  }
   io.info(`workspace: ${workspace}`);
-  let activeToken = token;
-  const cloudUrl = normalizeCloudUrl(
-    opts.cloudUrl
-      ?? process.env.WORKFORCE_DEPLOY_CLOUD_URL
-      ?? process.env.WORKFORCE_CLOUD_URL
-      ?? defaultApiUrl()
-  );
+  let activeToken = resolvedAuth.token;
 
   const connectedIntegrations = await connectAndCollectIntegrations({
     persona: preflight.persona,
@@ -207,7 +231,7 @@ export async function deploy(opts: DeployOptions, resolvers: DeployResolvers = {
     ...(activeToken ? { workspaceToken: activeToken } : {}),
     ...(opts.detach ? { detach: true } : {}),
     ...(opts.byoSandbox ? { byoSandbox: true } : {}),
-    ...(opts.cloudUrl ? { cloudUrl: opts.cloudUrl } : {}),
+    ...(cloudUrl ? { cloudUrl } : {}),
     ...(opts.noPrompt ? { noPrompt: true } : {}),
     ...(opts.harnessSource ? { harnessSource: opts.harnessSource } : {}),
     ...(opts.byokKey ? { byokKey: opts.byokKey } : {}),
