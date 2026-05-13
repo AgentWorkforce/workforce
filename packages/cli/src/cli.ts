@@ -181,6 +181,31 @@ Commands:
                       persona-maker with the task as input, or exits non-zero
                       (non-TTY) with a hint.
                       Exit codes: 0 match, 2 no match, 3 picker unavailable.
+  deploy <persona-path> [flags]
+                      Deploy a persona as a managed agent. Modes:
+                        --mode dev          run the persona locally (default if
+                                            no Daytona/workspace creds resolve)
+                        --mode sandbox      run inside a Daytona sandbox
+                                            (default when creds resolve)
+                        --mode cloud        POST persona + bundle to the
+                                            workforce cloud workspace
+                      Flags:
+                        --workspace <name>  pick a non-default workspace
+                        --no-connect        skip integration-connect prompts
+                                            (fail if any integration is missing)
+                        --byo-sandbox       force BYO Daytona auth
+                        --detach            background the runner instead of
+                                            streaming logs in the foreground
+                        --bundle-out <dir>  emit the bundle to <dir> and exit
+                                            without launching
+                        --dry-run           validate the persona; no side effects
+                        --cloud-url <url>   override the workforce cloud URL
+                        --input KEY=value   override a declared persona input
+                                            (repeat for multiple)
+  login               Connect this machine to a workforce workspace. The
+                      browser-based flow is rolling out; until then it prints
+                      the WORKFORCE_WORKSPACE_ID / WORKFORCE_WORKSPACE_TOKEN
+                      env-var setup instructions and exits non-zero.
 
 Options:
   -h, --help          Show this help text.
@@ -207,6 +232,9 @@ Examples:
   agentworkforce harness check
   agentworkforce pick "review this PR for security issues"
   agentworkforce agent "$(agentworkforce pick "fix the flaky test in foo.test.ts")"
+  agentworkforce deploy ./personas/weekly-digest.json --mode cloud
+  agentworkforce deploy ./personas/weekly-digest.json --mode sandbox --input TOPIC="Deploy v1"
+  agentworkforce login
 `;
 
 function die(msg: string, withUsage = true): never {

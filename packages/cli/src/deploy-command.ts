@@ -11,7 +11,7 @@ import {
 const DEFAULT_CLOUD_URL = 'https://agentrelay.com';
 
 /**
- * Argv parser + dispatcher for `workforce deploy <persona-path> [flags]`.
+ * Argv parser + dispatcher for `agentworkforce deploy <persona-path> [flags]`.
  * Keeps cli.ts itself slim — the file is already a large dispatcher and
  * each command lands in its own module when it grows past trivial.
  */
@@ -47,7 +47,7 @@ export async function runDeploy(args: readonly string[]): Promise<void> {
     process.exit(exit.code);
   } catch (err) {
     process.stderr.write(
-      `\nworkforce deploy failed: ${err instanceof Error ? err.message : String(err)}\n`
+      `\nagentworkforce deploy failed: ${err instanceof Error ? err.message : String(err)}\n`
     );
     process.exit(1);
   }
@@ -73,7 +73,7 @@ export async function runLogin(args: readonly string[]): Promise<void> {
     ?? process.env.WORKFORCE_WORKSPACE_ID?.trim()
     ?? (await io.prompt('Workspace ID')).trim();
   if (!workspace) {
-    process.stderr.write('workforce login failed: workspace is required; pass --workspace or set WORKFORCE_WORKSPACE_ID\n');
+    process.stderr.write('agentworkforce login failed: workspace is required; pass --workspace or set WORKFORCE_WORKSPACE_ID\n');
     process.exit(1);
   }
 
@@ -90,13 +90,13 @@ export async function runLogin(args: readonly string[]): Promise<void> {
     process.exit(0);
   } catch (err) {
     process.stderr.write(
-      `\nworkforce login failed: ${err instanceof Error ? err.message : String(err)}\n`
+      `\nagentworkforce login failed: ${err instanceof Error ? err.message : String(err)}\n`
     );
     process.exit(1);
   }
 }
 
-const DEPLOY_USAGE = `usage: workforce deploy <persona-path> [flags]
+const DEPLOY_USAGE = `usage: agentworkforce deploy <persona-path> [flags]
 
 Flags:
   --mode dev|sandbox|cloud    Pick a run mode (default: sandbox if Daytona/workspace creds resolve, else dev)
@@ -115,7 +115,7 @@ Flags:
   -h, --help                   Print this message
 `;
 
-const LOGIN_USAGE = `usage: workforce login [flags]
+const LOGIN_USAGE = `usage: agentworkforce login [flags]
 
 Connect this machine to a workforce workspace using the browser OAuth flow.
 The resulting workspace token is stored in the OS keychain when available,
@@ -202,7 +202,7 @@ export function parseDeployArgs(args: readonly string[]): DeployOptions {
   }
 
   if (!personaPath) {
-    die('deploy: missing persona path. Usage: workforce deploy <persona-path>');
+    die('deploy: missing persona path. Usage: agentworkforce deploy <persona-path>');
   }
 
   return {
