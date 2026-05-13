@@ -134,8 +134,7 @@ function createDeployAuthRecovery(opts: DeployOptions): CloudAuthRecoveryResolve
       });
       io.info(`cloud: logged in for workspace ${activeWorkspace}; retrying integration check`);
       return {
-        token: auth.accessToken,
-        workspace: activeWorkspace
+        token: auth.accessToken
       };
     }
   };

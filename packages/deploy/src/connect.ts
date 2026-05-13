@@ -243,8 +243,10 @@ export async function connectIntegrations(input: ConnectAllInput): Promise<Conne
       }
     }
 
-    if (statusCheckFailure && isIntegrationAuthFailure(statusCheckFailure)) {
-      input.io.error(`integrations.${provider}: auth failed while checking connection status`);
+    if (statusCheckFailure) {
+      input.io.error(
+        `integrations.${provider}: ${isIntegrationAuthFailure(statusCheckFailure) ? 'auth failed' : 'failed'} while checking connection status`
+      );
       outcomes.push({
         provider,
         status: 'failed',

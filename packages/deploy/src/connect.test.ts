@@ -289,6 +289,43 @@ test('connectIntegrations does not prompt auth recovery when --no-prompt is set'
   ]);
 });
 
+test('connectIntegrations fails status-check errors without opening a connect flow', async () => {
+  const io = createBufferedIO();
+  let connectCalled = false;
+
+  const result = await connectIntegrations({
+    persona: {
+      id: 'essay',
+      intent: 'essay',
+      description: 'test persona',
+      tags: ['implementation'],
+      integrations: { notion: {} }
+    } as never,
+    workspace: 'ws-1',
+    noConnect: false,
+    io,
+    integrations: {
+      async isConnected() {
+        throw new Error('cloud integration request failed: 503 Service Unavailable');
+      },
+      async connect() {
+        connectCalled = true;
+        throw new Error('connect should not be called after status-check failure');
+      }
+    }
+  });
+
+  assert.equal(connectCalled, false);
+  assert.deepEqual(result.outcomes, [
+    {
+      provider: 'notion',
+      status: 'failed',
+      message: 'cloud integration request failed: 503 Service Unavailable'
+    }
+  ]);
+  assert.ok(io.messages.some((message) => message.level === 'error' && message.message.includes('failed while checking connection status')));
+});
+
 test('connectIntegrations honors --no-prompt for subscription provider setup', async () => {
   const io = createBufferedIO();
   let confirmCalled = false;

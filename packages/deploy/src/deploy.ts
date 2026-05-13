@@ -50,7 +50,7 @@ export interface CloudAuthRecoveryResolver {
     io: DeployIO;
     provider: string;
     reason: string;
-  }): Promise<{ token: string; workspace?: string } | false | null | undefined>;
+  }): Promise<{ token: string } | false | null | undefined>;
 }
 
 /**
