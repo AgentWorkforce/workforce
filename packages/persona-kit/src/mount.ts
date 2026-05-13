@@ -1,5 +1,22 @@
-import { createMount } from '@relayfile/local-mount';
 import type { ResolvedMountPolicy } from './plan.js';
+
+// `@relayfile/local-mount` pulls in `@parcel/watcher`, which loads a
+// per-platform native binary at module evaluation time
+// (`@parcel/watcher-linux-x64-glibc`, `-darwin-arm64`, …). When
+// persona-kit is loaded server-side just to call `parsePersonaSpec`
+// (e.g. cloud's `import('@agentworkforce/persona-kit')` to validate a
+// deploy bundle), eagerly importing local-mount fails any host that
+// doesn't ship a matching prebuild — most notably AWS Lambda's
+// `@parcel/watcher-linux-x64-glibc`, which OpenNext doesn't bundle.
+//
+// Deferring the local-mount import to `applyPersonaMount`'s call site
+// means the native binary only loads when a mount is actually being
+// applied (which is a CLI/runtime concern, never a server-side
+// validation concern).
+async function loadCreateMount(): Promise<typeof import('@relayfile/local-mount').createMount> {
+  const mod = await import('@relayfile/local-mount');
+  return mod.createMount;
+}
 
 export interface PersonaMountHandle {
   /**
@@ -68,6 +85,7 @@ export async function applyPersonaMount(
       'applyPersonaMount: options.personaId is required when a mount policy is supplied'
     );
   }
+  const createMount = await loadCreateMount();
   const handle = await createMount(options.cwd, options.mountDir, {
     ignoredPatterns: [...mount.ignoredPatterns],
     readonlyPatterns: [...mount.readonlyPatterns],
