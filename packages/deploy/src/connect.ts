@@ -152,6 +152,7 @@ export interface ConnectAllInput {
   persona: PersonaSpec;
   workspace: string;
   noConnect: boolean;
+  noPrompt?: boolean;
   io: DeployIO;
   integrations: IntegrationConnectResolver;
   /** Required only when persona.useSubscription is true. */
@@ -196,6 +197,18 @@ export async function connectIntegrations(input: ConnectAllInput): Promise<Conne
       input.io.info(`integrations.${provider}: already connected`);
       outcomes.push({ provider, status: 'already-connected' });
       continue;
+    }
+
+    if (input.noPrompt) {
+      input.io.error(
+        `integrations.${provider}: not connected, and --no-prompt was passed. Connect it before deploying or run without --no-prompt.`
+      );
+      outcomes.push({
+        provider,
+        status: 'failed',
+        message: 'not connected (--no-prompt was set)'
+      });
+      return { outcomes };
     }
 
     if (input.noConnect) {
