@@ -10,6 +10,21 @@
       "id": "skill.sh/find-skills",
       "source": "https://github.com/vercel-labs/skills#find-skills",
       "description": "Discover and evaluate skills on the skills.sh registry. Check the leaderboard first for popular options, then `npx skills find <query>` per capability area, then verify by install count (prefer 1K+), source reputation, and GitHub stars before recommending."
+    },
+    {
+      "id": "@agent-workforce/persona-relayfile-mount",
+      "source": "@agent-workforce/persona-relayfile-mount",
+      "description": "Load before writing the persona mount field. Allow-list idiom, !web vs !web/ walker gotcha, readonlyPatterns scope rule (never the work dir), per-agent dotfile overlay, .git sandbox behavior."
+    },
+    {
+      "id": "@agent-workforce/persona-mcp-servers",
+      "source": "@agent-workforce/persona-mcp-servers",
+      "description": "Load before writing the persona mcpServers field. Two spec variants (http/sse vs stdio), $VAR secret substitution, claude/codex/opencode harness support matrix that constrains harness selection, permissions.allow pairing."
+    },
+    {
+      "id": "@agent-workforce/persona-sidecars",
+      "source": "@agent-workforce/persona-sidecars",
+      "description": "Load before writing claudeMd/claudeMdContent/agentsMd/agentsMdContent. Path-vs-inline distinction (silent footgun the dry-run does NOT catch), which form to pick for local vs built-in personas, *Mode (overwrite vs extend)."
     }
   ],
   "inputs": {
