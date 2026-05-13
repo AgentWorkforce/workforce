@@ -1,4 +1,11 @@
-export { deploy, pickMode, type DeployResolvers } from './deploy.js';
+import {
+  deploy as deployImpl,
+  pickMode,
+  type DeployResolvers
+} from './deploy.js';
+import type { DeployOptions, DeployResult } from './types.js';
+
+export { pickMode, type DeployResolvers };
 export { preflightPersona } from './preflight.js';
 export {
   connectIntegrations,
@@ -8,7 +15,17 @@ export {
   type IntegrationConnectResolver,
   type ProviderSubscriptionResolver
 } from './connect.js';
-export { envWorkspaceAuth, type WorkspaceAuth } from './login.js';
+export {
+  envWorkspaceAuth,
+  loadWorkspaceToken,
+  loginWithBrowser,
+  resolveWorkspaceToken,
+  resolveWorkspaceTokenFromEnv,
+  storeWorkspaceToken,
+  type StoredWorkspaceLogin,
+  type WorkspaceAuth,
+  type WorkspaceAuthToken
+} from './login.js';
 export { createTerminalIO, createBufferedIO, type BufferedIO } from './io.js';
 export { bundleStager } from './bundle.js';
 export { devLauncher } from './modes/dev.js';
@@ -29,3 +46,10 @@ export type {
   ModeLaunchInput,
   ModeLauncher
 } from './types.js';
+
+export async function deploy(
+  opts: DeployOptions,
+  resolvers: DeployResolvers = {}
+): Promise<DeployResult> {
+  return await deployImpl(opts, resolvers);
+}

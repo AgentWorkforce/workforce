@@ -21,6 +21,18 @@ export interface DeployOptions {
   dryRun?: boolean;
   /** Override the WORKFORCE_CLOUD_URL; defaults to env or production. */
   cloudUrl?: string;
+  /** Fail instead of prompting for cloud auth/integration setup. */
+  noPrompt?: boolean;
+  /** Cloud harness credential source. */
+  harnessSource?: 'plan' | 'byok' | 'oauth';
+  /** BYOK API key used when `harnessSource` is `byok`. */
+  byokKey?: string;
+  /** Existing cloud persona behavior. Defaults to `cancel`. */
+  onExists?: 'update' | 'destroy' | 'cancel';
+  /** Runtime inputs forwarded to hosted cloud deployments. */
+  inputs?: Record<string, string>;
+  /** Runtime log streaming hook. */
+  onLog?: (line: string) => void;
   /** Override stdout writer for tests + structured outputs. */
   io?: DeployIO;
 }
@@ -106,6 +118,22 @@ export interface ModeLaunchInput {
    * cloud. Mode-specific (sandbox launcher only); other modes ignore.
    */
   byoSandbox?: boolean;
+  /** Workspace-scoped auth token resolved by the deploy orchestrator. */
+  workspaceToken?: string;
+  /** Cloud base URL override. */
+  cloudUrl?: string;
+  /** Fail instead of prompting for cloud setup. */
+  noPrompt?: boolean;
+  /** Cloud harness credential source. */
+  harnessSource?: 'plan' | 'byok' | 'oauth';
+  /** BYOK API key used when `harnessSource` is `byok`. */
+  byokKey?: string;
+  /** Existing cloud persona behavior. Defaults to `cancel`. */
+  onExists?: 'update' | 'destroy' | 'cancel';
+  /** Runtime inputs forwarded to launchers that support them. */
+  inputs?: Record<string, string>;
+  /** Runtime log streaming hook. */
+  onLog?: (line: string) => void;
 }
 
 export interface ModeLaunchHandle {
