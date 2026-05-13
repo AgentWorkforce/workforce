@@ -147,3 +147,51 @@ test('connectIntegrations fails fast on auth errors without prompting to connect
   assert.ok(io.messages.some((message) => message.level === 'warn' && message.message.includes('failed to check connection status for notion')));
   assert.ok(io.messages.some((message) => message.level === 'error' && message.message.includes('auth failed')));
 });
+
+test('connectIntegrations honors --no-prompt for subscription provider setup', async () => {
+  const io = createBufferedIO();
+  let confirmCalled = false;
+  let subscriptionConnectCalled = false;
+  io.confirm = async () => {
+    confirmCalled = true;
+    return true;
+  };
+
+  await assert.rejects(
+    connectIntegrations({
+      persona: {
+        id: 'essay',
+        intent: 'essay',
+        description: 'test persona',
+        tags: ['implementation'],
+        useSubscription: true,
+        integrations: {}
+      } as never,
+      workspace: 'ws-1',
+      noConnect: false,
+      noPrompt: true,
+      io,
+      integrations: {
+        async isConnected() {
+          throw new Error('no integration checks expected');
+        },
+        async connect() {
+          throw new Error('no integration connects expected');
+        }
+      },
+      subscription: {
+        async isConnected() {
+          return false;
+        },
+        async connect() {
+          subscriptionConnectCalled = true;
+          return { provider: 'anthropic' };
+        }
+      }
+    }),
+    /--no-prompt was passed/
+  );
+
+  assert.equal(confirmCalled, false);
+  assert.equal(subscriptionConnectCalled, false);
+});

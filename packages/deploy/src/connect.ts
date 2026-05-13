@@ -152,6 +152,7 @@ export interface ConnectAllInput {
   persona: PersonaSpec;
   workspace: string;
   noConnect: boolean;
+  noPrompt?: boolean;
   io: DeployIO;
   integrations: IntegrationConnectResolver;
   /** Required only when persona.useSubscription is true. */
@@ -173,6 +174,8 @@ export interface ConnectAllResult {
  * Behavior summary:
  *   - integrations: {} or undefined → returns immediately, no prompts
  *   - already-connected provider → no prompt; emits `already-connected`
+ *   - auth failure while checking status → fails without prompting
+ *   - not connected + noPrompt=true → fails immediately without prompting
  *   - not connected + noConnect=true → fails the deploy with a clear message
  *   - not connected + noConnect=false → prompts; on yes runs `connect`,
  *     on no marks `skipped`. The orchestrator decides what to do with
@@ -208,6 +211,18 @@ export async function connectIntegrations(input: ConnectAllInput): Promise<Conne
         message: statusCheckFailure
       });
       continue;
+    }
+
+    if (input.noPrompt) {
+      input.io.error(
+        `integrations.${provider}: not connected, and --no-prompt was passed. Connect it before deploying or run without --no-prompt.`
+      );
+      outcomes.push({
+        provider,
+        status: 'failed',
+        message: 'not connected (--no-prompt was set)'
+      });
+      return { outcomes };
     }
 
     if (input.noConnect) {
@@ -256,6 +271,11 @@ export async function connectIntegrations(input: ConnectAllInput): Promise<Conne
       .isConnected({ workspace: input.workspace })
       .catch(() => false);
     if (!isConn) {
+      if (input.noPrompt) {
+        throw new Error(
+          'persona requires a subscription provider connection, but --no-prompt was passed. Connect it before deploying or run without --no-prompt.'
+        );
+      }
       if (input.noConnect) {
         throw new Error(
           'persona requires a subscription provider connection, but --no-connect was passed'

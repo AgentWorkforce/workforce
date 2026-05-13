@@ -78,6 +78,46 @@ async function withWorkspaceEnv<T>(
   }
 }
 
+function successfulBundleStager(): BundleStager {
+  return {
+    async stage(input) {
+      await mkdir(input.outDir, { recursive: true });
+      const runner = path.join(input.outDir, 'runner.mjs');
+      const bundle = path.join(input.outDir, 'agent.bundle.mjs');
+      const personaCopy = path.join(input.outDir, 'persona.json');
+      const pkg = path.join(input.outDir, 'package.json');
+      await Promise.all([
+        writeFile(runner, '', 'utf8'),
+        writeFile(bundle, '', 'utf8'),
+        writeFile(personaCopy, '{}', 'utf8'),
+        writeFile(pkg, '{}', 'utf8')
+      ]);
+      return {
+        runnerPath: runner,
+        bundlePath: bundle,
+        personaCopyPath: personaCopy,
+        packageJsonPath: pkg,
+        sizeBytes: 1
+      };
+    }
+  };
+}
+
+function successfulDevLauncher(onLaunch?: () => void): ModeLauncher {
+  return {
+    async launch() {
+      onLaunch?.();
+      return {
+        id: 'pid-1',
+        async stop() {
+          /* no-op */
+        },
+        done: Promise.resolve({ code: 0 })
+      };
+    }
+  };
+}
+
 test('preflightPersona accepts a valid deploy-shaped persona', async () => {
   const { personaPath, cleanup } = await withTempPersona(basePersonaJson());
   try {
@@ -182,6 +222,143 @@ test('deploy fails clearly when integration is not connected and --no-connect is
     assert.ok(
       io.messages.find(
         (m) => m.level === 'error' && m.message.includes('prompts are disabled')
+      )
+    );
+  } finally {
+    await cleanup();
+  }
+});
+
+test('deploy connects each missing persona integration before launch', async () => {
+  const { personaPath, cleanup } = await withTempPersona(
+    basePersonaJson({ integrations: { github: {}, notion: {} } })
+  );
+  const io = createBufferedIO();
+  const checked: string[] = [];
+  const connected: string[] = [];
+  let launched = false;
+  const workspaceAuth: WorkspaceAuth = {
+    async resolveWorkspace() {
+      return { workspace: 'ws-test', token: 'tok' };
+    }
+  };
+  const integrations: IntegrationConnectResolver = {
+    async isConnected({ provider }) {
+      checked.push(provider);
+      return false;
+    },
+    async connect({ provider }) {
+      connected.push(provider);
+      return { connectionId: `conn-${provider}` };
+    }
+  };
+
+  try {
+    const result = await deploy(
+      { personaPath, mode: 'dev', io },
+      {
+        workspaceAuth,
+        integrations,
+        bundle: successfulBundleStager(),
+        modes: { dev: successfulDevLauncher(() => { launched = true; }) }
+      }
+    );
+
+    assert.deepEqual(checked, ['github', 'notion']);
+    assert.deepEqual(connected, ['github', 'notion']);
+    assert.deepEqual(result.connectedIntegrations, ['github', 'notion']);
+    assert.equal(launched, true);
+  } finally {
+    await cleanup();
+  }
+});
+
+test('deploy aborts cleanly when one missing integration connect fails', async () => {
+  const { personaPath, cleanup } = await withTempPersona(
+    basePersonaJson({ integrations: { github: {}, notion: {} } })
+  );
+  const io = createBufferedIO();
+  const connected: string[] = [];
+  let launched = false;
+  const workspaceAuth: WorkspaceAuth = {
+    async resolveWorkspace() {
+      return { workspace: 'ws-test', token: 'tok' };
+    }
+  };
+  const integrations: IntegrationConnectResolver = {
+    async isConnected() {
+      return false;
+    },
+    async connect({ provider }) {
+      connected.push(provider);
+      if (provider === 'notion') {
+        throw new Error('notion oauth unavailable');
+      }
+      return { connectionId: `conn-${provider}` };
+    }
+  };
+
+  try {
+    await assert.rejects(
+      deploy(
+        { personaPath, mode: 'dev', io },
+        {
+          workspaceAuth,
+          integrations,
+          bundle: successfulBundleStager(),
+          modes: { dev: successfulDevLauncher(() => { launched = true; }) }
+        }
+      ),
+      /deploy aborted: 1 integration\(s\) failed to connect: notion/
+    );
+    assert.deepEqual(connected, ['github', 'notion']);
+    assert.equal(launched, false);
+    assert.ok(
+      io.messages.find(
+        (m) => m.level === 'error' && m.message.includes('integrations.notion: connect failed: notion oauth unavailable')
+      )
+    );
+  } finally {
+    await cleanup();
+  }
+});
+
+test('deploy treats --no-prompt as fail-fast for missing integration connects', async () => {
+  const { personaPath, cleanup } = await withTempPersona(
+    basePersonaJson({ integrations: { github: {}, notion: {} } })
+  );
+  const io = createBufferedIO();
+  const checked: string[] = [];
+  let connectCalled = false;
+  const workspaceAuth: WorkspaceAuth = {
+    async resolveWorkspace() {
+      return { workspace: 'ws-test', token: 'tok' };
+    }
+  };
+  const integrations: IntegrationConnectResolver = {
+    async isConnected({ provider }) {
+      checked.push(provider);
+      return false;
+    },
+    async connect() {
+      connectCalled = true;
+      throw new Error('connect should not be called when --no-prompt is set');
+    }
+  };
+
+  try {
+    await assert.rejects(
+      deploy(
+        { personaPath, mode: 'dev', noPrompt: true, io },
+        { workspaceAuth, integrations }
+      ),
+      /deploy aborted: 1 integration\(s\) failed to connect: github/
+    );
+    assert.deepEqual(checked, ['github']);
+    assert.equal(connectCalled, false);
+    assert.ok(
+      io.messages.find(
+        (m) => m.level === 'error' && m.message.includes('--no-prompt was passed')
       )
     );
   } finally {

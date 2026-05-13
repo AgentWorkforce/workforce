@@ -143,6 +143,7 @@ export async function deploy(opts: DeployOptions, resolvers: DeployResolvers = {
     persona: preflight.persona,
     workspace,
     noConnect: opts.noConnect === true,
+    ...(opts.noPrompt ? { noPrompt: true } : {}),
     io,
     integrations: resolvers.integrations ?? defaultIntegrationResolver({
       mode,
