@@ -36,7 +36,7 @@
     "lint": "tsc -p tsconfig.json --noEmit"
   },
   "dependencies": {
-    "@relayfile/local-mount": "^0.7.0"
+    "@relayfile/local-mount": "^0.7.19"
   },
   "devDependencies": {
     "ts-json-schema-generator": "^2.3.0"
