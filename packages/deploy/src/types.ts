@@ -21,6 +21,8 @@ export interface DeployOptions {
   dryRun?: boolean;
   /** Override the WORKFORCE_CLOUD_URL; defaults to env or production. */
   cloudUrl?: string;
+  /** Localhost-only bearer token for cloud dev auth bypass. */
+  devToken?: string;
   /** Fail instead of prompting for cloud auth/integration setup. */
   noPrompt?: boolean;
   /** Cloud harness credential source. */
@@ -122,6 +124,8 @@ export interface ModeLaunchInput {
   workspaceToken?: string;
   /** Cloud base URL override. */
   cloudUrl?: string;
+  /** Localhost-only bearer token for cloud dev auth bypass. */
+  devToken?: string;
   /** Fail instead of prompting for cloud setup. */
   noPrompt?: boolean;
   /** Cloud harness credential source. */

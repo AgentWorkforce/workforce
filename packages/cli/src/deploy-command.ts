@@ -242,6 +242,7 @@ Flags:
   --bundle-out <dir>           Emit the bundle to <dir> and exit (no launch)
   --dry-run                    Validate the persona and exit before any side effects
   --cloud-url <url>            Override the workforce cloud base URL
+  --dev-token <token>          Localhost-only cloud dev auth bearer token
   --no-prompt                  Fail instead of prompting for cloud setup
   --harness-source <source>    Cloud harness source: plan, byok, or oauth
   --byok-key <key>             API key for --harness-source byok
@@ -289,6 +290,7 @@ export function parseDeployArgs(args: readonly string[]): DeployOptions {
   let bundleOut: string | undefined;
   let dryRun = false;
   let cloudUrl: string | undefined;
+  let devToken: string | undefined;
   let noPrompt = false;
   let harnessSource: DeployOptions['harnessSource'];
   let byokKey: string | undefined;
@@ -322,6 +324,10 @@ export function parseDeployArgs(args: readonly string[]): DeployOptions {
       cloudUrl = expectValue('--cloud-url', args[++i]);
     } else if (a.startsWith('--cloud-url=')) {
       cloudUrl = expectInlineValue('--cloud-url', a.slice('--cloud-url='.length));
+    } else if (a === '--dev-token') {
+      devToken = expectValue('--dev-token', args[++i]);
+    } else if (a.startsWith('--dev-token=')) {
+      devToken = expectInlineValue('--dev-token', a.slice('--dev-token='.length));
     } else if (a === '--no-prompt') {
       noPrompt = true;
       noConnect = true;
@@ -354,6 +360,14 @@ export function parseDeployArgs(args: readonly string[]): DeployOptions {
     die('deploy: missing persona path. Usage: agentworkforce deploy <persona-path>');
   }
 
+  if (devToken) {
+    const resolvedCloudUrl = cloudUrl
+      ?? process.env.WORKFORCE_DEPLOY_CLOUD_URL
+      ?? process.env.WORKFORCE_CLOUD_URL
+      ?? defaultApiUrl();
+    assertLocalDevCloudUrl(resolvedCloudUrl, '--dev-token');
+  }
+
   return {
     personaPath,
     ...(mode ? { mode } : {}),
@@ -364,6 +378,7 @@ export function parseDeployArgs(args: readonly string[]): DeployOptions {
     ...(bundleOut ? { bundleOut } : {}),
     ...(dryRun ? { dryRun: true } : {}),
     ...(cloudUrl ? { cloudUrl } : {}),
+    ...(devToken ? { devToken } : {}),
     ...(noPrompt ? { noPrompt: true } : {}),
     ...(harnessSource ? { harnessSource } : {}),
     ...(byokKey ? { byokKey } : {}),
@@ -413,6 +428,18 @@ function expectChoice<T extends string>(flag: string, value: string, allowed: re
     die(`${flag}: expected one of ${allowed.join('|')}; got "${value}"`);
   }
   return value as T;
+}
+
+function assertLocalDevCloudUrl(rawUrl: string, flag: string): void {
+  let url: URL;
+  try {
+    url = new URL(rawUrl);
+  } catch {
+    die(`${flag}: invalid cloud URL "${rawUrl}"`);
+  }
+  if (url.hostname !== 'localhost' && url.hostname !== '127.0.0.1') {
+    die(`${flag}: only allowed with localhost or 127.0.0.1 cloud URLs`);
+  }
 }
 
 function parseLoginArgs(args: readonly string[]): { workspace?: string; cloudUrl?: string } {

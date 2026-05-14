@@ -165,14 +165,20 @@ export async function deploy(opts: DeployOptions, resolvers: DeployResolvers = {
   // a user who freshly ran `agentworkforce login` would hit "no workspace
   // resolved" because that flow only writes the shared accessToken and
   // active.json pointer.
-  const resolvedAuth = resolvers.workspaceAuth
-    ? await resolvers.workspaceAuth.resolveWorkspace({ override: opts.workspace, io })
-    : await resolveWorkspaceToken({
-        ...(opts.workspace ? { workspace: opts.workspace } : {}),
-        cloudUrl,
-        io,
-        ...(opts.noPrompt ? { noPrompt: true } : {})
-      });
+  const devToken = opts.devToken?.trim() || process.env.WORKFORCE_DEV_AUTH_TOKEN?.trim();
+  const resolvedAuth = devToken
+    ? {
+        token: devToken,
+        workspace: opts.workspace ?? process.env.WORKFORCE_WORKSPACE_ID ?? 'dev-workspace'
+      }
+    : resolvers.workspaceAuth
+      ? await resolvers.workspaceAuth.resolveWorkspace({ override: opts.workspace, io })
+      : await resolveWorkspaceToken({
+          ...(opts.workspace ? { workspace: opts.workspace } : {}),
+          cloudUrl,
+          io,
+          ...(opts.noPrompt ? { noPrompt: true } : {})
+        });
   const workspace = (resolvedAuth.workspace ?? opts.workspace ?? '').trim();
   if (!workspace) {
     throw new Error(
@@ -232,6 +238,7 @@ export async function deploy(opts: DeployOptions, resolvers: DeployResolvers = {
     ...(opts.detach ? { detach: true } : {}),
     ...(opts.byoSandbox ? { byoSandbox: true } : {}),
     ...(cloudUrl ? { cloudUrl } : {}),
+    ...(devToken ? { devToken } : {}),
     ...(opts.noPrompt ? { noPrompt: true } : {}),
     ...(opts.harnessSource ? { harnessSource: opts.harnessSource } : {}),
     ...(opts.byokKey ? { byokKey: opts.byokKey } : {}),

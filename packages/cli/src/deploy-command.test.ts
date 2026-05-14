@@ -54,6 +54,29 @@ function trapExit(throwOnExit = true): ExitTrap {
   return trap;
 }
 
+test('parseDeployArgs accepts --dev-token for localhost cloud URLs', () => {
+  const parsed = parseDeployArgs([
+    '/tmp/persona.json',
+    '--mode', 'cloud',
+    '--cloud-url', 'http://localhost:3000/cloud',
+    '--dev-token', 'dev-local-token'
+  ]);
+  assert.equal(parsed.cloudUrl, 'http://localhost:3000/cloud');
+  assert.equal(parsed.devToken, 'dev-local-token');
+});
+
+test('parseDeployArgs rejects --dev-token for non-local cloud URLs', () => {
+  assert.throws(
+    () => parseDeployArgs([
+      '/tmp/persona.json',
+      '--mode', 'cloud',
+      '--cloud-url', 'https://cloud.example.test',
+      '--dev-token', 'dev-local-token'
+    ]),
+    /only allowed with localhost or 127.0.0.1 cloud URLs/
+  );
+});
+
 test('runLogin uses cloud SDK auth, picks a workspace, and writes the active pointer (no token mint)', async () => {
   const calls: string[] = [];
   const writes: unknown[] = [];
