@@ -1,3 +1,6 @@
+import { homedir } from 'node:os';
+
+import { makeEnvRefResolver } from './env-refs.js';
 import { buildInteractiveSpec, type InteractiveConfigFile } from './interactive-spec.js';
 import { resolvePersonaInputs, renderPersonaInputs } from './inputs.js';
 import { materializeSkills } from './skills.js';
@@ -5,6 +8,7 @@ import type {
   Harness,
   PersonaInputSpec,
   PersonaMount,
+  PersonaMountRoot,
   PersonaSelection,
   SidecarMdMode,
   SkillMaterializationPlan
@@ -18,13 +22,33 @@ import type {
 export type ResolvedPersona = PersonaSelection;
 
 /**
+ * A single resolved mount root inside a multi-root {@link ResolvedMountPolicy}.
+ * Path is already absolute (env-refs expanded, `~` expanded) and ready to
+ * hand to relayfile's `createMount`. Patterns are per-root extensions to the
+ * policy-level lists — the executor concatenates them before calling
+ * `createMount` for each root.
+ */
+export interface ResolvedMountRoot {
+  alias: string;
+  /** Absolute path on disk. Optional roots that resolved to a missing path are dropped before reaching this list. */
+  path: string;
+  readonly: boolean;
+  ignoredPatterns: string[];
+  readonlyPatterns: string[];
+}
+
+/**
  * Mount policy resolved against any caller dotfiles / extra patterns.
  * The plan carries this through verbatim; the executor passes it to the
  * mount provider (e.g. {@link import('./mount.js').applyPersonaMount}).
+ *
+ * `roots` is set only when the persona opts into multi-root mounts. When
+ * absent, the legacy single-root cwd mount path applies.
  */
 export interface ResolvedMountPolicy {
   ignoredPatterns: string[];
   readonlyPatterns: string[];
+  roots?: ResolvedMountRoot[];
 }
 
 /**
@@ -185,16 +209,120 @@ function resolveSidecarWrite(
   return [];
 }
 
+function expandHome(path: string): string {
+  if (path === '~') return homedir();
+  if (path.startsWith('~/') || path.startsWith('~\\')) {
+    return `${homedir()}/${path.slice(2)}`;
+  }
+  return path;
+}
+
+/**
+ * Resolve a single declared root: substitute `$VAR` / `${VAR}` against the
+ * supplied env, expand `~`, and require the result to be absolute. When the
+ * root is optional, missing env refs and missing paths are reported as a
+ * `skipped` result rather than thrown; the executor will drop them silently.
+ */
+function resolveMountRoot(
+  root: PersonaMountRoot,
+  processEnv: NodeJS.ProcessEnv,
+  context: string
+): { kind: 'ok'; root: ResolvedMountRoot } | { kind: 'skip'; reason: string } {
+  const resolve = makeEnvRefResolver(processEnv);
+  let expanded: string;
+  try {
+    expanded = resolve(root.path, `${context}.path`);
+  } catch (err) {
+    if (root.optional) {
+      return { kind: 'skip', reason: (err as Error).message };
+    }
+    throw err;
+  }
+  const withHome = expandHome(expanded);
+  if (!withHome.startsWith('/') && !/^[A-Za-z]:[\\/]/.test(withHome)) {
+    const message = `${context}.path resolved to "${withHome}" which is not an absolute path`;
+    if (root.optional) return { kind: 'skip', reason: message };
+    throw new Error(message);
+  }
+  const readonly = root.readonly === true;
+  // Convert `readonly: true` into the gitignore-style "**" pattern relayfile
+  // understands. Doing it here keeps `applyPersonaMount` agnostic of the
+  // sugar and lets per-root pattern overrides compose cleanly.
+  const readonlyPatterns = [
+    ...(readonly ? ['**'] : []),
+    ...(root.readonlyPatterns ?? [])
+  ];
+  return {
+    kind: 'ok',
+    root: {
+      alias: root.alias,
+      path: withHome,
+      readonly,
+      ignoredPatterns: [...(root.ignoredPatterns ?? [])],
+      readonlyPatterns
+    }
+  };
+}
+
+/**
+ * Resolve a {@link PersonaMount}'s `roots` against the supplied env: expand
+ * `$VAR` / `${VAR}` references, expand leading `~`, drop optional roots whose
+ * path is missing, and reject duplicate destinations. Exposed for callers
+ * that manage their own relayfile lifecycle (e.g. the CLI's spinner/SIGINT/
+ * autosync stack) and need the same resolved layout the executor would use.
+ *
+ * Returns `undefined` when the persona declared no `roots` (i.e. legacy
+ * single-root cwd mount applies) or when every root was optional and
+ * unresolvable; an empty array is never returned.
+ */
+export function resolveMountRoots(
+  mount: PersonaMount | undefined,
+  processEnv: NodeJS.ProcessEnv,
+  context = 'mount'
+): ResolvedMountRoot[] | undefined {
+  if (!mount?.roots || mount.roots.length === 0) return undefined;
+  const out: ResolvedMountRoot[] = [];
+  const seen = new Set<string>();
+  mount.roots.forEach((root, idx) => {
+    const result = resolveMountRoot(root, processEnv, `${context}.roots[${idx}]`);
+    if (result.kind === 'skip') return;
+    if (seen.has(result.root.path)) {
+      throw new Error(
+        `${context}.roots[${idx}].path resolves to "${result.root.path}" which is already used by another root`
+      );
+    }
+    seen.add(result.root.path);
+    out.push(result.root);
+  });
+  return out.length > 0 ? out : undefined;
+}
+
 function resolveMountPolicy(
-  mount: PersonaMount | undefined
+  mount: PersonaMount | undefined,
+  processEnv: NodeJS.ProcessEnv,
+  context: string
 ): ResolvedMountPolicy | undefined {
   if (!mount) return undefined;
   const ignored = mount.ignoredPatterns ?? [];
   const readonly = mount.readonlyPatterns ?? [];
-  if (ignored.length === 0 && readonly.length === 0) return undefined;
+  // resolveMountRoots returns undefined when (a) no roots declared, or (b)
+  // every declared root was optional and unresolvable. In case (b) we fall
+  // back to the no-mount path (returning undefined here), since multi-root
+  // personas inherently have no useful "single cwd" fallback.
+  const resolvedRoots = mount.roots && mount.roots.length > 0
+    ? resolveMountRoots(mount, processEnv, context)
+    : undefined;
+  if (mount.roots && mount.roots.length > 0 && !resolvedRoots) {
+    return undefined;
+  }
+
+  if (ignored.length === 0 && readonly.length === 0 && !resolvedRoots) {
+    return undefined;
+  }
   return {
     ignoredPatterns: [...ignored],
-    readonlyPatterns: [...readonly]
+    readonlyPatterns: [...readonly],
+    ...(resolvedRoots ? { roots: resolvedRoots } : {})
   };
 }
 
@@ -254,7 +382,22 @@ export function buildPersonaSpawnPlan(
 
   const inputBindings = resolvedInputBindings(persona.inputs, inputResolution.values);
   const sidecars = resolveSidecarWrite(persona);
-  const mount = resolveMountPolicy(persona.mount);
+  // Build the env-ref source for mount.roots[].path the same way the plan
+  // builds the harness env: ambient processEnv (when opted-in) layered with
+  // resolved inputs and overrides. Persona-level `env` wins last, matching
+  // the spawn-env precedence below.
+  const mountEnv: NodeJS.ProcessEnv = {};
+  const ambientForMount =
+    options.processEnv ?? (options.includeProcessEnv ? process.env : undefined);
+  if (ambientForMount) {
+    for (const [k, v] of Object.entries(ambientForMount)) {
+      if (typeof v === 'string') mountEnv[k] = v;
+    }
+  }
+  for (const binding of inputBindings) mountEnv[binding.envName] = binding.value;
+  if (options.envOverrides) Object.assign(mountEnv, options.envOverrides);
+  if (persona.env) Object.assign(mountEnv, persona.env);
+  const mount = resolveMountPolicy(persona.mount, mountEnv, 'mount');
 
   // Env precedence (later wins):
   //   ambient processEnv (opt-in)

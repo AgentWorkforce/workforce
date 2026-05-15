@@ -107,15 +107,88 @@ export interface PersonaPermissions {
 }
 
 /**
+ * A single source root inside a multi-root {@link PersonaMount}. Each root
+ * becomes a subdirectory of the mount keyed by `alias` (so a persona with
+ * `roots: [{ alias: 'api', ... }, { alias: 'web', ... }]` exposes `api/`
+ * and `web/` side-by-side to the harness).
+ *
+ * `path` is resolved at plan-build time:
+ *   - `$VAR` / `${VAR}` references are expanded against the harness env +
+ *     persona inputs (same machinery as `env` / `mcpServers`),
+ *   - leading `~` is expanded to the caller's home directory,
+ *   - the result must be an absolute path that exists on disk.
+ *
+ * `optional: true` lets a root be silently skipped when its path is missing
+ * or unset; non-optional roots fail loudly at `executePersonaSpawnPlan` /
+ * the CLI mount stage (not at `parsePersonaSpec`, so cloud-side validation
+ * doesn't need teammate paths to exist).
+ *
+ * Per-root `ignoredPatterns` / `readonlyPatterns` extend the persona-wide
+ * lists at mount time. `readonly: true` short-circuits readonly handling by
+ * injecting `**` into this root's readonly patterns, mirroring relayfile's
+ * gitignore semantics.
+ */
+export interface PersonaMountRoot {
+  /**
+   * Subdirectory name the root is exposed as inside the mount. Must match
+   * `^[a-z0-9](?:[a-z0-9-_]*[a-z0-9])?$` and be unique within the persona.
+   * Used verbatim as a filesystem path segment.
+   */
+  alias: string;
+  /**
+   * Filesystem path to the source. Supports `$VAR` / `${VAR}` env-ref
+   * substitution and `~` home expansion. Resolved to an absolute path at
+   * plan-build time.
+   */
+  path: string;
+  /**
+   * When true, every file under this root is treated as readonly inside the
+   * mount (relayfile injects `**` into this root's readonly patterns). The
+   * agent can still read but writes do not sync back.
+   */
+  readonly?: boolean;
+  /**
+   * When true, a missing or unresolvable path is silently dropped rather
+   * than failing the launch. Use for "fan-out across whichever repos the
+   * teammate has checked out" personas.
+   */
+  optional?: boolean;
+  /**
+   * Per-root gitignore-syntax patterns that augment the persona-wide
+   * {@link PersonaMount.ignoredPatterns}. Applied only to this root's
+   * relayfile mount.
+   */
+  ignoredPatterns?: string[];
+  /**
+   * Per-root gitignore-syntax patterns that augment the persona-wide
+   * {@link PersonaMount.readonlyPatterns}. Applied only to this root's
+   * relayfile mount.
+   */
+  readonlyPatterns?: string[];
+}
+
+/**
  * Relayfile mount policy for interactive sessions. Patterns use gitignore
  * syntax. `ignoredPatterns` are omitted from the mount entirely;
  * `readonlyPatterns` are copied into the mount but edits do not sync back.
  * Launchers may merge these with project-level `.agentignore` /
  * `.agentreadonly` dotfiles.
+ *
+ * `roots` opts into multi-root: the harness's cwd becomes a virtual parent
+ * directory containing each declared root as a subdirectory (keyed by
+ * `alias`). Personas without `roots` keep the existing single-root behavior
+ * (mount = launcher cwd). See {@link PersonaMountRoot}.
  */
 export interface PersonaMount {
   ignoredPatterns?: string[];
   readonlyPatterns?: string[];
+  /**
+   * Opt-in multi-root mount. When present and non-empty, the launcher
+   * ignores its own cwd and mounts each root as a subdirectory. An
+   * explicit empty array is a parse error — declare `roots` only when you
+   * mean to opt in.
+   */
+  roots?: PersonaMountRoot[];
 }
 
 /**

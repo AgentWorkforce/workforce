@@ -196,6 +196,96 @@ test('parseMount throws when patterns are not non-empty strings', () => {
   );
 });
 
+test('parseMount accepts multi-root mount with $VAR paths and per-root flags', () => {
+  const m = parseMount(
+    {
+      ignoredPatterns: ['node_modules'],
+      roots: [
+        { alias: 'api', path: '$ACME_API_DIR', readonly: true },
+        { alias: 'web', path: '$ACME_WEB_DIR', ignoredPatterns: ['.next'] }
+      ]
+    },
+    'mount'
+  );
+  assert.deepEqual(m, {
+    ignoredPatterns: ['node_modules'],
+    roots: [
+      { alias: 'api', path: '$ACME_API_DIR', readonly: true },
+      { alias: 'web', path: '$ACME_WEB_DIR', ignoredPatterns: ['.next'] }
+    ]
+  });
+});
+
+test('parseMount rejects empty roots array (opt-in requires at least one entry)', () => {
+  assert.throws(
+    () => parseMount({ roots: [] }, 'mount'),
+    /must contain at least one entry/
+  );
+});
+
+test('parseMount rejects duplicate root aliases', () => {
+  assert.throws(
+    () =>
+      parseMount(
+        { roots: [{ alias: 'api', path: '/a' }, { alias: 'api', path: '/b' }] },
+        'mount'
+      ),
+    /duplicates an earlier root/
+  );
+});
+
+test('parseMount rejects invalid root alias shapes', () => {
+  assert.throws(
+    () => parseMount({ roots: [{ alias: 'BadAlias', path: '/x' }] }, 'mount'),
+    /alias must match/
+  );
+  assert.throws(
+    () => parseMount({ roots: [{ alias: '-leading', path: '/x' }] }, 'mount'),
+    /alias must match/
+  );
+  assert.throws(
+    () => parseMount({ roots: [{ alias: '', path: '/x' }] }, 'mount'),
+    /alias must be a non-empty string/
+  );
+});
+
+test('parseMount rejects roots missing or with empty path', () => {
+  assert.throws(
+    () => parseMount({ roots: [{ alias: 'api' }] }, 'mount'),
+    /path must be a non-empty string/
+  );
+  assert.throws(
+    () => parseMount({ roots: [{ alias: 'api', path: '' }] }, 'mount'),
+    /path must be a non-empty string/
+  );
+});
+
+test('parseMount preserves optional + per-root patterns', () => {
+  const m = parseMount(
+    {
+      roots: [
+        {
+          alias: 'api',
+          path: '$X',
+          optional: true,
+          ignoredPatterns: ['build'],
+          readonlyPatterns: ['vendor/**']
+        }
+      ]
+    },
+    'mount'
+  );
+  assert.deepEqual(m?.roots, [
+    {
+      alias: 'api',
+      path: '$X',
+      optional: true,
+      ignoredPatterns: ['build'],
+      readonlyPatterns: ['vendor/**']
+    }
+  ]);
+});
+
 test('INPUT_NAME_RE matches env-var convention', () => {
   for (const ok of ['FOO', 'FOO_BAR', '_FOO', 'A1', 'A_1_B']) {
     assert.match(ok, INPUT_NAME_RE, `expected ${ok} to match`);
