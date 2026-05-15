@@ -162,6 +162,26 @@ test('parseAgentArgs: --no-skill-cache and --refresh-skills set flags', () => {
   assert.equal(c.flags.installInRepo, true);
 });
 
+test('parseAgentArgs: --check-upstream and --no-check-upstream set flags', () => {
+  const a = parseAgentArgs(['--check-upstream', 'p@best']);
+  assert.equal(a.flags.checkUpstream, true);
+  assert.equal(a.flags.noCheckUpstream, false);
+
+  const b = parseAgentArgs(['--no-check-upstream', 'p@best']);
+  assert.equal(b.flags.noCheckUpstream, true);
+  assert.equal(b.flags.checkUpstream, false);
+
+  const c = parseAgentArgs([
+    '--check-upstream',
+    '--refresh-skills',
+    '--no-skill-cache',
+    'p@best'
+  ]);
+  assert.equal(c.flags.checkUpstream, true);
+  assert.equal(c.flags.refreshSkills, true);
+  assert.equal(c.flags.noSkillCache, true);
+});
+
 test('parseAgentArgs: --dry-run composes with other flags', () => {
   const { flags, positional } = parseAgentArgs([
     '--dry-run',

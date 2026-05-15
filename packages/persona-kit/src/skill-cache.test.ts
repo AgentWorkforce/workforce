@@ -9,6 +9,7 @@ import {
   readSkillCacheMarker,
   resolveSkillCacheDir,
   skillCacheRoot,
+  updateSkillCacheMarkerUpstream,
   writeSkillCacheMarker
 } from './skill-cache.js';
 import type { PersonaSkill } from './types.js';
@@ -149,7 +150,7 @@ test('writeSkillCacheMarker / readSkillCacheMarker round-trips', async () => {
     });
     const read = readSkillCacheMarker(dir);
     assert.ok(read);
-    assert.equal(read.schemaVersion, 1);
+    assert.equal(read.schemaVersion, 2);
     assert.equal(read.fingerprint, 'abc123');
     assert.equal(read.harness, 'claude');
     assert.equal(read.skills.length, 1);
@@ -192,5 +193,124 @@ test('isSkillCacheValid: requires fingerprint match', async () => {
     });
     assert.equal(isSkillCacheValid(dir, 'fp-real'), true);
     assert.equal(isSkillCacheValid(dir, 'fp-different'), false);
+  });
+});
+
+// --- schema v2: upstream metadata ---------------------------------------
+
+test('readSkillCacheMarker: upgrades a v1 marker in place (no upstream records)', async () => {
+  await withTmpDir(async (dir) => {
+    await writeFile(
+      join(dir, '.aw-skill-cache.json'),
+      JSON.stringify({
+        schemaVersion: 1,
+        fingerprint: 'fp1',
+        harness: 'claude',
+        installedAt: '2026-01-01T00:00:00.000Z',
+        skills: [{ id: 'foo', source: '@org/foo' }]
+      }),
+      'utf8'
+    );
+    const read = readSkillCacheMarker(dir);
+    assert.ok(read);
+    assert.equal(read.schemaVersion, 2);
+    assert.equal(read.fingerprint, 'fp1');
+    assert.equal(read.lastUpstreamCheckAt, undefined);
+    assert.equal(read.skills[0]?.upstream, undefined);
+  });
+});
+
+test('writeSkillCacheMarker / readSkillCacheMarker: prpm upstream round-trip', async () => {
+  await withTmpDir(async (dir) => {
+    writeSkillCacheMarker(dir, {
+      fingerprint: 'fp2',
+      harness: 'claude',
+      lastUpstreamCheckAt: '2026-05-15T00:00:00.000Z',
+      skills: [
+        {
+          id: 'swarm',
+          source: '@agent-relay/choosing-swarm-patterns',
+          upstream: {
+            kind: 'prpm',
+            packageRef: '@agent-relay/choosing-swarm-patterns',
+            version: '1.0.0'
+          }
+        }
+      ]
+    });
+    const read = readSkillCacheMarker(dir);
+    assert.ok(read);
+    assert.equal(read.lastUpstreamCheckAt, '2026-05-15T00:00:00.000Z');
+    const u = read.skills[0]?.upstream;
+    assert.ok(u && u.kind === 'prpm');
+    assert.equal(u.version, '1.0.0');
+    assert.equal(u.packageRef, '@agent-relay/choosing-swarm-patterns');
+  });
+});
+
+test('readSkillCacheMarker: drops a malformed upstream block but keeps the skill', async () => {
+  await withTmpDir(async (dir) => {
+    await writeFile(
+      join(dir, '.aw-skill-cache.json'),
+      JSON.stringify({
+        schemaVersion: 2,
+        fingerprint: 'fp3',
+        harness: 'claude',
+        installedAt: '2026-05-15T00:00:00.000Z',
+        skills: [
+          { id: 'bad', source: '@org/x', upstream: { kind: 'prpm' } },
+          {
+            id: 'good',
+            source: 'gh#y',
+            upstream: { kind: 'github-blob', blobUrl: 'https://u', sha: 'abc' }
+          }
+        ]
+      }),
+      'utf8'
+    );
+    const read = readSkillCacheMarker(dir);
+    assert.ok(read);
+    assert.equal(read.skills[0]?.upstream, undefined); // malformed prpm dropped
+    assert.equal(read.skills[0]?.id, 'bad'); // skill itself preserved
+    const g = read.skills[1]?.upstream;
+    assert.ok(g && g.kind === 'github-blob');
+    assert.equal(g.sha, 'abc');
+  });
+});
+
+test('updateSkillCacheMarkerUpstream: bumps timestamp, overlays records, keeps others', async () => {
+  await withTmpDir(async (dir) => {
+    writeSkillCacheMarker(dir, {
+      fingerprint: 'fp4',
+      harness: 'claude',
+      lastUpstreamCheckAt: '2026-05-01T00:00:00.000Z',
+      skills: [
+        { id: 'a', source: '@o/a', upstream: { kind: 'prpm', packageRef: '@o/a', version: '1.0.0' } },
+        { id: 'b', source: '@o/b' }
+      ]
+    });
+    updateSkillCacheMarkerUpstream(dir, {
+      lastUpstreamCheckAt: '2026-05-15T12:00:00.000Z',
+      skills: new Map([
+        ['a', { kind: 'prpm', packageRef: '@o/a', version: '2.0.0' }]
+      ])
+    });
+    const read = readSkillCacheMarker(dir);
+    assert.ok(read);
+    assert.equal(read.lastUpstreamCheckAt, '2026-05-15T12:00:00.000Z');
+    const a = read.skills.find((s) => s.id === 'a')?.upstream;
+    assert.ok(a && a.kind === 'prpm' && a.version === '2.0.0');
+    // 'b' had no overlay key → untouched (still no upstream)
+    assert.equal(read.skills.find((s) => s.id === 'b')?.upstream, undefined);
+  });
+});
+
+test('updateSkillCacheMarkerUpstream: no-ops when marker missing', async () => {
+  await withTmpDir(async (dir) => {
+    // Should not throw even though there is no marker file.
+    updateSkillCacheMarkerUpstream(dir, {
+      lastUpstreamCheckAt: '2026-05-15T12:00:00.000Z'
+    });
+    assert.equal(readSkillCacheMarker(dir), null);
   });
 });

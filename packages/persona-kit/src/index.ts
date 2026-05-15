@@ -105,10 +105,24 @@ export {
   readSkillCacheMarker,
   resolveSkillCacheDir,
   skillCacheRoot,
+  updateSkillCacheMarkerUpstream,
   writeSkillCacheMarker,
   type SkillCacheFingerprintInput,
-  type SkillCacheMarker
+  type SkillCacheMarker,
+  type SkillCacheMarkerSkill,
+  type SkillUpstreamRecord
 } from './skill-cache.js';
+
+// Upstream drift detection (opt-in, TTL-gated)
+export {
+  buildUpstreamRecordsFromCacheDir,
+  detectSkillUpstreamDrift,
+  isUpstreamCheckDue,
+  parseCheckInterval,
+  type ProbeDeps,
+  type SkillDriftDetail,
+  type UpstreamDriftResult
+} from './skill-upstream-probe.js';
 
 // Env-ref resolution
 export {
