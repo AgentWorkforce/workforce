@@ -98,6 +98,18 @@ export {
   resolveSkillSource
 } from './skills.js';
 
+// Persistent skill-install cache
+export {
+  computeSkillCacheFingerprint,
+  isSkillCacheValid,
+  readSkillCacheMarker,
+  resolveSkillCacheDir,
+  skillCacheRoot,
+  writeSkillCacheMarker,
+  type SkillCacheFingerprintInput,
+  type SkillCacheMarker
+} from './skill-cache.js';
+
 // Env-ref resolution
 export {
   MissingEnvRefError,

@@ -139,6 +139,29 @@ test('parseAgentArgs: --dry-run sets flag and preserves positional selector', ()
   assert.deepEqual(positional, ['local-codex@best']);
 });
 
+test('parseAgentArgs: --no-skill-cache and --refresh-skills set flags', () => {
+  const a = parseAgentArgs(['--no-skill-cache', 'persona@best']);
+  assert.equal(a.flags.noSkillCache, true);
+  assert.equal(a.flags.refreshSkills, false);
+  assert.deepEqual(a.positional, ['persona@best']);
+
+  const b = parseAgentArgs(['--refresh-skills', 'persona@best']);
+  assert.equal(b.flags.refreshSkills, true);
+  assert.equal(b.flags.noSkillCache, false);
+  assert.deepEqual(b.positional, ['persona@best']);
+
+  // Both compose with each other and with the existing flags.
+  const c = parseAgentArgs([
+    '--no-skill-cache',
+    '--refresh-skills',
+    '--install-in-repo',
+    'persona@best'
+  ]);
+  assert.equal(c.flags.noSkillCache, true);
+  assert.equal(c.flags.refreshSkills, true);
+  assert.equal(c.flags.installInRepo, true);
+});
+
 test('parseAgentArgs: --dry-run composes with other flags', () => {
   const { flags, positional } = parseAgentArgs([
     '--dry-run',

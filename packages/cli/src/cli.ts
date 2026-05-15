@@ -4,6 +4,7 @@ import { randomBytes } from 'node:crypto';
 import {
   appendFileSync,
   closeSync,
+  cpSync,
   existsSync,
   mkdirSync,
   mkdtempSync,
@@ -25,9 +26,11 @@ import {
   buildInstallArtifacts,
   buildInteractiveSpec,
   buildNonInteractiveSpec,
+  computeSkillCacheFingerprint,
   detectHarnesses,
   formatDropWarnings,
   HARNESS_VALUES,
+  isSkillCacheValid,
   materializeSkills,
   MissingPersonaInputError,
   PERSONA_TAGS,
@@ -35,7 +38,9 @@ import {
   resolveMcpServersLenient,
   resolvePersonaInputs,
   resolveSidecar,
+  resolveSkillCacheDir,
   resolveStringMapLenient,
+  writeSkillCacheMarker,
   type Harness,
   type HarnessAvailability,
   type InteractiveSpec,
@@ -127,6 +132,15 @@ Commands:
                                             Disable launch metadata recording.
                                             Also disabled by
                                             AGENTWORKFORCE_LAUNCH_METADATA=0.
+                        --no-skill-cache    Bypass the persistent skill-install
+                                            cache (under
+                                            ~/.agentworkforce/workforce/cache/plugins/)
+                                            and install fresh into a per-session
+                                            dir. Also disabled by
+                                            AGENTWORKFORCE_NO_SKILL_CACHE=1.
+                        --refresh-skills    Force a fresh install of the skill
+                                            cache entry for this persona,
+                                            overwriting any existing cache dir.
                         --dry-run           Validate the persona without
                                             spawning the harness or burning
                                             tier-model tokens. Three checks:
@@ -641,6 +655,37 @@ function sessionInstallRoot(sessionRoot: string): string {
 
 function sessionMountDir(sessionRoot: string): string {
   return join(sessionRoot, 'mount');
+}
+
+/**
+ * Mirror the contents of a populated skill cache dir into a target dir
+ * (typically a relayfile mount root). Skips the cache marker file so it
+ * never lands inside the harness's view.
+ *
+ * Used by the mount-harness branch to give opencode / codex the same
+ * "install once, reuse forever" behaviour that claude gets for free via
+ * `--plugin-dir <cacheDir>`. The destination is expected to be the mount
+ * root: skill artifacts under `.skills/`, `.opencode/`, `.agents/`, etc. are
+ * declared as mount-ignored patterns so the mirror does not sync back to the
+ * user's real repo on session exit.
+ */
+function mirrorSkillCacheInto(cacheDir: string, targetDir: string): void {
+  if (!existsSync(cacheDir)) return;
+  for (const entry of readdirSync(cacheDir, { withFileTypes: true })) {
+    if (entry.name === '.aw-skill-cache.json') continue;
+    const from = join(cacheDir, entry.name);
+    const to = join(targetDir, entry.name);
+    cpSync(from, to, {
+      recursive: true,
+      // Don't overwrite a path the mount mirror or persona setup already
+      // created — surfacing the conflict as an error here would be loud and
+      // unactionable; the mount-ignored patterns guarantee any pre-existing
+      // entry under these names came from a prior cache mirror in this same
+      // session, which is fine to leave alone.
+      force: false,
+      errorOnExist: false
+    });
+  }
 }
 
 /**
@@ -1163,6 +1208,10 @@ async function runInteractive(
   options: {
     installInRepo?: boolean;
     noLaunchMetadata?: boolean;
+    /** Bypass the persistent skill cache for this run (install fresh into a session dir). */
+    noSkillCache?: boolean;
+    /** Force reinstall into the cache dir, replacing any existing entry. */
+    refreshSkills?: boolean;
     personaSpec: PersonaSpec;
     personaSource: PersonaSource;
     capture?: RunInteractiveCapture;
@@ -1228,9 +1277,39 @@ async function runInteractive(
   const useSessionDir =
     !options.installInRepo && (harness === 'claude' || useClean);
   const sessionRoot = useSessionDir ? generateSessionRoot(personaId) : undefined;
+
+  // Persistent skill-install cache. Keyed by a content-addressed fingerprint
+  // of (harness, sorted skill sources, local file contents). On a hit we reuse
+  // the dir directly — for claude as `--plugin-dir`, for mount harnesses by
+  // mirroring its contents into the mount before launch. Disabled when the
+  // user opts into in-repo installs (the cache lives outside the repo, so
+  // mirroring it back would re-introduce the very leakage `--install-in-repo`
+  // is designed to surface to the user explicitly).
+  const skillCachingEnabled = !options.installInRepo && options.noSkillCache !== true;
+  const skillCacheFingerprint = skillCachingEnabled
+    ? computeSkillCacheFingerprint({
+        harness,
+        skills: effectiveSelection.skills,
+        repoRoot: process.cwd()
+      })
+    : undefined;
+  const skillCacheDir = skillCacheFingerprint
+    ? resolveSkillCacheDir(skillCacheFingerprint)
+    : undefined;
+  const skillCacheHit =
+    skillCacheDir !== undefined &&
+    skillCacheFingerprint !== undefined &&
+    !options.refreshSkills &&
+    isSkillCacheValid(skillCacheDir, skillCacheFingerprint);
+
+  // installRoot: for claude this is the dir passed to `--plugin-dir`. With
+  // caching enabled it points at the persistent cache; without, at the
+  // ephemeral session dir (pre-cache behavior). Other harnesses do not use
+  // claude's plugin-dir flag — for them the cache (if any) is mirrored into
+  // the mount in `onBeforeLaunch`, not surfaced as an installRoot.
   const installRoot =
-    sessionRoot && harness === 'claude'
-      ? sessionInstallRoot(sessionRoot)
+    harness === 'claude' && !options.installInRepo
+      ? skillCacheDir ?? (sessionRoot ? sessionInstallRoot(sessionRoot) : undefined)
       : undefined;
   // `repoRoot` lets the local skill provider (kind: 'local') resolve
   // relative source paths like `.agentworkforce/workforce/skills/foo.md` to
@@ -1242,6 +1321,21 @@ async function runInteractive(
     repoRoot: process.cwd()
   });
   process.stderr.write(`→ ${personaId} via ${harness} (${model})\n`);
+  if (skillCacheFingerprint && skillCacheDir) {
+    if (skillCacheHit) {
+      process.stderr.write(
+        `• skill cache hit (${skillCacheFingerprint.slice(0, 12)}) → reusing ${skillCacheDir}\n`
+      );
+    } else if (options.refreshSkills) {
+      process.stderr.write(
+        `• skill cache refresh requested (${skillCacheFingerprint.slice(0, 12)}) → reinstalling into ${skillCacheDir}\n`
+      );
+    } else {
+      process.stderr.write(
+        `• skill cache miss (${skillCacheFingerprint.slice(0, 12)}) → installing into ${skillCacheDir}\n`
+      );
+    }
+  }
 
   const startLaunchMetadataForLaunch = (cwd = process.cwd()) =>
     startLaunchMetadataRecording({
@@ -1281,8 +1375,19 @@ async function runInteractive(
   // `onBeforeLaunch` below instead of pre-running here.
   const deferInstallToMount =
     useClean && harness !== 'claude' && install.commandString !== ':';
-  if (install.commandString !== ':' && !deferInstallToMount) {
+  if (
+    install.commandString !== ':' &&
+    !deferInstallToMount &&
+    !skillCacheHit
+  ) {
     await runInstall(install.command, installLabel);
+    if (skillCacheFingerprint && skillCacheDir) {
+      writeSkillCacheMarker(skillCacheDir, {
+        fingerprint: skillCacheFingerprint,
+        harness,
+        skills: effectiveSelection.skills.map((s) => ({ id: s.id, source: s.source }))
+      });
+    }
   }
 
   const spec = buildInteractiveSpec({
@@ -1481,7 +1586,32 @@ async function runInteractive(
         // Hand the line off to the install spinner so the two don't fight
         // for the same stream, then resume the setup spinner afterwards.
         setupSpinner?.stop();
-        await runInstallOrThrow(install.command, installLabel, handle.mountDir);
+        // Cache-aware mount install:
+        //   - If we have a cache hit, skip the install and mirror the
+        //     pre-populated cache dir into the mount. `npx prpm install`
+        //     never runs.
+        //   - On miss (or `--refresh-skills`), run the install once with
+        //     cwd set to the cache dir so artifacts land in the persistent
+        //     location, then mirror into the mount and write the marker.
+        //   - With caching disabled (`--install-in-repo` or
+        //     `--no-skill-cache`), fall back to the legacy in-mount install.
+        if (skillCacheHit && skillCacheDir) {
+          mirrorSkillCacheInto(skillCacheDir, handle.mountDir);
+        } else if (skillCachingEnabled && skillCacheDir && skillCacheFingerprint) {
+          mkdirSync(skillCacheDir, { recursive: true });
+          await runInstallOrThrow(install.command, installLabel, skillCacheDir);
+          writeSkillCacheMarker(skillCacheDir, {
+            fingerprint: skillCacheFingerprint,
+            harness,
+            skills: effectiveSelection.skills.map((s) => ({
+              id: s.id,
+              source: s.source
+            }))
+          });
+          mirrorSkillCacheInto(skillCacheDir, handle.mountDir);
+        } else {
+          await runInstallOrThrow(install.command, installLabel, handle.mountDir);
+        }
         setupSpinner?.start();
       }
       for (const file of spec.configFiles) {
@@ -1615,7 +1745,12 @@ async function runInteractive(
       // potentially `rm -rf`ing pre-existing user content. The mount dir is
       // removed wholesale by `removeSessionRoot` below, so the install's
       // cleanup is redundant anyway in that case.
-      if (!deferInstallToMount) {
+      //
+      // Skill caching also suppresses the cleanup: the cache dir IS the
+      // persistence layer, so the rm command (which targets the
+      // sessionInstallRoot — now pointing at the cache dir for claude) would
+      // wipe the very thing we want to keep across launches.
+      if (!deferInstallToMount && !skillCachingEnabled) {
         runCleanup(install.cleanupCommand, install.cleanupCommandString);
       }
       removeSessionRoot(sessionRoot);
@@ -1635,7 +1770,12 @@ async function runInteractive(
     const finish = (code: number) => {
       if (settled) return;
       settled = true;
-      runCleanup(install.cleanupCommand, install.cleanupCommandString);
+      // Skill caching takes ownership of the install dir; running cleanup
+      // here would `rm -rf` the persistent cache. Skip in that case and
+      // rely on the cache marker as the source of truth for "valid install".
+      if (!skillCachingEnabled) {
+        runCleanup(install.cleanupCommand, install.cleanupCommandString);
+      }
       removeSessionRoot(sessionRoot);
       void launchMetadata.stop().finally(() => resolve(code));
     };
@@ -2494,6 +2634,8 @@ async function runAgentSelector(
   const code = await runInteractive(selection, {
     installInRepo: flags.installInRepo,
     noLaunchMetadata: flags.noLaunchMetadata,
+    noSkillCache: flags.noSkillCache,
+    refreshSkills: flags.refreshSkills,
     personaSpec: target.spec,
     personaSource: target.source,
     capture
@@ -3577,7 +3719,9 @@ async function runInteractivePicker(): Promise<never> {
   await runAgentSelector(selected, {
     installInRepo: false,
     noLaunchMetadata: false,
-    dryRun: false
+    dryRun: false,
+    noSkillCache: process.env.AGENTWORKFORCE_NO_SKILL_CACHE === '1',
+    refreshSkills: false
   });
   // runAgentSelector has Promise<never> return type; this is unreachable.
   process.exit(0);
@@ -3724,7 +3868,13 @@ async function runPick(args: readonly string[]): Promise<never> {
   };
   await runAgentSelector(
     CREATE_SELECTOR,
-    { installInRepo: false, noLaunchMetadata: false, dryRun: false },
+    {
+      installInRepo: false,
+      noLaunchMetadata: false,
+      dryRun: false,
+      noSkillCache: process.env.AGENTWORKFORCE_NO_SKILL_CACHE === '1',
+      refreshSkills: false
+    },
     inputValues
   );
   // runAgentSelector terminates via process.exit; this satisfies TS's
@@ -3848,6 +3998,10 @@ export interface AgentFlags {
   installInRepo: boolean;
   noLaunchMetadata: boolean;
   dryRun: boolean;
+  /** Bypass the persistent skill-install cache for this launch. */
+  noSkillCache: boolean;
+  /** Force a fresh install even if the cache entry exists (rebuilds it in place). */
+  refreshSkills: boolean;
 }
 
 export interface CreateFlags extends AgentFlags {
@@ -3862,7 +4016,9 @@ export function parseAgentArgs(args: readonly string[]): {
   const flags: AgentFlags = {
     installInRepo: false,
     noLaunchMetadata: false,
-    dryRun: false
+    dryRun: false,
+    noSkillCache: process.env.AGENTWORKFORCE_NO_SKILL_CACHE === '1',
+    refreshSkills: false
   };
   const positional: string[] = [];
   let seenDoubleDash = false;
@@ -3887,6 +4043,14 @@ export function parseAgentArgs(args: readonly string[]): {
       flags.dryRun = true;
       continue;
     }
+    if (arg === '--no-skill-cache') {
+      flags.noSkillCache = true;
+      continue;
+    }
+    if (arg === '--refresh-skills') {
+      flags.refreshSkills = true;
+      continue;
+    }
     if (arg === '-h' || arg === '--help') {
       process.stdout.write(USAGE);
       process.exit(0);
@@ -3905,6 +4069,8 @@ export function parseCreateArgs(args: readonly string[]): {
     installInRepo: false,
     noLaunchMetadata: false,
     dryRun: false,
+    noSkillCache: process.env.AGENTWORKFORCE_NO_SKILL_CACHE === '1',
+    refreshSkills: false,
     saveDefault: false
   };
   let seenDoubleDash = false;
