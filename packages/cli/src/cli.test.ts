@@ -9,6 +9,7 @@ import {
   CLEAN_IGNORED_PATTERNS,
   CREATE_SELECTOR,
   SKILL_INSTALL_IGNORED_PATTERNS,
+  acquireSkillCacheLock,
   applyAcceptedPatches,
   assertSafeRelativePath,
   buildPickCandidates,
@@ -24,6 +25,7 @@ import {
   parseProposals,
   promptYesNoSync,
   readSingleCharChoice,
+  resolveEnvCheckIntervalMs,
   resolveSystemPromptPlaceholders,
   stripAgentFlag,
   type ImproverProposal,
@@ -140,26 +142,35 @@ test('parseAgentArgs: --dry-run sets flag and preserves positional selector', ()
 });
 
 test('parseAgentArgs: --no-skill-cache and --refresh-skills set flags', () => {
-  const a = parseAgentArgs(['--no-skill-cache', 'persona@best']);
-  assert.equal(a.flags.noSkillCache, true);
-  assert.equal(a.flags.refreshSkills, false);
-  assert.deepEqual(a.positional, ['persona@best']);
+  // parseAgentArgs reads AGENTWORKFORCE_NO_SKILL_CACHE for the default; isolate
+  // it so the env on the running machine can't make the default-false cases flaky.
+  const prevNoCache = process.env.AGENTWORKFORCE_NO_SKILL_CACHE;
+  delete process.env.AGENTWORKFORCE_NO_SKILL_CACHE;
+  try {
+    const a = parseAgentArgs(['--no-skill-cache', 'persona@best']);
+    assert.equal(a.flags.noSkillCache, true);
+    assert.equal(a.flags.refreshSkills, false);
+    assert.deepEqual(a.positional, ['persona@best']);
 
-  const b = parseAgentArgs(['--refresh-skills', 'persona@best']);
-  assert.equal(b.flags.refreshSkills, true);
-  assert.equal(b.flags.noSkillCache, false);
-  assert.deepEqual(b.positional, ['persona@best']);
+    const b = parseAgentArgs(['--refresh-skills', 'persona@best']);
+    assert.equal(b.flags.refreshSkills, true);
+    assert.equal(b.flags.noSkillCache, false);
+    assert.deepEqual(b.positional, ['persona@best']);
 
-  // Both compose with each other and with the existing flags.
-  const c = parseAgentArgs([
-    '--no-skill-cache',
-    '--refresh-skills',
-    '--install-in-repo',
-    'persona@best'
-  ]);
-  assert.equal(c.flags.noSkillCache, true);
-  assert.equal(c.flags.refreshSkills, true);
-  assert.equal(c.flags.installInRepo, true);
+    // Both compose with each other and with the existing flags.
+    const c = parseAgentArgs([
+      '--no-skill-cache',
+      '--refresh-skills',
+      '--install-in-repo',
+      'persona@best'
+    ]);
+    assert.equal(c.flags.noSkillCache, true);
+    assert.equal(c.flags.refreshSkills, true);
+    assert.equal(c.flags.installInRepo, true);
+  } finally {
+    if (prevNoCache === undefined) delete process.env.AGENTWORKFORCE_NO_SKILL_CACHE;
+    else process.env.AGENTWORKFORCE_NO_SKILL_CACHE = prevNoCache;
+  }
 });
 
 test('parseAgentArgs: --check-upstream and --no-check-upstream set flags', () => {
@@ -1432,4 +1443,96 @@ test('readSingleCharChoice: invalid input loops until valid arrives', () => {
   // Saw two "invalid choice" reprompts before the valid 'q'.
   const invalidLines = writes.filter((w) => w.includes('invalid choice'));
   assert.equal(invalidLines.length, 2);
+});
+
+// --- resolveEnvCheckIntervalMs (PR #124 review: `never` must disable) ----
+
+test('resolveEnvCheckIntervalMs: unset → 24h default', () => {
+  const prev = process.env.AGENTWORKFORCE_SKILL_CACHE_CHECK_INTERVAL;
+  delete process.env.AGENTWORKFORCE_SKILL_CACHE_CHECK_INTERVAL;
+  try {
+    assert.equal(resolveEnvCheckIntervalMs(), 24 * 3_600_000);
+  } finally {
+    if (prev === undefined) delete process.env.AGENTWORKFORCE_SKILL_CACHE_CHECK_INTERVAL;
+    else process.env.AGENTWORKFORCE_SKILL_CACHE_CHECK_INTERVAL = prev;
+  }
+});
+
+test('resolveEnvCheckIntervalMs: never/off → null (NOT coalesced to default)', () => {
+  const prev = process.env.AGENTWORKFORCE_SKILL_CACHE_CHECK_INTERVAL;
+  try {
+    for (const v of ['never', 'off', 'false']) {
+      process.env.AGENTWORKFORCE_SKILL_CACHE_CHECK_INTERVAL = v;
+      assert.equal(resolveEnvCheckIntervalMs(), null, `"${v}" must disable checks`);
+    }
+    process.env.AGENTWORKFORCE_SKILL_CACHE_CHECK_INTERVAL = '0';
+    assert.equal(resolveEnvCheckIntervalMs(), 0); // 0 = always, distinct from null
+    process.env.AGENTWORKFORCE_SKILL_CACHE_CHECK_INTERVAL = '30m';
+    assert.equal(resolveEnvCheckIntervalMs(), 1_800_000);
+    process.env.AGENTWORKFORCE_SKILL_CACHE_CHECK_INTERVAL = 'garbage';
+    assert.equal(resolveEnvCheckIntervalMs(), 24 * 3_600_000); // unparseable → default
+  } finally {
+    if (prev === undefined) delete process.env.AGENTWORKFORCE_SKILL_CACHE_CHECK_INTERVAL;
+    else process.env.AGENTWORKFORCE_SKILL_CACHE_CHECK_INTERVAL = prev;
+  }
+});
+
+// --- acquireSkillCacheLock (PR #124 review: per-fingerprint locking) -----
+
+test('acquireSkillCacheLock: acquires, blocks re-acquire, releases', async () => {
+  const dir = mkdtempSync(join(tmpdir(), 'cli-lock-'));
+  try {
+    const cacheDir = join(dir, 'fp');
+    const lock = await acquireSkillCacheLock(cacheDir);
+    assert.ok(lock, 'first acquire succeeds');
+    assert.equal(existsSync(`${cacheDir}.lock`), true);
+
+    // A held, fresh lock from a live pid (us) is not stolen → second acquire
+    // blocks; assert it doesn't resolve within a short window.
+    const second = acquireSkillCacheLock(cacheDir);
+    const raced = await Promise.race([
+      second.then(() => 'acquired'),
+      new Promise((r) => setTimeout(() => r('still-blocked'), 600))
+    ]);
+    assert.equal(raced, 'still-blocked');
+
+    lock.release();
+    assert.equal(existsSync(`${cacheDir}.lock`), false);
+
+    // Now the pending second acquire (250ms poll) can proceed.
+    const lock2 = await second;
+    assert.ok(lock2);
+    lock2.release();
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test('acquireSkillCacheLock: steals a stale (old-timestamp) lock', async () => {
+  const dir = mkdtempSync(join(tmpdir(), 'cli-lock-stale-'));
+  try {
+    const cacheDir = join(dir, 'fp');
+    // Live pid, but timestamp ~16min old → stale, must be stolen.
+    const old = Date.now() - 16 * 60_000;
+    writeFileSync(`${cacheDir}.lock`, `${process.pid}\n${old}\n`);
+    const lock = await acquireSkillCacheLock(cacheDir);
+    assert.ok(lock, 'stale lock stolen and re-acquired');
+    lock.release();
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test('acquireSkillCacheLock: steals a lock held by a dead pid', async () => {
+  const dir = mkdtempSync(join(tmpdir(), 'cli-lock-deadpid-'));
+  try {
+    const cacheDir = join(dir, 'fp');
+    // Fresh timestamp but an almost-certainly-dead pid → stolen via pid check.
+    writeFileSync(`${cacheDir}.lock`, `999999999\n${Date.now()}\n`);
+    const lock = await acquireSkillCacheLock(cacheDir);
+    assert.ok(lock, 'dead-pid lock stolen and re-acquired');
+    lock.release();
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
 });

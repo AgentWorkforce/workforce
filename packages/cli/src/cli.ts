@@ -678,6 +678,122 @@ function sessionMountDir(sessionRoot: string): string {
 const DEFAULT_SKILL_CACHE_CHECK_INTERVAL_MS = 24 * 3_600_000;
 
 /**
+ * Resolve the env-configured drift-check interval.
+ *
+ * `parseCheckInterval` returns three things we must keep distinct:
+ *   - a number  → an explicit interval (incl. `0` = always)
+ *   - `null`    → the user explicitly disabled checks (`never`/`off`/`false`)
+ *   - `undefined` → unset or unparseable → fall back to the 24h default
+ *
+ * A plain `?? DEFAULT` is wrong here because `??` also coalesces `null`,
+ * silently re-enabling checks the user asked to turn off.
+ */
+export function resolveEnvCheckIntervalMs(): number | null {
+  const parsed = parseCheckInterval(
+    process.env.AGENTWORKFORCE_SKILL_CACHE_CHECK_INTERVAL
+  );
+  return parsed === undefined ? DEFAULT_SKILL_CACHE_CHECK_INTERVAL_MS : parsed;
+}
+
+interface SkillCacheLockHandle {
+  release(): void;
+}
+
+// A lock is considered abandoned if its heartbeat timestamp is older than
+// this — covers a holder that was SIGKILLed without releasing.
+const SKILL_CACHE_LOCK_STALE_MS = 15 * 60_000;
+// Upper bound on how long we'll wait for a peer's install before proceeding
+// best-effort (unlocked). A real skill install is seconds; this is generous.
+const SKILL_CACHE_LOCK_WAIT_MS = 10 * 60_000;
+const SKILL_CACHE_LOCK_POLL_MS = 250;
+
+function skillCachePidAlive(pid: number): boolean {
+  try {
+    process.kill(pid, 0);
+    return true;
+  } catch (e) {
+    // EPERM => process exists but we can't signal it (still alive).
+    return (e as NodeJS.ErrnoException).code === 'EPERM';
+  }
+}
+
+function skillCacheLockIsStale(lockPath: string): boolean {
+  try {
+    const [pidRaw, tsRaw] = readFileSync(lockPath, 'utf8').split('\n');
+    const ts = Number(tsRaw);
+    if (Number.isFinite(ts) && Date.now() - ts > SKILL_CACHE_LOCK_STALE_MS) {
+      return true;
+    }
+    const pid = Number(pidRaw);
+    if (Number.isInteger(pid) && pid > 0 && !skillCachePidAlive(pid)) {
+      return true;
+    }
+    return false;
+  } catch {
+    // Unreadable (just removed by the holder?) — treat as stale so we retry
+    // the exclusive create rather than spin forever.
+    return true;
+  }
+}
+
+/**
+ * Acquire a per-fingerprint advisory lock so two concurrent
+ * `agentworkforce agent <same-persona>` launches don't both miss the cache
+ * and install into the same dir simultaneously (which can interleave
+ * `prpm install` writes and corrupt the cache).
+ *
+ * The lock is a sibling file `<cacheDir>.lock` (NOT inside the cache dir, so
+ * a `--refresh-skills` wipe of the dir can't delete a live lock). Created
+ * with `wx` (O_EXCL) for atomicity. A held lock is stolen only if its holder
+ * is dead or its heartbeat is stale. If we can't get it within the wait
+ * budget we return null and the caller proceeds unlocked (best-effort —
+ * never hang a launch on locking).
+ */
+export async function acquireSkillCacheLock(
+  skillCacheDir: string
+): Promise<SkillCacheLockHandle | null> {
+  const lockPath = `${skillCacheDir}.lock`;
+  try {
+    mkdirSync(dirname(lockPath), { recursive: true });
+  } catch {
+    return null;
+  }
+  const deadline = Date.now() + SKILL_CACHE_LOCK_WAIT_MS;
+  for (;;) {
+    try {
+      writeFileSync(lockPath, `${process.pid}\n${Date.now()}\n`, { flag: 'wx' });
+      let released = false;
+      return {
+        release() {
+          if (released) return;
+          released = true;
+          try {
+            rmSync(lockPath, { force: true });
+          } catch {
+            /* best-effort — a stale-steal by another proc is harmless */
+          }
+        }
+      };
+    } catch (err) {
+      if ((err as NodeJS.ErrnoException).code !== 'EEXIST') {
+        // Unexpected FS error: don't block the launch on locking.
+        return null;
+      }
+      if (skillCacheLockIsStale(lockPath)) {
+        try {
+          rmSync(lockPath, { force: true });
+        } catch {
+          /* lost the steal race — loop and re-evaluate */
+        }
+        continue;
+      }
+      if (Date.now() >= deadline) return null;
+      await new Promise((r) => setTimeout(r, SKILL_CACHE_LOCK_POLL_MS));
+    }
+  }
+}
+
+/**
  * Persist the cache marker after a successful install, folding in each
  * skill's upstream identity (prpm version / github blob SHA) read from the
  * lockfiles the installers just wrote into `cacheDir`. Sets
@@ -1403,8 +1519,7 @@ async function runInteractive(
       ? 0
       : options.noCheckUpstream
         ? null
-        : (parseCheckInterval(process.env.AGENTWORKFORCE_SKILL_CACHE_CHECK_INTERVAL) ??
-          DEFAULT_SKILL_CACHE_CHECK_INTERVAL_MS);
+        : resolveEnvCheckIntervalMs();
     const marker = readSkillCacheMarker(skillCacheDir);
     if (marker && isUpstreamCheckDue(marker, intervalMs)) {
       const spinner = ora({
@@ -1502,14 +1617,42 @@ async function runInteractive(
     !deferInstallToMount &&
     !skillCacheHit
   ) {
-    await runInstall(install.command, installLabel);
-    if (skillCacheFingerprint && skillCacheDir) {
-      await writeMarkerWithUpstream(
-        skillCacheDir,
-        skillCacheFingerprint,
-        harness,
-        effectiveSelection.skills.map((s) => ({ id: s.id, source: s.source }))
-      );
+    const cacheable = skillCachingEnabled && !!skillCacheDir && !!skillCacheFingerprint;
+    const lock =
+      cacheable && skillCacheDir ? await acquireSkillCacheLock(skillCacheDir) : null;
+    try {
+      // Re-check under the lock: a concurrent launch may have populated the
+      // cache while we waited. (Not on refresh — that's an explicit rebuild.)
+      const peerPopulated =
+        cacheable &&
+        !options.refreshSkills &&
+        skillCacheDir !== undefined &&
+        skillCacheFingerprint !== undefined &&
+        isSkillCacheValid(skillCacheDir, skillCacheFingerprint);
+      if (peerPopulated) {
+        process.stderr.write(
+          `• skill cache populated by a concurrent launch → reusing ${skillCacheDir}\n`
+        );
+      } else {
+        // `--refresh-skills`: wipe the entry first so the reinstall is a true
+        // rebuild — no stale files from a prior version, and a partial
+        // failure can't leave the old marker behind to fake a later hit.
+        // Done under the lock so a peer's in-progress install isn't clobbered.
+        if (options.refreshSkills && cacheable && skillCacheDir) {
+          rmSync(skillCacheDir, { recursive: true, force: true });
+        }
+        await runInstall(install.command, installLabel);
+        if (skillCacheFingerprint && skillCacheDir) {
+          await writeMarkerWithUpstream(
+            skillCacheDir,
+            skillCacheFingerprint,
+            harness,
+            effectiveSelection.skills.map((s) => ({ id: s.id, source: s.source }))
+          );
+        }
+      }
+    } finally {
+      lock?.release();
     }
   }
 
@@ -1724,17 +1867,37 @@ async function runInteractive(
         if (skillCacheHit && skillCacheDir) {
           mirrorSkillCacheInto(skillCacheDir, handle.mountDir);
         } else if (skillCachingEnabled && skillCacheDir && skillCacheFingerprint) {
-          setupSpinner?.stop();
-          mkdirSync(skillCacheDir, { recursive: true });
-          await runInstallOrThrow(install.command, installLabel, skillCacheDir);
-          await writeMarkerWithUpstream(
-            skillCacheDir,
-            skillCacheFingerprint,
-            harness,
-            effectiveSelection.skills.map((s) => ({ id: s.id, source: s.source }))
-          );
-          mirrorSkillCacheInto(skillCacheDir, handle.mountDir);
-          setupSpinner?.start();
+          const lock = await acquireSkillCacheLock(skillCacheDir);
+          try {
+            // A concurrent launch may have populated the cache while we
+            // waited for the lock — mirror it instead of reinstalling.
+            // (Skipped on refresh, which is an explicit rebuild.)
+            if (
+              !options.refreshSkills &&
+              isSkillCacheValid(skillCacheDir, skillCacheFingerprint)
+            ) {
+              mirrorSkillCacheInto(skillCacheDir, handle.mountDir);
+            } else {
+              setupSpinner?.stop();
+              // `--refresh-skills`: wipe first so the reinstall is a true
+              // rebuild and a partial failure can't leave a stale marker.
+              if (options.refreshSkills) {
+                rmSync(skillCacheDir, { recursive: true, force: true });
+              }
+              mkdirSync(skillCacheDir, { recursive: true });
+              await runInstallOrThrow(install.command, installLabel, skillCacheDir);
+              await writeMarkerWithUpstream(
+                skillCacheDir,
+                skillCacheFingerprint,
+                harness,
+                effectiveSelection.skills.map((s) => ({ id: s.id, source: s.source }))
+              );
+              mirrorSkillCacheInto(skillCacheDir, handle.mountDir);
+              setupSpinner?.start();
+            }
+          } finally {
+            lock?.release();
+          }
         } else {
           setupSpinner?.stop();
           await runInstallOrThrow(install.command, installLabel, handle.mountDir);
