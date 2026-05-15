@@ -1583,21 +1583,25 @@ async function runInteractive(
       // flagged in the index, just hidden via the `.git/info/exclude` block.
       configureGitForMount(handle.mountDir, ignoredPatterns);
       if (deferInstallToMount) {
-        // Hand the line off to the install spinner so the two don't fight
-        // for the same stream, then resume the setup spinner afterwards.
-        setupSpinner?.stop();
         // Cache-aware mount install:
-        //   - If we have a cache hit, skip the install and mirror the
+        //   - If we have a cache hit, skip the install and just mirror the
         //     pre-populated cache dir into the mount. `npx prpm install`
-        //     never runs.
+        //     never runs and no install spinner is needed.
         //   - On miss (or `--refresh-skills`), run the install once with
         //     cwd set to the cache dir so artifacts land in the persistent
         //     location, then mirror into the mount and write the marker.
         //   - With caching disabled (`--install-in-repo` or
         //     `--no-skill-cache`), fall back to the legacy in-mount install.
+        //
+        // The setup spinner is only stopped around branches that print their
+        // own spinner (install) so the two don't fight for the same stream.
+        // The pure cache-hit path is a near-instant cpSync — leaving the
+        // setup spinner running avoids a redundant "Setting up sandbox
+        // mount…" redraw in the user-visible output.
         if (skillCacheHit && skillCacheDir) {
           mirrorSkillCacheInto(skillCacheDir, handle.mountDir);
         } else if (skillCachingEnabled && skillCacheDir && skillCacheFingerprint) {
+          setupSpinner?.stop();
           mkdirSync(skillCacheDir, { recursive: true });
           await runInstallOrThrow(install.command, installLabel, skillCacheDir);
           writeSkillCacheMarker(skillCacheDir, {
@@ -1609,10 +1613,12 @@ async function runInteractive(
             }))
           });
           mirrorSkillCacheInto(skillCacheDir, handle.mountDir);
+          setupSpinner?.start();
         } else {
+          setupSpinner?.stop();
           await runInstallOrThrow(install.command, installLabel, handle.mountDir);
+          setupSpinner?.start();
         }
-        setupSpinner?.start();
       }
       for (const file of spec.configFiles) {
         assertSafeRelativePath(file.path);
