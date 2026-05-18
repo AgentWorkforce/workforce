@@ -477,6 +477,32 @@ test('dangerouslyBypassApprovalsAndSandbox is preserved on standalone local pers
   });
 });
 
+test('standalone local personas reject bypass with explicit codex sandbox settings', () => {
+  withLayers(({ cwd, homeDir }) => {
+    writeJson(join(homeDir, 'standalone-bypass-conflict.json'), {
+      id: 'standalone-bypass-conflict',
+      intent: 'review',
+      description: 'Standalone persona with contradictory codex settings.',
+      harness: 'codex',
+      model: 'openai-codex/gpt-5.3-codex',
+      systemPrompt: 'Do the work.',
+      harnessSettings: {
+        reasoning: 'medium',
+        timeoutSeconds: 900,
+        sandboxMode: 'workspace-write',
+        dangerouslyBypassApprovalsAndSandbox: true
+      }
+    });
+
+    const loaded = loadLocalPersonas({ cwd, homeDir });
+    assert.equal(loaded.byId.has('standalone-bypass-conflict'), false);
+    assert.match(
+      loaded.warnings.join('\n'),
+      /dangerouslyBypassApprovalsAndSandbox is mutually exclusive with: sandboxMode/
+    );
+  });
+});
+
 test('optional input flag is preserved on standalone local personas', () => {
   withLayers(({ cwd, homeDir }) => {
     writeJson(join(homeDir, 'standalone-scaffolder.json'), {
