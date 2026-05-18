@@ -450,6 +450,33 @@ test('inputs are preserved on standalone local personas', () => {
   });
 });
 
+test('dangerouslyBypassApprovalsAndSandbox is preserved on standalone local personas', () => {
+  withLayers(({ cwd, homeDir }) => {
+    writeJson(join(homeDir, 'standalone-bypass.json'), {
+      id: 'standalone-bypass',
+      intent: 'review',
+      description: 'Standalone persona that opts out of codex approvals.',
+      harness: 'codex',
+      model: 'openai-codex/gpt-5.3-codex',
+      systemPrompt: 'Do the work.',
+      harnessSettings: {
+        reasoning: 'medium',
+        timeoutSeconds: 900,
+        dangerouslyBypassApprovalsAndSandbox: true
+      }
+    });
+    const loaded = loadLocalPersonas({ cwd, homeDir });
+    assert.deepEqual(loaded.warnings, []);
+    const settings = loaded.byId.get('standalone-bypass')?.harnessSettings;
+    assert.ok(settings);
+    // Regression: assertStandaloneHarnessSettings used to rebuild the
+    // settings object field-by-field and drop this flag, so codex launched
+    // without --dangerously-bypass-approvals-and-sandbox and kept prompting
+    // (including for MCP tool calls).
+    assert.equal(settings?.dangerouslyBypassApprovalsAndSandbox, true);
+  });
+});
+
 test('optional input flag is preserved on standalone local personas', () => {
   withLayers(({ cwd, homeDir }) => {
     writeJson(join(homeDir, 'standalone-scaffolder.json'), {

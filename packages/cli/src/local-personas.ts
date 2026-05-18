@@ -659,7 +659,8 @@ function assertPartialHarnessSettingsShape(value: Record<string, unknown>, conte
     sandboxMode,
     approvalPolicy,
     workspaceWriteNetworkAccess,
-    webSearch
+    webSearch,
+    dangerouslyBypassApprovalsAndSandbox
   } = value;
   if (
     reasoning !== undefined &&
@@ -694,6 +695,12 @@ function assertPartialHarnessSettingsShape(value: Record<string, unknown>, conte
   }
   if (webSearch !== undefined && typeof webSearch !== 'boolean') {
     throw new Error(`${context}.webSearch must be a boolean`);
+  }
+  if (
+    dangerouslyBypassApprovalsAndSandbox !== undefined &&
+    typeof dangerouslyBypassApprovalsAndSandbox !== 'boolean'
+  ) {
+    throw new Error(`${context}.dangerouslyBypassApprovalsAndSandbox must be a boolean`);
   }
 }
 
@@ -745,6 +752,10 @@ function assertStandaloneHarnessSettings(
   }
   if (settings.webSearch !== undefined) {
     out.webSearch = settings.webSearch as boolean;
+  }
+  if (settings.dangerouslyBypassApprovalsAndSandbox !== undefined) {
+    out.dangerouslyBypassApprovalsAndSandbox =
+      settings.dangerouslyBypassApprovalsAndSandbox as boolean;
   }
   return out;
 }
