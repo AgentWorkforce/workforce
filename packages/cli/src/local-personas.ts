@@ -17,7 +17,8 @@ import {
   type PersonaPermissions,
   type PersonaSpec,
   type PersonaTag,
-  type SidecarMdMode
+  type SidecarMdMode,
+  parseHarnessSettings
 } from '@agentworkforce/persona-kit';
 import { listBuiltInPersonas, personaCatalog } from '@agentworkforce/workload-router';
 
@@ -659,7 +660,8 @@ function assertPartialHarnessSettingsShape(value: Record<string, unknown>, conte
     sandboxMode,
     approvalPolicy,
     workspaceWriteNetworkAccess,
-    webSearch
+    webSearch,
+    dangerouslyBypassApprovalsAndSandbox
   } = value;
   if (
     reasoning !== undefined &&
@@ -695,6 +697,12 @@ function assertPartialHarnessSettingsShape(value: Record<string, unknown>, conte
   if (webSearch !== undefined && typeof webSearch !== 'boolean') {
     throw new Error(`${context}.webSearch must be a boolean`);
   }
+  if (
+    dangerouslyBypassApprovalsAndSandbox !== undefined &&
+    typeof dangerouslyBypassApprovalsAndSandbox !== 'boolean'
+  ) {
+    throw new Error(`${context}.dangerouslyBypassApprovalsAndSandbox must be a boolean`);
+  }
 }
 
 function findInLibrary(key: string): PersonaSpec | undefined {
@@ -723,30 +731,7 @@ function assertStandaloneHarnessSettings(
   settings: Record<string, unknown>,
   context: string
 ): HarnessSettings {
-  assertPartialHarnessSettingsShape(settings, context);
-  const reasoning = settings.reasoning;
-  if (reasoning !== 'low' && reasoning !== 'medium' && reasoning !== 'high') {
-    throw new Error(`${context}.reasoning must be one of: low, medium, high`);
-  }
-  const timeoutSeconds = settings.timeoutSeconds;
-  if (typeof timeoutSeconds !== 'number' || !Number.isFinite(timeoutSeconds) || timeoutSeconds <= 0) {
-    throw new Error(`${context}.timeoutSeconds must be a positive number`);
-  }
-
-  const out: HarnessSettings = { reasoning, timeoutSeconds };
-  if (settings.sandboxMode !== undefined) {
-    out.sandboxMode = settings.sandboxMode as CodexSandboxMode;
-  }
-  if (settings.approvalPolicy !== undefined) {
-    out.approvalPolicy = settings.approvalPolicy as CodexApprovalPolicy;
-  }
-  if (settings.workspaceWriteNetworkAccess !== undefined) {
-    out.workspaceWriteNetworkAccess = settings.workspaceWriteNetworkAccess as boolean;
-  }
-  if (settings.webSearch !== undefined) {
-    out.webSearch = settings.webSearch as boolean;
-  }
-  return out;
+  return parseHarnessSettings(settings, context);
 }
 
 function standaloneSpecFromOverride(
