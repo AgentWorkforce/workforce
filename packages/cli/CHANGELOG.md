@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [3.0.13] - 2026-05-19
+
+### Changed
+
+- Improve deployment list and logs CLI (#126)
+
 ## [3.0.12] - 2026-05-18
 
 ### Fixed
