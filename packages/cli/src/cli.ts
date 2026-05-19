@@ -60,7 +60,7 @@ import {
 import ora, { type Ora } from 'ora';
 import { runDeploy, runLogin, runLogout } from './deploy-command.js';
 import { runDestroy } from './destroy-command.js';
-import { runDeploymentList } from './list-command.js';
+import { runDeploymentList, runDeploymentLogs } from './list-command.js';
 import {
   startLaunchMetadataRecording,
   type LaunchMetadataRun
@@ -206,6 +206,7 @@ Commands:
                         --input KEY=value   override a declared persona input
                                             (repeat for multiple)
   deployments list    List deployed cloud agents in the active workspace.
+  deployments logs    Show structured logs for a deployed cloud agent.
   destroy <persona-or-agent-id> [flags]
                       Tear down a deployed agent: cancel all schedules and
                       mark the agent as destroyed in the workspace. Accepts
@@ -3805,14 +3806,18 @@ export async function main(): Promise<void> {
   if (subcommand === 'deployments') {
     const [action, ...extra] = rest;
     if (!action || action === '-h' || action === '--help') {
-      process.stdout.write('Usage: agentworkforce deployments list [flags]\n');
+      process.stdout.write('Usage: agentworkforce deployments <list|logs> [flags]\n');
       process.exit(action ? 0 : 1);
     }
-    if (action !== 'list') {
-      die(`deployments: unknown action "${action}". Expected: list`);
+    if (action === 'list') {
+      await runDeploymentList(extra);
+      return;
     }
-    await runDeploymentList(extra);
-    return;
+    if (action === 'logs') {
+      await runDeploymentLogs(extra);
+      return;
+    }
+    die(`deployments: unknown action "${action}". Expected: list, logs`);
   }
 
   if (subcommand === 'destroy') {
