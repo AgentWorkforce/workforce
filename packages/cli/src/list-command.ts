@@ -154,18 +154,21 @@ export async function runDeploymentLogs(args: readonly string[]): Promise<void> 
       process.exit(0);
     }
 
-    const entries: LogEntry[] = [];
+    const entryFiles: LogEntry[][] = [];
+    let collected = 0;
     for (const path of paths.slice(0, 14)) {
-      entries.push(...await fetchLogEntries({
+      const fileEntries = await fetchLogEntries({
         cloudUrl,
         workspace,
         token,
         path,
         agentId: agent.agentId
-      }));
-      if (entries.length >= opts.tail) break;
+      });
+      entryFiles.push(fileEntries);
+      collected += fileEntries.length;
+      if (collected >= opts.tail) break;
     }
-    writeLogOutput(entries.slice(-opts.tail), opts);
+    writeLogOutput(tailLogEntriesFromNewestFiles(entryFiles, opts.tail), opts);
     process.exit(0);
   } catch (err) {
     process.stderr.write(
@@ -305,6 +308,17 @@ export function formatDeploymentsTable(agents: readonly DeploymentAgent[]): stri
 export function formatDeploymentLogEntries(entries: readonly LogEntry[]): string {
   if (entries.length === 0) return 'No log entries found.\n';
   return entries.map(formatLogEntry).join('\n') + '\n';
+}
+
+export function tailLogEntriesFromNewestFiles(
+  filesNewestFirst: readonly (readonly LogEntry[])[],
+  tail: number
+): LogEntry[] {
+  const chronological: LogEntry[] = [];
+  for (let i = filesNewestFirst.length - 1; i >= 0; i -= 1) {
+    chronological.push(...filesNewestFirst[i]);
+  }
+  return chronological.slice(-tail);
 }
 
 function parseAgents(body: ListResponse): DeploymentAgent[] {

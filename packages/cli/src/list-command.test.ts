@@ -4,7 +4,8 @@ import {
   formatDeploymentLogEntries,
   formatDeploymentsTable,
   parseDeploymentListArgs,
-  parseDeploymentLogsArgs
+  parseDeploymentLogsArgs,
+  tailLogEntriesFromNewestFiles
 } from './list-command.js';
 
 test('parseDeploymentListArgs accepts deployment list filters', () => {
@@ -88,4 +89,23 @@ test('formatDeploymentLogEntries renders structured log rows', () => {
     }
   ]);
   assert.match(out, /2026-05-19T13:00:00.000Z\s+INFO\s+agent-1\s+handled event/);
+});
+
+test('tailLogEntriesFromNewestFiles keeps the newest entries across files', () => {
+  const entries = tailLogEntriesFromNewestFiles(
+    [
+      [
+        { ts: '2026-05-19T13:00:00.000Z', msg: 'newer-a' },
+        { ts: '2026-05-19T14:00:00.000Z', msg: 'newer-b' },
+        { ts: '2026-05-19T15:00:00.000Z', msg: 'newer-c' }
+      ],
+      [
+        { ts: '2026-05-18T10:00:00.000Z', msg: 'older-a' },
+        { ts: '2026-05-18T11:00:00.000Z', msg: 'older-b' }
+      ]
+    ],
+    3
+  );
+
+  assert.deepEqual(entries.map((entry) => entry.msg), ['newer-a', 'newer-b', 'newer-c']);
 });
