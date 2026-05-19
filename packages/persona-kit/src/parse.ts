@@ -23,6 +23,7 @@ import type {
   PersonaMemoryConfig,
   PersonaMemoryScope,
   PersonaMount,
+  PersonaMountRoot,
   PersonaPermissions,
   PersonaSchedule,
   PersonaSelection,
@@ -245,6 +246,55 @@ export function parseStringList(
   return parsed.length > 0 ? parsed : undefined;
 }
 
+/**
+ * Mount root alias regex. Used verbatim as a filesystem path segment, so we
+ * accept only lowercase ascii word chars (with internal dashes/underscores),
+ * matching the convention shared by the rest of persona-kit identifiers.
+ * Bounded to ≤32 chars to keep CLI displays tidy.
+ */
+export const MOUNT_ROOT_ALIAS_RE = /^[a-z0-9](?:[a-z0-9_-]*[a-z0-9])?$/;
+const MOUNT_ROOT_ALIAS_MAX = 32;
+
+export function parseMountRoot(
+  value: unknown,
+  context: string
+): PersonaMountRoot {
+  if (!isObject(value)) {
+    throw new Error(`${context} must be an object`);
+  }
+  const { alias, path, readonly, optional, ignoredPatterns, readonlyPatterns } = value;
+  if (typeof alias !== 'string' || !alias.trim()) {
+    throw new Error(`${context}.alias must be a non-empty string`);
+  }
+  if (alias.length > MOUNT_ROOT_ALIAS_MAX) {
+    throw new Error(`${context}.alias must be ≤${MOUNT_ROOT_ALIAS_MAX} characters`);
+  }
+  if (!MOUNT_ROOT_ALIAS_RE.test(alias)) {
+    throw new Error(
+      `${context}.alias must match ${MOUNT_ROOT_ALIAS_RE.source}`
+    );
+  }
+  if (typeof path !== 'string' || !path.trim()) {
+    throw new Error(`${context}.path must be a non-empty string`);
+  }
+  if (readonly !== undefined && typeof readonly !== 'boolean') {
+    throw new Error(`${context}.readonly must be a boolean if provided`);
+  }
+  if (optional !== undefined && typeof optional !== 'boolean') {
+    throw new Error(`${context}.optional must be a boolean if provided`);
+  }
+  const ignored = parseStringList(ignoredPatterns, `${context}.ignoredPatterns`);
+  const readonlyPatts = parseStringList(readonlyPatterns, `${context}.readonlyPatterns`);
+  return {
+    alias,
+    path,
+    ...(readonly === true ? { readonly: true } : {}),
+    ...(optional === true ? { optional: true } : {}),
+    ...(ignored ? { ignoredPatterns: ignored } : {}),
+    ...(readonlyPatts ? { readonlyPatterns: readonlyPatts } : {})
+  };
+}
+
 export function parseMount(
   value: unknown,
   context: string
@@ -261,10 +311,36 @@ export function parseMount(
     value.readonlyPatterns,
     `${context}.readonlyPatterns`
   );
-  return ignoredPatterns || readonlyPatterns
+  let roots: PersonaMountRoot[] | undefined;
+  if (value.roots !== undefined) {
+    if (!Array.isArray(value.roots)) {
+      throw new Error(`${context}.roots must be an array if provided`);
+    }
+    if (value.roots.length === 0) {
+      // Empty `roots: []` is almost always a misedit — opting into multi-root
+      // and then forgetting the entries shouldn't silently fall back to the
+      // legacy single-root mount. Match parse.ts's "no surprises" stance.
+      throw new Error(
+        `${context}.roots must contain at least one entry if provided (omit the field for single-root cwd mounts)`
+      );
+    }
+    const seen = new Set<string>();
+    roots = value.roots.map((entry, idx) => {
+      const parsed = parseMountRoot(entry, `${context}.roots[${idx}]`);
+      if (seen.has(parsed.alias)) {
+        throw new Error(
+          `${context}.roots[${idx}].alias "${parsed.alias}" duplicates an earlier root in this persona`
+        );
+      }
+      seen.add(parsed.alias);
+      return parsed;
+    });
+  }
+  return ignoredPatterns || readonlyPatterns || roots
     ? {
         ...(ignoredPatterns ? { ignoredPatterns } : {}),
-        ...(readonlyPatterns ? { readonlyPatterns } : {})
+        ...(readonlyPatterns ? { readonlyPatterns } : {}),
+        ...(roots ? { roots } : {})
       }
     : undefined;
 }

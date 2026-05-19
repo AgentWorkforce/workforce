@@ -33,6 +33,7 @@ import {
   PERSONA_TAGS,
   renderPersonaInputs,
   resolveMcpServersLenient,
+  resolveMountRoots,
   resolvePersonaInputs,
   resolveSidecar,
   resolveStringMapLenient,
@@ -44,6 +45,7 @@ import {
   type PersonaSelection,
   type PersonaSpec,
   type PersonaTag,
+  type ResolvedMountRoot,
   type SidecarMdMode,
   type SkillMaterializationPlan
 } from '@agentworkforce/persona-kit';
@@ -1358,9 +1360,43 @@ async function runInteractive(
   // `npx prpm install` / `npx skills add` writes land in the sandbox. The
   // skill-install paths are added to `ignoredPatterns` so they are neither
   // copied in from the real repo nor synced back on exit.
+  // Multi-root mount requires the sandbox mount infrastructure. A persona
+  // declaring `mount.roots` under --install-in-repo (which disengages the
+  // sandbox) can't be honored, so we bail loudly rather than silently
+  // mounting only one of the declared roots or none.
+  const declaredMountRoots = effectiveSelection.mount?.roots;
+  if (declaredMountRoots && declaredMountRoots.length > 0 && !useClean) {
+    process.stderr.write(
+      `error: persona "${personaId}" declares mount.roots which requires the sandbox mount; ` +
+        `--install-in-repo disengages the mount. Drop the flag and retry.\n`
+    );
+    return 1;
+  }
+
   if (useClean && sessionRoot) {
     const mountDir = sessionMountDir(sessionRoot);
     let launchMetadata: LaunchMetadataRun | undefined;
+    // Resolve declared multi-root mounts against the same caller env the
+    // harness sees. resolveMountRoots returns undefined when the persona
+    // ships no `roots`; an empty array means every root was optional and
+    // unresolvable, which we surface as a hard error — silently falling
+    // back to single-cwd mount would defeat the persona's intent.
+    let resolvedMountRoots: ResolvedMountRoot[] | undefined;
+    if (declaredMountRoots && declaredMountRoots.length > 0) {
+      try {
+        resolvedMountRoots = resolveMountRoots(effectiveSelection.mount, callerEnv);
+      } catch (err) {
+        process.stderr.write(`error: ${(err as Error).message}\n`);
+        return 1;
+      }
+      if (!resolvedMountRoots || resolvedMountRoots.length === 0) {
+        process.stderr.write(
+          `error: persona "${personaId}" declares mount.roots but no roots resolved — ` +
+            `set the env vars referenced by mount.roots[].path and retry.\n`
+        );
+        return 1;
+      }
+    }
     // Anything we materialize into the mount via onBeforeLaunch must be
     // hidden from the mount-mirror in both directions: without this, any
     // opencode.json already present in the real repo would be copied into
@@ -1375,6 +1411,37 @@ async function runInteractive(
       mount: effectiveSelection.mount,
       configFilePaths: spec.configFiles.map((file) => file.path)
     });
+    // Mount targets: each describes one createMount call.
+    //  - Single-root personas (no `mount.roots`): one target rooted at
+    //    process.cwd() → mountDir. The harness sees a 1:1 mirror of the
+    //    repo, exactly as before.
+    //  - Multi-root personas: one target per resolved root, each rooted at
+    //    the root's resolved path → mountDir/<alias>. The harness's cwd is
+    //    the parent mountDir which holds each root side-by-side.
+    interface MountTarget {
+      source: string;
+      dest: string;
+      ignoredPatterns: string[];
+      readonlyPatterns: string[];
+      agentName: string;
+    }
+    const mountTargets: MountTarget[] = resolvedMountRoots
+      ? resolvedMountRoots.map((r) => ({
+          source: r.path,
+          dest: join(mountDir, r.alias),
+          ignoredPatterns: [...ignoredPatterns, ...r.ignoredPatterns],
+          readonlyPatterns: [...readonlyPatterns, ...r.readonlyPatterns],
+          agentName: `${personaId}:${r.alias}`
+        }))
+      : [
+          {
+            source: process.cwd(),
+            dest: mountDir,
+            ignoredPatterns: [...ignoredPatterns],
+            readonlyPatterns: [...readonlyPatterns],
+            agentName: personaId
+          }
+        ];
     // Setup spinner covers createMount + git-config + (optional) in-mount
     // install + config-file writes + autosync start, so the multi-second
     // pause before the harness child appears is visibly live. createMount
@@ -1454,62 +1521,83 @@ async function runInteractive(
     };
     process.on('SIGINT', sigintHandler);
 
-    let handle: Awaited<ReturnType<typeof createMount>> | undefined;
-    let autoSync: AutoSyncHandle | undefined;
+    const mountHandles: Array<Awaited<ReturnType<typeof createMount>>> = [];
+    const autoSyncHandles: AutoSyncHandle[] = [];
     let exitCode = 0;
     try {
       // createMount inside the try so its initial-mirror failures fall into
-      // the catch path and clean up the setup spinner.
-      handle = await createMount(process.cwd(), mountDir, {
-        ignoredPatterns: [...ignoredPatterns],
-        readonlyPatterns: [...readonlyPatterns],
-        excludeDirs: [],
-        agentName: personaId,
-        // Pull `.git` into the mount so git commands work inside the
-        // sandbox. relayfile treats this as one-way project→mount: host-side
-        // `.git` changes flow in, mount-side commits/refs stay sandboxed and
-        // are discarded on cleanup. The agent must `git push` to persist
-        // work.
-        includeGit: true
-      });
-      // Run before install / configFile writes so the freshly written files
-      // (e.g. `.opencode/`, `opencode.json`) aren't yet present when we run
-      // `git ls-files` to pick skip-worktree candidates — we don't need them
-      // flagged in the index, just hidden via the `.git/info/exclude` block.
-      configureGitForMount(handle.mountDir, ignoredPatterns);
+      // the catch path and clean up the setup spinner. Multi-root mounts
+      // open each target sequentially; cleanup below tears them down in
+      // reverse order.
+      //
+      // Pull `.git` into each mount so git commands work inside the
+      // sandbox. relayfile treats this as one-way project→mount: host-side
+      // `.git` changes flow in, mount-side commits/refs stay sandboxed and
+      // are discarded on cleanup. The agent must `git push` to persist
+      // work.
+      for (const target of mountTargets) {
+        // Ensure the parent exists before relayfile creates the leaf,
+        // important when a multi-root persona's alias creates the first
+        // entry under sessionMountDir.
+        mkdirSync(dirname(target.dest), { recursive: true });
+        const handle = await createMount(target.source, target.dest, {
+          ignoredPatterns: target.ignoredPatterns,
+          readonlyPatterns: target.readonlyPatterns,
+          excludeDirs: [],
+          agentName: target.agentName,
+          includeGit: true
+        });
+        mountHandles.push(handle);
+        // Run before install / configFile writes so the freshly written
+        // files aren't yet present when we run `git ls-files` to pick
+        // skip-worktree candidates — we don't need them flagged in the
+        // index, just hidden via the `.git/info/exclude` block.
+        configureGitForMount(handle.mountDir, target.ignoredPatterns);
+      }
       if (deferInstallToMount) {
         // Hand the line off to the install spinner so the two don't fight
         // for the same stream, then resume the setup spinner afterwards.
+        // Install runs in the parent mountDir (which equals the single
+        // root's mountDir in the legacy path, and is the virtual parent
+        // for multi-root); skill artifacts are session-scoped and removed
+        // wholesale when sessionRoot is wiped.
         setupSpinner?.stop();
-        await runInstallOrThrow(install.command, installLabel, handle.mountDir);
+        await runInstallOrThrow(install.command, installLabel, mountDir);
         setupSpinner?.start();
       }
       for (const file of spec.configFiles) {
         assertSafeRelativePath(file.path);
-        const target = join(handle.mountDir, file.path);
+        const target = join(mountDir, file.path);
         mkdirSync(dirname(target), { recursive: true });
         writeFileSync(target, file.contents, 'utf8');
       }
       if (resolvedSidecar) {
         const body = buildSidecarBody(resolvedSidecar, process.cwd());
-        writeFileSync(join(handle.mountDir, resolvedSidecar.mountFile), body, 'utf8');
+        writeFileSync(join(mountDir, resolvedSidecar.mountFile), body, 'utf8');
       }
-      launchMetadata = await startLaunchMetadataForLaunch(handle.mountDir);
+      launchMetadata = await startLaunchMetadataForLaunch(mountDir);
       if (options.capture) {
         options.capture.stampEnrichment = { ...launchMetadata.metadata };
         options.capture.stampingEnabled = launchMetadata.enabled;
       }
 
-      autoSync = handle.startAutoSync();
+      for (const handle of mountHandles) {
+        autoSyncHandles.push(handle.startAutoSync());
+      }
 
       // Stop the setup spinner before spawning the child — the child
       // inherits stdio and would otherwise interleave its output with
       // spinner frames.
-      setupSpinner?.succeed(`Sandbox mount ready → ${mountDir}`);
+      const mountLabel = resolvedMountRoots
+        ? `${mountDir} (${resolvedMountRoots.length} roots: ${resolvedMountRoots
+            .map((r) => r.alias)
+            .join(', ')})`
+        : mountDir;
+      setupSpinner?.succeed(`Sandbox mount ready → ${mountLabel}`);
       setupSpinner = undefined;
 
       const childEnv = resolvedEnv ? { ...process.env, ...resolvedEnv } : process.env;
-      const childCwd = handle.mountDir;
+      const childCwd = mountDir;
       if (options.capture) {
         options.capture.sessionCwd = childCwd;
         options.capture.harness = harness;
@@ -1542,16 +1630,22 @@ async function runInteractive(
       }).start();
 
       let count = 0;
-      if (autoSync) {
-        await autoSync.stop({ signal: shutdownController.signal });
-        count += autoSync.totalChanges();
-        autoSync = undefined;
+      // Stop every autosync handle before issuing the final syncBack so we
+      // don't race the watcher against our own reconcile. autoSyncHandles
+      // is drained as we go so the `finally` block doesn't double-stop.
+      while (autoSyncHandles.length > 0) {
+        const auto = autoSyncHandles.pop();
+        if (!auto) continue;
+        await auto.stop({ signal: shutdownController.signal });
+        count += auto.totalChanges();
       }
       // NOTE: `count` is bidirectional — it sums autosync activity in both
       // directions (inbound project→mount and outbound mount→project,
       // including deletes) plus the final mount→project syncBack. Phrase as
       // "file events during session" so we don't overclaim direction.
-      count += await handle.syncBack({ signal: shutdownController.signal });
+      for (const handle of mountHandles) {
+        count += await handle.syncBack({ signal: shutdownController.signal });
+      }
 
       const aborted = shutdownController.signal.aborted;
       const qualifier = aborted ? ' (partial)' : '';
@@ -1597,16 +1691,25 @@ async function runInteractive(
         syncSpinner.stop();
         syncSpinner = undefined;
       }
-      // Best-effort: stop autosync if we errored out before the success path
-      // already cleared it.
-      if (autoSync) {
+      // Best-effort: stop any autosync handles still active if we errored
+      // out before the success path drained them. Cleanup runs in reverse
+      // open order so a partially-set-up mount is unwound symmetrically.
+      while (autoSyncHandles.length > 0) {
+        const auto = autoSyncHandles.pop();
+        if (!auto) continue;
         try {
-          await autoSync.stop({ signal: shutdownController.signal });
+          await auto.stop({ signal: shutdownController.signal });
         } catch {
           /* ignore — we're tearing down anyway */
         }
       }
-      handle?.cleanup();
+      for (let i = mountHandles.length - 1; i >= 0; i -= 1) {
+        try {
+          mountHandles[i].cleanup();
+        } catch {
+          /* ignore — best-effort cleanup */
+        }
+      }
       await launchMetadata?.stop();
       process.removeListener('SIGINT', sigintHandler);
       // When the install ran inside the mount, its cleanup paths are

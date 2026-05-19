@@ -1,7 +1,13 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { buildPersonaSpawnPlan, type ResolvedPersona } from './plan.js';
-import type { Harness } from './types.js';
+import { homedir } from 'node:os';
+
+import {
+  buildPersonaSpawnPlan,
+  resolveMountRoots,
+  type ResolvedPersona
+} from './plan.js';
+import type { Harness, PersonaMount } from './types.js';
 
 function persona(over: Partial<ResolvedPersona> = {}): ResolvedPersona {
   return {
@@ -98,6 +104,118 @@ test('buildPersonaSpawnPlan threads mount policy through when patterns present',
 test('buildPersonaSpawnPlan drops empty mount policy', () => {
   const plan = buildPersonaSpawnPlan(persona({ mount: {} }), { processEnv: cleanEnv });
   assert.equal(plan.mount, undefined);
+});
+
+test('buildPersonaSpawnPlan resolves mount.roots via inputs + processEnv', () => {
+  const plan = buildPersonaSpawnPlan(
+    persona({
+      inputs: { ACME_API_DIR: { env: 'ACME_API_DIR' } },
+      mount: {
+        roots: [
+          { alias: 'api', path: '$ACME_API_DIR', readonly: true },
+          { alias: 'web', path: '/tmp/web' }
+        ]
+      }
+    }),
+    {
+      processEnv: { ACME_API_DIR: '/tmp/api' } as NodeJS.ProcessEnv,
+      includeProcessEnv: false
+    }
+  );
+  assert.deepEqual(plan.mount?.roots, [
+    {
+      alias: 'api',
+      path: '/tmp/api',
+      readonly: true,
+      ignoredPatterns: [],
+      readonlyPatterns: ['**']
+    },
+    {
+      alias: 'web',
+      path: '/tmp/web',
+      readonly: false,
+      ignoredPatterns: [],
+      readonlyPatterns: []
+    }
+  ]);
+});
+
+test('resolveMountRoots expands ~ and $VAR in root paths', () => {
+  const mount: PersonaMount = {
+    roots: [
+      { alias: 'home', path: '~/work' },
+      { alias: 'absolute', path: '${REPO_PATH}' }
+    ]
+  };
+  const roots = resolveMountRoots(mount, { REPO_PATH: '/tmp/repo' } as NodeJS.ProcessEnv);
+  assert.equal(roots?.length, 2);
+  assert.equal(roots?.[0].alias, 'home');
+  assert.ok(roots?.[0].path.startsWith(homedir()), 'home root expands ~');
+  assert.equal(roots?.[1].path, '/tmp/repo');
+});
+
+test('resolveMountRoots throws on non-optional missing env ref', () => {
+  const mount: PersonaMount = {
+    roots: [{ alias: 'api', path: '$MISSING_VAR' }]
+  };
+  assert.throws(
+    () => resolveMountRoots(mount, {} as NodeJS.ProcessEnv),
+    /MISSING_VAR is required/
+  );
+});
+
+test('resolveMountRoots drops optional roots whose env ref is missing', () => {
+  const mount: PersonaMount = {
+    roots: [
+      { alias: 'web', path: '/tmp/present' },
+      { alias: 'api', path: '$MISSING_VAR', optional: true }
+    ]
+  };
+  const roots = resolveMountRoots(mount, {} as NodeJS.ProcessEnv);
+  assert.equal(roots?.length, 1);
+  assert.equal(roots?.[0].alias, 'web');
+});
+
+test('resolveMountRoots returns undefined when every optional root is missing', () => {
+  const mount: PersonaMount = {
+    roots: [
+      { alias: 'a', path: '$MISSING_A', optional: true },
+      { alias: 'b', path: '$MISSING_B', optional: true }
+    ]
+  };
+  const roots = resolveMountRoots(mount, {} as NodeJS.ProcessEnv);
+  assert.equal(roots, undefined);
+});
+
+test('resolveMountRoots rejects two roots that resolve to the same absolute path', () => {
+  const mount: PersonaMount = {
+    roots: [
+      { alias: 'a', path: '/tmp/repo' },
+      { alias: 'b', path: '/tmp/repo' }
+    ]
+  };
+  assert.throws(
+    () => resolveMountRoots(mount, {} as NodeJS.ProcessEnv),
+    /already used by another root/
+  );
+});
+
+test('resolveMountRoots rejects relative paths after expansion', () => {
+  const mount: PersonaMount = {
+    roots: [{ alias: 'api', path: 'relative/path' }]
+  };
+  assert.throws(
+    () => resolveMountRoots(mount, {} as NodeJS.ProcessEnv),
+    /not an absolute path/
+  );
+});
+
+test('resolveMountRoots returns undefined when no roots declared', () => {
+  assert.equal(resolveMountRoots(undefined, {} as NodeJS.ProcessEnv), undefined);
+  assert.equal(
+    resolveMountRoots({ ignoredPatterns: ['x'] }, {} as NodeJS.ProcessEnv),
+    undefined
+  );
 });
 
 test('buildPersonaSpawnPlan resolves inputs into env bindings', () => {

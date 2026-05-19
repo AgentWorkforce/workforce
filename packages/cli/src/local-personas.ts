@@ -639,6 +639,41 @@ function assertPermissionsShape(value: unknown, context: string): void {
   }
 }
 
+const MOUNT_ROOT_ALIAS_RE = /^[a-z0-9](?:[a-z0-9_-]*[a-z0-9])?$/;
+const MOUNT_ROOT_ALIAS_MAX = 32;
+
+function assertMountRootShape(value: unknown, context: string): void {
+  if (!isPlainObject(value)) {
+    throw new Error(`${context} must be an object`);
+  }
+  const { alias, path, readonly, optional, ignoredPatterns, readonlyPatterns } = value;
+  if (typeof alias !== 'string' || !alias.trim()) {
+    throw new Error(`${context}.alias must be a non-empty string`);
+  }
+  if (alias.length > MOUNT_ROOT_ALIAS_MAX) {
+    throw new Error(`${context}.alias must be ≤${MOUNT_ROOT_ALIAS_MAX} characters`);
+  }
+  if (!MOUNT_ROOT_ALIAS_RE.test(alias)) {
+    throw new Error(`${context}.alias must match ${MOUNT_ROOT_ALIAS_RE.source}`);
+  }
+  if (typeof path !== 'string' || !path.trim()) {
+    throw new Error(`${context}.path must be a non-empty string`);
+  }
+  if (readonly !== undefined && typeof readonly !== 'boolean') {
+    throw new Error(`${context}.readonly must be a boolean if provided`);
+  }
+  if (optional !== undefined && typeof optional !== 'boolean') {
+    throw new Error(`${context}.optional must be a boolean if provided`);
+  }
+  for (const key of ['ignoredPatterns', 'readonlyPatterns'] as const) {
+    const list = (value as Record<string, unknown>)[key];
+    if (list === undefined) continue;
+    if (!Array.isArray(list) || list.some((s) => typeof s !== 'string' || !s.trim())) {
+      throw new Error(`${context}.${key} must be an array of non-empty strings`);
+    }
+  }
+}
+
 function assertMountShape(value: unknown, context: string): void {
   if (value === undefined) return;
   if (!isPlainObject(value)) {
@@ -650,6 +685,27 @@ function assertMountShape(value: unknown, context: string): void {
     if (!Array.isArray(list) || list.some((s) => typeof s !== 'string' || !s.trim())) {
       throw new Error(`${context}.${key} must be an array of non-empty strings`);
     }
+  }
+  if (value.roots !== undefined) {
+    if (!Array.isArray(value.roots)) {
+      throw new Error(`${context}.roots must be an array if provided`);
+    }
+    if (value.roots.length === 0) {
+      throw new Error(
+        `${context}.roots must contain at least one entry if provided (omit the field for single-root cwd mounts)`
+      );
+    }
+    const seen = new Set<string>();
+    value.roots.forEach((root, idx) => {
+      assertMountRootShape(root, `${context}.roots[${idx}]`);
+      const alias = (root as { alias: string }).alias;
+      if (seen.has(alias)) {
+        throw new Error(
+          `${context}.roots[${idx}].alias "${alias}" duplicates an earlier root in this persona`
+        );
+      }
+      seen.add(alias);
+    });
   }
 }
 
@@ -1052,10 +1108,22 @@ function mergeMount(
     ...(base?.readonlyPatterns ?? []),
     ...(override?.readonlyPatterns ?? [])
   ];
-  if (ignoredPatterns.length === 0 && readonlyPatterns.length === 0) return undefined;
+  // `roots` replaces wholesale on override (matching the `skills` semantics
+  // higher up). Partial root-graph merging would mean overlays could land
+  // half-defined roots that depend on entries the base no longer ships —
+  // confusing in exactly the cases multi-root personas show up in.
+  const roots = override?.roots ?? base?.roots;
+  if (
+    ignoredPatterns.length === 0 &&
+    readonlyPatterns.length === 0 &&
+    !roots
+  ) {
+    return undefined;
+  }
   return {
     ...(ignoredPatterns.length > 0 ? { ignoredPatterns } : {}),
-    ...(readonlyPatterns.length > 0 ? { readonlyPatterns } : {})
+    ...(readonlyPatterns.length > 0 ? { readonlyPatterns } : {}),
+    ...(roots ? { roots } : {})
   };
 }
 
