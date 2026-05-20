@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [3.0.14] - 2026-05-20
+
+### Added
+
+- **Persistent skill cache to skip prpm install on repeat launches** (#124)
+
 ## [3.0.13] - 2026-05-19
 
 ### Changed
