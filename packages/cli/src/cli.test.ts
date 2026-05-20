@@ -80,7 +80,11 @@ function trapExit(): ExitTrap {
   return trap;
 }
 
-function writeStandaloneCodexPersona(workforceHome: string, id = 'local-codex'): string {
+function writeStandaloneCodexPersona(
+  workforceHome: string,
+  id = 'local-codex',
+  extra: Record<string, unknown> = {}
+): string {
   const personaDir = join(workforceHome, 'personas');
   mkdirSync(personaDir, { recursive: true });
   writeFileSync(
@@ -93,7 +97,8 @@ function writeStandaloneCodexPersona(workforceHome: string, id = 'local-codex'):
       harness: 'codex',
       model: 'test-codex',
       systemPrompt: 'Run the local codex test harness.',
-      harnessSettings: { reasoning: 'medium', timeoutSeconds: 30 }
+      harnessSettings: { reasoning: 'medium', timeoutSeconds: 30 },
+      ...extra
     }),
     'utf8'
   );
@@ -371,34 +376,35 @@ test('parseCreateArgs: --save-default persists create target in source config', 
   }
 });
 
-test('decideCleanMode: claude defaults to mount (parity with opencode)', () => {
-  // claude and opencode both default to the sandbox mount; the includeGit
-  // path in relayfile 0.6 keeps `.git` in the mount so git operations work
-  // inside it. --install-in-repo is the only opt-out.
-  assert.deepEqual(decideCleanMode('claude'), { useClean: true });
+test('decideCleanMode: claude defaults to direct launch without a mount', () => {
+  assert.deepEqual(decideCleanMode('claude'), { useClean: false });
 });
 
-test('decideCleanMode: claude + --install-in-repo disengages mount', () => {
+test('decideCleanMode: claude + --install-in-repo stays unmounted', () => {
   assert.deepEqual(decideCleanMode('claude', true), { useClean: false });
 });
 
-test('decideCleanMode: opencode defaults to mount (skills would otherwise land in repo)', () => {
-  // Opencode has no installRoot support in the SDK, so the mount is the only
-  // way to keep `.opencode/skills/`, `.agents/skills/`, prpm.lock, etc. out
-  // of the real repo. Default-on for non-in-repo runs.
-  assert.deepEqual(decideCleanMode('opencode'), { useClean: true });
+test('decideCleanMode: opencode mounts only when cwd config or skills require it', () => {
+  assert.deepEqual(decideCleanMode('opencode'), { useClean: false });
+  assert.deepEqual(decideCleanMode('opencode', { hasConfigFiles: true }), { useClean: true });
+  assert.deepEqual(decideCleanMode('opencode', { installNeedsSandbox: true }), { useClean: true });
 });
 
 test('decideCleanMode: opencode + --install-in-repo → no mount', () => {
-  assert.deepEqual(decideCleanMode('opencode', true), { useClean: false });
+  assert.deepEqual(
+    decideCleanMode('opencode', { installInRepo: true, hasConfigFiles: true }),
+    { useClean: false }
+  );
 });
 
-test('decideCleanMode: codex defaults to mount (parity with claude/opencode)', () => {
-  // All three harnesses default to the mount; --install-in-repo is the
-  // single opt-out. Codex needs the mount so persona-supplied AGENTS.md
-  // sidecars can be materialized without overwriting the user's real-cwd
-  // copy, and so any per-session writes stay sandboxed.
-  assert.deepEqual(decideCleanMode('codex'), { useClean: true });
+test('decideCleanMode: codex mounts only for filesystem-affecting persona features', () => {
+  assert.deepEqual(decideCleanMode('codex'), { useClean: false });
+  assert.deepEqual(decideCleanMode('codex', { hasSidecar: true }), { useClean: true });
+  assert.deepEqual(decideCleanMode('codex', { installNeedsSandbox: true }), { useClean: true });
+  assert.deepEqual(
+    decideCleanMode('codex', { mount: { readonlyPatterns: ['docs/**'] } }),
+    { useClean: true }
+  );
   assert.deepEqual(decideCleanMode('codex', true), { useClean: false });
 });
 
@@ -964,13 +970,31 @@ test('loadSidecarForSelection: opencode picks agentsMd, not claudeMd', () => {
   assert.equal(sidecar?.personaContent, '# agents\n');
 });
 
-test('main: codex sessions engage the sandbox mount by default', async () => {
-  const root = mkdtempSync(join(tmpdir(), 'aw-cli-mount-'));
+test('main: codex sessions skip the sandbox mount by default', async () => {
+  const root = mkdtempSync(join(tmpdir(), 'aw-cli-direct-'));
   try {
     const workforceHome = join(root, '.agentworkforce', 'workforce');
     const personaId = writeStandaloneCodexPersona(workforceHome);
-    // Codex defaults to a relayfile mount in parity with claude/opencode so
-    // persona-supplied AGENTS.md sidecars and per-session writes stay sandboxed.
+    const { stderr } = await runCliCapturingStderr(
+      ['agent', `${personaId}`],
+      { AGENT_WORKFORCE_HOME: workforceHome }
+    );
+    assert.ok(
+      !/sandbox mount →/.test(stderr),
+      `expected the direct launch branch to skip the mount; saw stderr:\n${stderr}`
+    );
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test('main: codex sessions use the sandbox mount for declared mount policy', async () => {
+  const root = mkdtempSync(join(tmpdir(), 'aw-cli-mount-'));
+  try {
+    const workforceHome = join(root, '.agentworkforce', 'workforce');
+    const personaId = writeStandaloneCodexPersona(workforceHome, 'local-codex-mounted', {
+      mount: { readonlyPatterns: ['README.md'] }
+    });
     const { stderr } = await runCliCapturingStderr(
       ['agent', `${personaId}`],
       { AGENT_WORKFORCE_HOME: workforceHome }
@@ -978,20 +1002,18 @@ test('main: codex sessions engage the sandbox mount by default', async () => {
     assert.match(
       stderr,
       /sandbox mount →/,
-      `expected the mount branch to engage; saw stderr:\n${stderr}`
+      `expected the mount branch to engage for mount policy; saw stderr:\n${stderr}`
     );
   } finally {
     rmSync(root, { recursive: true, force: true });
   }
 });
 
-test('main: codex --install-in-repo disengages the sandbox mount', async () => {
+test('main: codex --install-in-repo keeps direct launch unmounted', async () => {
   const root = mkdtempSync(join(tmpdir(), 'aw-cli-no-mount-'));
   try {
     const workforceHome = join(root, '.agentworkforce', 'workforce');
     const personaId = writeStandaloneCodexPersona(workforceHome);
-    // The single opt-out: --install-in-repo. Confirms parity with claude/
-    // opencode where the same flag turns the mount off.
     const { stderr } = await runCliCapturingStderr(
       ['agent', `${personaId}`, '--install-in-repo'],
       { AGENT_WORKFORCE_HOME: workforceHome }

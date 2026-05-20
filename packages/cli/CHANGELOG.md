@@ -7,6 +7,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+
+- Default simple interactive persona launches to direct unmounted mode; Relayfile mounts now engage only for explicit filesystem policy, sidecars/config files, or non-Claude skill installs that need repo write isolation.
+
 ## [3.0.14] - 2026-05-20
 
 ### Added

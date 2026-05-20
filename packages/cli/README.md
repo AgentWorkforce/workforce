@@ -910,14 +910,22 @@ persona session, add it to the persona's `mcpServers` block.
 agentworkforce agent [--install-in-repo] [--no-launch-metadata] <persona>[@<tier>]
 ```
 
-By default, claude and opencode sessions run inside a sandbox mount — see
-[**Sandbox mount**](#sandbox-mount) below. `--install-in-repo` opts out.
+By default, simple prompt/MCP launches run directly in the real cwd with
+normal harness auth and session-scoped argv/config inputs. The CLI does not
+change `$HOME`, run Claude with `--bare`, or otherwise hide OAuth/keychain
+credentials in this direct path. A sandbox mount is created only when the
+persona needs filesystem mediation: declared `mount` rules, sidecar/config
+files that must appear in the harness cwd, or non-Claude skill installs that
+would otherwise write repo-relative artifacts. `--install-in-repo` opts out of
+session staging and lets installers write to the repo's conventional harness
+directories.
 
 1. Resolves the persona, walks the cascade, resolves `$VAR` refs.
-2. **Stages skills outside the repo by default** (claude interactive only —
-   see **Skill staging** below). For codex / opencode, or when
-   `--install-in-repo` is passed, falls back to the legacy repo-relative
-   install path (`.claude/skills/`, `.agents/skills/`, `.skills/`).
+2. **Stages skills outside the repo by default** for Claude interactive
+   sessions — see **Skill staging** below. Codex/opencode skill installs still
+   require a sandbox mount unless `--install-in-repo` is passed, because their
+   installers write repo-relative paths (`.agents/skills/`, `.skills/`,
+   lockfiles).
 3. Runs skill install (`prpm install …`) if the persona declares any skills,
    using the computed target (stage dir or repo).
 4. Execs the harness binary with stdio inherited:
@@ -1005,7 +1013,7 @@ the working tree, and the session only sees the skills the persona declares
 **Opt-out — `--install-in-repo`:**
 
 Pass `--install-in-repo` to fall back to the legacy behavior (skills land in
-the repo's `.claude/skills/` directory, cleaned on exit):
+the repo's harness directory, then are cleaned on exit):
 
 ```sh
 agentworkforce install @agentworkforce/personas-core --persona code-reviewer
@@ -1018,24 +1026,33 @@ stage dir conflicts with something else (network filesystem, read-only
 
 **Caveats for V1:**
 
-- **Claude harness only.** codex and opencode continue to install into their
-  conventional repo-relative directories. The SDK throws if `installRoot` is
-  passed with a non-claude harness.
+- **Claude installRoot only.** codex and opencode do not support
+  out-of-repo install roots yet. When they declare skills, the CLI uses a
+  sandbox mount by default so installer output stays out of the real repo.
 - **No cache layer yet.** Every interactive session runs a fresh prpm install
   into a new stage dir. A `~/.agentworkforce/workforce/cache/` content-addressed cache
   is planned but not wired up.
 
 ## Sandbox mount
 
-By default, claude and opencode interactive sessions run inside a
+Interactive sessions normally avoid a filesystem mirror. The CLI creates a
 [`@relayfile/local-mount`](https://www.npmjs.com/package/@relayfile/local-mount)
-mount that hides repo-level harness configuration from the session, applies
-the persona `mount` block plus Relayfile `.agentignore` / `.agentreadonly`
-rules, and routes skill-install writes into the sandbox — so the model sees
-persona context + user-level context, and only the project files the mount
-exposes. Codex sessions never mount (no harness-side support).
+only when a persona needs filesystem-level behavior:
 
-`--install-in-repo` opts out and runs against the real cwd.
+- `mount.ignoredPatterns` or `mount.readonlyPatterns`.
+- Persona sidecars (`claudeMd` / `agentsMd`) that must be materialized as
+  `CLAUDE.md` / `AGENTS.md` without writing into the real repo.
+- Harness config files such as opencode's per-session `opencode.json`.
+- Codex/opencode skill installs, whose providers still write repo-relative
+  directories and lockfiles.
+
+When the mount is active, it hides repo-level harness configuration from the
+session, applies the persona `mount` block plus Relayfile `.agentignore` /
+`.agentreadonly` rules, and routes sandbox-only writes away from the real
+checkout.
+
+`--install-in-repo` prevents the mount from being used for installer isolation
+and runs installers against the real cwd.
 
 The CLI reads these files from the project root before creating the mount:
 
@@ -1072,10 +1089,11 @@ the repo):
   still load. The mount scrubs the *project*, not the user. To exclude
   user-level context too, launch under a scratch `$HOME`.
 - **Persona skills.** For claude, the `--plugin-dir` passed to the harness
-  resolves to an absolute path *outside* the mount, so staged skills from
-  `~/.agentworkforce/workforce/sessions/<id>/claude/plugin/` load normally. For
-  opencode, the install runs inside the mount so the writes land in the
-  sandbox.
+  resolves to an absolute path under
+  `~/.agentworkforce/workforce/sessions/<id>/claude/plugin/`, so simple
+  Claude personas do not need a mount just to load staged skills. For
+  codex/opencode, the install runs inside the mount when skills are declared
+  so repo-relative installer output lands in the sandbox.
 - **Keychain auth.** The mount does not pass `--bare`; it only hides
   files. Claude Code's macOS keychain login stays active.
 - **Persona `mcpServers`.** Still passed via `--mcp-config` — unaffected
@@ -1089,9 +1107,10 @@ the repo):
 
 ### Session layout
 
-Both the skill install root and the sandbox mount live under a single
-session directory. The session id (`<personaId>-<base36-timestamp>-<hex>`)
-is generated once and both paths are derived from it:
+When a run needs session artifacts, the skill install root and any sandbox
+mount live under a single session directory. The session id
+(`<personaId>-<base36-timestamp>-<hex>`) is generated once and both paths are
+derived from it:
 
 ```
 ~/.agentworkforce/workforce/
@@ -1105,22 +1124,23 @@ is generated once and both paths are derived from it:
         └── <mirrored project tree, minus the hidden patterns>
 ```
 
-`@relayfile/local-mount` handles mount creation, process spawn,
-SIGINT/SIGTERM forwarding, write syncback, and cleanup on exit. The
-agentworkforce CLI just wires the paths and passes the persona's argv.
+`@relayfile/local-mount` handles mount creation, write syncback, and cleanup
+when the conditional mount branch is active. Plain direct launches skip this
+tree walk entirely and keep the harness's normal auth lookup path.
 
 ### Example
 
 ```sh
-# Interactive persona session with the repo's CLAUDE.md, .claude/, and
-# .mcp.json hidden — session sees the persona's staged skills plus your
-# user-level ~/.claude/CLAUDE.md, nothing else from this repo.
-agentworkforce install @agentworkforce/personas-core --persona code-reviewer
-agentworkforce agent code-reviewer@best
+# Interactive persona session with explicit filesystem policy. This uses
+# Relayfile so the session sees only the paths allowed by the persona and
+# project .agentignore/.agentreadonly rules.
+agentworkforce install @agentworkforce/personas-core --persona proactive-agent-builder
+agentworkforce agent proactive-agent-builder
 ```
 
-On exit: mount is synced back to the real repo, then torn down; skill
-stage dir is cleaned up by the existing `rm -rf` cleanup command.
+On exit, mounted runs sync changes back to the real repo, then tear down the
+mount; the skill stage dir is cleaned up by the existing `rm -rf` cleanup
+command.
 
 ## Selecting a harness per tier
 
