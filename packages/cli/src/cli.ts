@@ -702,6 +702,7 @@ interface SkillCacheLockHandle {
 // A lock is considered abandoned if its heartbeat timestamp is older than
 // this — covers a holder that was SIGKILLed without releasing.
 const SKILL_CACHE_LOCK_STALE_MS = 15 * 60_000;
+const SKILL_CACHE_LOCK_HEARTBEAT_MS = 60_000;
 // Upper bound on how long we'll wait for a peer's install before proceeding
 // best-effort (unlocked). A real skill install is seconds; this is generous.
 const SKILL_CACHE_LOCK_WAIT_MS = 10 * 60_000;
@@ -721,12 +722,10 @@ function skillCacheLockIsStale(lockPath: string): boolean {
   try {
     const [pidRaw, tsRaw] = readFileSync(lockPath, 'utf8').split('\n');
     const ts = Number(tsRaw);
-    const pid = Number(pidRaw);
     if (Number.isFinite(ts) && Date.now() - ts > SKILL_CACHE_LOCK_STALE_MS) {
-      if (!Number.isInteger(pid) || pid <= 0 || !skillCachePidAlive(pid)) {
-        return true;
-      }
+      return true;
     }
+    const pid = Number(pidRaw);
     if (Number.isInteger(pid) && pid > 0 && !skillCachePidAlive(pid)) {
       return true;
     }
@@ -735,6 +734,19 @@ function skillCacheLockIsStale(lockPath: string): boolean {
     // Unreadable (just removed by the holder?) — treat as stale so we retry
     // the exclusive create rather than spin forever.
     return true;
+  }
+}
+
+function writeSkillCacheLockFile(lockPath: string, token: string): void {
+  writeFileSync(lockPath, `${process.pid}\n${Date.now()}\n${token}\n`);
+}
+
+function skillCacheLockTokenMatches(lockPath: string, token: string): boolean {
+  try {
+    const [, , foundToken] = readFileSync(lockPath, 'utf8').split('\n');
+    return foundToken === token;
+  } catch {
+    return false;
   }
 }
 
@@ -763,14 +775,29 @@ export async function acquireSkillCacheLock(
   const deadline = Date.now() + SKILL_CACHE_LOCK_WAIT_MS;
   for (;;) {
     try {
-      writeFileSync(lockPath, `${process.pid}\n${Date.now()}\n`, { flag: 'wx' });
+      const token = randomBytes(16).toString('hex');
+      writeFileSync(lockPath, `${process.pid}\n${Date.now()}\n${token}\n`, {
+        flag: 'wx'
+      });
+      const heartbeat = setInterval(() => {
+        if (!skillCacheLockTokenMatches(lockPath, token)) return;
+        try {
+          writeSkillCacheLockFile(lockPath, token);
+        } catch {
+          /* best-effort heartbeat */
+        }
+      }, SKILL_CACHE_LOCK_HEARTBEAT_MS);
+      heartbeat.unref?.();
       let released = false;
       return {
         release() {
           if (released) return;
           released = true;
+          clearInterval(heartbeat);
           try {
-            rmSync(lockPath, { force: true });
+            if (skillCacheLockTokenMatches(lockPath, token)) {
+              rmSync(lockPath, { force: true });
+            }
           } catch {
             /* best-effort — a stale-steal by another proc is harmless */
           }
