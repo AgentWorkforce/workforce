@@ -18,6 +18,7 @@ import {
   buildSidecarBody,
   configureGitForMount,
   decideCleanMode,
+  formatSandboxMountReadyMessage,
   loadSidecarForSelection,
   parseAgentArgs,
   parseInstallArgs,
@@ -400,6 +401,35 @@ test('decideCleanMode: codex defaults to mount (parity with claude/opencode)', (
   // copy, and so any per-session writes stay sandboxed.
   assert.deepEqual(decideCleanMode('codex'), { useClean: true });
   assert.deepEqual(decideCleanMode('codex', true), { useClean: false });
+});
+
+test('formatSandboxMountReadyMessage: appends mount metrics when available', () => {
+  assert.equal(
+    formatSandboxMountReadyMessage('/tmp/mount', {
+      initialMountDurationMs: 123,
+      initialFileCount: 456
+    }),
+    'Sandbox mount ready (123ms, 456 files) → /tmp/mount'
+  );
+});
+
+test('formatSandboxMountReadyMessage: omits metrics when linked against an older mount handle', () => {
+  assert.equal(
+    formatSandboxMountReadyMessage('/tmp/mount', {
+      initialMountDurationMs: 123
+    }),
+    'Sandbox mount ready → /tmp/mount'
+  );
+  assert.equal(
+    formatSandboxMountReadyMessage('/tmp/mount', {
+      initialFileCount: 456
+    }),
+    'Sandbox mount ready → /tmp/mount'
+  );
+  assert.equal(
+    formatSandboxMountReadyMessage('/tmp/mount', {}),
+    'Sandbox mount ready → /tmp/mount'
+  );
 });
 
 test('stripAgentFlag: removes --agent <name> pair preserving surrounding args', () => {

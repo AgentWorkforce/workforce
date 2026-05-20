@@ -1235,6 +1235,17 @@ export function decideCleanMode(
   return { useClean: false };
 }
 
+export function formatSandboxMountReadyMessage(
+  mountDir: string,
+  handle: { initialMountDurationMs?: number; initialFileCount?: number }
+): string {
+  const mountStats =
+    handle.initialMountDurationMs !== undefined && handle.initialFileCount !== undefined
+      ? ` (${handle.initialMountDurationMs}ms, ${handle.initialFileCount} files)`
+      : '';
+  return `Sandbox mount ready${mountStats} → ${mountDir}`;
+}
+
 /**
  * Persona authoring dry-run. Used by persona authors to verify a persona
  * actually launches before it ships, without spawning the harness or
@@ -1955,7 +1966,7 @@ async function runInteractive(
       // Stop the setup spinner before spawning the child — the child
       // inherits stdio and would otherwise interleave its output with
       // spinner frames.
-      setupSpinner?.succeed(`Sandbox mount ready → ${mountDir}`);
+      setupSpinner?.succeed(formatSandboxMountReadyMessage(mountDir, handle));
       setupSpinner = undefined;
 
       const childEnv = resolvedEnv ? { ...process.env, ...resolvedEnv } : process.env;
