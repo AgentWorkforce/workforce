@@ -4,6 +4,7 @@ import { randomBytes } from 'node:crypto';
 import {
   appendFileSync,
   closeSync,
+  cpSync,
   existsSync,
   mkdirSync,
   mkdtempSync,
@@ -25,17 +26,27 @@ import {
   buildInstallArtifacts,
   buildInteractiveSpec,
   buildNonInteractiveSpec,
+  buildUpstreamRecordsFromCacheDir,
+  computeSkillCacheFingerprint,
   detectHarnesses,
+  detectSkillUpstreamDrift,
   formatDropWarnings,
   HARNESS_VALUES,
+  isSkillCacheValid,
+  isUpstreamCheckDue,
   materializeSkills,
   MissingPersonaInputError,
+  parseCheckInterval,
   PERSONA_TAGS,
+  readSkillCacheMarker,
   renderPersonaInputs,
   resolveMcpServersLenient,
   resolvePersonaInputs,
   resolveSidecar,
+  resolveSkillCacheDir,
   resolveStringMapLenient,
+  updateSkillCacheMarkerUpstream,
+  writeSkillCacheMarker,
   type Harness,
   type HarnessAvailability,
   type InteractiveSpec,
@@ -127,6 +138,26 @@ Commands:
                                             Disable launch metadata recording.
                                             Also disabled by
                                             AGENTWORKFORCE_LAUNCH_METADATA=0.
+                        --no-skill-cache    Bypass the persistent skill-install
+                                            cache (under
+                                            ~/.agentworkforce/workforce/cache/plugins/)
+                                            and install fresh into a per-session
+                                            dir. Also disabled by
+                                            AGENTWORKFORCE_NO_SKILL_CACHE=1.
+                        --refresh-skills    Force a fresh install of the skill
+                                            cache entry for this persona,
+                                            overwriting any existing cache dir.
+                        --check-upstream    Force an upstream drift check this
+                                            launch (prpm version / GitHub blob
+                                            SHA) regardless of the TTL. A drifted
+                                            skill triggers a reinstall.
+                        --no-check-upstream Skip the upstream drift check this
+                                            launch regardless of the TTL.
+                                            Interval is otherwise 24h, tunable
+                                            via
+                                            AGENTWORKFORCE_SKILL_CACHE_CHECK_INTERVAL
+                                            (e.g. 24h, 30m, 0=always,
+                                            never=disable).
                         --dry-run           Validate the persona without
                                             spawning the harness or burning
                                             tier-model tokens. Three checks:
@@ -642,6 +673,227 @@ function sessionInstallRoot(sessionRoot: string): string {
 
 function sessionMountDir(sessionRoot: string): string {
   return join(sessionRoot, 'mount');
+}
+
+/** Default upstream drift-check interval when neither flag nor env overrides. */
+const DEFAULT_SKILL_CACHE_CHECK_INTERVAL_MS = 24 * 3_600_000;
+
+/**
+ * Resolve the env-configured drift-check interval.
+ *
+ * `parseCheckInterval` returns three things we must keep distinct:
+ *   - a number  → an explicit interval (incl. `0` = always)
+ *   - `null`    → the user explicitly disabled checks (`never`/`off`/`false`)
+ *   - `undefined` → unset or unparseable → fall back to the 24h default
+ *
+ * A plain `?? DEFAULT` is wrong here because `??` also coalesces `null`,
+ * silently re-enabling checks the user asked to turn off.
+ */
+export function resolveEnvCheckIntervalMs(): number | null {
+  const parsed = parseCheckInterval(
+    process.env.AGENTWORKFORCE_SKILL_CACHE_CHECK_INTERVAL
+  );
+  return parsed === undefined ? DEFAULT_SKILL_CACHE_CHECK_INTERVAL_MS : parsed;
+}
+
+interface SkillCacheLockHandle {
+  release(): void;
+}
+
+// A lock is considered abandoned if its heartbeat timestamp is older than
+// this — covers a holder that was SIGKILLed without releasing.
+const SKILL_CACHE_LOCK_STALE_MS = 15 * 60_000;
+const SKILL_CACHE_LOCK_HEARTBEAT_MS = 60_000;
+// Upper bound on how long we'll wait for a peer's install before proceeding
+// best-effort (unlocked). A real skill install is seconds; this is generous.
+const SKILL_CACHE_LOCK_WAIT_MS = 10 * 60_000;
+const SKILL_CACHE_LOCK_POLL_MS = 250;
+
+function skillCachePidAlive(pid: number): boolean {
+  try {
+    process.kill(pid, 0);
+    return true;
+  } catch (e) {
+    // EPERM => process exists but we can't signal it (still alive).
+    return (e as NodeJS.ErrnoException).code === 'EPERM';
+  }
+}
+
+function skillCacheLockIsStale(lockPath: string): boolean {
+  try {
+    const [pidRaw, tsRaw] = readFileSync(lockPath, 'utf8').split('\n');
+    const ts = Number(tsRaw);
+    if (Number.isFinite(ts) && Date.now() - ts > SKILL_CACHE_LOCK_STALE_MS) {
+      return true;
+    }
+    const pid = Number(pidRaw);
+    if (Number.isInteger(pid) && pid > 0 && !skillCachePidAlive(pid)) {
+      return true;
+    }
+    return false;
+  } catch {
+    // Unreadable (just removed by the holder?) — treat as stale so we retry
+    // the exclusive create rather than spin forever.
+    return true;
+  }
+}
+
+function writeSkillCacheLockFile(lockPath: string, token: string): void {
+  writeFileSync(lockPath, `${process.pid}\n${Date.now()}\n${token}\n`);
+}
+
+function skillCacheLockTokenMatches(lockPath: string, token: string): boolean {
+  try {
+    const [, , foundToken] = readFileSync(lockPath, 'utf8').split('\n');
+    return foundToken === token;
+  } catch {
+    return false;
+  }
+}
+
+/**
+ * Acquire a per-fingerprint advisory lock so two concurrent
+ * `agentworkforce agent <same-persona>` launches don't both miss the cache
+ * and install into the same dir simultaneously (which can interleave
+ * `prpm install` writes and corrupt the cache).
+ *
+ * The lock is a sibling file `<cacheDir>.lock` (NOT inside the cache dir, so
+ * a `--refresh-skills` wipe of the dir can't delete a live lock). Created
+ * with `wx` (O_EXCL) for atomicity. A held lock is stolen only if its holder
+ * is dead or its heartbeat is stale. If we can't get it within the wait
+ * budget we return null and the caller proceeds unlocked (best-effort —
+ * never hang a launch on locking).
+ */
+export async function acquireSkillCacheLock(
+  skillCacheDir: string
+): Promise<SkillCacheLockHandle | null> {
+  const lockPath = `${skillCacheDir}.lock`;
+  try {
+    mkdirSync(dirname(lockPath), { recursive: true });
+  } catch {
+    return null;
+  }
+  const deadline = Date.now() + SKILL_CACHE_LOCK_WAIT_MS;
+  for (;;) {
+    try {
+      const token = randomBytes(16).toString('hex');
+      writeFileSync(lockPath, `${process.pid}\n${Date.now()}\n${token}\n`, {
+        flag: 'wx'
+      });
+      const heartbeat = setInterval(() => {
+        if (!skillCacheLockTokenMatches(lockPath, token)) return;
+        try {
+          writeSkillCacheLockFile(lockPath, token);
+        } catch {
+          /* best-effort heartbeat */
+        }
+      }, SKILL_CACHE_LOCK_HEARTBEAT_MS);
+      heartbeat.unref?.();
+      let released = false;
+      return {
+        release() {
+          if (released) return;
+          released = true;
+          clearInterval(heartbeat);
+          try {
+            if (skillCacheLockTokenMatches(lockPath, token)) {
+              rmSync(lockPath, { force: true });
+            }
+          } catch {
+            /* best-effort — a stale-steal by another proc is harmless */
+          }
+        }
+      };
+    } catch (err) {
+      if ((err as NodeJS.ErrnoException).code !== 'EEXIST') {
+        // Unexpected FS error: don't block the launch on locking.
+        return null;
+      }
+      if (skillCacheLockIsStale(lockPath)) {
+        try {
+          rmSync(lockPath, { force: true });
+        } catch {
+          /* lost the steal race — loop and re-evaluate */
+        }
+        continue;
+      }
+      if (Date.now() >= deadline) return null;
+      await new Promise((r) => setTimeout(r, SKILL_CACHE_LOCK_POLL_MS));
+    }
+  }
+}
+
+/**
+ * Persist the cache marker after a successful install, folding in each
+ * skill's upstream identity (prpm version / github blob SHA) read from the
+ * lockfiles the installers just wrote into `cacheDir`. Sets
+ * `lastUpstreamCheckAt` to now so the first launch within the TTL window
+ * doesn't immediately re-probe what we just resolved.
+ *
+ * Best-effort on the upstream side: a probe failure for a given skill simply
+ * omits its `upstream` record (the next drift pass will try again). The
+ * marker itself is always written — its presence is what makes the cache
+ * dir "valid".
+ */
+async function writeMarkerWithUpstream(
+  cacheDir: string,
+  fingerprint: string,
+  harness: Harness,
+  skills: readonly { id: string; source: string }[]
+): Promise<void> {
+  let upstream: Map<string, { kind: string } | undefined> | undefined;
+  try {
+    upstream = (await buildUpstreamRecordsFromCacheDir(cacheDir, skills)) as Map<
+      string,
+      { kind: string } | undefined
+    >;
+  } catch {
+    upstream = undefined;
+  }
+  writeSkillCacheMarker(cacheDir, {
+    fingerprint,
+    harness,
+    lastUpstreamCheckAt: new Date().toISOString(),
+    skills: skills.map((s) => {
+      const rec = upstream?.get(s.id);
+      return {
+        id: s.id,
+        source: s.source,
+        ...(rec ? { upstream: rec as never } : {})
+      };
+    })
+  });
+}
+
+/**
+ * Mirror the contents of a populated skill cache dir into a target dir
+ * (typically a relayfile mount root). Skips the cache marker file so it
+ * never lands inside the harness's view.
+ *
+ * Used by the mount-harness branch to give opencode / codex the same
+ * "install once, reuse forever" behaviour that claude gets for free via
+ * `--plugin-dir <cacheDir>`. The destination is expected to be the mount
+ * root: skill artifacts under `.skills/`, `.opencode/`, `.agents/`, etc. are
+ * declared as mount-ignored patterns so the mirror does not sync back to the
+ * user's real repo on session exit.
+ */
+function mirrorSkillCacheInto(cacheDir: string, targetDir: string): void {
+  if (!existsSync(cacheDir)) return;
+  for (const entry of readdirSync(cacheDir, { withFileTypes: true })) {
+    if (entry.name === '.aw-skill-cache.json') continue;
+    const from = join(cacheDir, entry.name);
+    const to = join(targetDir, entry.name);
+    cpSync(from, to, {
+      recursive: true,
+      // Don't overwrite a path the mount mirror or persona setup already
+      // created — surfacing the conflict as an error here would be loud and
+      // unactionable; the mount-ignored patterns guarantee any pre-existing
+      // entry under these names came from a prior cache mirror in this same
+      // session, which is fine to leave alone.
+      force: false,
+      errorOnExist: false
+    });
+  }
 }
 
 /**
@@ -1164,6 +1416,14 @@ async function runInteractive(
   options: {
     installInRepo?: boolean;
     noLaunchMetadata?: boolean;
+    /** Bypass the persistent skill cache for this run (install fresh into a session dir). */
+    noSkillCache?: boolean;
+    /** Force reinstall into the cache dir, replacing any existing entry. */
+    refreshSkills?: boolean;
+    /** Force an upstream drift check this launch regardless of the TTL. */
+    checkUpstream?: boolean;
+    /** Skip the upstream drift check this launch regardless of the TTL. */
+    noCheckUpstream?: boolean;
     personaSpec: PersonaSpec;
     personaSource: PersonaSource;
     capture?: RunInteractiveCapture;
@@ -1229,9 +1489,44 @@ async function runInteractive(
   const useSessionDir =
     !options.installInRepo && (harness === 'claude' || useClean);
   const sessionRoot = useSessionDir ? generateSessionRoot(personaId) : undefined;
+
+  // Persistent skill-install cache. Keyed by a content-addressed fingerprint
+  // of (harness, sorted skill sources, local file contents). On a hit we reuse
+  // the dir directly — for claude as `--plugin-dir`, for mount harnesses by
+  // mirroring its contents into the mount before launch. Disabled when the
+  // user opts into in-repo installs (the cache lives outside the repo, so
+  // mirroring it back would re-introduce the very leakage `--install-in-repo`
+  // is designed to surface to the user explicitly).
+  const skillCachingEnabled = !options.installInRepo && options.noSkillCache !== true;
+  const skillCacheFingerprint = skillCachingEnabled
+    ? computeSkillCacheFingerprint({
+        harness,
+        skills: effectiveSelection.skills,
+        repoRoot: process.cwd()
+      })
+    : undefined;
+  const skillCacheDir = skillCacheFingerprint
+    ? resolveSkillCacheDir(skillCacheFingerprint)
+    : undefined;
+  // Source-key hit: marker present and fingerprint matches. The upstream
+  // drift check below may still flip this to a miss.
+  const skillCacheSourceHit =
+    skillCacheDir !== undefined &&
+    skillCacheFingerprint !== undefined &&
+    !options.refreshSkills &&
+    isSkillCacheValid(skillCacheDir, skillCacheFingerprint);
+  // Mutable: a detected upstream drift downgrades the hit into a miss so the
+  // install path reruns and rebuilds the cache dir in place.
+  let skillCacheHit = skillCacheSourceHit;
+
+  // installRoot: for claude this is the dir passed to `--plugin-dir`. With
+  // caching enabled it points at the persistent cache; without, at the
+  // ephemeral session dir (pre-cache behavior). Other harnesses do not use
+  // claude's plugin-dir flag — for them the cache (if any) is mirrored into
+  // the mount in `onBeforeLaunch`, not surfaced as an installRoot.
   const installRoot =
-    sessionRoot && harness === 'claude'
-      ? sessionInstallRoot(sessionRoot)
+    harness === 'claude' && !options.installInRepo
+      ? skillCacheDir ?? (sessionRoot ? sessionInstallRoot(sessionRoot) : undefined)
       : undefined;
   // `repoRoot` lets the local skill provider (kind: 'local') resolve
   // relative source paths like `.agentworkforce/workforce/skills/foo.md` to
@@ -1243,6 +1538,71 @@ async function runInteractive(
     repoRoot: process.cwd()
   });
   process.stderr.write(`→ ${personaId} via ${harness} (${model})\n`);
+
+  // Upstream drift check (opt-in, TTL-gated). Only meaningful on a
+  // source-key hit — a miss reinstalls anyway, and a refresh is
+  // unconditional. Resolve the interval: --check-upstream forces (0 = always
+  // this launch), --no-check-upstream disables (null = never), otherwise the
+  // env var, otherwise the 24h default.
+  if (skillCacheSourceHit && skillCacheDir && skillCacheFingerprint) {
+    const intervalMs = options.checkUpstream
+      ? 0
+      : options.noCheckUpstream
+        ? null
+        : resolveEnvCheckIntervalMs();
+    const marker = readSkillCacheMarker(skillCacheDir);
+    if (marker && isUpstreamCheckDue(marker, intervalMs)) {
+      const spinner = ora({
+        text: 'Checking skills for upstream updates…',
+        stream: process.stderr
+      }).start();
+      try {
+        const { drifted, details } = await detectSkillUpstreamDrift(marker);
+        const moved = details.filter((d) => d.drifted);
+        if (drifted) {
+          spinner.warn(
+            `Upstream changed for ${moved.length} skill(s): ${moved
+              .map((d) => `${d.skillId} (${d.note})`)
+              .join(', ')}`
+          );
+          skillCacheHit = false;
+        } else {
+          spinner.succeed(
+            `Skills up to date (${details.length} checked) — reusing cache`
+          );
+          // Record the clean check so we don't re-probe until the TTL lapses.
+          updateSkillCacheMarkerUpstream(skillCacheDir, {
+            lastUpstreamCheckAt: new Date().toISOString()
+          });
+        }
+      } catch (err) {
+        // Fail-open: a probe-layer crash must never block the launch.
+        spinner.warn(
+          `Upstream check failed (${(err as Error).message}); using cached skills`
+        );
+      }
+    }
+  }
+
+  if (skillCacheFingerprint && skillCacheDir) {
+    if (skillCacheHit) {
+      process.stderr.write(
+        `• skill cache hit (${skillCacheFingerprint.slice(0, 12)}) → reusing ${skillCacheDir}\n`
+      );
+    } else if (options.refreshSkills) {
+      process.stderr.write(
+        `• skill cache refresh requested (${skillCacheFingerprint.slice(0, 12)}) → reinstalling into ${skillCacheDir}\n`
+      );
+    } else if (skillCacheSourceHit) {
+      process.stderr.write(
+        `• skill cache stale (${skillCacheFingerprint.slice(0, 12)}) → upstream drift, reinstalling into ${skillCacheDir}\n`
+      );
+    } else {
+      process.stderr.write(
+        `• skill cache miss (${skillCacheFingerprint.slice(0, 12)}) → installing into ${skillCacheDir}\n`
+      );
+    }
+  }
 
   const startLaunchMetadataForLaunch = (cwd = process.cwd()) =>
     startLaunchMetadataRecording({
@@ -1282,8 +1642,48 @@ async function runInteractive(
   // `onBeforeLaunch` below instead of pre-running here.
   const deferInstallToMount =
     useClean && harness !== 'claude' && install.commandString !== ':';
-  if (install.commandString !== ':' && !deferInstallToMount) {
-    await runInstall(install.command, installLabel);
+  if (
+    install.commandString !== ':' &&
+    !deferInstallToMount &&
+    !skillCacheHit
+  ) {
+    const cacheable = skillCachingEnabled && !!skillCacheDir && !!skillCacheFingerprint;
+    const lock =
+      cacheable && skillCacheDir ? await acquireSkillCacheLock(skillCacheDir) : null;
+    try {
+      // Re-check under the lock: a concurrent launch may have populated the
+      // cache while we waited. (Not on refresh — that's an explicit rebuild.)
+      const peerPopulated =
+        cacheable &&
+        !options.refreshSkills &&
+        skillCacheDir !== undefined &&
+        skillCacheFingerprint !== undefined &&
+        isSkillCacheValid(skillCacheDir, skillCacheFingerprint);
+      if (peerPopulated) {
+        process.stderr.write(
+          `• skill cache populated by a concurrent launch → reusing ${skillCacheDir}\n`
+        );
+      } else {
+        // `--refresh-skills`: wipe the entry first so the reinstall is a true
+        // rebuild — no stale files from a prior version, and a partial
+        // failure can't leave the old marker behind to fake a later hit.
+        // Done under the lock so a peer's in-progress install isn't clobbered.
+        if (options.refreshSkills && cacheable && skillCacheDir) {
+          rmSync(skillCacheDir, { recursive: true, force: true });
+        }
+        await runInstall(install.command, installLabel);
+        if (skillCacheFingerprint && skillCacheDir) {
+          await writeMarkerWithUpstream(
+            skillCacheDir,
+            skillCacheFingerprint,
+            harness,
+            effectiveSelection.skills.map((s) => ({ id: s.id, source: s.source }))
+          );
+        }
+      }
+    } finally {
+      lock?.release();
+    }
   }
 
   const spec = buildInteractiveSpec({
@@ -1479,11 +1879,60 @@ async function runInteractive(
       // flagged in the index, just hidden via the `.git/info/exclude` block.
       configureGitForMount(handle.mountDir, ignoredPatterns);
       if (deferInstallToMount) {
-        // Hand the line off to the install spinner so the two don't fight
-        // for the same stream, then resume the setup spinner afterwards.
-        setupSpinner?.stop();
-        await runInstallOrThrow(install.command, installLabel, handle.mountDir);
-        setupSpinner?.start();
+        // Cache-aware mount install:
+        //   - If we have a cache hit, skip the install and just mirror the
+        //     pre-populated cache dir into the mount. `npx prpm install`
+        //     never runs and no install spinner is needed.
+        //   - On miss (or `--refresh-skills`), run the install once with
+        //     cwd set to the cache dir so artifacts land in the persistent
+        //     location, then mirror into the mount and write the marker.
+        //   - With caching disabled (`--install-in-repo` or
+        //     `--no-skill-cache`), fall back to the legacy in-mount install.
+        //
+        // The setup spinner is only stopped around branches that print their
+        // own spinner (install) so the two don't fight for the same stream.
+        // The pure cache-hit path is a near-instant cpSync — leaving the
+        // setup spinner running avoids a redundant "Setting up sandbox
+        // mount…" redraw in the user-visible output.
+        if (skillCacheHit && skillCacheDir) {
+          mirrorSkillCacheInto(skillCacheDir, handle.mountDir);
+        } else if (skillCachingEnabled && skillCacheDir && skillCacheFingerprint) {
+          const lock = await acquireSkillCacheLock(skillCacheDir);
+          try {
+            // A concurrent launch may have populated the cache while we
+            // waited for the lock — mirror it instead of reinstalling.
+            // (Skipped on refresh, which is an explicit rebuild.)
+            if (
+              !options.refreshSkills &&
+              isSkillCacheValid(skillCacheDir, skillCacheFingerprint)
+            ) {
+              mirrorSkillCacheInto(skillCacheDir, handle.mountDir);
+            } else {
+              setupSpinner?.stop();
+              // `--refresh-skills`: wipe first so the reinstall is a true
+              // rebuild and a partial failure can't leave a stale marker.
+              if (options.refreshSkills) {
+                rmSync(skillCacheDir, { recursive: true, force: true });
+              }
+              mkdirSync(skillCacheDir, { recursive: true });
+              await runInstallOrThrow(install.command, installLabel, skillCacheDir);
+              await writeMarkerWithUpstream(
+                skillCacheDir,
+                skillCacheFingerprint,
+                harness,
+                effectiveSelection.skills.map((s) => ({ id: s.id, source: s.source }))
+              );
+              mirrorSkillCacheInto(skillCacheDir, handle.mountDir);
+              setupSpinner?.start();
+            }
+          } finally {
+            lock?.release();
+          }
+        } else {
+          setupSpinner?.stop();
+          await runInstallOrThrow(install.command, installLabel, handle.mountDir);
+          setupSpinner?.start();
+        }
       }
       for (const file of spec.configFiles) {
         assertSafeRelativePath(file.path);
@@ -1616,7 +2065,12 @@ async function runInteractive(
       // potentially `rm -rf`ing pre-existing user content. The mount dir is
       // removed wholesale by `removeSessionRoot` below, so the install's
       // cleanup is redundant anyway in that case.
-      if (!deferInstallToMount) {
+      //
+      // Skill caching also suppresses the cleanup: the cache dir IS the
+      // persistence layer, so the rm command (which targets the
+      // sessionInstallRoot — now pointing at the cache dir for claude) would
+      // wipe the very thing we want to keep across launches.
+      if (!deferInstallToMount && !skillCachingEnabled) {
         runCleanup(install.cleanupCommand, install.cleanupCommandString);
       }
       removeSessionRoot(sessionRoot);
@@ -1636,7 +2090,12 @@ async function runInteractive(
     const finish = (code: number) => {
       if (settled) return;
       settled = true;
-      runCleanup(install.cleanupCommand, install.cleanupCommandString);
+      // Skill caching takes ownership of the install dir; running cleanup
+      // here would `rm -rf` the persistent cache. Skip in that case and
+      // rely on the cache marker as the source of truth for "valid install".
+      if (!skillCachingEnabled) {
+        runCleanup(install.cleanupCommand, install.cleanupCommandString);
+      }
       removeSessionRoot(sessionRoot);
       void launchMetadata.stop().finally(() => resolve(code));
     };
@@ -2495,6 +2954,10 @@ async function runAgentSelector(
   const code = await runInteractive(selection, {
     installInRepo: flags.installInRepo,
     noLaunchMetadata: flags.noLaunchMetadata,
+    noSkillCache: flags.noSkillCache,
+    refreshSkills: flags.refreshSkills,
+    checkUpstream: flags.checkUpstream,
+    noCheckUpstream: flags.noCheckUpstream,
     personaSpec: target.spec,
     personaSource: target.source,
     capture
@@ -3578,7 +4041,11 @@ async function runInteractivePicker(): Promise<never> {
   await runAgentSelector(selected, {
     installInRepo: false,
     noLaunchMetadata: false,
-    dryRun: false
+    dryRun: false,
+    noSkillCache: process.env.AGENTWORKFORCE_NO_SKILL_CACHE === '1',
+    refreshSkills: false,
+    checkUpstream: false,
+    noCheckUpstream: false
   });
   // runAgentSelector has Promise<never> return type; this is unreachable.
   process.exit(0);
@@ -3725,7 +4192,15 @@ async function runPick(args: readonly string[]): Promise<never> {
   };
   await runAgentSelector(
     CREATE_SELECTOR,
-    { installInRepo: false, noLaunchMetadata: false, dryRun: false },
+    {
+      installInRepo: false,
+      noLaunchMetadata: false,
+      dryRun: false,
+      noSkillCache: process.env.AGENTWORKFORCE_NO_SKILL_CACHE === '1',
+      refreshSkills: false,
+      checkUpstream: false,
+      noCheckUpstream: false
+    },
     inputValues
   );
   // runAgentSelector terminates via process.exit; this satisfies TS's
@@ -3853,6 +4328,14 @@ export interface AgentFlags {
   installInRepo: boolean;
   noLaunchMetadata: boolean;
   dryRun: boolean;
+  /** Bypass the persistent skill-install cache for this launch. */
+  noSkillCache: boolean;
+  /** Force a fresh install even if the cache entry exists (rebuilds it in place). */
+  refreshSkills: boolean;
+  /** Force an upstream drift check this launch regardless of the TTL. */
+  checkUpstream: boolean;
+  /** Skip the upstream drift check this launch regardless of the TTL. */
+  noCheckUpstream: boolean;
 }
 
 export interface CreateFlags extends AgentFlags {
@@ -3867,7 +4350,11 @@ export function parseAgentArgs(args: readonly string[]): {
   const flags: AgentFlags = {
     installInRepo: false,
     noLaunchMetadata: false,
-    dryRun: false
+    dryRun: false,
+    noSkillCache: process.env.AGENTWORKFORCE_NO_SKILL_CACHE === '1',
+    refreshSkills: false,
+    checkUpstream: false,
+    noCheckUpstream: false
   };
   const positional: string[] = [];
   let seenDoubleDash = false;
@@ -3892,6 +4379,22 @@ export function parseAgentArgs(args: readonly string[]): {
       flags.dryRun = true;
       continue;
     }
+    if (arg === '--no-skill-cache') {
+      flags.noSkillCache = true;
+      continue;
+    }
+    if (arg === '--refresh-skills') {
+      flags.refreshSkills = true;
+      continue;
+    }
+    if (arg === '--check-upstream') {
+      flags.checkUpstream = true;
+      continue;
+    }
+    if (arg === '--no-check-upstream') {
+      flags.noCheckUpstream = true;
+      continue;
+    }
     if (arg === '-h' || arg === '--help') {
       process.stdout.write(USAGE);
       process.exit(0);
@@ -3910,6 +4413,10 @@ export function parseCreateArgs(args: readonly string[]): {
     installInRepo: false,
     noLaunchMetadata: false,
     dryRun: false,
+    noSkillCache: process.env.AGENTWORKFORCE_NO_SKILL_CACHE === '1',
+    refreshSkills: false,
+    checkUpstream: false,
+    noCheckUpstream: false,
     saveDefault: false
   };
   let seenDoubleDash = false;
