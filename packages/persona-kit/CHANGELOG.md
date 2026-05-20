@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [3.0.15] - 2026-05-20
+
 ### Dependencies
 
 - Bump @relayfile/local-mount 0.7.19 → 0.7.24.
