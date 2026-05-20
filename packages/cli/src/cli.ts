@@ -721,10 +721,12 @@ function skillCacheLockIsStale(lockPath: string): boolean {
   try {
     const [pidRaw, tsRaw] = readFileSync(lockPath, 'utf8').split('\n');
     const ts = Number(tsRaw);
-    if (Number.isFinite(ts) && Date.now() - ts > SKILL_CACHE_LOCK_STALE_MS) {
-      return true;
-    }
     const pid = Number(pidRaw);
+    if (Number.isFinite(ts) && Date.now() - ts > SKILL_CACHE_LOCK_STALE_MS) {
+      if (!Number.isInteger(pid) || pid <= 0 || !skillCachePidAlive(pid)) {
+        return true;
+      }
+    }
     if (Number.isInteger(pid) && pid > 0 && !skillCachePidAlive(pid)) {
       return true;
     }
