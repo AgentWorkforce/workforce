@@ -120,6 +120,13 @@
           },
           "description": "Cron-style clock listeners. Each `name` is unique within the persona."
         },
+        "watch": {
+          "type": "array",
+          "items": {
+            "$ref": "#/definitions/WatchRule"
+          },
+          "description": "Relayfile-change listeners for proactive cloud personas."
+        },
         "memory": {
           "$ref": "#/definitions/PersonaMemory",
           "description": "Memory subsystem opt-in. Wires the agent-assistant memory adapter at runtime; the persona spec only declares intent, not implementation details (api keys, adapter type, etc. come from workforce env)."
@@ -362,6 +369,10 @@
     "PersonaMount": {
       "type": "object",
       "properties": {
+        "enabled": {
+          "type": "boolean",
+          "description": "Whether launchers should create a Relayfile mount for this persona. Defaults to true when omitted so existing mount policies keep working."
+        },
         "ignoredPatterns": {
           "type": "array",
           "items": {
@@ -489,6 +500,42 @@
         "cron"
       ],
       "description": "Clock listener configuration. `name` is unique within the persona and surfaces to the handler as `event.name`. `cron` is a standard 5-field expression. `tz` defaults to `UTC` at the runtime layer (the parser keeps it optional so the spec stays close to what the author wrote)."
+    },
+    "WatchRule": {
+      "type": "object",
+      "properties": {
+        "paths": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "events": {
+          "type": "array",
+          "items": {
+            "$ref": "#/definitions/WatchEvent"
+          }
+        },
+        "debounceMs": {
+          "type": "number"
+        },
+        "match": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "paths",
+        "events"
+      ],
+      "description": "Relayfile-change listener configuration. `paths` are absolute Relayfile glob roots (for example `/integrations/github/repos/acme/web/issues/*.json`). Runtime matching is owned by the cloud trigger router; persona-kit only validates the portable declaration shape."
+    },
+    "WatchEvent": {
+      "type": "string",
+      "enum": [
+        "created",
+        "updated",
+        "deleted"
+      ]
     },
     "PersonaMemory": {
       "anyOf": [

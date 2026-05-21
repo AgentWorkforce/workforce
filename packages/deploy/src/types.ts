@@ -98,7 +98,7 @@ export interface BundleResult {
 /**
  * Contract each run-mode launcher implements. The defaults live next
  * to this file: `modes/dev.ts` (local child_process), `modes/sandbox.ts`
- * (Daytona), and `modes/cloud.ts` (workforce-cloud hosted, opt-in once
+ * (Daytona), and `modes/cloud/index.ts` (workforce-cloud hosted, opt-in once
  * the cloud deployments endpoint ships). Callers swap individual modes
  * via `DeployResolvers.modes` — useful for tests and custom runtimes.
  */

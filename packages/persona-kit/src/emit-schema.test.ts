@@ -23,7 +23,8 @@ test('persona fixtures validate against generated schema and parse', async () =>
     'integration-source-service-account.json',
     'integration-source-workspace.json',
     'invalid-unknown-trigger.json',
-    'minimal.json'
+    'minimal.json',
+    'proactive-watch-persona.json'
   ]);
 
   for (const fixtureName of fixtureNames) {
@@ -74,6 +75,25 @@ test('generated schema reflects locked v1 persona fields', async () => {
   assert.equal('PersonaSandbox' in definitions, false);
   assert.equal('PersonaSandboxConfig' in definitions, false);
   assert.equal('PersonaTraits' in definitions, false);
+});
+
+test('generated schema includes watch rules and mount.enabled', async () => {
+  const schema = JSON.parse(await readFile(schemaPath, 'utf8')) as SchemaNode;
+  const definitions = schema.definitions as Record<string, SchemaNode>;
+  const personaSpec = definitions.PersonaSpec;
+  const personaMount = definitions.PersonaMount;
+  const watchRule = definitions.WatchRule;
+
+  assert.ok(personaSpec.properties?.watch);
+  assert.equal(personaMount.properties?.enabled && personaMount.properties.enabled !== true
+    ? personaMount.properties.enabled.type
+    : undefined, 'boolean');
+  assert.equal(watchRule.properties?.paths && watchRule.properties.paths !== true
+    ? watchRule.properties.paths.type
+    : undefined, 'array');
+  assert.equal(watchRule.properties?.events && watchRule.properties.events !== true
+    ? watchRule.properties.events.type
+    : undefined, 'array');
 });
 
 type SchemaNode = Record<string, unknown> & {

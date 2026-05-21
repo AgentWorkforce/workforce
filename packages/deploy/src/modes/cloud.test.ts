@@ -10,7 +10,7 @@ import {
   cloudLauncher,
   configureCloudCredentialDepsForTest,
   type CloudRunHandle
-} from './cloud.js';
+} from './cloud/index.js';
 
 type FetchCall = {
   url: string;
@@ -186,6 +186,86 @@ test('cloud launcher POSTs a deploy bundle and returns the cloud handle', async 
   assert.equal(handle.deploymentId, 'dep-1');
   assert.equal((await handle.done).code, 0);
   assert.equal(calls.filter((call) => call.url.includes('/provider-credentials/managed')).length, 1);
+});
+
+test('cloud launcher sends proactive personas through the proactive-personas endpoint', async () => {
+  const watch = [{ paths: ['/i/x/**'], events: ['created'], debounceMs: 1000 }];
+  const proactivePersona = persona({
+    mount: { enabled: false },
+    watch
+  } as Partial<PersonaSpec>);
+
+  const { handle, calls } = await launch({
+    persona: proactivePersona,
+    env: {
+      WORKFORCE_DEPLOY_CLOUD_URL: 'https://cloud.example.test'
+    },
+    fetch(url, init) {
+      assert.equal(url, 'https://cloud.example.test/api/v1/workspaces/ws-test/proactive-personas/demo');
+      assert.equal(init?.method, 'POST');
+      const body = JSON.parse(String(init?.body)) as Record<string, unknown>;
+      assert.deepEqual(body.watch, watch);
+      assert.equal(
+        (((body.watch as unknown[])[0] as { paths: string[] }).paths[0]),
+        '/i/x/**'
+      );
+      assert.deepEqual(body.mount, { enabled: false });
+      assert.deepEqual(((body.persona as Record<string, unknown>).watch), watch);
+      return okJson({ agentId: 'agent-1', deploymentId: 'dep-1', status: 'ready' }, 201);
+    }
+  });
+
+  assert.equal(handle.id, 'agent-1');
+  assert.equal(handle.agentId, 'agent-1');
+  assert.equal(handle.deploymentId, 'dep-1');
+  assert.equal(handle.status, 'ready');
+  assert.equal((await handle.done).code, 0);
+  assert.equal(callsForUrl(calls, '/deployments'), 0);
+  assert.equal(callsForUrl(calls, '/proactive-personas/demo'), 1);
+});
+
+test('cloud launcher keeps non-proactive personas on the deployments endpoint', async () => {
+  const { handle, calls } = await launch({
+    persona: persona({ schedules: [] }),
+    env: {
+      WORKFORCE_DEPLOY_CLOUD_URL: 'https://cloud.example.test'
+    },
+    fetch(url, init) {
+      if (init?.method === 'GET' && url.endsWith('/deployments')) {
+        return okJson({ agents: [] });
+      }
+      assert.equal(url, 'https://cloud.example.test/api/v1/workspaces/ws-test/deployments');
+      assert.equal(init?.method, 'POST');
+      return okJson({ agentId: 'agent-1', deploymentId: 'dep-1', status: 'active' }, 201);
+    }
+  });
+
+  assert.equal(handle.id, 'agent-1');
+  assert.equal(callsForUrl(calls, '/deployments'), 2);
+  assert.equal(callsForUrl(calls, '/proactive-personas'), 0);
+});
+
+test('cloud launcher maps proactive failed deployment responses to a failed handle', async () => {
+  const proactivePersona = persona({
+    watch: [{ paths: ['/i/x/**'], events: ['updated'], debounceMs: 1000 }]
+  } as Partial<PersonaSpec>);
+
+  const { handle } = await launch({
+    persona: proactivePersona,
+    env: {
+      WORKFORCE_DEPLOY_CLOUD_URL: 'https://cloud.example.test'
+    },
+    fetch(url, init) {
+      assert.equal(url, 'https://cloud.example.test/api/v1/workspaces/ws-test/proactive-personas/demo');
+      assert.equal(init?.method, 'POST');
+      return okJson({ agentId: 'agent-1', deploymentId: 'dep-1', status: 'failed' }, 201);
+    }
+  });
+
+  assert.equal(handle.id, 'agent-1');
+  assert.equal(handle.deploymentId, 'dep-1');
+  assert.equal(handle.status, 'failed');
+  assert.equal((await handle.done).code, 1);
 });
 
 test('cloud URL precedence is flag env, cloud env, persona deployUrl, then default', async () => {

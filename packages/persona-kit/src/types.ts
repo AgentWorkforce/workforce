@@ -114,6 +114,11 @@ export interface PersonaPermissions {
  * `.agentreadonly` dotfiles.
  */
 export interface PersonaMount {
+  /**
+   * Whether launchers should create a Relayfile mount for this persona.
+   * Defaults to true when omitted so existing mount policies keep working.
+   */
+  enabled?: boolean;
   ignoredPatterns?: string[];
   readonlyPatterns?: string[];
 }
@@ -204,6 +209,21 @@ export interface PersonaSchedule {
   name: string;
   cron: string;
   tz?: string;
+}
+
+export type WatchEvent = 'created' | 'updated' | 'deleted';
+
+/**
+ * Relayfile-change listener configuration. `paths` are absolute Relayfile
+ * glob roots (for example `/integrations/github/repos/acme/web/issues/*.json`).
+ * Runtime matching is owned by the cloud trigger router; persona-kit only
+ * validates the portable declaration shape.
+ */
+export interface WatchRule {
+  paths: string[];
+  events: WatchEvent[];
+  debounceMs?: number;
+  match?: string;
 }
 
 /**
@@ -340,6 +360,8 @@ export interface PersonaSpec {
   integrations?: Record<string, PersonaIntegrationConfig>;
   /** Cron-style clock listeners. Each `name` is unique within the persona. */
   schedules?: PersonaSchedule[];
+  /** Relayfile-change listeners for proactive cloud personas. */
+  watch?: WatchRule[];
   /**
    * Memory subsystem opt-in. Wires the agent-assistant memory adapter at
    * runtime; the persona spec only declares intent, not implementation

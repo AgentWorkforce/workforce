@@ -29,7 +29,9 @@ import type {
   PersonaSkill,
   PersonaSpec,
   PersonaTag,
-  SidecarMdMode
+  SidecarMdMode,
+  WatchEvent,
+  WatchRule
 } from './types.js';
 
 /**
@@ -261,8 +263,17 @@ export function parseMount(
     value.readonlyPatterns,
     `${context}.readonlyPatterns`
   );
-  return ignoredPatterns || readonlyPatterns
+  const enabled = value.enabled;
+  if (enabled !== undefined && typeof enabled !== 'boolean') {
+    throw new Error(`${context}.enabled must be a boolean if provided`);
+  }
+  return ignoredPatterns || readonlyPatterns || enabled !== undefined
     ? {
+        ...(typeof enabled === 'boolean'
+          ? { enabled }
+          : ignoredPatterns || readonlyPatterns
+            ? { enabled: true }
+            : {}),
         ...(ignoredPatterns ? { ignoredPatterns } : {}),
         ...(readonlyPatterns ? { readonlyPatterns } : {})
       }
@@ -680,6 +691,74 @@ export function parseSchedules(
   return out;
 }
 
+const WATCH_EVENT_VALUES: readonly WatchEvent[] = ['created', 'updated', 'deleted'];
+
+function isWatchEvent(value: unknown): value is WatchEvent {
+  return (
+    typeof value === 'string' &&
+    WATCH_EVENT_VALUES.includes(value as WatchEvent)
+  );
+}
+
+export function parseWatch(value: unknown, context: string): WatchRule[] | undefined {
+  if (value === undefined) return undefined;
+  if (!Array.isArray(value)) {
+    throw new Error(`${context} must be an array if provided`);
+  }
+  if (value.length === 0) return undefined;
+
+  return value.map((entry, idx) => {
+    const entryContext = `${context}[${idx}]`;
+    if (!isObject(entry)) {
+      throw new Error(`${entryContext} must be an object`);
+    }
+    const { paths, events, debounceMs, match } = entry;
+    if (!Array.isArray(paths) || paths.length === 0) {
+      throw new Error(`${entryContext}.paths must be a non-empty array`);
+    }
+    const parsedPaths = paths.map((path, pathIdx) => {
+      const pathContext = `${entryContext}.paths[${pathIdx}]`;
+      if (typeof path !== 'string' || !path.trim()) {
+        throw new Error(`${pathContext} must be a non-empty string`);
+      }
+      if (!path.startsWith('/')) {
+        throw new Error(`${pathContext} must start with /`);
+      }
+      return path;
+    });
+
+    if (!Array.isArray(events) || events.length === 0) {
+      throw new Error(`${entryContext}.events must be a non-empty array`);
+    }
+    const parsedEvents: WatchEvent[] = [];
+    for (const [eventIdx, event] of events.entries()) {
+      if (!isWatchEvent(event)) {
+        throw new Error(
+          `${entryContext}.events[${eventIdx}] must be one of: ${WATCH_EVENT_VALUES.join(', ')}`
+        );
+      }
+      if (!parsedEvents.includes(event)) parsedEvents.push(event);
+    }
+
+    if (
+      debounceMs !== undefined &&
+      (typeof debounceMs !== 'number' || !Number.isFinite(debounceMs) || debounceMs < 0)
+    ) {
+      throw new Error(`${entryContext}.debounceMs must be a non-negative number if provided`);
+    }
+    if (match !== undefined && (typeof match !== 'string' || !match.trim())) {
+      throw new Error(`${entryContext}.match must be a non-empty string if provided`);
+    }
+
+    return {
+      paths: parsedPaths,
+      events: parsedEvents,
+      ...(typeof debounceMs === 'number' ? { debounceMs } : {}),
+      ...(typeof match === 'string' ? { match } : {})
+    };
+  });
+}
+
 export function parseMemory(value: unknown, context: string): PersonaMemory | undefined {
   if (value === undefined) return undefined;
   if (typeof value === 'boolean') return value;
@@ -778,6 +857,7 @@ export function parsePersonaSpec(value: unknown, expectedIntent: PersonaIntent):
     useSubscription,
     integrations,
     schedules,
+    watch,
     memory,
     onEvent
   } = value;
@@ -859,6 +939,7 @@ export function parsePersonaSpec(value: unknown, expectedIntent: PersonaIntent):
     `persona[${expectedIntent}].integrations`
   );
   const parsedSchedules = parseSchedules(schedules, `persona[${expectedIntent}].schedules`);
+  const parsedWatch = parseWatch(watch, `persona[${expectedIntent}].watch`);
   const parsedMemory = parseMemory(memory, `persona[${expectedIntent}].memory`);
   const parsedOnEvent = parseOnEvent(onEvent, `persona[${expectedIntent}].onEvent`);
 
@@ -887,6 +968,7 @@ export function parsePersonaSpec(value: unknown, expectedIntent: PersonaIntent):
     ...(typeof useSubscription === 'boolean' ? { useSubscription } : {}),
     ...(parsedIntegrations ? { integrations: parsedIntegrations } : {}),
     ...(parsedSchedules ? { schedules: parsedSchedules } : {}),
+    ...(parsedWatch ? { watch: parsedWatch } : {}),
     ...(parsedMemory !== undefined ? { memory: parsedMemory } : {}),
     ...(parsedOnEvent !== undefined ? { onEvent: parsedOnEvent } : {})
   };

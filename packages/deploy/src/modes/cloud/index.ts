@@ -12,11 +12,11 @@ import type {
   ModeLaunchInput,
   ModeLaunchHandle,
   ModeLauncher
-} from '../types.js';
+} from '../../types.js';
 import {
   resolveWorkspaceToken,
   type WorkspaceAuthToken
-} from '../login.js';
+} from '../../login.js';
 
 const BUILD_YOUR_OWN_CLOUD_DOCS_URL = 'https://docs.agentworkforce.com/deploy/build-your-own-cloud';
 const USER_AGENT = 'workforce-deploy';
@@ -24,7 +24,7 @@ const MAX_ATTEMPTS = 3;
 const POLL_TIMEOUT_MS = 60_000;
 const POLL_INTERVAL_MS = 2_000;
 
-type CloudDeployStatus = 'starting' | 'active' | 'failed' | 'cancelled';
+type CloudDeployStatus = 'ready' | 'starting' | 'active' | 'failed' | 'cancelled';
 type HarnessSource = 'plan' | 'byok' | 'oauth';
 type OnExistsChoice = 'update' | 'destroy' | 'cancel';
 
@@ -142,31 +142,32 @@ export const cloudLauncher: ModeLauncher = {
       byokKey: input.byokKey
     });
 
-    const existingPersona = await handleExistingPersona({
-      cloudUrl,
-      workspaceId: input.workspace,
-      token: auth.token,
-      personaId: input.persona.id,
-      io: input.io,
-      noPrompt,
-      onExists: input.onExists
-    });
-    if (existingPersona.cancelled) {
-      return {
-        id: existingPersona.agentId,
-        agentId: existingPersona.agentId,
-        deploymentId: 'cancelled',
-        status: 'cancelled',
-        async stop() {
-          /* no-op: user chose not to change the existing hosted persona. */
-        },
-        done: Promise.resolve({ code: 0 })
-      };
+    const proactive = isProactivePersona(input.persona);
+    if (!proactive) {
+      const existingPersona = await handleExistingPersona({
+        cloudUrl,
+        workspaceId: input.workspace,
+        token: auth.token,
+        personaId: input.persona.id,
+        io: input.io,
+        noPrompt,
+        onExists: input.onExists
+      });
+      if (existingPersona.cancelled) {
+        return {
+          id: existingPersona.agentId,
+          agentId: existingPersona.agentId,
+          deploymentId: 'cancelled',
+          status: 'cancelled',
+          async stop() {
+            /* no-op: user chose not to change the existing hosted persona. */
+          },
+          done: Promise.resolve({ code: 0 })
+        };
+      }
+    } else {
+      input.io.info('cloud: proactive persona detected; cloud endpoint will upsert trigger registration');
     }
-
-    const endpoint = `${cloudUrl}/api/v1/workspaces/${encodeURIComponent(
-      input.workspace
-    )}/deployments`;
 
     const body = JSON.stringify({
       persona: input.persona,
@@ -179,10 +180,23 @@ export const cloudLauncher: ModeLauncher = {
       // previews read snake_case, while current routes read camelCase.
       credentialSelections,
       credential_selections: credentialSelections,
-      inputs: input.inputs ?? readInputsOverride()
+      inputs: input.inputs ?? readInputsOverride(),
+      ...(proactive
+        ? {
+            watch: readPersonaWatch(input.persona),
+            mount: readPersonaMount(input.persona) ?? { enabled: false }
+          }
+        : {})
     });
 
-    input.io.info(`cloud: deploying persona bundle to ${cloudUrl}`);
+    const endpoint = proactive
+      ? proactivePersonasEndpoint(cloudUrl, input.workspace, input.persona.id)
+      : deploymentsEndpoint(cloudUrl, input.workspace);
+    input.io.info(
+      proactive
+        ? `cloud: registering proactive persona bundle with ${cloudUrl}`
+        : `cloud: deploying persona bundle to ${cloudUrl}`
+    );
     const deployBody = await requestJsonWithRetry<CloudDeployResponse>(
       endpoint,
       {
@@ -200,7 +214,7 @@ export const cloudLauncher: ModeLauncher = {
 
     let stopping = false;
     const done = (async (): Promise<{ code: number }> => {
-      if (initialStatus === 'active') return { code: 0 };
+      if (initialStatus === 'ready' || initialStatus === 'active') return { code: 0 };
       if (initialStatus === 'failed') return { code: 1 };
 
       try {
@@ -212,7 +226,7 @@ export const cloudLauncher: ModeLauncher = {
           io: input.io,
           onLog: input.onLog
         });
-        return { code: finalStatus === 'active' ? 0 : 1 };
+        return { code: finalStatus === 'ready' || finalStatus === 'active' ? 0 : 1 };
       } catch (err) {
         if (!stopping) {
           input.io.error(
@@ -226,13 +240,23 @@ export const cloudLauncher: ModeLauncher = {
     const stop = async (): Promise<void> => {
       if (stopping) return;
       stopping = true;
-      await deleteAgent({
-        cloudUrl,
-        workspaceId: input.workspace,
-        agentId,
-        token: auth.token,
-        action: 'cloud stop'
-      });
+      if (proactive) {
+        await deleteProactivePersona({
+          cloudUrl,
+          workspaceId: input.workspace,
+          personaId: input.persona.id,
+          token: auth.token,
+          action: 'cloud proactive stop'
+        });
+      } else {
+        await deleteAgent({
+          cloudUrl,
+          workspaceId: input.workspace,
+          agentId,
+          token: auth.token,
+          action: 'cloud stop'
+        });
+      }
     };
 
     return {
@@ -245,6 +269,28 @@ export const cloudLauncher: ModeLauncher = {
     };
   }
 };
+
+function isProactivePersona(persona: PersonaSpec): boolean {
+  const watch = readPersonaWatch(persona);
+  return Array.isArray(watch) && watch.length > 0;
+}
+
+function readPersonaWatch(persona: PersonaSpec): unknown[] | undefined {
+  const watch = (persona as PersonaSpec & { watch?: unknown }).watch;
+  return Array.isArray(watch) ? watch : undefined;
+}
+
+function readPersonaMount(persona: PersonaSpec): unknown {
+  return (persona as PersonaSpec & { mount?: unknown }).mount;
+}
+
+function deploymentsEndpoint(cloudUrl: string, workspaceId: string): string {
+  return `${cloudUrl}/api/v1/workspaces/${encodeURIComponent(workspaceId)}/deployments`;
+}
+
+function proactivePersonasEndpoint(cloudUrl: string, workspaceId: string, personaId: string): string {
+  return `${cloudUrl}/api/v1/workspaces/${encodeURIComponent(workspaceId)}/proactive-personas/${encodeURIComponent(personaId)}`;
+}
 
 function resolveCloudUrl(input: ModeLaunchInput): string {
   const fromInput = input.cloudUrl?.trim();
@@ -560,6 +606,29 @@ async function deleteAgent(args: {
     );
   }
   if (!res.ok) {
+    throw new Error(`${args.action} failed: ${res.status} ${await responseExcerpt(res)}`);
+  }
+}
+
+async function deleteProactivePersona(args: {
+  cloudUrl: string;
+  workspaceId: string;
+  personaId: string;
+  token: string;
+  action: string;
+}): Promise<void> {
+  const destroyUrl = proactivePersonasEndpoint(args.cloudUrl, args.workspaceId, args.personaId);
+  const res = await fetch(destroyUrl, {
+    method: 'DELETE',
+    headers: {
+      authorization: `Bearer ${args.token}`,
+      'user-agent': USER_AGENT
+    }
+  });
+  if (res.status === 401) {
+    throw new Error(`${args.action} failed: unauthorized. Run \`workforce login\` and retry.`);
+  }
+  if (!res.ok && res.status !== 404) {
     throw new Error(`${args.action} failed: ${res.status} ${await responseExcerpt(res)}`);
   }
 }
@@ -884,7 +953,7 @@ async function pollAgentStatus(args: {
   token: WorkspaceAuthToken['token'];
   io: ModeLaunchInput['io'];
   onLog?: ModeLaunchInput['onLog'];
-}): Promise<'active' | 'failed'> {
+}): Promise<'ready' | 'active' | 'failed'> {
   const statusUrl = `${args.cloudUrl}/api/v1/workspaces/${encodeURIComponent(
     args.workspaceId
   )}/agents/${encodeURIComponent(args.agentId)}`;
@@ -909,7 +978,7 @@ async function pollAgentStatus(args: {
       emitLog(args, `cloud: status ${status}`);
       lastStatus = status;
     }
-    if (status === 'active' || status === 'failed') return status;
+    if (status === 'ready' || status === 'active' || status === 'failed') return status;
   }
 
   throw new Error(`timed out after ${pollTimeoutMs() / 1000}s waiting for agent ${args.agentId}`);
@@ -1006,7 +1075,13 @@ function expectString(value: unknown, field: string): string {
 }
 
 function expectStatus(value: unknown): CloudDeployStatus {
-  if (value === 'starting' || value === 'active' || value === 'failed' || value === 'cancelled') {
+  if (
+    value === 'ready'
+    || value === 'starting'
+    || value === 'active'
+    || value === 'failed'
+    || value === 'cancelled'
+  ) {
     return value;
   }
   throw new Error(`cloud deploy response has unknown status "${String(value)}"`);

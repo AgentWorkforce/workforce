@@ -189,6 +189,7 @@ function resolveMountPolicy(
   mount: PersonaMount | undefined
 ): ResolvedMountPolicy | undefined {
   if (!mount) return undefined;
+  if (mount.enabled === false) return undefined;
   const ignored = mount.ignoredPatterns ?? [];
   const readonly = mount.readonlyPatterns ?? [];
   if (ignored.length === 0 && readonly.length === 0) return undefined;

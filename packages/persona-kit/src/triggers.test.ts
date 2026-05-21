@@ -85,3 +85,41 @@ test('lintTriggers warns per unknown trigger for a known provider', () => {
     assert.match(issue.path, /integrations\.github\.triggers\[\d+\]\.on/);
   }
 });
+
+test('lintTriggers returns no issues for valid relayfile watch rules', () => {
+  const issues = lintTriggers({
+    ...specWithIntegrations(undefined),
+    watch: [
+      {
+        paths: ['/integrations/github/repos/acme/web/issues/**/*.json'],
+        events: ['created', 'updated'],
+        debounceMs: 5000
+      }
+    ]
+  });
+  assert.deepEqual(issues, []);
+});
+
+test('lintTriggers warns for non-absolute relayfile watch paths', () => {
+  const issues = lintTriggers({
+    ...specWithIntegrations(undefined),
+    watch: [{ paths: ['integrations/github/**'], events: ['updated'] }]
+  });
+  assert.equal(issues.length, 1);
+  assert.equal(issues[0].level, 'warning');
+  assert.equal(issues[0].code, 'watch_path_not_absolute');
+  assert.equal(issues[0].provider, 'relayfile');
+  assert.equal(issues[0].path, 'watch[0].paths[0]');
+});
+
+test('lintTriggers warns for relayfile watch rules with empty events', () => {
+  const issues = lintTriggers({
+    ...specWithIntegrations(undefined),
+    watch: [{ paths: ['/integrations/github/**'], events: [] }]
+  });
+  assert.equal(issues.length, 1);
+  assert.equal(issues[0].level, 'warning');
+  assert.equal(issues[0].code, 'watch_empty_events');
+  assert.equal(issues[0].provider, 'relayfile');
+  assert.equal(issues[0].path, 'watch[0].events');
+});
