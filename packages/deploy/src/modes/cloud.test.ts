@@ -188,7 +188,12 @@ test('cloud launcher POSTs a deploy bundle and returns the cloud handle', async 
   assert.equal(calls.filter((call) => call.url.includes('/provider-credentials/managed')).length, 1);
 });
 
-test('cloud launcher sends proactive personas through the proactive-personas endpoint', async () => {
+test('cloud launcher sends proactive personas (top-level watch) through the deployments endpoint', async () => {
+  // Consolidation: proactive personas now flow through the same
+  // /deployments POST as regular personas. The persona's top-level
+  // watch[] travels inside the persona object; cloud-side
+  // preparePersonaDeploy extracts it and persists into agents.watch_rules
+  // (cloud PR #919). No separate /proactive-personas surface.
   const watch = [{ paths: ['/i/x/**'], events: ['created'], debounceMs: 1000 }];
   const proactivePersona = persona({
     mount: { enabled: false },
@@ -201,16 +206,16 @@ test('cloud launcher sends proactive personas through the proactive-personas end
       WORKFORCE_DEPLOY_CLOUD_URL: 'https://cloud.example.test'
     },
     fetch(url, init) {
-      assert.equal(url, 'https://cloud.example.test/api/v1/workspaces/ws-test/proactive-personas/demo');
+      if (init?.method === 'GET' && url.endsWith('/deployments')) {
+        return okJson({ agents: [] });
+      }
+      assert.equal(url, 'https://cloud.example.test/api/v1/workspaces/ws-test/deployments');
       assert.equal(init?.method, 'POST');
       const body = JSON.parse(String(init?.body)) as Record<string, unknown>;
-      assert.deepEqual(body.watch, watch);
-      assert.equal(
-        (((body.watch as unknown[])[0] as { paths: string[] }).paths[0]),
-        '/i/x/**'
-      );
-      assert.deepEqual(body.mount, { enabled: false });
+      // watch[] travels inside persona, not as a sibling field.
       assert.deepEqual(((body.persona as Record<string, unknown>).watch), watch);
+      assert.equal(body.watch, undefined);
+      assert.equal(body.mount, undefined);
       return okJson({ agentId: 'agent-1', deploymentId: 'dep-1', status: 'ready' }, 201);
     }
   });
@@ -220,8 +225,7 @@ test('cloud launcher sends proactive personas through the proactive-personas end
   assert.equal(handle.deploymentId, 'dep-1');
   assert.equal(handle.status, 'ready');
   assert.equal((await handle.done).code, 0);
-  assert.equal(callsForUrl(calls, '/deployments'), 0);
-  assert.equal(callsForUrl(calls, '/proactive-personas/demo'), 1);
+  assert.equal(callsForUrl(calls, '/proactive-personas'), 0);
 });
 
 test('cloud launcher keeps non-proactive personas on the deployments endpoint', async () => {
@@ -256,7 +260,10 @@ test('cloud launcher maps proactive failed deployment responses to a failed hand
       WORKFORCE_DEPLOY_CLOUD_URL: 'https://cloud.example.test'
     },
     fetch(url, init) {
-      assert.equal(url, 'https://cloud.example.test/api/v1/workspaces/ws-test/proactive-personas/demo');
+      if (init?.method === 'GET' && url.endsWith('/deployments')) {
+        return okJson({ agents: [] });
+      }
+      assert.equal(url, 'https://cloud.example.test/api/v1/workspaces/ws-test/deployments');
       assert.equal(init?.method, 'POST');
       return okJson({ agentId: 'agent-1', deploymentId: 'dep-1', status: 'failed' }, 201);
     }

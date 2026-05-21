@@ -142,31 +142,26 @@ export const cloudLauncher: ModeLauncher = {
       byokKey: input.byokKey
     });
 
-    const proactive = isProactivePersona(input.persona);
-    if (!proactive) {
-      const existingPersona = await handleExistingPersona({
-        cloudUrl,
-        workspaceId: input.workspace,
-        token: auth.token,
-        personaId: input.persona.id,
-        io: input.io,
-        noPrompt,
-        onExists: input.onExists
-      });
-      if (existingPersona.cancelled) {
-        return {
-          id: existingPersona.agentId,
-          agentId: existingPersona.agentId,
-          deploymentId: 'cancelled',
-          status: 'cancelled',
-          async stop() {
-            /* no-op: user chose not to change the existing hosted persona. */
-          },
-          done: Promise.resolve({ code: 0 })
-        };
-      }
-    } else {
-      input.io.info('cloud: proactive persona detected; cloud endpoint will upsert trigger registration');
+    const existingPersona = await handleExistingPersona({
+      cloudUrl,
+      workspaceId: input.workspace,
+      token: auth.token,
+      personaId: input.persona.id,
+      io: input.io,
+      noPrompt,
+      onExists: input.onExists
+    });
+    if (existingPersona.cancelled) {
+      return {
+        id: existingPersona.agentId,
+        agentId: existingPersona.agentId,
+        deploymentId: 'cancelled',
+        status: 'cancelled',
+        async stop() {
+          /* no-op: user chose not to change the existing hosted persona. */
+        },
+        done: Promise.resolve({ code: 0 })
+      };
     }
 
     const body = JSON.stringify({
@@ -180,23 +175,11 @@ export const cloudLauncher: ModeLauncher = {
       // previews read snake_case, while current routes read camelCase.
       credentialSelections,
       credential_selections: credentialSelections,
-      inputs: input.inputs ?? readInputsOverride(),
-      ...(proactive
-        ? {
-            watch: readPersonaWatch(input.persona),
-            mount: readPersonaMount(input.persona) ?? { enabled: false }
-          }
-        : {})
+      inputs: input.inputs ?? readInputsOverride()
     });
 
-    const endpoint = proactive
-      ? proactivePersonasEndpoint(cloudUrl, input.workspace, input.persona.id)
-      : deploymentsEndpoint(cloudUrl, input.workspace);
-    input.io.info(
-      proactive
-        ? `cloud: registering proactive persona bundle with ${cloudUrl}`
-        : `cloud: deploying persona bundle to ${cloudUrl}`
-    );
+    const endpoint = deploymentsEndpoint(cloudUrl, input.workspace);
+    input.io.info(`cloud: deploying persona bundle to ${cloudUrl}`);
     const deployBody = await requestJsonWithRetry<CloudDeployResponse>(
       endpoint,
       {
@@ -240,23 +223,13 @@ export const cloudLauncher: ModeLauncher = {
     const stop = async (): Promise<void> => {
       if (stopping) return;
       stopping = true;
-      if (proactive) {
-        await deleteProactivePersona({
-          cloudUrl,
-          workspaceId: input.workspace,
-          personaId: input.persona.id,
-          token: auth.token,
-          action: 'cloud proactive stop'
-        });
-      } else {
-        await deleteAgent({
-          cloudUrl,
-          workspaceId: input.workspace,
-          agentId,
-          token: auth.token,
-          action: 'cloud stop'
-        });
-      }
+      await deleteAgent({
+        cloudUrl,
+        workspaceId: input.workspace,
+        agentId,
+        token: auth.token,
+        action: 'cloud stop'
+      });
     };
 
     return {
@@ -270,26 +243,8 @@ export const cloudLauncher: ModeLauncher = {
   }
 };
 
-function isProactivePersona(persona: PersonaSpec): boolean {
-  const watch = readPersonaWatch(persona);
-  return Array.isArray(watch) && watch.length > 0;
-}
-
-function readPersonaWatch(persona: PersonaSpec): unknown[] | undefined {
-  const watch = (persona as PersonaSpec & { watch?: unknown }).watch;
-  return Array.isArray(watch) ? watch : undefined;
-}
-
-function readPersonaMount(persona: PersonaSpec): unknown {
-  return (persona as PersonaSpec & { mount?: unknown }).mount;
-}
-
 function deploymentsEndpoint(cloudUrl: string, workspaceId: string): string {
   return `${cloudUrl}/api/v1/workspaces/${encodeURIComponent(workspaceId)}/deployments`;
-}
-
-function proactivePersonasEndpoint(cloudUrl: string, workspaceId: string, personaId: string): string {
-  return `${cloudUrl}/api/v1/workspaces/${encodeURIComponent(workspaceId)}/proactive-personas/${encodeURIComponent(personaId)}`;
 }
 
 function resolveCloudUrl(input: ModeLaunchInput): string {
@@ -606,29 +561,6 @@ async function deleteAgent(args: {
     );
   }
   if (!res.ok) {
-    throw new Error(`${args.action} failed: ${res.status} ${await responseExcerpt(res)}`);
-  }
-}
-
-async function deleteProactivePersona(args: {
-  cloudUrl: string;
-  workspaceId: string;
-  personaId: string;
-  token: string;
-  action: string;
-}): Promise<void> {
-  const destroyUrl = proactivePersonasEndpoint(args.cloudUrl, args.workspaceId, args.personaId);
-  const res = await fetch(destroyUrl, {
-    method: 'DELETE',
-    headers: {
-      authorization: `Bearer ${args.token}`,
-      'user-agent': USER_AGENT
-    }
-  });
-  if (res.status === 401) {
-    throw new Error(`${args.action} failed: unauthorized. Run \`workforce login\` and retry.`);
-  }
-  if (!res.ok && res.status !== 404) {
     throw new Error(`${args.action} failed: ${res.status} ${await responseExcerpt(res)}`);
   }
 }
