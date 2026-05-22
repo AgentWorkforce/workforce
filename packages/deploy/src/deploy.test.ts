@@ -398,13 +398,20 @@ test('deploy can recover cloud integration auth by logging in and retrying with 
       return { token: 'fresh-token' };
     }
   };
-  globalThis.fetch = (async (_input, init) => {
-    authHeaders.push(String(new Headers(init?.headers).get('authorization')));
-    if (authHeaders.length === 1) {
+  globalThis.fetch = (async (input, init) => {
+    const url = String(input);
+    const auth = String(new Headers(init?.headers).get('authorization'));
+    // Catalog fetch is best-effort: don't drive auth recovery from it.
+    // Return an empty providers list so the resolver caches that and moves on.
+    if (url.includes('/api/v1/integrations/catalog')) {
+      return jsonResponse({ providers: [] });
+    }
+    authHeaders.push(auth);
+    if (auth === 'Bearer stale-token') {
       return jsonResponse({ error: 'Unauthorized' }, 401);
     }
     return jsonResponse([
-      { provider: 'notion', status: 'ready', connectionId: 'conn-notion' }
+      { provider: 'notion', providerConfigKey: 'notion-relay', status: 'ready' }
     ]);
   }) as typeof fetch;
 

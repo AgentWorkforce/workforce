@@ -6,10 +6,12 @@ import { resolveCloudUrl } from './cloud-url.js';
 import {
   connectIntegrations,
   envIntegrationResolver,
+  relayfileCatalogConfigKeyResolver,
   relayfileIntegrationResolver,
   type ConnectAllInput,
   type IntegrationAuthRecoveryResolver,
   type IntegrationConnectResolver,
+  type ProviderConfigKeyResolver,
   type ProviderSubscriptionResolver
 } from './connect.js';
 import { createTerminalIO } from './io.js';
@@ -44,6 +46,7 @@ export interface DeployResolvers {
   integrations?: IntegrationConnectResolver;
   authRecovery?: CloudAuthRecoveryResolver;
   subscription?: ProviderSubscriptionResolver;
+  providerConfigKeys?: ProviderConfigKeyResolver;
   bundle?: BundleStager;
   modes?: Partial<Record<DeployMode, ModeLauncher>>;
 }
@@ -206,7 +209,18 @@ export async function deploy(opts: DeployOptions, resolvers: DeployResolvers = {
           )
         }
       : {}),
-    ...(resolvers.subscription ? { subscription: resolvers.subscription } : {})
+    ...(resolvers.subscription ? { subscription: resolvers.subscription } : {}),
+    ...(resolvers.providerConfigKeys
+      ? { providerConfigKeys: resolvers.providerConfigKeys }
+      : mode === 'cloud'
+        ? {
+            providerConfigKeys: relayfileCatalogConfigKeyResolver({
+              apiUrl: normalizeCloudUrl(cloudUrl ?? defaultApiUrl()),
+              workspaceToken: () => activeToken,
+              io
+            })
+          }
+        : {})
   });
 
   const bundleDir = path.resolve(

@@ -1,6 +1,10 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { connectIntegrations, relayfileIntegrationResolver } from './connect.js';
+import {
+  connectIntegrations,
+  relayfileCatalogConfigKeyResolver,
+  relayfileIntegrationResolver
+} from './connect.js';
 import { createBufferedIO } from './io.js';
 
 function okJson(body: unknown, status = 200): Response {
@@ -10,7 +14,7 @@ function okJson(body: unknown, status = 200): Response {
   });
 }
 
-test('relayfileIntegrationResolver isConnected reads the cloud integration list', async () => {
+test('relayfileIntegrationResolver isConnected defaults to /me/integrations (deployer_user)', async () => {
   const urls: string[] = [];
   const resolver = relayfileIntegrationResolver({
     apiUrl: 'https://cloud.example.test',
@@ -19,16 +23,180 @@ test('relayfileIntegrationResolver isConnected reads the cloud integration list'
     fetch: async (url) => {
       urls.push(String(url));
       return okJson([
-        { provider: 'github', status: 'ready', connectionId: 'conn-1' }
+        { provider: 'github', providerConfigKey: 'github-relay', status: 'ready' }
       ]);
     }
   });
   assert.equal(await resolver.isConnected({ workspace: 'ws-runtime', provider: 'github' }), true);
   assert.equal(await resolver.isConnected({ workspace: 'ws-runtime', provider: 'notion' }), false);
   assert.deepEqual(urls, [
-    'https://cloud.example.test/api/v1/workspaces/ws-runtime/integrations',
+    'https://cloud.example.test/api/v1/me/integrations',
+    'https://cloud.example.test/api/v1/me/integrations'
+  ]);
+});
+
+test('relayfileIntegrationResolver isConnected hits /workspaces/<id>/integrations for workspace source', async () => {
+  const urls: string[] = [];
+  const resolver = relayfileIntegrationResolver({
+    apiUrl: 'https://cloud.example.test',
+    workspaceId: 'ws-1',
+    workspaceToken: 'tok',
+    fetch: async (url) => {
+      urls.push(String(url));
+      return okJson([
+        { provider: 'github', providerConfigKey: 'github-relay', status: 'ready' }
+      ]);
+    }
+  });
+  assert.equal(
+    await resolver.isConnected({
+      workspace: 'ws-runtime',
+      provider: 'github',
+      source: { kind: 'workspace' }
+    }),
+    true
+  );
+  assert.deepEqual(urls, [
     'https://cloud.example.test/api/v1/workspaces/ws-runtime/integrations'
   ]);
+});
+
+test('relayfileIntegrationResolver isConnected rejects rows whose providerConfigKey does not match', async () => {
+  // Workspace has slack-ricky connected. Persona declares plain `slack`, which
+  // should resolve to slack-relay. The row exists with provider:'slack' but
+  // backed by a different config-key → must NOT count as connected.
+  const resolver = relayfileIntegrationResolver({
+    apiUrl: 'https://cloud.example.test',
+    workspaceId: 'ws-1',
+    workspaceToken: 'tok',
+    fetch: async () =>
+      okJson([{ provider: 'slack', providerConfigKey: 'slack-ricky', status: 'ready' }])
+  });
+  assert.equal(
+    await resolver.isConnected({
+      workspace: 'ws-1',
+      provider: 'slack',
+      expectedConfigKey: 'slack-relay'
+    }),
+    false
+  );
+});
+
+test('relayfileIntegrationResolver isConnected accepts a matching providerConfigKey', async () => {
+  const resolver = relayfileIntegrationResolver({
+    apiUrl: 'https://cloud.example.test',
+    workspaceId: 'ws-1',
+    workspaceToken: 'tok',
+    fetch: async () =>
+      okJson([{ provider: 'slack', providerConfigKey: 'slack-relay', status: 'ready' }])
+  });
+  assert.equal(
+    await resolver.isConnected({
+      workspace: 'ws-1',
+      provider: 'slack',
+      expectedConfigKey: 'slack-relay'
+    }),
+    true
+  );
+});
+
+test('relayfileIntegrationResolver isConnected falls back to provider-name match when row lacks providerConfigKey', async () => {
+  // Older cloud (pre cloud#988) returns rows without providerConfigKey. To
+  // avoid hard-failing every deploy until that ships, the matcher treats a
+  // missing field as "trust the server" and matches by provider name only.
+  const resolver = relayfileIntegrationResolver({
+    apiUrl: 'https://cloud.example.test',
+    workspaceId: 'ws-1',
+    workspaceToken: 'tok',
+    fetch: async () => okJson([{ provider: 'slack', status: 'ready' }])
+  });
+  assert.equal(
+    await resolver.isConnected({
+      workspace: 'ws-1',
+      provider: 'slack',
+      expectedConfigKey: 'slack-relay'
+    }),
+    true
+  );
+});
+
+test('relayfileIntegrationResolver isConnected ignores rows with only a connectionId (no status)', async () => {
+  // The previous matcher treated any truthy connectionId as connected. That
+  // caused false positives whenever an abandoned OAuth left an orphan row.
+  const resolver = relayfileIntegrationResolver({
+    apiUrl: 'https://cloud.example.test',
+    workspaceId: 'ws-1',
+    workspaceToken: 'tok',
+    fetch: async () => okJson([{ provider: 'slack', connectionId: 'orphan' }])
+  });
+  assert.equal(
+    await resolver.isConnected({ workspace: 'ws-1', provider: 'slack' }),
+    false
+  );
+});
+
+test('relayfileIntegrationResolver isConnected falls back to workspace endpoint when /me/integrations 404s', async () => {
+  const io = createBufferedIO();
+  const urls: string[] = [];
+  const resolver = relayfileIntegrationResolver({
+    apiUrl: 'https://cloud.example.test',
+    workspaceId: 'ws-1',
+    workspaceToken: 'tok',
+    io,
+    fetch: async (url) => {
+      urls.push(String(url));
+      if (String(url).endsWith('/me/integrations')) {
+        return new Response('not found', { status: 404 });
+      }
+      return okJson([{ provider: 'github', status: 'ready' }]);
+    }
+  });
+  assert.equal(
+    await resolver.isConnected({ workspace: 'ws-runtime', provider: 'github' }),
+    true
+  );
+  assert.deepEqual(urls, [
+    'https://cloud.example.test/api/v1/me/integrations',
+    'https://cloud.example.test/api/v1/workspaces/ws-runtime/integrations'
+  ]);
+  assert.ok(
+    io.messages.some(
+      (m) => m.level === 'warn' && /me\/integrations/.test(m.message)
+    )
+  );
+});
+
+test('relayfileCatalogConfigKeyResolver returns the expected configKey and caches the catalog', async () => {
+  let calls = 0;
+  const resolver = relayfileCatalogConfigKeyResolver({
+    apiUrl: 'https://cloud.example.test',
+    workspaceToken: 'tok',
+    fetch: async () => {
+      calls += 1;
+      return okJson({
+        providers: [
+          { id: 'slack', configKey: 'slack-relay' },
+          { id: 'github', configKey: 'github-relay' }
+        ]
+      });
+    }
+  });
+  assert.equal(await resolver.resolve('slack'), 'slack-relay');
+  assert.equal(await resolver.resolve('github'), 'github-relay');
+  assert.equal(await resolver.resolve('unknown'), undefined);
+  assert.equal(calls, 1, 'catalog should be fetched exactly once and cached');
+});
+
+test('relayfileCatalogConfigKeyResolver returns undefined for every provider when catalog fetch fails', async () => {
+  const io = createBufferedIO();
+  const resolver = relayfileCatalogConfigKeyResolver({
+    apiUrl: 'https://cloud.example.test',
+    workspaceToken: 'tok',
+    io,
+    fetch: async () => new Response('boom', { status: 500 })
+  });
+  assert.equal(await resolver.resolve('slack'), undefined);
+  assert.ok(io.messages.some((m) => m.level === 'warn' && /catalog/.test(m.message)));
 });
 
 test('relayfileIntegrationResolver reads the latest workspace token for each request', async () => {
@@ -39,12 +207,13 @@ test('relayfileIntegrationResolver reads the latest workspace token for each req
     workspaceId: 'ws-1',
     workspaceToken: () => token,
     fetch: async (_url, init) => {
-      authHeaders.push(String(new Headers(init?.headers).get('authorization')));
-      if (authHeaders.length === 1) {
+      const auth = String(new Headers(init?.headers).get('authorization'));
+      authHeaders.push(auth);
+      if (auth === 'Bearer old-token') {
         return okJson({ error: 'Unauthorized' }, 401);
       }
       return okJson([
-        { provider: 'github', status: 'ready', connectionId: 'conn-1' }
+        { provider: 'github', providerConfigKey: 'github-relay', status: 'ready' }
       ]);
     }
   });
