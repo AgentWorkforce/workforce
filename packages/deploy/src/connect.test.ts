@@ -135,6 +135,29 @@ test('relayfileIntegrationResolver isConnected ignores rows with only a connecti
   );
 });
 
+test('relayfileIntegrationResolver isConnected does NOT fall back when /me/integrations returns 5xx with "404" in the body', async () => {
+  // Regression: previous implementation regex-matched "404" anywhere in the
+  // error message and treated a 500 whose body mentioned "/api/v1/foo/404"
+  // (or any other 404 substring) as a missing-endpoint signal. The check
+  // must use the explicit HTTP status, not the body text.
+  const urls: string[] = [];
+  const resolver = relayfileIntegrationResolver({
+    apiUrl: 'https://cloud.example.test',
+    workspaceId: 'ws-1',
+    workspaceToken: 'tok',
+    fetch: async (url) => {
+      urls.push(String(url));
+      return new Response('upstream timeout (request 404abc failed)', { status: 500 });
+    }
+  });
+  await assert.rejects(
+    resolver.isConnected({ workspace: 'ws-runtime', provider: 'github' }),
+    /cloud integration request failed: 500/
+  );
+  // Only the /me call should have happened — no silent fallback to workspace.
+  assert.deepEqual(urls, ['https://cloud.example.test/api/v1/me/integrations']);
+});
+
 test('relayfileIntegrationResolver isConnected falls back to workspace endpoint when /me/integrations 404s', async () => {
   const io = createBufferedIO();
   const urls: string[] = [];

@@ -439,6 +439,26 @@ async function checkProviderConnected(
     });
 }
 
+/**
+ * Error thrown by `requestJson` for any non-2xx response. Carries the numeric
+ * HTTP `status` so callers can branch on it without parsing the message
+ * (which can include the response body — body content like "404" inside a
+ * 500 response was causing false-positive fallbacks).
+ */
+interface CloudRequestError extends Error {
+  status: number;
+}
+
+function cloudRequestError(message: string, status: number): CloudRequestError {
+  const err = new Error(message) as CloudRequestError;
+  err.status = status;
+  return err;
+}
+
+function isCloudRequestError(err: unknown): err is CloudRequestError {
+  return err instanceof Error && typeof (err as { status?: unknown }).status === 'number';
+}
+
 async function requestJson(
   fetchImpl: typeof fetch,
   url: string,
@@ -454,17 +474,22 @@ async function requestJson(
     }
   });
   if (res.status === 401) {
-    throw new Error(
-      'cloud integration request failed: unauthorized. Your active workspace session is invalid or expired. Run `agentworkforce login --workspace <id-or-slug>` to refresh, then retry.'
+    throw cloudRequestError(
+      'cloud integration request failed: unauthorized. Your active workspace session is invalid or expired. Run `agentworkforce login --workspace <id-or-slug>` to refresh, then retry.',
+      401
     );
   }
   if (res.status === 403) {
-    throw new Error(
-      'cloud integration request failed: forbidden. The active account is not authorized for this workspace. Run `agentworkforce login --workspace <id-or-slug>` against an account with access, then retry.'
+    throw cloudRequestError(
+      'cloud integration request failed: forbidden. The active account is not authorized for this workspace. Run `agentworkforce login --workspace <id-or-slug>` against an account with access, then retry.',
+      403
     );
   }
   if (!res.ok) {
-    throw new Error(`cloud integration request failed: ${res.status} ${await res.text().catch(() => '')}`.trim());
+    throw cloudRequestError(
+      `cloud integration request failed: ${res.status} ${await res.text().catch(() => '')}`.trim(),
+      res.status
+    );
   }
   return await res.json();
 }
@@ -509,8 +534,11 @@ async function fetchIntegrationsForScope(args: {
     try {
       return await requestJson(args.fetchImpl, url, args.token);
     } catch (err) {
-      const message = err instanceof Error ? err.message : String(err);
-      if (/\b404\b/.test(message) || /\b405\b/.test(message)) {
+      // Only fall back when the endpoint itself is missing (older cloud that
+      // hasn't shipped cloud#988). Any other failure — auth, 5xx, network —
+      // must propagate so callers see the real error and can drive the
+      // existing auth-recovery flow rather than silently masking the cause.
+      if (isCloudRequestError(err) && (err.status === 404 || err.status === 405)) {
         args.io?.warn?.(
           'cloud does not expose /api/v1/me/integrations yet; falling back to the workspace integrations list. ' +
             'Deployer-user-scoped connections may show as not-connected. ' +
