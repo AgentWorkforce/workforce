@@ -120,6 +120,39 @@ test('relayfileIntegrationResolver isConnected falls back to provider-name match
   );
 });
 
+for (const status of ['ready', 'pending', 'syncing', 'degraded'] as const) {
+  test(`relayfileIntegrationResolver isConnected accepts status="${status}" as connected`, async () => {
+    const resolver = relayfileIntegrationResolver({
+      apiUrl: 'https://cloud.example.test',
+      workspaceId: 'ws-1',
+      workspaceToken: 'tok',
+      fetch: async () => okJson([{ provider: 'slack', providerConfigKey: 'slack-relay', status }])
+    });
+    assert.equal(
+      await resolver.isConnected({ workspace: 'ws-1', provider: 'slack' }),
+      true,
+      `status="${status}" should count as connected`
+    );
+  });
+}
+
+test('relayfileIntegrationResolver isConnected rejects status="error"', async () => {
+  // A failed initial sync or errored writeback means the persona cannot
+  // rely on the integration at dispatch time. Re-prompt OAuth so the user
+  // can repair it instead of silently shipping a broken deploy.
+  const resolver = relayfileIntegrationResolver({
+    apiUrl: 'https://cloud.example.test',
+    workspaceId: 'ws-1',
+    workspaceToken: 'tok',
+    fetch: async () =>
+      okJson([{ provider: 'slack', providerConfigKey: 'slack-relay', status: 'error' }])
+  });
+  assert.equal(
+    await resolver.isConnected({ workspace: 'ws-1', provider: 'slack' }),
+    false
+  );
+});
+
 test('relayfileIntegrationResolver isConnected ignores rows with only a connectionId (no status)', async () => {
   // The previous matcher treated any truthy connectionId as connected. That
   // caused false positives whenever an abandoned OAuth left an orphan row.

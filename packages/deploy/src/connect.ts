@@ -598,13 +598,30 @@ function listHasConnectedProvider(
 }
 
 /**
- * A row counts as "connected" only when the cloud's derived state is
- * affirmatively healthy. The previous implementation also accepted "any
- * truthy connectionId" as a yes, which produced false positives whenever a
- * stale row was left behind by an abandoned OAuth attempt. The cloud now
- * derives `status` from `initialSync + writeback` (see
- * `cloud/packages/web/app/api/v1/workspaces/[workspaceId]/integrations/route.ts:62`),
- * so trusting that field is both correct and sufficient.
+ * A row counts as "connected" when the cloud's derived state represents a
+ * live OAuth grant, even if Nango's initial sync hasn't finished. The cloud
+ * derives `status` from `initialSync + writeback` and emits one of:
+ *
+ *   - `ready`     — sync complete, writeback healthy. Fully usable.
+ *   - `pending`   — OAuth grant exists, sync queued (the gap between OAuth
+ *                   completion and sync start). Persona can use it for
+ *                   writes immediately; reads will see data once sync runs.
+ *   - `syncing`   — initial sync running. Same operational status as `pending`
+ *                   from the persona's perspective.
+ *   - `degraded`  — sync complete but writeback lagging or paused. Connection
+ *                   still works; reading at-rest data is fine; new writes may
+ *                   queue but won't fail.
+ *   - `error`     — sync failed or writeback errored. Treat as not-connected
+ *                   so the user re-runs OAuth (or fixes the upstream cause).
+ *
+ * The preflight accepts everything except `error` and missing rows. The
+ * previous implementation accepted only `ready`, which forced users to wait
+ * for the initial sync to complete between `agentworkforce login` and their
+ * first deploy — every fresh integration sat in `pending`/`syncing` for a
+ * few minutes and tripped the "not connected" branch.
+ *
+ * Legacy fields (`connected`, `active`, `state`, `ready: true`, `oauth.connected`)
+ * are kept for compatibility with older cloud surfaces and the env resolver.
  */
 function isConnectedStatus(value: unknown): boolean {
   if (!value || typeof value !== 'object' || Array.isArray(value)) return false;
@@ -612,6 +629,9 @@ function isConnectedStatus(value: unknown): boolean {
   return record.status === 'connected'
     || record.status === 'active'
     || record.status === 'ready'
+    || record.status === 'pending'
+    || record.status === 'syncing'
+    || record.status === 'degraded'
     || record.state === 'connected'
     || record.state === 'ready'
     || record.ready === true
