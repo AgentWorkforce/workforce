@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [3.0.17] - 2026-05-22
+
+### Fixed
+
+- Scope-aware + configKey-aware integration preflight (#131)
+
 ## [3.0.16] - 2026-05-22
 
 ### Added
