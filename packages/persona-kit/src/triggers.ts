@@ -37,7 +37,11 @@ export type TriggerLintLevel = 'warning';
  * Machine-readable issue category, so callers can branch on
  * `issue.code` without parsing the human-readable `message`.
  */
-export type TriggerLintCode = 'unknown_provider' | 'unknown_trigger';
+export type TriggerLintCode =
+  | 'unknown_provider'
+  | 'unknown_trigger'
+  | 'watch_path_not_absolute'
+  | 'watch_empty_events';
 
 export interface TriggerLintIssue {
   level: TriggerLintLevel;
@@ -63,37 +67,63 @@ export interface TriggerLintIssue {
 export function lintTriggers(persona: PersonaSpec): TriggerLintIssue[] {
   const issues: TriggerLintIssue[] = [];
   const integrations = persona.integrations;
-  if (!integrations) return issues;
 
-  for (const [provider, config] of Object.entries(integrations)) {
-    const triggers = config.triggers;
-    if (!triggers) continue;
-    const known = (KNOWN_TRIGGERS as Record<string, readonly string[] | undefined>)[provider];
+  if (integrations) {
+    for (const [provider, config] of Object.entries(integrations)) {
+      const triggers = config.triggers;
+      if (!triggers) continue;
+      const known = (KNOWN_TRIGGERS as Record<string, readonly string[] | undefined>)[provider];
 
-    if (!known) {
-      // Unknown provider: warn once on the integration as a whole so we
-      // don't spam per-trigger warnings for a provider workforce hasn't
-      // catalogued yet.
-      issues.push({
-        level: 'warning',
-        code: 'unknown_provider',
-        provider,
-        trigger: '*',
-        path: `integrations.${provider}`,
-        message: `provider "${provider}" is not in the known-trigger registry; trigger names will not be linted`
-      });
-      continue;
-    }
-
-    for (const [idx, trigger] of triggers.entries()) {
-      if (!known.includes(trigger.on)) {
+      if (!known) {
+        // Unknown provider: warn once on the integration as a whole so we
+        // don't spam per-trigger warnings for a provider workforce hasn't
+        // catalogued yet.
         issues.push({
           level: 'warning',
-          code: 'unknown_trigger',
+          code: 'unknown_provider',
           provider,
-          trigger: trigger.on,
-          path: `integrations.${provider}.triggers[${idx}].on`,
-          message: `trigger "${trigger.on}" is not in the known-trigger registry for ${provider} (known: ${known.join(', ')})`
+          trigger: '*',
+          path: `integrations.${provider}`,
+          message: `provider "${provider}" is not in the known-trigger registry; trigger names will not be linted`
+        });
+        continue;
+      }
+
+      for (const [idx, trigger] of triggers.entries()) {
+        if (!known.includes(trigger.on)) {
+          issues.push({
+            level: 'warning',
+            code: 'unknown_trigger',
+            provider,
+            trigger: trigger.on,
+            path: `integrations.${provider}.triggers[${idx}].on`,
+            message: `trigger "${trigger.on}" is not in the known-trigger registry for ${provider} (known: ${known.join(', ')})`
+          });
+        }
+      }
+    }
+  }
+
+  for (const [idx, rule] of (persona.watch ?? []).entries()) {
+    if (!rule.events || rule.events.length === 0) {
+      issues.push({
+        level: 'warning',
+        code: 'watch_empty_events',
+        provider: 'relayfile',
+        trigger: '*',
+        path: `watch[${idx}].events`,
+        message: 'watch rule must declare at least one relayfile event'
+      });
+    }
+    for (const [pathIdx, path] of (rule.paths ?? []).entries()) {
+      if (!path.startsWith('/')) {
+        issues.push({
+          level: 'warning',
+          code: 'watch_path_not_absolute',
+          provider: 'relayfile',
+          trigger: '*',
+          path: `watch[${idx}].paths[${pathIdx}]`,
+          message: `watch path "${path}" must start with /`
         });
       }
     }

@@ -20,7 +20,7 @@ import {
 } from './login.js';
 import { devLauncher } from './modes/dev.js';
 import { sandboxLauncher } from './modes/sandbox.js';
-import { cloudLauncher } from './modes/cloud.js';
+import { cloudLauncher } from './modes/cloud/index.js';
 import { preflightPersona } from './preflight.js';
 import type {
   BundleStager,

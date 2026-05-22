@@ -95,6 +95,16 @@ test('buildPersonaSpawnPlan threads mount policy through when patterns present',
   assert.deepEqual(plan.mount?.readonlyPatterns, ['vendor/**']);
 });
 
+test('buildPersonaSpawnPlan suppresses mount policy when explicitly disabled', () => {
+  const plan = buildPersonaSpawnPlan(
+    persona({
+      mount: { enabled: false, ignoredPatterns: ['secrets/**'] }
+    }),
+    { processEnv: cleanEnv }
+  );
+  assert.equal(plan.mount, undefined);
+});
+
 test('buildPersonaSpawnPlan drops empty mount policy', () => {
   const plan = buildPersonaSpawnPlan(persona({ mount: {} }), { processEnv: cleanEnv });
   assert.equal(plan.mount, undefined);

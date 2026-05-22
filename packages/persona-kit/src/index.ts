@@ -42,7 +42,9 @@ export type {
   SkillInstall,
   SkillMaterializationOptions,
   SkillMaterializationPlan,
-  SkillSourceKind
+  SkillSourceKind,
+  WatchEvent,
+  WatchRule
 } from './types.js';
 
 // Parsers + sidecar resolver
@@ -74,6 +76,7 @@ export {
   parseStringList,
   parseStringMap,
   parseTags,
+  parseWatch,
   resolveSidecar,
   sidecarSelectionFields
 } from './parse.js';

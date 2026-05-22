@@ -5,7 +5,7 @@ import path from 'node:path';
 import os from 'node:os';
 import { deploy } from '../index.js';
 import { createBufferedIO } from '../io.js';
-import { cloudLauncher } from './cloud.js';
+import { cloudLauncher } from './cloud/index.js';
 import type {
   BundleResult,
   BundleStager,

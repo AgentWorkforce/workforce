@@ -21,7 +21,8 @@ import {
   parseSkills,
   parseStringList,
   parseStringMap,
-  parseTags
+  parseTags,
+  parseWatch
 } from './parse.js';
 
 function validSpec(over: Record<string, unknown> = {}): Record<string, unknown> {
@@ -183,9 +184,16 @@ test('parseMount accepts ignoredPatterns + readonlyPatterns; drops empties to un
     'mount'
   );
   assert.deepEqual(m, {
+    enabled: true,
     ignoredPatterns: ['secrets/**'],
     readonlyPatterns: ['vendor/**']
   });
+});
+
+test('parseMount accepts enabled without pattern lists', () => {
+  assert.deepEqual(parseMount({ enabled: false }, 'mount'), { enabled: false });
+  assert.deepEqual(parseMount({ enabled: true }, 'mount'), { enabled: true });
+  assert.throws(() => parseMount({ enabled: 'no' }, 'mount'), /mount\.enabled must be a boolean/);
 });
 
 test('parseMount throws when patterns are not non-empty strings', () => {
@@ -711,6 +719,70 @@ test('parseSchedules trims name/cron/tz before validation and dedupe', () => {
   );
   assert.deepEqual(s, [
     { name: 'morning', cron: '0 9 * * 1-5', tz: 'America/New_York' }
+  ]);
+});
+
+test('parseWatch accepts relayfile watch rules and dedupes events', () => {
+  const watch = parseWatch(
+    [
+      {
+        paths: ['/integrations/github/repos/acme/web/issues/**/*.json'],
+        events: ['created', 'updated', 'created'],
+        debounceMs: 5000,
+        match: '.state == "open"'
+      }
+    ],
+    'watch'
+  );
+  assert.deepEqual(watch, [
+    {
+      paths: ['/integrations/github/repos/acme/web/issues/**/*.json'],
+      events: ['created', 'updated'],
+      debounceMs: 5000,
+      match: '.state == "open"'
+    }
+  ]);
+  assert.equal(parseWatch(undefined, 'watch'), undefined);
+  assert.equal(parseWatch([], 'watch'), undefined);
+});
+
+test('parseWatch rejects malformed relayfile watch rules with precise field paths', () => {
+  assert.throws(() => parseWatch({}, 'watch'), /watch must be an array if provided/);
+  assert.throws(() => parseWatch([null], 'watch'), /watch\[0\] must be an object/);
+  assert.throws(() => parseWatch([{ events: ['created'] }], 'watch'), /watch\[0\]\.paths must be a non-empty array/);
+  assert.throws(() => parseWatch([{ paths: [], events: ['created'] }], 'watch'), /watch\[0\]\.paths must be a non-empty array/);
+  assert.throws(() => parseWatch([{ paths: [42], events: ['created'] }], 'watch'), /watch\[0\]\.paths\[0\] must be a non-empty string/);
+  assert.throws(() => parseWatch([{ paths: ['relative/**'], events: ['created'] }], 'watch'), /watch\[0\]\.paths\[0\] must start with \//);
+  assert.throws(() => parseWatch([{ paths: ['/x'] }], 'watch'), /watch\[0\]\.events must be a non-empty array/);
+  assert.throws(() => parseWatch([{ paths: ['/x'], events: [] }], 'watch'), /watch\[0\]\.events must be a non-empty array/);
+  assert.throws(() => parseWatch([{ paths: ['/x'], events: ['changed'] }], 'watch'), /watch\[0\]\.events\[0\] must be one of: created, updated, deleted/);
+  assert.throws(() => parseWatch([{ paths: ['/x'], events: ['created'], debounceMs: -1 }], 'watch'), /watch\[0\]\.debounceMs must be a non-negative number/);
+  assert.throws(() => parseWatch([{ paths: ['/x'], events: ['created'], match: '' }], 'watch'), /watch\[0\]\.match must be a non-empty string/);
+});
+
+test('parsePersonaSpec round-trips watch and mount.enabled=false', () => {
+  const spec = parsePersonaSpec(
+    validSpec({
+      cloud: true,
+      onEvent: './agent.ts',
+      mount: { enabled: false },
+      watch: [
+        {
+          paths: ['/integrations/slack/channels/general/**/*.json'],
+          events: ['created', 'updated', 'deleted'],
+          debounceMs: 0
+        }
+      ]
+    }),
+    'documentation'
+  );
+  assert.deepEqual(spec.mount, { enabled: false });
+  assert.deepEqual(spec.watch, [
+    {
+      paths: ['/integrations/slack/channels/general/**/*.json'],
+      events: ['created', 'updated', 'deleted'],
+      debounceMs: 0
+    }
   ]);
 });
 

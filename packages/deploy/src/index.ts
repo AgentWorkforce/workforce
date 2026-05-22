@@ -7,7 +7,7 @@ import {
 import { preflightPersona } from './preflight.js';
 import { devLauncher } from './modes/dev.js';
 import { sandboxLauncher } from './modes/sandbox.js';
-import { cloudLauncher } from './modes/cloud.js';
+import { cloudLauncher } from './modes/cloud/index.js';
 import type {
   DeployOptions,
   DeployResult,
@@ -50,7 +50,7 @@ export { createTerminalIO, createBufferedIO, type BufferedIO } from './io.js';
 export { bundleStager } from './bundle.js';
 export { devLauncher } from './modes/dev.js';
 export { sandboxLauncher, resolveSandboxAuth, type SandboxAuth } from './modes/sandbox.js';
-export { cloudLauncher } from './modes/cloud.js';
+export { cloudLauncher } from './modes/cloud/index.js';
 
 export type {
   BundleResult,

@@ -12,11 +12,11 @@ import type {
   ModeLaunchInput,
   ModeLaunchHandle,
   ModeLauncher
-} from '../types.js';
+} from '../../types.js';
 import {
   resolveWorkspaceToken,
   type WorkspaceAuthToken
-} from '../login.js';
+} from '../../login.js';
 
 const BUILD_YOUR_OWN_CLOUD_DOCS_URL = 'https://docs.agentworkforce.com/deploy/build-your-own-cloud';
 const USER_AGENT = 'workforce-deploy';
@@ -24,7 +24,7 @@ const MAX_ATTEMPTS = 3;
 const POLL_TIMEOUT_MS = 60_000;
 const POLL_INTERVAL_MS = 2_000;
 
-type CloudDeployStatus = 'starting' | 'active' | 'failed' | 'cancelled';
+type CloudDeployStatus = 'ready' | 'starting' | 'active' | 'failed' | 'cancelled';
 type HarnessSource = 'plan' | 'byok' | 'oauth';
 type OnExistsChoice = 'update' | 'destroy' | 'cancel';
 
@@ -164,10 +164,6 @@ export const cloudLauncher: ModeLauncher = {
       };
     }
 
-    const endpoint = `${cloudUrl}/api/v1/workspaces/${encodeURIComponent(
-      input.workspace
-    )}/deployments`;
-
     const body = JSON.stringify({
       persona: input.persona,
       bundle: {
@@ -182,6 +178,7 @@ export const cloudLauncher: ModeLauncher = {
       inputs: input.inputs ?? readInputsOverride()
     });
 
+    const endpoint = deploymentsEndpoint(cloudUrl, input.workspace);
     input.io.info(`cloud: deploying persona bundle to ${cloudUrl}`);
     const deployBody = await requestJsonWithRetry<CloudDeployResponse>(
       endpoint,
@@ -200,7 +197,7 @@ export const cloudLauncher: ModeLauncher = {
 
     let stopping = false;
     const done = (async (): Promise<{ code: number }> => {
-      if (initialStatus === 'active') return { code: 0 };
+      if (initialStatus === 'ready' || initialStatus === 'active') return { code: 0 };
       if (initialStatus === 'failed') return { code: 1 };
 
       try {
@@ -212,7 +209,7 @@ export const cloudLauncher: ModeLauncher = {
           io: input.io,
           onLog: input.onLog
         });
-        return { code: finalStatus === 'active' ? 0 : 1 };
+        return { code: finalStatus === 'ready' || finalStatus === 'active' ? 0 : 1 };
       } catch (err) {
         if (!stopping) {
           input.io.error(
@@ -245,6 +242,10 @@ export const cloudLauncher: ModeLauncher = {
     };
   }
 };
+
+function deploymentsEndpoint(cloudUrl: string, workspaceId: string): string {
+  return `${cloudUrl}/api/v1/workspaces/${encodeURIComponent(workspaceId)}/deployments`;
+}
 
 function resolveCloudUrl(input: ModeLaunchInput): string {
   const fromInput = input.cloudUrl?.trim();
@@ -884,7 +885,7 @@ async function pollAgentStatus(args: {
   token: WorkspaceAuthToken['token'];
   io: ModeLaunchInput['io'];
   onLog?: ModeLaunchInput['onLog'];
-}): Promise<'active' | 'failed'> {
+}): Promise<'ready' | 'active' | 'failed'> {
   const statusUrl = `${args.cloudUrl}/api/v1/workspaces/${encodeURIComponent(
     args.workspaceId
   )}/agents/${encodeURIComponent(args.agentId)}`;
@@ -909,7 +910,7 @@ async function pollAgentStatus(args: {
       emitLog(args, `cloud: status ${status}`);
       lastStatus = status;
     }
-    if (status === 'active' || status === 'failed') return status;
+    if (status === 'ready' || status === 'active' || status === 'failed') return status;
   }
 
   throw new Error(`timed out after ${pollTimeoutMs() / 1000}s waiting for agent ${args.agentId}`);
@@ -1006,7 +1007,13 @@ function expectString(value: unknown, field: string): string {
 }
 
 function expectStatus(value: unknown): CloudDeployStatus {
-  if (value === 'starting' || value === 'active' || value === 'failed' || value === 'cancelled') {
+  if (
+    value === 'ready'
+    || value === 'starting'
+    || value === 'active'
+    || value === 'failed'
+    || value === 'cancelled'
+  ) {
     return value;
   }
   throw new Error(`cloud deploy response has unknown status "${String(value)}"`);
