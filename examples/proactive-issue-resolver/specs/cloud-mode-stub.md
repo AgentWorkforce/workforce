@@ -43,7 +43,7 @@ The change must:
 
 ## Acceptance
 
-- `npx tsc --noEmit -p /Users/khaliqgant/Projects/AgentWorkforce/workforce/examples/tsconfig.json`
+- `npx tsc --noEmit -p examples/tsconfig.json`
   passes with no new errors.
 - Running `trigger-issue.sh` with `PROACTIVE_USE_CLOUD` unset uses the local
   path (verified by reading agent.ts: the cloud branch is unreachable without

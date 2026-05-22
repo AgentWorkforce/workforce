@@ -83,8 +83,12 @@ test('generated schema includes watch rules and mount.enabled', async () => {
   const personaSpec = definitions.PersonaSpec;
   const personaMount = definitions.PersonaMount;
   const watchRule = definitions.WatchRule;
+  const watchSchema = personaSpec.properties?.watch;
 
-  assert.ok(personaSpec.properties?.watch);
+  assert.ok(watchSchema && typeof watchSchema === 'object');
+  assert.equal(watchSchema && typeof watchSchema === 'object'
+    ? watchSchema.type
+    : undefined, 'array');
   assert.equal(personaMount.properties?.enabled && personaMount.properties.enabled !== true
     ? personaMount.properties.enabled.type
     : undefined, 'boolean');

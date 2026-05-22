@@ -20,14 +20,34 @@
 
 set -euo pipefail
 
+trim() {
+  local value="$1"
+  value="${value#"${value%%[![:space:]]*}"}"
+  value="${value%"${value##*[![:space:]]}"}"
+  printf '%s' "$value"
+}
+
 if [[ $# -ne 3 ]]; then
   echo "usage: $0 <owner> <repo> <issue-number>" >&2
   exit 2
 fi
 
-OWNER=$1
-REPO=$2
-NUM=$3
+OWNER=$(trim "$1")
+REPO=$(trim "$2")
+NUM=$(trim "$3")
+
+if ! [[ "$OWNER" =~ ^[A-Za-z0-9][A-Za-z0-9-]{0,38}$ ]]; then
+  echo "error: invalid owner (allowed: GitHub owner name characters, no slashes)" >&2
+  exit 2
+fi
+if ! [[ "$REPO" =~ ^[A-Za-z0-9._-]+$ ]]; then
+  echo "error: invalid repo (allowed: [A-Za-z0-9._-], no slashes)" >&2
+  exit 2
+fi
+if ! [[ "$NUM" =~ ^[1-9][0-9]*$ ]]; then
+  echo "error: issue number must be a positive integer" >&2
+  exit 2
+fi
 
 if [[ -z "${PROACTIVE_SLACK_USER:-}" && -z "${PROACTIVE_SLACK_CHANNEL:-}" ]]; then
   echo "error: set PROACTIVE_SLACK_USER or PROACTIVE_SLACK_CHANNEL" >&2
@@ -44,7 +64,11 @@ if [[ ! -f "$ACTIVE" ]]; then
   echo "error: $ACTIVE not found — run \`agentworkforce login\` first" >&2
   exit 2
 fi
-WORKSPACE_ID=$(jq -r '.workspace' "$ACTIVE")
+WORKSPACE_ID=$(jq -r '.workspace // empty' "$ACTIVE")
+if [[ -z "$WORKSPACE_ID" || "$WORKSPACE_ID" == "null" ]]; then
+  echo "error: no .workspace in $ACTIVE — run \`agentworkforce login\` first" >&2
+  exit 2
+fi
 
 SCRIPT_DIR=$( cd "$( dirname "${BASH_SOURCE[0]}" )" && pwd )
 PERSONA="$SCRIPT_DIR/persona.json"

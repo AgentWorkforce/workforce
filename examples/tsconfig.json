@@ -11,5 +11,6 @@
       "@agentworkforce/persona-kit": ["../packages/persona-kit/src/index.ts"]
     }
   },
-  "include": ["./**/*.ts"]
+  "include": ["./**/*.ts"],
+  "exclude": ["proactive-issue-resolver/**", "./proactive-issue-resolver/**"]
 }

@@ -27,7 +27,7 @@ trigger-issue.sh owner repo N
   → handler claims issue (`gh issue edit --add-label ricky-claimed`)
   → handler comments :robot: on the issue
   → claude harness investigates repo + writes spec.md
-  → createRickySdk({cwd}).generateLocalWorkflow({ spec, run: true, autoFixAttempts: 3, bestJudgement: true })
+  → createRickySdk({cwd}).generateLocalWorkflow({ spec, run: true, autoFixAttempts: 3, bestJudgement: false })
   → Ricky-generated workflow opens PR via @agent-relay/github-primitive
   → Slack DM (or channel post) with PR URL on success, failure summary on hard fail
   → runner exits when stdin closes
@@ -47,7 +47,8 @@ trigger-issue.sh owner repo N
 ## Install
 
 ```sh
-cd /Users/khaliqgant/Projects/AgentWorkforce/workforce/examples/proactive-issue-resolver
+REPO_ROOT=$(git rev-parse --show-toplevel)
+cd "$REPO_ROOT/examples/proactive-issue-resolver"
 npm install
 ```
 
@@ -74,9 +75,10 @@ From the repo you want the PR opened against (so the sandbox cwd is that
 repo's checkout):
 
 ```sh
-cd /Users/khaliqgant/Projects/AgentWorkforce/workforce       # or any repo
+REPO_ROOT=$(git rev-parse --show-toplevel)
+cd "$REPO_ROOT"       # or any repo
 PROACTIVE_SLACK_USER=U0ADJH4P83T \
-  /Users/khaliqgant/Projects/AgentWorkforce/workforce/examples/proactive-issue-resolver/trigger-issue.sh \
+  "$REPO_ROOT/examples/proactive-issue-resolver/trigger-issue.sh" \
   AgentWorkforce workforce 123
 ```
 
@@ -85,8 +87,8 @@ What happens:
 1. `gh` fetches issue #123 and the repo metadata.
 2. The script wraps both in a `github.issues.opened` envelope and pipes it to
    `agentworkforce deploy ... --mode dev`.
-3. The handler adds the `ricky-claimed` label to issue #123 (atomic; second
-   run sees the label and bails).
+3. The handler adds the `ricky-claimed` label to issue #123 and acquires a
+   deterministic Git ref lock before dispatch.
 4. Handler comments `:robot: Proactive agent picked up #123. Investigating…`.
 5. Spec gets written to `.proactive/issue-123-spec.md`.
 6. Ricky generates and runs `workflows/generated/resolve-issue-workforce-123.ts`.
@@ -96,8 +98,9 @@ What happens:
 ## Validate without running
 
 ```sh
+REPO_ROOT=$(git rev-parse --show-toplevel)
 agentworkforce deploy \
-  /Users/khaliqgant/Projects/AgentWorkforce/workforce/examples/proactive-issue-resolver/persona.json \
+  "$REPO_ROOT/examples/proactive-issue-resolver/persona.json" \
   --mode dev --dry-run
 ```
 
@@ -130,9 +133,9 @@ against this output today.
 - **Manual trigger only.** No auto-subscription to live GitHub webhooks; that
   needs `--mode cloud` ingress (not wired) or a local Relayfile-backed event
   bridge.
-- **Label-based claim only, no in-flight registry.** If the persona crashes
-  between label-add and dispatch, manual cleanup is required (`gh issue edit
-  --remove-label ricky-claimed`).
+- **Label + Git ref claim only, no in-flight registry.** If the persona crashes
+  between claim and dispatch, manual cleanup is required (`gh issue edit
+  --remove-label ricky-claimed` and delete the `agentworkforce/locks/...` ref).
 - **No trust envelope.** v1 ships a PR for every triggered issue regardless
   of label or path. v2 reads `.proactive/trust-policy.yaml`.
 - **No human approval gate.** v2 adds a `:thumbsup:` reactji gate.

@@ -1,4 +1,5 @@
 import { handler } from '@agentworkforce/runtime';
+import type { WorkforceCtx } from '@agentworkforce/runtime';
 import { createRickySdk } from '@agentworkforce/ricky';
 import type {
   CloudGenerateRequest,
@@ -9,6 +10,8 @@ import { promises as fs } from 'node:fs';
 import * as path from 'node:path';
 
 const CLAIM_LABEL = 'ricky-claimed';
+const OWNER_RE = /^[A-Za-z0-9](?:[A-Za-z0-9-]{0,37}[A-Za-z0-9])?$/;
+const REPO_RE = /^[A-Za-z0-9._-]+$/;
 
 type IssueTarget = { owner: string; repo: string; number: number };
 
@@ -40,13 +43,33 @@ function targetFromPayload(p: GithubIssuePayload): IssueTarget {
     typeof p.repository?.owner === 'string'
       ? p.repository.owner
       : p.repository?.owner?.login;
-  const owner = ownerLogin ?? p.repository?.full_name?.split('/')[0];
-  const repo = p.repository?.name ?? p.repository?.full_name?.split('/')[1];
+  const owner = normalizeGithubSegment(
+    ownerLogin ?? p.repository?.full_name?.split('/')[0],
+    OWNER_RE,
+    'owner',
+  );
+  const repo = normalizeGithubSegment(
+    p.repository?.name ?? p.repository?.full_name?.split('/')[1],
+    REPO_RE,
+    'repo',
+  );
   const number = p.issue?.number;
-  if (!owner || !repo || typeof number !== 'number') {
+  if (typeof number !== 'number' || !Number.isInteger(number) || number <= 0) {
     throw new Error('issues.opened payload missing owner/repo/number');
   }
   return { owner, repo, number };
+}
+
+function normalizeGithubSegment(
+  value: string | undefined,
+  pattern: RegExp,
+  label: string,
+): string {
+  const normalized = value?.trim();
+  if (!normalized || !pattern.test(normalized)) {
+    throw new Error(`issues.opened payload has invalid ${label}`);
+  }
+  return normalized;
 }
 
 function labelNames(p: GithubIssuePayload): string[] {
@@ -60,7 +83,7 @@ function workflowNameFor(t: IssueTarget): string {
 }
 
 async function notifySlack(
-  ctx: Parameters<Parameters<typeof handler>[0]>[0],
+  ctx: WorkforceCtx,
   text: string,
 ): Promise<void> {
   if (!ctx.slack) throw new Error('slack integration required');
@@ -78,36 +101,107 @@ async function notifySlack(
 }
 
 async function claimViaLabel(
-  ctx: Parameters<Parameters<typeof handler>[0]>[0],
+  ctx: WorkforceCtx,
   t: IssueTarget,
 ): Promise<'claimed' | 'already-claimed'> {
-  // Idempotent claim via `gh issue edit --add-label`. If the label already
-  // exists, GitHub treats the add as a no-op; we detect that by reading the
-  // current labels first.
-  const view = await ctx.sandbox.exec(
-    `gh issue view ${t.number} --repo ${t.owner}/${t.repo} --json labels`,
-  );
-  if (view.exitCode !== 0) {
-    throw new Error(`gh issue view failed: ${view.output}`);
-  }
-  let parsed: { labels?: Array<{ name?: string }> } = {};
-  try {
-    parsed = JSON.parse(view.output);
-  } catch {
-    // proceed; we'll just attempt to add the label
-  }
-  const existing = (parsed.labels ?? [])
-    .map((l) => l?.name)
-    .filter((n): n is string => typeof n === 'string');
-  if (existing.includes(CLAIM_LABEL)) return 'already-claimed';
-
+  const claimStartedAt = Date.now() - 1000;
+  const repo = shellQuote(`${t.owner}/${t.repo}`);
   const add = await ctx.sandbox.exec(
-    `gh issue edit ${t.number} --repo ${t.owner}/${t.repo} --add-label ${CLAIM_LABEL}`,
+    `gh issue edit ${t.number} --repo ${repo} --add-label ${shellQuote(CLAIM_LABEL)}`,
   );
   if (add.exitCode !== 0) {
     throw new Error(`gh issue edit failed: ${add.output}`);
   }
+
+  await sleep(1500);
+
+  const timelinePath = shellQuote(`repos/${t.owner}/${t.repo}/issues/${t.number}/timeline`);
+  const timeline = await ctx.sandbox.exec(
+    `gh api ${timelinePath} -H ${shellQuote('Accept: application/vnd.github+json')} --paginate`,
+  );
+  if (timeline.exitCode !== 0) {
+    throw new Error(`gh issue timeline verification failed: ${timeline.output}`);
+  }
+
+  const labelEvents = parseTimeline(timeline.output)
+    .filter((event) => event.event === 'labeled' && event.label?.name === CLAIM_LABEL)
+    .sort((a, b) => Date.parse(a.created_at ?? '') - Date.parse(b.created_at ?? ''));
+  const firstClaim = labelEvents[0];
+  const firstClaimTime = Date.parse(firstClaim?.created_at ?? '');
+  if (!firstClaim || !Number.isFinite(firstClaimTime) || firstClaimTime < claimStartedAt) {
+    return 'already-claimed';
+  }
+
+  const lockAcquired = await createIssueLockRef(ctx, t);
+  if (!lockAcquired) return 'already-claimed';
+
   return 'claimed';
+}
+
+async function createIssueLockRef(ctx: WorkforceCtx, t: IssueTarget): Promise<boolean> {
+  const repoPath = shellQuote(`repos/${t.owner}/${t.repo}`);
+  const defaultBranchResult = await ctx.sandbox.exec(
+    `gh api ${repoPath} --jq ${shellQuote('.default_branch')}`,
+  );
+  if (defaultBranchResult.exitCode !== 0) {
+    throw new Error(`gh repo lookup failed: ${defaultBranchResult.output}`);
+  }
+  const defaultBranch = defaultBranchResult.output.trim();
+  if (!defaultBranch) {
+    throw new Error('gh repo lookup did not return a default branch');
+  }
+
+  const defaultRefPath = shellQuote(
+    `repos/${t.owner}/${t.repo}/git/ref/heads/${defaultBranch}`,
+  );
+  const baseShaResult = await ctx.sandbox.exec(
+    `gh api ${defaultRefPath} --jq ${shellQuote('.object.sha')}`,
+  );
+  if (baseShaResult.exitCode !== 0) {
+    throw new Error(`gh default branch lookup failed: ${baseShaResult.output}`);
+  }
+  const baseSha = baseShaResult.output.trim();
+  if (!/^[a-f0-9]{40}$/i.test(baseSha)) {
+    throw new Error('gh default branch lookup did not return a commit sha');
+  }
+
+  const lockRef = `refs/heads/agentworkforce/locks/ricky-issue-${t.number}`;
+  const create = await ctx.sandbox.exec(
+    `gh api ${shellQuote(`repos/${t.owner}/${t.repo}/git/refs`)} -X POST -f ${shellQuote(`ref=${lockRef}`)} -f ${shellQuote(`sha=${baseSha}`)}`,
+  );
+  if (create.exitCode === 0) return true;
+  if (/Reference already exists|already_exists/i.test(create.output)) return false;
+  throw new Error(`gh lock ref create failed: ${create.output}`);
+}
+
+function parseTimeline(output: string): Array<{
+  event?: string;
+  created_at?: string;
+  label?: { name?: string };
+}> {
+  try {
+    const parsed = JSON.parse(output);
+    return Array.isArray(parsed) ? parsed : [];
+  } catch {
+    return [];
+  }
+}
+
+function shellQuote(value: string): string {
+  return `'${value.replace(/'/g, `'\\''`)}'`;
+}
+
+function sleep(ms: number): Promise<void> {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+function normalizeSpecOutput(output: string): string {
+  let spec = output.replace(/^\uFEFF/, '').trimStart();
+  const fenced = spec.match(/^```(?:markdown|md)?[ \t]*\r?\n([\s\S]*?)\r?\n```[ \t]*$/i);
+  if (fenced) {
+    spec = fenced[1].trimStart();
+  }
+  return spec.trim();
 }
 
 function buildInvestigatePrompt(t: IssueTarget, p: GithubIssuePayload, labels: string[]): string {
@@ -232,7 +326,7 @@ async function dispatchToRicky(
     workflowName,
     run: true,
     autoFixAttempts: 3,
-    bestJudgement: true,
+    bestJudgement: false,
   });
   return {
     prUrl: extractPrUrl(response),
@@ -282,8 +376,8 @@ export default handler(async (ctx, event) => {
   const labels = labelNames(p);
   if (labels.includes(CLAIM_LABEL)) return; // already in flight
 
-  // 1. Atomically claim via label. If the label add races, the second runner
-  //    will see it and bail out at the read step.
+  // 1. Claim via label, then acquire a deterministic Git ref lock so concurrent
+  //    deliveries cannot both dispatch Ricky for the same issue.
   const claim = await claimViaLabel(ctx, target);
   if (claim === 'already-claimed') return;
 
@@ -298,8 +392,9 @@ export default handler(async (ctx, event) => {
     cwd: ctx.sandbox.cwd,
   });
 
-  const spec = investigation.output.trim();
-  if (investigation.exitCode !== 0 || !spec.startsWith('#')) {
+  const spec = normalizeSpecOutput(investigation.output);
+  const specHeader = spec.split(/\r?\n/).slice(0, 5).join('\n');
+  if (investigation.exitCode !== 0 || !/^#\s+Spec:/m.test(specHeader)) {
     const msg = `:warning: Could not produce a valid spec for #${target.number} (harness exit ${investigation.exitCode}). Aborting.`;
     await ctx.github.comment(target, msg);
     await notifySlack(ctx, `${msg}\nIssue: ${p.issue?.html_url ?? ''}`);

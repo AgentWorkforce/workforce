@@ -267,17 +267,20 @@ export function parseMount(
   if (enabled !== undefined && typeof enabled !== 'boolean') {
     throw new Error(`${context}.enabled must be a boolean if provided`);
   }
-  return ignoredPatterns || readonlyPatterns || enabled !== undefined
-    ? {
-        ...(typeof enabled === 'boolean'
-          ? { enabled }
-          : ignoredPatterns || readonlyPatterns
-            ? { enabled: true }
-            : {}),
-        ...(ignoredPatterns ? { ignoredPatterns } : {}),
-        ...(readonlyPatterns ? { readonlyPatterns } : {})
-      }
-    : undefined;
+  const hasPatterns = Boolean(ignoredPatterns || readonlyPatterns);
+  const finalEnabled = typeof enabled === 'boolean'
+    ? enabled
+    : hasPatterns
+      ? true
+      : undefined;
+  if (!hasPatterns && finalEnabled === undefined) {
+    return undefined;
+  }
+  return {
+    ...(finalEnabled !== undefined ? { enabled: finalEnabled } : {}),
+    ...(ignoredPatterns ? { ignoredPatterns } : {}),
+    ...(readonlyPatterns ? { readonlyPatterns } : {})
+  };
 }
 
 export const INPUT_NAME_RE = /^[A-Z_][A-Z0-9_]*$/;
