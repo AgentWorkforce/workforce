@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [3.0.16] - 2026-05-22
+
+### Added
+
+- **Cloud mode + relayfile watch personas (spec 03)** (#130)
+
 ## [3.0.15] - 2026-05-20
 
 ### Dependencies
