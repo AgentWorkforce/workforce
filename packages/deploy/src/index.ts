@@ -20,11 +20,13 @@ export { preflightPersona };
 export {
   connectIntegrations,
   envIntegrationResolver,
+  relayfileCatalogConfigKeyResolver,
   relayfileIntegrationResolver,
   type ConnectAllInput,
   type ConnectAllResult,
   type IntegrationAuthRecoveryResolver,
   type IntegrationConnectResolver,
+  type ProviderConfigKeyResolver,
   type ProviderSubscriptionResolver
 } from './connect.js';
 export {

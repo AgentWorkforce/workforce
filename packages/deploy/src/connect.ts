@@ -1,6 +1,6 @@
 import { platform } from 'node:os';
 import { spawn } from 'node:child_process';
-import type { PersonaSpec } from '@agentworkforce/persona-kit';
+import type { IntegrationSource, PersonaSpec } from '@agentworkforce/persona-kit';
 import type { DeployIO, IntegrationConnectOutcome } from './types.js';
 
 /**
@@ -30,8 +30,29 @@ const PROVIDER_ENV_PREFIX = 'WORKFORCE_INTEGRATION_';
  * dep tree (smaller bin, faster install).
  */
 export interface IntegrationConnectResolver {
-  /** Is the provider already linked to the workspace? */
-  isConnected(args: { workspace: string; provider: string }): Promise<boolean>;
+  /**
+   * Is the provider already linked to the right scope for this persona?
+   *
+   * `source` discriminates which scope the cloud will resolve at dispatch
+   * time (deployer-user / workspace / workspace-service-account). The
+   * preflight check must hit the same scope: a `user_integrations` row
+   * does not satisfy a workspace-scoped persona declaration and vice
+   * versa. Defaults to `{ kind: 'deployer_user' }` (matches the
+   * persona-kit default at parse time).
+   *
+   * `expectedConfigKey` is the Nango provider-config-key the persona's
+   * declared `provider` resolves to (e.g. provider `slack` →
+   * `slack-relay`). When supplied, rows whose `providerConfigKey` does
+   * not match are ignored — protecting against false positives when the
+   * workspace has multiple Slack providers (slack-relay / slack-ricky /
+   * slack-nightcto / slack-my-senior-dev / slack-sage).
+   */
+  isConnected(args: {
+    workspace: string;
+    provider: string;
+    source?: IntegrationSource;
+    expectedConfigKey?: string;
+  }): Promise<boolean>;
   /** Run the browser-based OAuth flow and resolve when the user finishes. */
   connect(args: { workspace: string; provider: string }): Promise<{ connectionId: string }>;
 }
@@ -95,13 +116,25 @@ export function relayfileIntegrationResolver(opts: {
   const apiUrl = opts.apiUrl.replace(/\/+$/, '');
 
   return {
-    async isConnected({ workspace, provider }) {
+    async isConnected({ workspace, provider, source, expectedConfigKey }) {
       const workspaceId = workspace || opts.workspaceId;
       const token = await resolveWorkspaceToken(opts.workspaceToken);
-      const body = await requestJson(fetchImpl, `${apiUrl}/api/v1/workspaces/${encodeURIComponent(
-        workspaceId
-      )}/integrations`, token);
-      return listHasConnectedProvider(body, provider);
+      const effectiveSource: IntegrationSource = source ?? { kind: 'deployer_user' };
+
+      const list = await fetchIntegrationsForScope({
+        fetchImpl,
+        apiUrl,
+        token,
+        workspaceId,
+        source: effectiveSource,
+        io
+      });
+      return listHasConnectedProvider(list, provider, {
+        ...(expectedConfigKey ? { expectedConfigKey } : {}),
+        ...(effectiveSource.kind === 'workspace_service_account'
+          ? { serviceAccountName: effectiveSource.name }
+          : {})
+      });
     },
     async connect({ workspace, provider }) {
       const workspaceId = workspace || opts.workspaceId;
@@ -174,6 +207,28 @@ export interface ConnectAllInput {
   authRecovery?: IntegrationAuthRecoveryResolver;
   /** Required only when persona.useSubscription is true. */
   subscription?: ProviderSubscriptionResolver;
+  /**
+   * Optional resolver for the Nango provider-config-key behind each provider
+   * id. Backed by `GET /api/v1/integrations/catalog`. When supplied, the
+   * walker passes the expected config-key into the resolver's `isConnected`
+   * call so e.g. a persona declaring `slack` is verified against the
+   * `slack-relay` config-key specifically, ignoring rows backed by other
+   * Slack providers (slack-ricky / slack-nightcto / slack-sage / etc.).
+   *
+   * When omitted, the walker falls back to provider-name-only matching,
+   * which is sufficient for providers that have a single config-key but
+   * loses precision for ambiguous ones.
+   */
+  providerConfigKeys?: ProviderConfigKeyResolver;
+}
+
+/**
+ * Returns the expected Nango provider-config-key for a persona-declared
+ * provider id. The CLI implementation caches the cloud catalog response
+ * after the first lookup to keep deploys cheap.
+ */
+export interface ProviderConfigKeyResolver {
+  resolve(provider: string): Promise<string | undefined>;
 }
 
 export interface ConnectAllResult {
@@ -204,10 +259,22 @@ export async function connectIntegrations(input: ConnectAllInput): Promise<Conne
   const outcomes: IntegrationConnectOutcome[] = [];
 
   for (const provider of Object.keys(integrations)) {
+    const integrationEntry = integrations[provider] ?? {};
+    const source: IntegrationSource = integrationEntry.source ?? { kind: 'deployer_user' };
+    const expectedConfigKey = input.providerConfigKeys
+      ? await input.providerConfigKeys.resolve(provider).catch(() => undefined)
+      : undefined;
+
     let statusCheckFailure: string | undefined;
-    let connected = await checkProviderConnected(input, provider, (message) => {
-      statusCheckFailure = message;
-    });
+    let connected = await checkProviderConnected(
+      input,
+      provider,
+      source,
+      expectedConfigKey,
+      (message) => {
+        statusCheckFailure = message;
+      }
+    );
 
     if (connected) {
       input.io.info(`integrations.${provider}: already connected`);
@@ -232,9 +299,15 @@ export async function connectIntegrations(input: ConnectAllInput): Promise<Conne
 
       if (recovered) {
         statusCheckFailure = undefined;
-        connected = await checkProviderConnected(input, provider, (message) => {
-          statusCheckFailure = message;
-        });
+        connected = await checkProviderConnected(
+          input,
+          provider,
+          source,
+          expectedConfigKey,
+          (message) => {
+            statusCheckFailure = message;
+          }
+        );
         if (connected) {
           input.io.info(`integrations.${provider}: already connected`);
           outcomes.push({ provider, status: 'already-connected' });
@@ -347,16 +420,43 @@ export async function connectIntegrations(input: ConnectAllInput): Promise<Conne
 async function checkProviderConnected(
   input: ConnectAllInput,
   provider: string,
+  source: IntegrationSource,
+  expectedConfigKey: string | undefined,
   onFailure: (message: string) => void
 ): Promise<boolean> {
   return await input.integrations
-    .isConnected({ workspace: input.workspace, provider })
+    .isConnected({
+      workspace: input.workspace,
+      provider,
+      source,
+      ...(expectedConfigKey ? { expectedConfigKey } : {})
+    })
     .catch((err) => {
       const message = err instanceof Error ? err.message : String(err);
       onFailure(message);
       input.io.warn(`failed to check connection status for ${provider}: ${message}`);
       return false;
     });
+}
+
+/**
+ * Error thrown by `requestJson` for any non-2xx response. Carries the numeric
+ * HTTP `status` so callers can branch on it without parsing the message
+ * (which can include the response body — body content like "404" inside a
+ * 500 response was causing false-positive fallbacks).
+ */
+interface CloudRequestError extends Error {
+  status: number;
+}
+
+function cloudRequestError(message: string, status: number): CloudRequestError {
+  const err = new Error(message) as CloudRequestError;
+  err.status = status;
+  return err;
+}
+
+function isCloudRequestError(err: unknown): err is CloudRequestError {
+  return err instanceof Error && typeof (err as { status?: unknown }).status === 'number';
 }
 
 async function requestJson(
@@ -374,17 +474,22 @@ async function requestJson(
     }
   });
   if (res.status === 401) {
-    throw new Error(
-      'cloud integration request failed: unauthorized. Your active workspace session is invalid or expired. Run `agentworkforce login --workspace <id-or-slug>` to refresh, then retry.'
+    throw cloudRequestError(
+      'cloud integration request failed: unauthorized. Your active workspace session is invalid or expired. Run `agentworkforce login --workspace <id-or-slug>` to refresh, then retry.',
+      401
     );
   }
   if (res.status === 403) {
-    throw new Error(
-      'cloud integration request failed: forbidden. The active account is not authorized for this workspace. Run `agentworkforce login --workspace <id-or-slug>` against an account with access, then retry.'
+    throw cloudRequestError(
+      'cloud integration request failed: forbidden. The active account is not authorized for this workspace. Run `agentworkforce login --workspace <id-or-slug>` against an account with access, then retry.',
+      403
     );
   }
   if (!res.ok) {
-    throw new Error(`cloud integration request failed: ${res.status} ${await res.text().catch(() => '')}`.trim());
+    throw cloudRequestError(
+      `cloud integration request failed: ${res.status} ${await res.text().catch(() => '')}`.trim(),
+      res.status
+    );
   }
   return await res.json();
 }
@@ -401,7 +506,70 @@ async function resolveWorkspaceToken(token: string | (() => string | Promise<str
   return typeof token === 'function' ? await token() : token;
 }
 
-function listHasConnectedProvider(body: unknown, provider: string): boolean {
+/**
+ * Fetch the integrations list backing the persona's declared `source`.
+ *
+ * - `deployer_user` (the default) → `GET /api/v1/me/integrations`
+ *   (reads `user_integrations` for the authed cloud user, per
+ *   `AgentWorkforce/cloud#988`).
+ * - `workspace` / `workspace_service_account` → `GET /api/v1/workspaces/<id>/integrations`
+ *   (reads `workspace_integrations`).
+ *
+ * Backwards-compat: if `/me/integrations` is unavailable (older cloud that
+ * hasn't shipped cloud#988 yet), fall back to the workspace endpoint with a
+ * warning. Authors deploying personas with `source: { kind: 'deployer_user' }`
+ * against an older cloud will see false negatives, but the deploy still
+ * surfaces a clean error rather than silently mis-resolving.
+ */
+async function fetchIntegrationsForScope(args: {
+  fetchImpl: typeof fetch;
+  apiUrl: string;
+  token: string;
+  workspaceId: string;
+  source: IntegrationSource;
+  io?: Pick<DeployIO, 'info' | 'warn'>;
+}): Promise<unknown> {
+  if (args.source.kind === 'deployer_user') {
+    const url = `${args.apiUrl}/api/v1/me/integrations`;
+    try {
+      return await requestJson(args.fetchImpl, url, args.token);
+    } catch (err) {
+      // Only fall back when the endpoint itself is missing (older cloud that
+      // hasn't shipped cloud#988). Any other failure — auth, 5xx, network —
+      // must propagate so callers see the real error and can drive the
+      // existing auth-recovery flow rather than silently masking the cause.
+      if (isCloudRequestError(err) && (err.status === 404 || err.status === 405)) {
+        args.io?.warn?.(
+          'cloud does not expose /api/v1/me/integrations yet; falling back to the workspace integrations list. ' +
+            'Deployer-user-scoped connections may show as not-connected. ' +
+            'Tracking in AgentWorkforce/cloud#988.'
+        );
+        return await requestJson(
+          args.fetchImpl,
+          `${args.apiUrl}/api/v1/workspaces/${encodeURIComponent(args.workspaceId)}/integrations`,
+          args.token
+        );
+      }
+      throw err;
+    }
+  }
+  return await requestJson(
+    args.fetchImpl,
+    `${args.apiUrl}/api/v1/workspaces/${encodeURIComponent(args.workspaceId)}/integrations`,
+    args.token
+  );
+}
+
+interface MatchOpts {
+  expectedConfigKey?: string;
+  serviceAccountName?: string;
+}
+
+function listHasConnectedProvider(
+  body: unknown,
+  provider: string,
+  opts: MatchOpts = {}
+): boolean {
   const candidates = Array.isArray(body)
     ? body
     : body && typeof body === 'object' && Array.isArray((body as { integrations?: unknown }).integrations)
@@ -410,10 +578,34 @@ function listHasConnectedProvider(body: unknown, provider: string): boolean {
   return candidates.some((item) => {
     if (!item || typeof item !== 'object' || Array.isArray(item)) return false;
     const record = item as Record<string, unknown>;
-    return record.provider === provider && isConnectedStatus(record);
+    if (record.provider !== provider) return false;
+    if (opts.expectedConfigKey) {
+      const rowConfigKey = readString(record, 'providerConfigKey');
+      // If the row carries a providerConfigKey, enforce strict match.
+      // If the field is missing entirely (older cloud that hasn't shipped
+      // cloud#988), fall through to status-only matching — the cloud
+      // server will still resolve the right config-key at dispatch time.
+      if (rowConfigKey !== undefined && rowConfigKey !== opts.expectedConfigKey) {
+        return false;
+      }
+    }
+    if (opts.serviceAccountName) {
+      const rowName = readString(record, 'name') ?? readString(record, 'serviceAccountName');
+      if (rowName !== opts.serviceAccountName) return false;
+    }
+    return isConnectedStatus(record);
   });
 }
 
+/**
+ * A row counts as "connected" only when the cloud's derived state is
+ * affirmatively healthy. The previous implementation also accepted "any
+ * truthy connectionId" as a yes, which produced false positives whenever a
+ * stale row was left behind by an abandoned OAuth attempt. The cloud now
+ * derives `status` from `initialSync + writeback` (see
+ * `cloud/packages/web/app/api/v1/workspaces/[workspaceId]/integrations/route.ts:62`),
+ * so trusting that field is both correct and sufficient.
+ */
 function isConnectedStatus(value: unknown): boolean {
   if (!value || typeof value !== 'object' || Array.isArray(value)) return false;
   const record = value as Record<string, unknown>;
@@ -423,11 +615,60 @@ function isConnectedStatus(value: unknown): boolean {
     || record.state === 'connected'
     || record.state === 'ready'
     || record.ready === true
-    || Boolean(record.connectionId)
-    || Boolean(record.currentConnectionId)
     || (record.oauth !== null
       && typeof record.oauth === 'object'
       && (record.oauth as { connected?: unknown }).connected === true);
+}
+
+/**
+ * Resolver backed by `GET /api/v1/integrations/catalog`. The catalog is
+ * pulled once on first lookup and cached for the lifetime of this
+ * instance. Designed to be plugged into `ConnectAllInput.providerConfigKeys`
+ * so the walker can pass a `expectedConfigKey` into `isConnected` calls.
+ */
+export function relayfileCatalogConfigKeyResolver(opts: {
+  apiUrl: string;
+  workspaceToken: string | (() => string | Promise<string>);
+  fetch?: typeof fetch;
+  io?: Pick<DeployIO, 'warn'>;
+}): ProviderConfigKeyResolver {
+  const fetchImpl = opts.fetch ?? fetch;
+  const apiUrl = opts.apiUrl.replace(/\/+$/, '');
+  let cache: Promise<Map<string, string>> | null = null;
+
+  const load = async (): Promise<Map<string, string>> => {
+    const token = await resolveWorkspaceToken(opts.workspaceToken);
+    const body = await requestJson(fetchImpl, `${apiUrl}/api/v1/integrations/catalog`, token);
+    const entries = Array.isArray(body)
+      ? body
+      : body && typeof body === 'object' && Array.isArray((body as { providers?: unknown }).providers)
+        ? (body as { providers: unknown[] }).providers
+        : [];
+    const map = new Map<string, string>();
+    for (const entry of entries) {
+      const id = readString(entry, 'id');
+      const configKey = readString(entry, 'configKey') ?? readString(entry, 'defaultConfigKey');
+      if (id && configKey) map.set(id, configKey);
+    }
+    return map;
+  };
+
+  return {
+    async resolve(provider) {
+      if (!cache) {
+        cache = load().catch((err) => {
+          const message = err instanceof Error ? err.message : String(err);
+          opts.io?.warn?.(
+            `cloud integration catalog fetch failed (${message}); falling back to provider-name-only matching for this deploy`
+          );
+          cache = null;
+          return new Map<string, string>();
+        });
+      }
+      const map = await cache;
+      return map.get(provider);
+    }
+  };
 }
 
 function readString(value: unknown, field: string): string | undefined {
