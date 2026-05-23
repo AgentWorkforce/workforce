@@ -1,6 +1,6 @@
 {
   "name": "@agentworkforce/runtime",
-  "version": "3.0.20",
+  "version": "3.0.21",
   "private": false,
   "type": "module",
   "main": "dist/index.js",
