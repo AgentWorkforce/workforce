@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [3.0.19] - 2026-05-23
+
+### Fixed
+
+- Pass persona source.kind into connect-session + status poll (#133)
+
 ## [3.0.18] - 2026-05-22
 
 ### Fixed
