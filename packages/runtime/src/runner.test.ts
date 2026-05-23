@@ -371,7 +371,7 @@ test('createCloudRuntimeDefaults builds slack integrations and workflow when wor
         }
       }
     });
-    const status = await defaults.workflow.status('run-123');
+    const status = await defaults.workflow.status(' run-123 ');
     assert.deepEqual(status, {
       status: 'success',
       output: {

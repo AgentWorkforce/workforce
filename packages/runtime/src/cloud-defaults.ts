@@ -328,15 +328,16 @@ async function fetchWorkflowStatus(args: {
   token: string;
   runId: string;
 }): Promise<{ status: 'pending' | 'running' | 'success' | 'failure'; output?: unknown; error?: string; patches?: unknown }> {
-  if (!args.runId.trim()) {
+  const runId = args.runId.trim();
+  if (!runId) {
     throw new Error('ctx.workflow.status() requires a non-empty runId');
   }
-  const response = await fetchWorkflow(`${args.base}/api/v1/workflows/runs/${encodeURIComponent(args.runId)}`, {
+  const response = await fetchWorkflow(`${args.base}/api/v1/workflows/runs/${encodeURIComponent(runId)}`, {
     method: 'GET',
     headers: workflowHeaders(args.token, false)
   });
   if (!response.ok) {
-    throw await workflowError(response, `ctx.workflow.status("${args.runId}")`);
+    throw await workflowError(response, `ctx.workflow.status("${runId}")`);
   }
   const body = await response.json().catch(() => ({})) as Record<string, unknown>;
   const status = normalizeWorkflowStatus(body.status);
