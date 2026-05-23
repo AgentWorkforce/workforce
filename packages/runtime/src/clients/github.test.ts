@@ -12,7 +12,7 @@ async function tempMount(): Promise<string> {
 test('github.comment writes a draft comment file under issues/<n>/comments/', async () => {
   const root = await tempMount();
   try {
-    const client = createGithubClient({ relayfileMountRoot: root });
+    const client = createGithubClient({ relayfileMountRoot: root, writebackTimeoutMs: 0 });
     await client.comment({ owner: 'o', repo: 'r', number: 2 }, 'hello');
 
     const dir = path.join(root, 'github/repos/o/r/issues/2/comments');
@@ -29,7 +29,7 @@ test('github.comment writes a draft comment file under issues/<n>/comments/', as
 test('github.createIssue writes a draft issue file under issues/', async () => {
   const root = await tempMount();
   try {
-    const client = createGithubClient({ relayfileMountRoot: root });
+    const client = createGithubClient({ relayfileMountRoot: root, writebackTimeoutMs: 0 });
     await client.createIssue({
       owner: 'o',
       repo: 'r',
@@ -55,7 +55,7 @@ test('github.createIssue writes a draft issue file under issues/', async () => {
 test('github.createPullRequest writes a draft pull request file under pulls/', async () => {
   const root = await tempMount();
   try {
-    const client = createGithubClient({ relayfileMountRoot: root });
+    const client = createGithubClient({ relayfileMountRoot: root, writebackTimeoutMs: 0 });
     await client.createPullRequest({
       owner: 'o',
       repo: 'r',
@@ -97,7 +97,7 @@ test('github.upsertIssue updates an existing flat issue match', async () => {
       })
     );
 
-    const client = createGithubClient({ relayfileMountRoot: root });
+    const client = createGithubClient({ relayfileMountRoot: root, writebackTimeoutMs: 0 });
     const result = await client.upsertIssue({
       owner: 'o',
       repo: 'r',
@@ -130,7 +130,7 @@ test('github.upsertIssue ignores a closed issue title match', async () => {
       })
     );
 
-    const client = createGithubClient({ relayfileMountRoot: root });
+    const client = createGithubClient({ relayfileMountRoot: root, writebackTimeoutMs: 0 });
     const result = await client.upsertIssue({
       owner: 'o',
       repo: 'r',
@@ -153,7 +153,7 @@ test('github.upsertIssue ignores a closed issue title match', async () => {
 test('github.upsertIssue creates a draft when no open match exists', async () => {
   const root = await tempMount();
   try {
-    const client = createGithubClient({ relayfileMountRoot: root });
+    const client = createGithubClient({ relayfileMountRoot: root, writebackTimeoutMs: 0 });
     const result = await client.upsertIssue({
       owner: 'o',
       repo: 'r',
@@ -188,7 +188,7 @@ test('github.getPr reads meta + diff from canonical paths', async () => {
     );
     await writeFile(path.join(pullRoot, 'diff.patch'), 'diff --git a/x b/x\n');
 
-    const client = createGithubClient({ relayfileMountRoot: root });
+    const client = createGithubClient({ relayfileMountRoot: root, writebackTimeoutMs: 0 });
     const pr = await client.getPr({ owner: 'o', repo: 'r', number: 42 });
     assert.equal(pr.title, 'Add deploy v1');
     assert.equal(pr.head, 'feature');
@@ -217,7 +217,7 @@ test('github.getPr reads a flat canonical pull request file', async () => {
       })
     );
 
-    const client = createGithubClient({ relayfileMountRoot: root });
+    const client = createGithubClient({ relayfileMountRoot: root, writebackTimeoutMs: 0 });
     const pr = await client.getPr({ owner: 'o', repo: 'r', number: 42 });
     assert.equal(pr.title, 'Add deploy v1');
     assert.equal(pr.head, 'feature');
@@ -232,7 +232,7 @@ test('github.getPr reads a flat canonical pull request file', async () => {
 test('github.postReview writes a review draft under pulls/<n>/reviews/', async () => {
   const root = await tempMount();
   try {
-    const client = createGithubClient({ relayfileMountRoot: root });
+    const client = createGithubClient({ relayfileMountRoot: root, writebackTimeoutMs: 0 });
     await client.postReview(
       { owner: 'o', repo: 'r', number: 42 },
       {
@@ -256,7 +256,7 @@ test('github.postReview writes a review draft under pulls/<n>/reviews/', async (
 test('github.postReview accepts COMMENT/APPROVE/REQUEST_CHANGES events', async () => {
   const root = await tempMount();
   try {
-    const client = createGithubClient({ relayfileMountRoot: root });
+    const client = createGithubClient({ relayfileMountRoot: root, writebackTimeoutMs: 0 });
     for (const event of ['COMMENT', 'APPROVE', 'REQUEST_CHANGES'] as const) {
       await client.postReview({ owner: 'o', repo: 'r', number: event === 'COMMENT' ? 1 : event === 'APPROVE' ? 2 : 3 }, {
         body: event.toLowerCase(),

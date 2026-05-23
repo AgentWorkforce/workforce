@@ -7,6 +7,8 @@ import os from 'node:os';
 import type { AddressInfo } from 'node:net';
 import type { PersonaSpec } from '@agentworkforce/persona-kit';
 import { startRunner } from './runner.js';
+import { createCloudRuntimeDefaults } from './cloud-defaults.js';
+import { buildCtx } from './ctx.js';
 import { handler } from './handler.js';
 import type { RawGatewayEnvelope } from './shim.js';
 import type {
@@ -171,7 +173,8 @@ test('startRunner supplies cloud github and harness defaults when generated runn
     'WORKFORCE_SANDBOX_ROOT',
     'RELAYFILE_MOUNT_ROOT',
     'WORKFORCE_USAGE_URL',
-    'WORKFORCE_DEPLOYMENT_TOKEN'
+    'WORKFORCE_DEPLOYMENT_TOKEN',
+    'WORKFORCE_RELAYFILE_WRITEBACK_TIMEOUT_MS'
   ]);
   try {
     await writeFakeHarness(binDir, 'claude', [
@@ -183,6 +186,7 @@ test('startRunner supplies cloud github and harness defaults when generated runn
     process.env.RELAYFILE_MOUNT_ROOT = workspaceRoot;
     process.env.WORKFORCE_USAGE_URL = usageUrl;
     process.env.WORKFORCE_DEPLOYMENT_TOKEN = 'deployment-token';
+    process.env.WORKFORCE_RELAYFILE_WRITEBACK_TIMEOUT_MS = '0';
 
     let harnessOutput = '';
     let pullRequestUrl = '';
@@ -269,6 +273,191 @@ test('startRunner supplies cloud github and harness defaults when generated runn
   } finally {
     restoreEnv(previousEnv);
     await new Promise<void>((resolve) => usageServer.close(() => resolve()));
+    await rm(dir, { recursive: true, force: true });
+  }
+});
+
+test('createCloudRuntimeDefaults builds slack integrations and workflow when workspace cloud env is present', async () => {
+  const dir = await mkdtemp(path.join(os.tmpdir(), 'wf-runtime-cloud-workflow-'));
+  await mkdir(path.join(dir, 'workflows'), { recursive: true });
+  await writeFile(
+    path.join(dir, 'workflows/cloud-small-issue-codex.ts'),
+    'console.log("workflow body");\n',
+    'utf8'
+  );
+  const requests: Array<{ method?: string; url?: string; headers: http.IncomingHttpHeaders; body?: unknown }> = [];
+  const server = http.createServer((req, res) => {
+    let body = '';
+    req.setEncoding('utf8');
+    req.on('data', (chunk) => {
+      body += chunk;
+    });
+    req.on('end', () => {
+      requests.push({
+        method: req.method,
+        url: req.url,
+        headers: req.headers,
+        body: body ? JSON.parse(body) : undefined
+      });
+      if (req.method === 'POST' && req.url === '/api/v1/workflows/run') {
+        res.writeHead(200, { 'content-type': 'application/json' }).end(JSON.stringify({ runId: 'run-123', status: 'pending' }));
+        return;
+      }
+      if (req.method === 'GET' && req.url === '/api/v1/workflows/runs/run-123') {
+        res.writeHead(200, { 'content-type': 'application/json' }).end(JSON.stringify({
+          status: 'completed',
+          result: { summary: 'done' },
+          patches: {
+            main: {
+              pushedTo: {
+                prUrl: 'https://example.test/pr/1'
+              }
+            }
+          }
+        }));
+        return;
+      }
+      res.writeHead(404).end();
+    });
+  });
+  await new Promise<void>((resolve) => server.listen(0, '127.0.0.1', resolve));
+  const address = server.address();
+  assert.ok(address && typeof address === 'object');
+
+  try {
+    const defaults = createCloudRuntimeDefaults({
+      persona: {
+        ...persona,
+        integrations: {
+          slack: { triggers: [{ on: 'message' }] },
+          linear: { triggers: [{ on: 'Issue' }] },
+          notion: { triggers: [{ on: 'page.created' }] },
+          jira: { triggers: [{ on: 'issue.created' }] }
+        }
+      },
+      agent: runtimeAgent,
+      deployment: runtimeDeployment,
+      workspaceId: 'ws-test',
+      log: () => {
+        /* keep test output quiet */
+      },
+      env: {
+        WORKFORCE_SANDBOX_ROOT: dir,
+        RELAYFILE_MOUNT_ROOT: dir,
+        WORKFORCE_WORKSPACE_TOKEN: 'workspace-token',
+        WORKFORCE_CLOUD_BASE_URL: `http://127.0.0.1:${address.port}`,
+        WORKFORCE_RELAYFILE_WRITEBACK_TIMEOUT_MS: '0'
+      }
+    });
+
+    assert.ok(defaults.integrations?.slack, 'slack client should be attached');
+    assert.ok(defaults.integrations?.linear, 'linear client should be attached');
+    assert.ok(defaults.integrations?.notion, 'notion client should be attached');
+    assert.ok(defaults.integrations?.jira, 'jira client should be attached');
+    assert.ok(defaults.workflow, 'workflow context should be attached');
+
+    const handle = await defaults.workflow.run('cloud-small-issue-codex', { issue: 1028 });
+    assert.equal(handle.runId, 'run-123');
+    assert.deepEqual(await handle.completion(), {
+      status: 'success',
+      output: {
+        result: { summary: 'done' },
+        patches: {
+          main: {
+            pushedTo: {
+              prUrl: 'https://example.test/pr/1'
+            }
+          }
+        }
+      }
+    });
+    const status = await defaults.workflow.status(' run-123 ');
+    assert.deepEqual(status, {
+      status: 'success',
+      output: {
+        result: { summary: 'done' },
+        patches: {
+          main: {
+            pushedTo: {
+              prUrl: 'https://example.test/pr/1'
+            }
+          }
+        }
+      },
+      patches: {
+        main: {
+          pushedTo: {
+            prUrl: 'https://example.test/pr/1'
+          }
+        }
+      }
+    });
+
+    const post = requests.find((request) => request.method === 'POST');
+    assert.equal(post?.headers.authorization, 'Bearer workspace-token');
+    assert.equal(post?.headers['x-agentworkforce-workspace-workflow-invocation'], 'true');
+    assert.deepEqual(post?.body, {
+      workflow: 'console.log("workflow body");\n',
+      fileType: 'ts',
+      sourceFileType: 'workflow',
+      runtime: { id: 'daytona' },
+      metadata: {
+        invocationSlug: 'cloud-small-issue-codex',
+        invocationArgs: JSON.stringify({ issue: 1028 })
+      }
+    });
+    const get = requests.find((request) => request.method === 'GET');
+    assert.equal(get?.headers.authorization, 'Bearer workspace-token');
+  } finally {
+    await new Promise<void>((resolve) => server.close(() => resolve()));
+    await rm(dir, { recursive: true, force: true });
+  }
+});
+
+test('createCloudRuntimeDefaults omits token-backed slack and workflow when workspace cloud env is absent', async () => {
+  const dir = await mkdtemp(path.join(os.tmpdir(), 'wf-runtime-cloud-missing-token-'));
+  try {
+    const defaults = createCloudRuntimeDefaults({
+      persona: {
+        ...persona,
+        integrations: {
+          slack: { triggers: [{ on: 'message' }] },
+          jira: { triggers: [{ on: 'issue.created' }] }
+        }
+      },
+      agent: runtimeAgent,
+      deployment: runtimeDeployment,
+      workspaceId: 'ws-test',
+      log: () => {
+        /* keep test output quiet */
+      },
+      env: {
+        WORKFORCE_SANDBOX_ROOT: dir,
+        RELAYFILE_MOUNT_ROOT: dir,
+        WORKFORCE_RELAYFILE_WRITEBACK_TIMEOUT_MS: '0'
+      }
+    });
+
+    assert.equal(defaults.integrations, undefined);
+    assert.equal(defaults.workflow, undefined);
+
+    const ctx = buildCtx({
+      persona,
+      agent: runtimeAgent,
+      deployment: runtimeDeployment,
+      workspaceId: 'ws-test',
+      sandbox: defaults.sandbox,
+      files: defaults.files,
+      harnessRunner: async () => ({ output: '', exitCode: 0, durationMs: 0 }),
+      log: () => {
+        /* keep test output quiet */
+      }
+    });
+    await assert.rejects(
+      () => ctx.workflow.status('run-123'),
+      /ctx.workflow is unavailable: the runner is not connected to the workforce workflows API/
+    );
+  } finally {
     await rm(dir, { recursive: true, force: true });
   }
 });

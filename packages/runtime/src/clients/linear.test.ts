@@ -12,7 +12,7 @@ async function tempMount(): Promise<string> {
 test('linear createIssue writes an issue draft', async () => {
   const root = await tempMount();
   try {
-    const client = createLinearClient({ relayfileMountRoot: root });
+    const client = createLinearClient({ relayfileMountRoot: root, writebackTimeoutMs: 0 });
     await client.createIssue({ teamId: 'team_1', title: 'Ship it', description: 'Soon' });
 
     const dir = path.join(root, 'linear/issues');
@@ -38,7 +38,7 @@ test('linear getIssue reads a canonical issue file', async () => {
       JSON.stringify({ id: 'i1', identifier: 'ENG-1', title: 'Ship it', description: null, url: 'https://linear.app/i1', state: null })
     );
 
-    const client = createLinearClient({ relayfileMountRoot: root });
+    const client = createLinearClient({ relayfileMountRoot: root, writebackTimeoutMs: 0 });
     assert.equal((await client.getIssue('ENG-1')).identifier, 'ENG-1');
   } finally {
     await rm(root, { recursive: true, force: true });

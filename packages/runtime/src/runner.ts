@@ -113,7 +113,9 @@ export async function startRunner(options: StartRunnerOptions): Promise<void> {
     harnessRunner: options.harnessRunner ?? cloudDefaults.harnessRunner,
     ...(options.subsystems?.llm ? { llm: options.subsystems.llm } : {}),
     ...(options.subsystems?.memory ? { memory: options.subsystems.memory } : {}),
-    ...(options.subsystems?.workflow ? { workflow: options.subsystems.workflow } : {}),
+    ...(options.subsystems?.workflow ?? cloudDefaults.workflow
+      ? { workflow: options.subsystems?.workflow ?? cloudDefaults.workflow }
+      : {}),
     ...(options.subsystems?.schedule ? { schedule: options.subsystems.schedule } : {}),
     ...(options.subsystems?.log ? { log: options.subsystems.log } : {}),
     ...(Object.keys(integrations).length > 0 ? { integrations } : {})

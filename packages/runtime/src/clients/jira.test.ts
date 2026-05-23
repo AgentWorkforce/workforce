@@ -12,7 +12,7 @@ async function tempMount(): Promise<string> {
 test('jira createIssue writes a Jira issue draft', async () => {
   const root = await tempMount();
   try {
-    const client = createJiraClient({ relayfileMountRoot: root });
+    const client = createJiraClient({ relayfileMountRoot: root, writebackTimeoutMs: 0 });
     await client.createIssue({
       cloudId: 'cloud_1',
       fields: { project: { key: 'ENG' }, summary: 'Ship it', issuetype: { name: 'Task' } }
@@ -33,7 +33,7 @@ test('jira createIssue writes a Jira issue draft', async () => {
 test('jira transition writes an issue transition draft', async () => {
   const root = await tempMount();
   try {
-    const client = createJiraClient({ relayfileMountRoot: root });
+    const client = createJiraClient({ relayfileMountRoot: root, writebackTimeoutMs: 0 });
     await client.transition({ cloudId: 'cloud_1', issueIdOrKey: 'ENG-1' }, '31');
 
     const dir = path.join(root, 'jira/issues/ENG-1/transitions');

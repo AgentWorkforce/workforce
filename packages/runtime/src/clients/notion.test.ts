@@ -12,7 +12,7 @@ async function tempMount(): Promise<string> {
 test('notion createPage writes a database page draft', async () => {
   const root = await tempMount();
   try {
-    const client = createNotionClient({ relayfileMountRoot: root });
+    const client = createNotionClient({ relayfileMountRoot: root, writebackTimeoutMs: 0 });
     await client.createPage(
       { database_id: 'db_1' },
       { Name: { title: [{ text: { content: 'Digest' } }] } },
@@ -32,7 +32,7 @@ test('notion createPage writes a database page draft', async () => {
 });
 
 test('notion createPage requires a database parent for file writeback', async () => {
-  const client = createNotionClient({ relayfileMountRoot: '/tmp/unused' });
+  const client = createNotionClient({ relayfileMountRoot: '/tmp/unused', writebackTimeoutMs: 0 });
   await assert.rejects(
     () => client.createPage({}, {}, []),
     /parent\.database_id/

@@ -16,8 +16,8 @@ import { WorkforceIntegrationError } from '../errors.js';
  *
  * The handler-side ergonomics stay identical to the direct-REST shape
  * — `await ctx.github.comment(target, body)` returns when the write
- * lands. Whether the receipt is awaited synchronously, polled, or
- * fired-and-forgotten depends on `writebackTimeoutMs`.
+ * lands and, by default, waits briefly for the provider receipt.
+ * Setting `writebackTimeoutMs` to `0` keeps fire-and-forget behavior.
  */
 export interface IntegrationClientOptions {
   /** Absolute path to the Relayfile mount the handler is running in. */
@@ -30,9 +30,8 @@ export interface IntegrationClientOptions {
   workspaceCwd?: string;
   /**
    * Max wait, in ms, for the Relayfile writeback worker to emit a
-   * receipt onto the just-written draft. `0` (default) means
-   * fire-and-forget — the client returns immediately and the receipt
-   * is whatever was readable at write time.
+   * receipt onto the just-written draft. Defaults to 3000ms. `0` means
+   * fire-and-forget — the client returns immediately without a receipt.
    */
   writebackTimeoutMs?: number;
   /** Poll interval while waiting for a receipt. Default 250ms. */
@@ -70,6 +69,8 @@ export interface WritebackResult {
   absolutePath: string;
   receipt?: WritebackReceipt;
 }
+
+const DEFAULT_WRITEBACK_TIMEOUT_MS = 3_000;
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === 'object' && value !== null && !Array.isArray(value);
@@ -196,7 +197,7 @@ function isNoEntryError(error: unknown): boolean {
 /**
  * Write a draft JSON payload atomically (write-then-rename) so the
  * writeback worker never sees a partial file. Waits for a receipt
- * when `writebackTimeoutMs > 0`; otherwise returns immediately.
+ * by default; pass `writebackTimeoutMs: 0` to return immediately.
  */
 export async function writeJsonFile(
   client: IntegrationClientOptions,
@@ -222,7 +223,7 @@ async function waitForReceipt(
   absolutePath: string,
   client: IntegrationClientOptions
 ): Promise<WritebackReceipt | undefined> {
-  const timeoutMs = client.writebackTimeoutMs ?? 0;
+  const timeoutMs = client.writebackTimeoutMs ?? DEFAULT_WRITEBACK_TIMEOUT_MS;
   // Fire-and-forget: never reinterpret the just-written draft as a
   // receipt. The draft payload may legitimately carry top-level `id` /
   // `path` / `created` fields (e.g. an upsert update writing back the
