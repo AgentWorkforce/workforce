@@ -1,6 +1,6 @@
 {
   "name": "@agentworkforce/deploy",
-  "version": "3.0.19",
+  "version": "3.0.20",
   "private": false,
   "type": "module",
   "main": "dist/index.js",

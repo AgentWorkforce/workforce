@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [3.0.20] - 2026-05-23
+
+### Added
+
+- **Make harness/model/systemPrompt optional for handler personas** (#135)
+
 ## [3.0.16] - 2026-05-22
 
 ### Added
