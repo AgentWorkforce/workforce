@@ -53,8 +53,24 @@ export interface IntegrationConnectResolver {
     source?: IntegrationSource;
     expectedConfigKey?: string;
   }): Promise<boolean>;
-  /** Run the browser-based OAuth flow and resolve when the user finishes. */
-  connect(args: { workspace: string; provider: string }): Promise<{ connectionId: string }>;
+  /**
+   * Run the browser-based OAuth flow and resolve when the user finishes.
+   *
+   * `source` discriminates which table the cloud writes the new row into:
+   * `deployer_user` → `user_integrations`, `workspace` → `workspace_integrations`,
+   * `workspace_service_account` → `workspace_integrations` with a named
+   * service-account attribution. The CLI passes the persona's declared
+   * source so the connect-side scope matches the preflight read scope and
+   * the runtime dispatcher's resolve scope (per `cloud#1001`).
+   *
+   * Defaults to `{ kind: 'deployer_user' }` (mirrors the persona-kit
+   * default).
+   */
+  connect(args: {
+    workspace: string;
+    provider: string;
+    source?: IntegrationSource;
+  }): Promise<{ connectionId: string }>;
 }
 
 /**
@@ -136,14 +152,27 @@ export function relayfileIntegrationResolver(opts: {
           : {})
       });
     },
-    async connect({ workspace, provider }) {
+    async connect({ workspace, provider, source }) {
       const workspaceId = workspace || opts.workspaceId;
       const token = await resolveWorkspaceToken(opts.workspaceToken);
+      const effectiveSource: IntegrationSource = source ?? { kind: 'deployer_user' };
+
+      // Tell the cloud which table to write the new row into. Per
+      // AgentWorkforce/cloud#1001, when `scope` is omitted the cloud
+      // defaults to `workspace` (today's behavior) so older clouds keep
+      // working. When `scope` is supplied, the cloud routes the row to
+      // user_integrations / workspace_integrations / service-account-named
+      // workspace_integrations accordingly, matching what the runtime
+      // dispatcher reads at tick time.
+      const sessionBody = {
+        allowedIntegrations: [provider],
+        scope: scopeRequest(effectiveSource)
+      };
       const session = await requestJson(fetchImpl, `${apiUrl}/api/v1/workspaces/${encodeURIComponent(
         workspaceId
       )}/integrations/connect-session`, token, {
         method: 'POST',
-        body: JSON.stringify({ allowedIntegrations: [provider] })
+        body: JSON.stringify(sessionBody)
       });
       const sessionUrl = readString(session, 'sessionUrl')
         ?? readString(session, 'connectLink')
@@ -166,6 +195,14 @@ export function relayfileIntegrationResolver(opts: {
           workspaceId
         )}/integrations/${encodeURIComponent(provider)}/status`);
         if (sessionId) statusUrl.searchParams.set('connectionId', sessionId);
+        // Scope the status poll to the same table the connect-session
+        // wrote into. Older clouds ignore the param and read from
+        // workspace_integrations (today's behavior).
+        const scopeParam = effectiveSource.kind;
+        statusUrl.searchParams.set('scope', scopeParam);
+        if (effectiveSource.kind === 'workspace_service_account') {
+          statusUrl.searchParams.set('serviceAccountName', effectiveSource.name);
+        }
         const status = await requestJson(
           fetchImpl,
           statusUrl.toString(),
@@ -186,6 +223,19 @@ export function relayfileIntegrationResolver(opts: {
       );
     }
   };
+}
+
+/**
+ * Translate the persona's typed `IntegrationSource` into the JSON shape the
+ * cloud connect-session endpoint accepts (per AgentWorkforce/cloud#1001).
+ */
+function scopeRequest(
+  source: IntegrationSource
+): { kind: 'deployer_user' | 'workspace' | 'workspace_service_account'; name?: string } {
+  if (source.kind === 'workspace_service_account') {
+    return { kind: 'workspace_service_account', name: source.name };
+  }
+  return { kind: source.kind };
 }
 
 function providerHasEnvCredentials(provider: string): boolean {
@@ -362,7 +412,11 @@ export async function connectIntegrations(input: ConnectAllInput): Promise<Conne
     }
 
     try {
-      const result = await input.integrations.connect({ workspace: input.workspace, provider });
+      const result = await input.integrations.connect({
+        workspace: input.workspace,
+        provider,
+        source
+      });
       input.io.info(`integrations.${provider}: connected (${result.connectionId})`);
       outcomes.push({ provider, status: 'connected-now' });
     } catch (err) {

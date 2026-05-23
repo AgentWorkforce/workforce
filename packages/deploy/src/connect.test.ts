@@ -305,7 +305,8 @@ test('relayfileIntegrationResolver connect opens a session and polls until conne
       if (url.endsWith('/integrations/connect-session')) {
         assert.equal(init?.method, 'POST');
         assert.deepEqual(JSON.parse(String(init?.body)), {
-          allowedIntegrations: ['notion']
+          allowedIntegrations: ['notion'],
+          scope: { kind: 'deployer_user' }
         });
         return okJson({ connectLink: 'https://connect.example.test/session', connectionId: 'conn-1' });
       }
@@ -328,6 +329,91 @@ test('relayfileIntegrationResolver connect opens a session and polls until conne
   assert.ok(urls.every((url) => url.includes('/workspaces/ws-runtime/')));
   assert.equal(polls, 3);
   assert.ok(io.messages.some((message) => message.message.includes('notion connected')));
+});
+
+test('relayfileIntegrationResolver connect sends scope=workspace and scopes status polls (workspace source)', async () => {
+  const bodies: unknown[] = [];
+  const statusUrls: string[] = [];
+  const resolver = relayfileIntegrationResolver({
+    apiUrl: 'https://cloud.example.test',
+    workspaceId: 'ws-1',
+    workspaceToken: 'tok',
+    pollIntervalMs: 0,
+    timeoutMs: 100,
+    openUrl: () => undefined,
+    sleep: async () => undefined,
+    fetch: async (input, init) => {
+      const url = input.toString();
+      if (url.endsWith('/integrations/connect-session')) {
+        bodies.push(JSON.parse(String(init?.body)));
+        return okJson({ sessionUrl: 'https://connect.example.test/session', connectionId: 'conn-ws' });
+      }
+      statusUrls.push(url);
+      return okJson({ status: 'ready', connectionId: 'conn-ws' });
+    }
+  });
+  await resolver.connect({ workspace: 'ws-1', provider: 'github', source: { kind: 'workspace' } });
+  assert.deepEqual(bodies, [{ allowedIntegrations: ['github'], scope: { kind: 'workspace' } }]);
+  assert.ok(statusUrls.every((u) => u.includes('scope=workspace')));
+});
+
+test('relayfileIntegrationResolver connect sends scope=workspace_service_account + name', async () => {
+  const bodies: unknown[] = [];
+  const statusUrls: string[] = [];
+  const resolver = relayfileIntegrationResolver({
+    apiUrl: 'https://cloud.example.test',
+    workspaceId: 'ws-1',
+    workspaceToken: 'tok',
+    pollIntervalMs: 0,
+    timeoutMs: 100,
+    openUrl: () => undefined,
+    sleep: async () => undefined,
+    fetch: async (input, init) => {
+      const url = input.toString();
+      if (url.endsWith('/integrations/connect-session')) {
+        bodies.push(JSON.parse(String(init?.body)));
+        return okJson({ sessionUrl: 'https://connect.example.test/session', connectionId: 'conn-sa' });
+      }
+      statusUrls.push(url);
+      return okJson({ status: 'ready', connectionId: 'conn-sa' });
+    }
+  });
+  await resolver.connect({
+    workspace: 'ws-1',
+    provider: 'github',
+    source: { kind: 'workspace_service_account', name: 'release-bot' }
+  });
+  assert.deepEqual(bodies, [
+    {
+      allowedIntegrations: ['github'],
+      scope: { kind: 'workspace_service_account', name: 'release-bot' }
+    }
+  ]);
+  assert.ok(statusUrls.every((u) => u.includes('scope=workspace_service_account')));
+  assert.ok(statusUrls.every((u) => u.includes('serviceAccountName=release-bot')));
+});
+
+test('relayfileIntegrationResolver connect defaults to deployer_user when source omitted', async () => {
+  const bodies: unknown[] = [];
+  const resolver = relayfileIntegrationResolver({
+    apiUrl: 'https://cloud.example.test',
+    workspaceId: 'ws-1',
+    workspaceToken: 'tok',
+    pollIntervalMs: 0,
+    timeoutMs: 100,
+    openUrl: () => undefined,
+    sleep: async () => undefined,
+    fetch: async (input, init) => {
+      const url = input.toString();
+      if (url.endsWith('/integrations/connect-session')) {
+        bodies.push(JSON.parse(String(init?.body)));
+        return okJson({ sessionUrl: 'https://connect.example.test/session', connectionId: 'conn-du' });
+      }
+      return okJson({ status: 'ready', connectionId: 'conn-du' });
+    }
+  });
+  await resolver.connect({ workspace: 'ws-1', provider: 'github' });
+  assert.deepEqual(bodies, [{ allowedIntegrations: ['github'], scope: { kind: 'deployer_user' } }]);
 });
 
 test('relayfileIntegrationResolver connect times out clearly', async () => {
