@@ -31,7 +31,7 @@ import type {
 type AgentInputValue = string | number | boolean | null | undefined;
 const USAGE_REPORT_TIMEOUT_MS = 5_000;
 const WORKFLOW_COMPLETION_POLL_MS = 1_000;
-const WORKFLOW_COMPLETION_TIMEOUT_MS = 30 * 60_000;
+const WORKFLOW_COMPLETION_TIMEOUT_MS = 90 * 60_000;
 const WORKFLOW_FETCH_TIMEOUT_MS = 15_000;
 const WORKFLOW_COMPLETION_MAX_TRANSIENT_ERRORS = 3;
 const WORKFLOW_INVOCATION_HEADER = 'x-agentworkforce-workspace-workflow-invocation';
@@ -327,7 +327,7 @@ async function fetchWorkflowStatus(args: {
   base: string;
   token: string;
   runId: string;
-}): Promise<{ status: 'pending' | 'running' | 'success' | 'failure'; output?: unknown; error?: string }> {
+}): Promise<{ status: 'pending' | 'running' | 'success' | 'failure'; output?: unknown; error?: string; patches?: unknown }> {
   if (!args.runId.trim()) {
     throw new Error('ctx.workflow.status() requires a non-empty runId');
   }
@@ -340,9 +340,11 @@ async function fetchWorkflowStatus(args: {
   }
   const body = await response.json().catch(() => ({})) as Record<string, unknown>;
   const status = normalizeWorkflowStatus(body.status);
+  const output = normalizeWorkflowOutput(body);
   return {
     status,
-    ...(body.output !== undefined ? { output: body.output } : {}),
+    ...(output !== undefined ? { output } : {}),
+    ...(body.patches !== undefined ? { patches: body.patches } : {}),
     ...(typeof body.error === 'string' ? { error: body.error } : {})
   };
 }
@@ -374,8 +376,18 @@ function normalizeWorkflowStatus(value: unknown): 'pending' | 'running' | 'succe
     case 'timed-out':
       return 'failure';
     default:
-      throw new Error(`ctx.workflow.status(): cloud response returned unknown status ${JSON.stringify(value)}`);
+      return 'pending';
   }
+}
+
+function normalizeWorkflowOutput(body: Record<string, unknown>): unknown {
+  if (body.output !== undefined) return body.output;
+  if (body.result !== undefined && body.patches !== undefined) {
+    return { result: body.result, patches: body.patches };
+  }
+  if (body.result !== undefined) return body.result;
+  if (body.patches !== undefined) return { patches: body.patches };
+  return undefined;
 }
 
 function workflowHeaders(token: string, delegated: boolean): Record<string, string> {

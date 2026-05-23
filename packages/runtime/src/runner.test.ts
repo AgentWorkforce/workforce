@@ -304,7 +304,17 @@ test('createCloudRuntimeDefaults builds slack integrations and workflow when wor
         return;
       }
       if (req.method === 'GET' && req.url === '/api/v1/workflows/runs/run-123') {
-        res.writeHead(200, { 'content-type': 'application/json' }).end(JSON.stringify({ status: 'completed', output: { prUrl: 'https://example.test/pr/1' } }));
+        res.writeHead(200, { 'content-type': 'application/json' }).end(JSON.stringify({
+          status: 'completed',
+          result: { summary: 'done' },
+          patches: {
+            main: {
+              pushedTo: {
+                prUrl: 'https://example.test/pr/1'
+              }
+            }
+          }
+        }));
         return;
       }
       res.writeHead(404).end();
@@ -348,9 +358,40 @@ test('createCloudRuntimeDefaults builds slack integrations and workflow when wor
 
     const handle = await defaults.workflow.run('cloud-small-issue-codex', { issue: 1028 });
     assert.equal(handle.runId, 'run-123');
-    assert.deepEqual(await handle.completion(), { status: 'success', output: { prUrl: 'https://example.test/pr/1' } });
+    assert.deepEqual(await handle.completion(), {
+      status: 'success',
+      output: {
+        result: { summary: 'done' },
+        patches: {
+          main: {
+            pushedTo: {
+              prUrl: 'https://example.test/pr/1'
+            }
+          }
+        }
+      }
+    });
     const status = await defaults.workflow.status('run-123');
-    assert.deepEqual(status, { status: 'success', output: { prUrl: 'https://example.test/pr/1' } });
+    assert.deepEqual(status, {
+      status: 'success',
+      output: {
+        result: { summary: 'done' },
+        patches: {
+          main: {
+            pushedTo: {
+              prUrl: 'https://example.test/pr/1'
+            }
+          }
+        }
+      },
+      patches: {
+        main: {
+          pushedTo: {
+            prUrl: 'https://example.test/pr/1'
+          }
+        }
+      }
+    });
 
     const post = requests.find((request) => request.method === 'POST');
     assert.equal(post?.headers.authorization, 'Bearer workspace-token');

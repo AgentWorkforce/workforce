@@ -161,7 +161,7 @@ export interface WorkflowRunHandle {
 
 export interface WorkflowContext {
   run(name: string, args?: Record<string, unknown>): Promise<WorkflowRunHandle>;
-  status(runId: string): Promise<{ status: 'pending' | 'running' | 'success' | 'failure'; output?: unknown; error?: string }>;
+  status(runId: string): Promise<{ status: 'pending' | 'running' | 'success' | 'failure'; output?: unknown; error?: string; patches?: unknown }>;
 }
 
 export interface ScheduleContext {
