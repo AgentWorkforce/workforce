@@ -12,6 +12,10 @@ import {
   type PersonaSpec
 } from '@agentworkforce/persona-kit';
 import { createGithubClient } from './clients/github.js';
+import { createJiraClient } from './clients/jira.js';
+import { createLinearClient } from './clients/linear.js';
+import { createNotionClient } from './clients/notion.js';
+import { createSlackClient } from './clients/slack.js';
 import type {
   FilesContext,
   HarnessRunArgs,
@@ -20,11 +24,15 @@ import type {
   SandboxContext,
   WorkforceAgentContext,
   WorkforceCtx,
-  WorkforceDeploymentContext
+  WorkforceDeploymentContext,
+  WorkflowContext
 } from './types.js';
 
 type AgentInputValue = string | number | boolean | null | undefined;
 const USAGE_REPORT_TIMEOUT_MS = 5_000;
+const WORKFLOW_COMPLETION_POLL_MS = 1_000;
+const WORKFLOW_COMPLETION_TIMEOUT_MS = 30 * 60_000;
+const WORKFLOW_INVOCATION_HEADER = 'X-Workspace-Workflow-Invocation';
 
 interface AgentRowContext extends WorkforceAgentContext {
   input_values?: Record<string, AgentInputValue>;
@@ -44,6 +52,7 @@ export interface CloudRuntimeDefaults {
   sandbox: SandboxContext;
   files: FilesContext;
   integrations?: Record<string, unknown>;
+  workflow?: WorkflowContext;
   harnessRunner: (args: HarnessRunArgs) => Promise<HarnessRunResult>;
 }
 
@@ -58,10 +67,15 @@ export function createCloudRuntimeDefaults(options: CloudDefaultOptions): CloudR
     workspaceRoot: root,
     env
   });
+  const workflow = createDefaultWorkflow({
+    workspaceRoot: root,
+    env
+  });
   return {
     sandbox,
     files,
     ...(integrations ? { integrations } : {}),
+    ...(workflow ? { workflow } : {}),
     harnessRunner: createProcessHarnessRunner({
       ...options,
       workspaceRoot: root,
@@ -139,20 +153,201 @@ function createDefaultIntegrations(args: {
   env: NodeJS.ProcessEnv;
 }): Record<string, unknown> | undefined {
   const integrations: Record<string, unknown> = {};
+  const common = {
+    relayfileMountRoot: firstNonEmpty(args.env.RELAYFILE_MOUNT_ROOT, args.env.RELAYFILE_ROOT) ?? args.workspaceRoot,
+    workspaceCwd: args.workspaceRoot,
+    workspaceId: args.workspaceId,
+    writebackTimeoutMs: numberFromEnv(args.env.WORKFORCE_RELAYFILE_WRITEBACK_TIMEOUT_MS),
+    writebackPollMs: numberFromEnv(args.env.WORKFORCE_RELAYFILE_WRITEBACK_POLL_MS),
+    relayfileBaseUrl: args.env.RELAYFILE_BASE_URL,
+    relayfileApiToken: args.env.RELAYFILE_TOKEN
+  };
+  const workspaceCloudApiToken = firstNonEmpty(args.env.WORKFORCE_WORKSPACE_TOKEN);
+  const cloudApiToken = firstNonEmpty(workspaceCloudApiToken, args.env.WORKFORCE_AGENT_TOKEN);
   if (args.persona.integrations?.github) {
     integrations.github = createGithubClient({
-      relayfileMountRoot: firstNonEmpty(args.env.RELAYFILE_MOUNT_ROOT, args.env.RELAYFILE_ROOT) ?? args.workspaceRoot,
-      workspaceCwd: args.workspaceRoot,
-      workspaceId: args.workspaceId,
-      writebackTimeoutMs: numberFromEnv(args.env.WORKFORCE_RELAYFILE_WRITEBACK_TIMEOUT_MS),
-      writebackPollMs: numberFromEnv(args.env.WORKFORCE_RELAYFILE_WRITEBACK_POLL_MS),
+      ...common,
       connectionId: args.env.WORKFORCE_INTEGRATION_GITHUB_CONNECTION_ID,
-      relayfileBaseUrl: args.env.RELAYFILE_BASE_URL,
-      relayfileApiToken: args.env.RELAYFILE_TOKEN,
-      cloudApiToken: firstNonEmpty(args.env.WORKFORCE_AGENT_TOKEN, args.env.WORKFORCE_WORKSPACE_TOKEN)
+      cloudApiToken
+    });
+  }
+  if (args.persona.integrations?.slack && workspaceCloudApiToken) {
+    integrations.slack = createSlackClient({
+      ...common,
+      connectionId: args.env.WORKFORCE_INTEGRATION_SLACK_CONNECTION_ID,
+      cloudApiToken: workspaceCloudApiToken,
+      slackTeamId: args.env.WORKFORCE_INTEGRATION_SLACK_TEAM_ID
+    });
+  }
+  if (args.persona.integrations?.linear) {
+    integrations.linear = createLinearClient({
+      ...common,
+      connectionId: args.env.WORKFORCE_INTEGRATION_LINEAR_CONNECTION_ID
+    });
+  }
+  if (args.persona.integrations?.notion) {
+    integrations.notion = createNotionClient({
+      ...common,
+      connectionId: args.env.WORKFORCE_INTEGRATION_NOTION_CONNECTION_ID
+    });
+  }
+  if (args.persona.integrations?.jira && workspaceCloudApiToken) {
+    integrations.jira = createJiraClient({
+      ...common,
+      connectionId: args.env.WORKFORCE_INTEGRATION_JIRA_CONNECTION_ID,
+      cloudApiToken: workspaceCloudApiToken
     });
   }
   return Object.keys(integrations).length > 0 ? integrations : undefined;
+}
+
+function createDefaultWorkflow(args: {
+  workspaceRoot: string;
+  env: NodeJS.ProcessEnv;
+}): WorkflowContext | undefined {
+  const token = firstNonEmpty(args.env.WORKFORCE_WORKSPACE_TOKEN);
+  const baseUrl = firstNonEmpty(args.env.WORKFORCE_CLOUD_BASE_URL);
+  if (!token || !baseUrl) return undefined;
+  const base = normalizeBaseUrl(baseUrl);
+  return {
+    async run(name, runArgs) {
+      const workflowSource = await readBundledWorkflowSource(args.workspaceRoot, name);
+      const response = await fetch(`${base}/api/v1/workflows/run`, {
+        method: 'POST',
+        headers: workflowHeaders(token, true),
+        body: JSON.stringify({
+          workflow: workflowSource,
+          fileType: 'ts',
+          sourceFileType: 'workflow',
+          runtime: { id: 'daytona' },
+          metadata: {
+            invocationSlug: name,
+            invocationArgs: JSON.stringify(runArgs ?? {})
+          }
+        })
+      });
+      if (!response.ok) {
+        throw await workflowError(response, `ctx.workflow.run("${name}")`);
+      }
+      const payload = await response.json().catch(() => ({})) as { runId?: unknown };
+      if (typeof payload.runId !== 'string' || payload.runId.trim().length === 0) {
+        throw new Error(`ctx.workflow.run("${name}"): cloud response missing runId`);
+      }
+      const runId = payload.runId;
+      return {
+        runId,
+        completion: () => pollWorkflowCompletion({ base, token, runId })
+      };
+    },
+    status(runId) {
+      return fetchWorkflowStatus({ base, token, runId });
+    }
+  };
+}
+
+async function readBundledWorkflowSource(workspaceRoot: string, name: string): Promise<string> {
+  const workflowFile = normalizeWorkflowName(name);
+  const roots = uniqueStrings([process.cwd(), workspaceRoot]);
+  const candidates = roots.flatMap((root) => [
+    path.resolve(root, 'workflows', workflowFile),
+    path.resolve(root, workflowFile)
+  ]);
+  for (const candidate of candidates) {
+    try {
+      return await readFile(candidate, 'utf8');
+    } catch (err) {
+      if (!isNoEntry(err)) throw err;
+    }
+  }
+  throw new Error(
+    `ctx.workflow.run("${name}") could not find bundled workflow source; expected ${candidates.join(' or ')}`
+  );
+}
+
+function normalizeWorkflowName(name: string): string {
+  const trimmed = name.trim();
+  if (!trimmed) {
+    throw new Error('ctx.workflow.run() requires a non-empty workflow name');
+  }
+  if (path.isAbsolute(trimmed) || trimmed.split(/[\\/]/).some((segment) => segment === '..' || segment === '')) {
+    throw new Error(`ctx.workflow.run("${name}") workflow name must be a safe relative path`);
+  }
+  return trimmed.endsWith('.ts') ? trimmed : `${trimmed}.ts`;
+}
+
+async function pollWorkflowCompletion(args: {
+  base: string;
+  token: string;
+  runId: string;
+}): Promise<{ output: unknown; status: 'success' | 'failure' }> {
+  const deadline = Date.now() + WORKFLOW_COMPLETION_TIMEOUT_MS;
+  while (Date.now() < deadline) {
+    const status = await fetchWorkflowStatus(args);
+    if (status.status === 'success') {
+      return { status: 'success', output: status.output };
+    }
+    if (status.status === 'failure') {
+      return { status: 'failure', output: status.output ?? status.error };
+    }
+    await delay(WORKFLOW_COMPLETION_POLL_MS);
+  }
+  throw new Error(`ctx.workflow.run("${args.runId}").completion(): timed out after ${WORKFLOW_COMPLETION_TIMEOUT_MS}ms`);
+}
+
+async function fetchWorkflowStatus(args: {
+  base: string;
+  token: string;
+  runId: string;
+}): Promise<{ status: 'pending' | 'running' | 'success' | 'failure'; output?: unknown; error?: string }> {
+  if (!args.runId.trim()) {
+    throw new Error('ctx.workflow.status() requires a non-empty runId');
+  }
+  const response = await fetch(`${args.base}/api/v1/workflows/runs/${encodeURIComponent(args.runId)}`, {
+    method: 'GET',
+    headers: workflowHeaders(args.token, false)
+  });
+  if (!response.ok) {
+    throw await workflowError(response, `ctx.workflow.status("${args.runId}")`);
+  }
+  const body = await response.json().catch(() => ({})) as Record<string, unknown>;
+  const status = normalizeWorkflowStatus(body.status);
+  return {
+    status,
+    ...(body.output !== undefined ? { output: body.output } : {}),
+    ...(typeof body.error === 'string' ? { error: body.error } : {})
+  };
+}
+
+function normalizeWorkflowStatus(value: unknown): 'pending' | 'running' | 'success' | 'failure' {
+  if (value === 'pending' || value === 'running' || value === 'success' || value === 'failure') return value;
+  return 'pending';
+}
+
+function workflowHeaders(token: string, delegated: boolean): Record<string, string> {
+  return {
+    accept: 'application/json',
+    'content-type': 'application/json',
+    authorization: `Bearer ${token}`,
+    ...(delegated ? { [WORKFLOW_INVOCATION_HEADER]: 'true' } : {})
+  };
+}
+
+async function workflowError(response: Response, label: string): Promise<Error> {
+  const body = await response.text().catch(() => '');
+  const excerpt = body.length > 400 ? `${body.slice(0, 400)}...` : body;
+  return new Error(`${label}: ${response.status} ${response.statusText}${excerpt ? ` - ${excerpt}` : ''}`);
+}
+
+function normalizeBaseUrl(value: string): string {
+  return value.replace(/\/+$/, '');
+}
+
+function uniqueStrings(values: string[]): string[] {
+  return [...new Set(values)];
+}
+
+function delay(ms: number): Promise<void> {
+  return new Promise((resolve) => setTimeout(resolve, ms));
 }
 
 function createProcessHarnessRunner(args: CloudDefaultOptions & {
