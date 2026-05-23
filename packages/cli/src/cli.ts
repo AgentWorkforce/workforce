@@ -427,6 +427,21 @@ export function resolveSystemPromptPlaceholders(prompt: string, harness: Harness
 }
 
 function buildSelection(spec: PersonaSpec, kind: 'repo' | 'local'): PersonaSelection {
+  // An interactive `agentworkforce agent` run spawns a harness session, which
+  // requires harness/model/systemPrompt. These are optional on the spec only
+  // for handler-style (onEvent) personas, which are deployed — not run
+  // interactively — so reject them here with a pointed error.
+  if (!spec.harness || !spec.model || spec.systemPrompt === undefined) {
+    throw new Error(
+      `persona "${spec.id}" cannot be run interactively: it omits ${[
+        !spec.harness && 'harness',
+        !spec.model && 'model',
+        spec.systemPrompt === undefined && 'systemPrompt'
+      ]
+        .filter(Boolean)
+        .join(', ')}. Handler-style personas (onEvent) are deployed via \`agentworkforce deploy\`, not run with \`agentworkforce agent\`.`
+    );
+  }
   const systemPrompt = resolveSystemPromptPlaceholders(spec.systemPrompt, spec.harness);
   const sidecar = resolveSidecar(spec);
   // Built-in personas: prefer the routing-profile rationale string so the
@@ -2491,8 +2506,8 @@ function collectPersonaRows(): PersonaListRow[] {
     rows.push({
       persona: spec.id,
       source,
-      harness: spec.harness,
-      model: spec.model,
+      harness: spec.harness ?? '—',
+      model: spec.model ?? '—',
       intent: spec.intent,
       tags: spec.tags ?? [],
       description: spec.description
@@ -2813,8 +2828,8 @@ function formatPersonaShow(spec: PersonaSpec, source: PersonaSource): string {
 
   lines.push('');
   lines.push('RUNTIME');
-  lines.push(`  harness:  ${spec.harness}`);
-  lines.push(`  model:    ${spec.model}`);
+  lines.push(`  harness:  ${spec.harness ?? '— (handler-style persona)'}`);
+  lines.push(`  model:    ${spec.model ?? '—'}`);
   lines.push(`  reasoning: ${spec.harnessSettings.reasoning}`);
   lines.push(`  timeout:  ${spec.harnessSettings.timeoutSeconds}s`);
   if (spec.harnessSettings.sandboxMode) {
@@ -2830,7 +2845,7 @@ function formatPersonaShow(spec: PersonaSpec, source: PersonaSource): string {
     lines.push(`  webSearch: ${spec.harnessSettings.webSearch}`);
   }
   lines.push('  systemPrompt:');
-  lines.push(indent(spec.systemPrompt, '    '));
+  lines.push(indent(spec.systemPrompt ?? '(none — handler-style persona)', '    '));
 
   return lines.join('\n') + '\n';
 }

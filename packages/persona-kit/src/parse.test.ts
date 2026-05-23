@@ -154,6 +154,74 @@ test('parsePersonaSpec throws when required runtime fields are missing', () => {
   );
 });
 
+test('parsePersonaSpec requires harness/model/systemPrompt for interactive personas (no onEvent)', () => {
+  // Build a spec missing each runtime field with no onEvent — still required.
+  const base = {
+    id: 'p',
+    intent: 'documentation',
+    tags: ['documentation'],
+    description: 'd',
+    harnessSettings: { reasoning: 'medium', timeoutSeconds: 300 }
+  };
+  assert.throws(
+    () => parsePersonaSpec({ ...base, model: 'm', systemPrompt: 's' }, 'documentation'),
+    /persona\[documentation\]\.harness must be one of:/
+  );
+  assert.throws(
+    () => parsePersonaSpec({ ...base, harness: 'claude', systemPrompt: 's' }, 'documentation'),
+    /persona\[documentation\]\.model must be a non-empty string/
+  );
+  assert.throws(
+    () => parsePersonaSpec({ ...base, harness: 'claude', model: 'm' }, 'documentation'),
+    /persona\[documentation\]\.systemPrompt must be a non-empty string/
+  );
+});
+
+test('parsePersonaSpec allows handler personas (onEvent) to omit harness/model/systemPrompt', () => {
+  // A pure orchestrator: the bundled handler controls flow and never calls
+  // ctx.harness.run, so it carries no harness/model/systemPrompt.
+  const spec = parsePersonaSpec(
+    {
+      id: 'orchestrator',
+      intent: 'documentation',
+      tags: ['documentation'],
+      description: 'fans out to a workflow on each issue event',
+      harnessSettings: { reasoning: 'medium', timeoutSeconds: 1800 },
+      cloud: true,
+      integrations: { github: { triggers: [{ on: 'issues.opened' }] } },
+      onEvent: './agent.ts'
+    },
+    'documentation'
+  );
+  assert.equal(spec.onEvent, './agent.ts');
+  assert.equal(spec.harness, undefined);
+  assert.equal(spec.model, undefined);
+  assert.equal(spec.systemPrompt, undefined);
+});
+
+test('parsePersonaSpec still validates harness enum for handler personas when provided', () => {
+  // Optional ≠ unvalidated: a handler that DOES call ctx.harness.run supplies
+  // harness/model, and a bad harness value is still rejected.
+  assert.throws(
+    () =>
+      parsePersonaSpec(
+        {
+          id: 'h',
+          intent: 'documentation',
+          tags: ['documentation'],
+          description: 'd',
+          harnessSettings: { reasoning: 'medium', timeoutSeconds: 300 },
+          cloud: true,
+          schedules: [{ name: 'daily', cron: '0 6 * * *', tz: 'UTC' }],
+          onEvent: './agent.ts',
+          harness: 'mystery'
+        },
+        'documentation'
+      ),
+    /persona\[documentation\]\.harness must be one of:/
+  );
+});
+
 test('parsePersonaSpec defers malformed skills[i].source to plan time (does not throw at parse)', () => {
   // Issue 70 contract: parse only validates shape (string + non-empty); URL/source-kind
   // validation happens in materializeSkills so a typo blows up its own persona, not the dir.

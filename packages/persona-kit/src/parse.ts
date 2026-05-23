@@ -879,16 +879,39 @@ export function parsePersonaSpec(value: unknown, expectedIntent: PersonaIntent):
     throw new Error(`persona[${expectedIntent}].description must be a non-empty string`);
   }
 
-  if (!isHarness(harness)) {
+  // Handler-style personas (`onEvent` set) run a bundled handler that
+  // controls the flow itself; `harness` / `model` / `systemPrompt` are only
+  // consumed when the handler calls `ctx.harness.run(...)`, so they're
+  // optional here. A pure orchestrator (e.g. one that only fans out to
+  // `ctx.workflow.run`) needs none of them and shouldn't have to carry stub
+  // values to pass validation. Interactive personas (no `onEvent`) still
+  // require all three — that's the harness session the CLI spawns.
+  const isHandlerPersona = typeof onEvent === 'string' && onEvent.trim().length > 0;
+
+  if (harness !== undefined) {
+    if (!isHarness(harness)) {
+      throw new Error(
+        `persona[${expectedIntent}].harness must be one of: ${HARNESS_VALUES.join(', ')}`
+      );
+    }
+  } else if (!isHandlerPersona) {
     throw new Error(
       `persona[${expectedIntent}].harness must be one of: ${HARNESS_VALUES.join(', ')}`
     );
   }
-  if (typeof model !== 'string' || !model.trim()) {
+  if (model !== undefined) {
+    if (typeof model !== 'string' || !model.trim()) {
+      throw new Error(`persona[${expectedIntent}].model must be a non-empty string`);
+    }
+  } else if (!isHandlerPersona) {
     throw new Error(`persona[${expectedIntent}].model must be a non-empty string`);
   }
-  const trimmedModel = model.trim();
-  if (typeof systemPrompt !== 'string' || !systemPrompt.trim()) {
+  const trimmedModel = typeof model === 'string' ? model.trim() : undefined;
+  if (systemPrompt !== undefined) {
+    if (typeof systemPrompt !== 'string' || !systemPrompt.trim()) {
+      throw new Error(`persona[${expectedIntent}].systemPrompt must be a non-empty string`);
+    }
+  } else if (!isHandlerPersona) {
     throw new Error(`persona[${expectedIntent}].systemPrompt must be a non-empty string`);
   }
   const parsedHarnessSettings = parseHarnessSettings(
@@ -953,9 +976,9 @@ export function parsePersonaSpec(value: unknown, expectedIntent: PersonaIntent):
     description,
     skills: parsedSkills,
     ...(parsedInputs ? { inputs: parsedInputs } : {}),
-    harness,
-    model: trimmedModel,
-    systemPrompt,
+    ...(harness !== undefined ? { harness: harness as Harness } : {}),
+    ...(trimmedModel !== undefined ? { model: trimmedModel } : {}),
+    ...(systemPrompt !== undefined ? { systemPrompt: systemPrompt as string } : {}),
     harnessSettings: parsedHarnessSettings,
     ...(parsedEnv ? { env: parsedEnv } : {}),
     ...(parsedMcpServers ? { mcpServers: parsedMcpServers } : {}),

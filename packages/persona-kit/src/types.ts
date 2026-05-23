@@ -276,12 +276,17 @@ export interface PersonaSpec {
    * values are substituted into the persona's system prompt.
    */
   inputs?: Record<string, PersonaInputSpec>;
-  /** Harness binary used to run this persona (`claude`, `codex`, `opencode`). */
-  harness: Harness;
-  /** Model identifier passed to the harness. */
-  model: string;
-  /** System prompt body. `$NAME` / `${NAME}` references to inputs are substituted at spawn time. */
-  systemPrompt: string;
+  /**
+   * Harness binary used to run this persona (`claude`, `codex`, `opencode`).
+   * Required for interactive personas. Optional for handler-style personas
+   * ({@link onEvent} set): only consumed when the handler calls
+   * `ctx.harness.run(...)`; pure orchestrators omit it.
+   */
+  harness?: Harness;
+  /** Model identifier passed to the harness. Optional for handler-style personas — see {@link harness}. */
+  model?: string;
+  /** System prompt body. `$NAME` / `${NAME}` references to inputs are substituted at spawn time. Optional for handler-style personas — see {@link harness}. */
+  systemPrompt?: string;
   /** Harness-level knobs (reasoning, timeout, codex sandbox/approval policy, etc.). */
   harnessSettings: HarnessSettings;
   /**
