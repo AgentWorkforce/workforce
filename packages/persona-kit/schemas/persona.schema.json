@@ -38,15 +38,15 @@
         },
         "harness": {
           "$ref": "#/definitions/Harness",
-          "description": "Harness binary used to run this persona (`claude`, `codex`, `opencode`)."
+          "description": "Harness binary used to run this persona (`claude`, `codex`, `opencode`). Required for interactive personas. Optional for handler-style personas ( {@link  onEvent }  set): only consumed when the handler calls `ctx.harness.run(...)`; pure orchestrators omit it."
         },
         "model": {
           "type": "string",
-          "description": "Model identifier passed to the harness."
+          "description": "Model identifier passed to the harness. Optional for handler-style personas — see  {@link  harness } ."
         },
         "systemPrompt": {
           "type": "string",
-          "description": "System prompt body. `$NAME` / `${NAME}` references to inputs are substituted at spawn time."
+          "description": "System prompt body. `$NAME` / `${NAME}` references to inputs are substituted at spawn time. Optional for handler-style personas — see  {@link  harness } ."
         },
         "harnessSettings": {
           "$ref": "#/definitions/HarnessSettings",
@@ -141,9 +141,6 @@
         "intent",
         "description",
         "skills",
-        "harness",
-        "model",
-        "systemPrompt",
         "harnessSettings"
       ],
       "description": "A persona listens for events. Three listener kinds: clock (cron schedules through `schedules[]`), radio (RelayFile integration events through `integrations.<provider>.triggers[]`), and inbox (RelayCast targeted messages, not yet modeled in v1). The current shape predates the listeners framing; semantics are equivalent.",

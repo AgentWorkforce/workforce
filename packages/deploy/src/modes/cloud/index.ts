@@ -278,6 +278,14 @@ async function ensureHarnessReady(args: {
   harnessSource?: HarnessSource;
   byokKey?: string;
 }): Promise<Record<string, string>> {
+  // Pure handler personas declare no harness (the bundled handler never calls
+  // ctx.harness.run — it orchestrates via ctx.workflow.run / integration
+  // clients). There's no harness inference to bill, so skip credential
+  // provisioning entirely.
+  if (!args.persona.harness) {
+    args.io.info('cloud: persona declares no harness; skipping harness credential setup');
+    return {};
+  }
   const source = await resolveHarnessSource(args);
   const modelProvider = deriveModelProvider(args.persona);
   if (source === 'plan') {
@@ -716,8 +724,12 @@ async function saveProviderCredential(args: {
 }
 
 function deriveModelProvider(persona: PersonaSpec): string {
+  // Callers gate on `persona.harness` being set before reaching here, so the
+  // harness fallback is always a defined string in practice; default to
+  // 'anthropic' to keep the return type total.
+  const harnessFallback = persona.harness ?? 'anthropic';
   const model = typeof persona.model === 'string' ? persona.model.trim() : '';
-  if (!model) return persona.harness;
+  if (!model) return harnessFallback;
   const lower = model.toLowerCase();
   if (matchesProviderToken(lower, ['anthropic', 'claude'])) return 'anthropic';
   if (matchesProviderToken(lower, ['openai', 'codex', 'gpt'])) return 'openai';
@@ -725,7 +737,7 @@ function deriveModelProvider(persona: PersonaSpec): string {
   if (matchesProviderToken(lower, ['openrouter', 'opencode'])) return 'openrouter';
   const [provider] = model.split(/[/:]/, 1);
   if (provider?.trim()) return provider.trim().toLowerCase();
-  return persona.harness;
+  return harnessFallback;
 }
 
 function matchesProviderToken(model: string, tokens: readonly string[]): boolean {

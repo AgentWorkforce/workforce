@@ -160,6 +160,26 @@ function createProcessHarnessRunner(args: CloudDefaultOptions & {
   env: NodeJS.ProcessEnv;
 }): (run: HarnessRunArgs) => Promise<HarnessRunResult> {
   return async (run) => {
+    // harness/model/systemPrompt are optional on the persona spec (pure
+    // orchestrator handlers omit them). But a handler that actually calls
+    // ctx.harness.run() needs all three to spawn the session — fail with a
+    // pointed error rather than passing `undefined` into the spec builder.
+    if (!args.persona.harness || !args.persona.model || args.persona.systemPrompt === undefined) {
+      throw new Error(
+        `ctx.harness.run() requires the persona to declare harness, model, and systemPrompt — ` +
+          `persona "${args.persona.id}" omits ${[
+            !args.persona.harness && 'harness',
+            !args.persona.model && 'model',
+            args.persona.systemPrompt === undefined && 'systemPrompt'
+          ]
+            .filter(Boolean)
+            .join(', ')}. Add them to persona.json, or remove the ctx.harness.run() call.`
+      );
+    }
+    const harness = args.persona.harness;
+    const personaModel = args.persona.model;
+    const personaSystemPrompt = args.persona.systemPrompt;
+
     const inputValues = resolveAgentInputValues(args.agent);
     const inputResolution = resolvePersonaInputs(args.persona.inputs, inputValues, args.env);
     const callerEnv = { ...args.env, ...inputResolution.values };
@@ -175,7 +195,7 @@ function createProcessHarnessRunner(args: CloudDefaultOptions & {
       args.log('warn', 'harness.config.dropped', { warning });
     }
 
-    const renderedSystemPrompt = renderPersonaInputs(args.persona.systemPrompt, inputResolution.values);
+    const renderedSystemPrompt = renderPersonaInputs(personaSystemPrompt, inputResolution.values);
     const cwd = resolveWorkspacePath(args.workspaceRoot, run.cwd ?? args.workspaceRoot);
     await assertDirectory(cwd);
     await materializeSidecar({
@@ -186,9 +206,9 @@ function createProcessHarnessRunner(args: CloudDefaultOptions & {
     });
     const task = run.prompt;
     const spec = buildNonInteractiveSpec({
-      harness: args.persona.harness,
+      harness,
       personaId: args.persona.id,
-      model: args.persona.model,
+      model: personaModel,
       systemPrompt: renderedSystemPrompt,
       harnessSettings: args.persona.harnessSettings,
       mcpServers: mcpResolution.servers,

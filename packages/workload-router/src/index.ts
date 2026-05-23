@@ -105,6 +105,16 @@ export function resolvePersona(intent: PersonaIntent, profile: RoutingProfile | 
   const rule = profileSpec.intents[intent];
   const spec = requireBuiltInPersona(intent);
 
+  // Routing resolves to an interactive harness session, which requires a
+  // harness/model/systemPrompt. Built-in catalog personas always declare
+  // them; the guard narrows the now-optional spec fields and fails loudly
+  // if a malformed built-in ever slips through.
+  if (!spec.harness || !spec.model || !spec.systemPrompt) {
+    throw new Error(
+      `built-in persona "${spec.id}" (intent ${intent}) is missing harness/model/systemPrompt required for routing`
+    );
+  }
+
   return {
     personaId: spec.id,
     harness: spec.harness,
