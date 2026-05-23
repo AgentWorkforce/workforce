@@ -32,11 +32,20 @@ type AgentInputValue = string | number | boolean | null | undefined;
 const USAGE_REPORT_TIMEOUT_MS = 5_000;
 const WORKFLOW_COMPLETION_POLL_MS = 1_000;
 const WORKFLOW_COMPLETION_TIMEOUT_MS = 30 * 60_000;
+const WORKFLOW_FETCH_TIMEOUT_MS = 15_000;
+const WORKFLOW_COMPLETION_MAX_TRANSIENT_ERRORS = 3;
 const WORKFLOW_INVOCATION_HEADER = 'x-agentworkforce-workspace-workflow-invocation';
 
 interface AgentRowContext extends WorkforceAgentContext {
   input_values?: Record<string, AgentInputValue>;
   inputValues?: Record<string, AgentInputValue>;
+}
+
+class WorkflowRequestError extends Error {
+  constructor(message: string, readonly retryable: boolean) {
+    super(message);
+    this.name = 'WorkflowRequestError';
+  }
 }
 
 export interface CloudDefaultOptions {
@@ -212,7 +221,7 @@ function createDefaultWorkflow(args: {
   return {
     async run(name, runArgs) {
       const workflowSource = await readBundledWorkflowSource(args.workspaceRoot, name);
-      const response = await fetch(`${base}/api/v1/workflows/run`, {
+      const response = await fetchWorkflow(`${base}/api/v1/workflows/run`, {
         method: 'POST',
         headers: workflowHeaders(token, true),
         body: JSON.stringify({
@@ -281,8 +290,23 @@ async function pollWorkflowCompletion(args: {
   runId: string;
 }): Promise<{ output: unknown; status: 'success' | 'failure' }> {
   const deadline = Date.now() + WORKFLOW_COMPLETION_TIMEOUT_MS;
+  let transientErrors = 0;
+  let lastTransientError: unknown;
   while (Date.now() < deadline) {
-    const status = await fetchWorkflowStatus(args);
+    let status: Awaited<ReturnType<typeof fetchWorkflowStatus>>;
+    try {
+      status = await fetchWorkflowStatus(args);
+      transientErrors = 0;
+      lastTransientError = undefined;
+    } catch (err) {
+      if (err instanceof WorkflowRequestError && err.retryable && transientErrors < WORKFLOW_COMPLETION_MAX_TRANSIENT_ERRORS) {
+        transientErrors += 1;
+        lastTransientError = err;
+        await delay(WORKFLOW_COMPLETION_POLL_MS);
+        continue;
+      }
+      throw err;
+    }
     if (status.status === 'success') {
       return { status: 'success', output: status.output };
     }
@@ -290,6 +314,11 @@ async function pollWorkflowCompletion(args: {
       return { status: 'failure', output: status.output ?? status.error };
     }
     await delay(WORKFLOW_COMPLETION_POLL_MS);
+  }
+  if (lastTransientError instanceof Error) {
+    throw new Error(
+      `ctx.workflow.run("${args.runId}").completion(): timed out after ${WORKFLOW_COMPLETION_TIMEOUT_MS}ms; last status poll error: ${lastTransientError.message}`
+    );
   }
   throw new Error(`ctx.workflow.run("${args.runId}").completion(): timed out after ${WORKFLOW_COMPLETION_TIMEOUT_MS}ms`);
 }
@@ -302,7 +331,7 @@ async function fetchWorkflowStatus(args: {
   if (!args.runId.trim()) {
     throw new Error('ctx.workflow.status() requires a non-empty runId');
   }
-  const response = await fetch(`${args.base}/api/v1/workflows/runs/${encodeURIComponent(args.runId)}`, {
+  const response = await fetchWorkflow(`${args.base}/api/v1/workflows/runs/${encodeURIComponent(args.runId)}`, {
     method: 'GET',
     headers: workflowHeaders(args.token, false)
   });
@@ -319,8 +348,34 @@ async function fetchWorkflowStatus(args: {
 }
 
 function normalizeWorkflowStatus(value: unknown): 'pending' | 'running' | 'success' | 'failure' {
-  if (value === 'pending' || value === 'running' || value === 'success' || value === 'failure') return value;
-  return 'pending';
+  switch (value) {
+    case 'pending':
+    case 'queued':
+    case 'starting':
+    case 'created':
+    case 'submitted':
+    case 'dispatching':
+      return 'pending';
+    case 'running':
+    case 'in_progress':
+    case 'in-progress':
+      return 'running';
+    case 'success':
+    case 'succeeded':
+    case 'completed':
+    case 'complete':
+      return 'success';
+    case 'failure':
+    case 'failed':
+    case 'cancelled':
+    case 'canceled':
+    case 'timed_out':
+    case 'timeout':
+    case 'timed-out':
+      return 'failure';
+    default:
+      throw new Error(`ctx.workflow.status(): cloud response returned unknown status ${JSON.stringify(value)}`);
+  }
 }
 
 function workflowHeaders(token: string, delegated: boolean): Record<string, string> {
@@ -335,7 +390,25 @@ function workflowHeaders(token: string, delegated: boolean): Record<string, stri
 async function workflowError(response: Response, label: string): Promise<Error> {
   const body = await response.text().catch(() => '');
   const excerpt = body.length > 400 ? `${body.slice(0, 400)}...` : body;
-  return new Error(`${label}: ${response.status} ${response.statusText}${excerpt ? ` - ${excerpt}` : ''}`);
+  return new WorkflowRequestError(
+    `${label}: ${response.status} ${response.statusText}${excerpt ? ` - ${excerpt}` : ''}`,
+    response.status === 429 || response.status >= 500
+  );
+}
+
+async function fetchWorkflow(input: string, init: RequestInit): Promise<Response> {
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), WORKFLOW_FETCH_TIMEOUT_MS);
+  try {
+    return await fetch(input, { ...init, signal: controller.signal });
+  } catch (err) {
+    const message = err instanceof Error && err.name === 'AbortError'
+      ? `timeout after ${WORKFLOW_FETCH_TIMEOUT_MS}ms`
+      : err instanceof Error ? err.message : String(err);
+    throw new WorkflowRequestError(`workflow request failed: ${message}`, true);
+  } finally {
+    clearTimeout(timer);
+  }
 }
 
 function normalizeBaseUrl(value: string): string {
