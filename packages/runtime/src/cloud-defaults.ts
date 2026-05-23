@@ -32,7 +32,7 @@ type AgentInputValue = string | number | boolean | null | undefined;
 const USAGE_REPORT_TIMEOUT_MS = 5_000;
 const WORKFLOW_COMPLETION_POLL_MS = 1_000;
 const WORKFLOW_COMPLETION_TIMEOUT_MS = 30 * 60_000;
-const WORKFLOW_INVOCATION_HEADER = 'X-Workspace-Workflow-Invocation';
+const WORKFLOW_INVOCATION_HEADER = 'x-agentworkforce-workspace-workflow-invocation';
 
 interface AgentRowContext extends WorkforceAgentContext {
   input_values?: Record<string, AgentInputValue>;

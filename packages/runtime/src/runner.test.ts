@@ -353,7 +353,7 @@ test('createCloudRuntimeDefaults builds slack integrations and workflow when wor
 
     const post = requests.find((request) => request.method === 'POST');
     assert.equal(post?.headers.authorization, 'Bearer workspace-token');
-    assert.equal(post?.headers['x-workspace-workflow-invocation'], 'true');
+    assert.equal(post?.headers['x-agentworkforce-workspace-workflow-invocation'], 'true');
     assert.deepEqual(post?.body, {
       workflow: 'console.log("workflow body");\n',
       fileType: 'ts',
