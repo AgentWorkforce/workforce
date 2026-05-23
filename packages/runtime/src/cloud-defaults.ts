@@ -405,11 +405,11 @@ async function workflowError(response: Response, label: string): Promise<Error> 
   const excerpt = body.length > 400 ? `${body.slice(0, 400)}...` : body;
   return new WorkflowRequestError(
     `${label}: ${response.status} ${response.statusText}${excerpt ? ` - ${excerpt}` : ''}`,
-    // A 403 immediately after token mint can be transient while cloud-side
-    // auth propagation settles. completion() retries it only within a small
-    // bounded budget, so an expired or permanently invalid token still fails
-    // in seconds rather than being hidden until the long completion timeout.
-    response.status === 403 || response.status === 429 || response.status >= 500
+    // Cloud workflow routes use 401 for missing/invalid/not-yet-propagated
+    // tokens, and 403 only for valid tokens that lack scope or workspace
+    // access. Retry 401 briefly for post-mint propagation; fail 403 fast so
+    // scope/tenant misconfiguration is not hidden behind retry noise.
+    response.status === 401 || response.status === 429 || response.status >= 500
   );
 }
 
