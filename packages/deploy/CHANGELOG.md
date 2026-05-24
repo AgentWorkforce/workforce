@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [3.0.22] - 2026-05-24
+
+### Dependencies
+
+- Bump @daytonaio/sdk to ^0.179.0 (#134)
+
 ## [3.0.20] - 2026-05-23
 
 ### Added
