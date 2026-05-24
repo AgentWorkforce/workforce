@@ -164,6 +164,55 @@ export interface WorkflowContext {
   status(runId: string): Promise<{ status: 'pending' | 'running' | 'success' | 'failure'; output?: unknown; error?: string; patches?: unknown }>;
 }
 
+/** Per-member result aggregated from `submit_result` (spec §6.2/§12). */
+export interface TeamMemberResult {
+  status: string;
+  output: string;
+  resultId?: string;
+}
+
+/** Spawn-call shape for `ctx.team.spawn(...)` (spec §6.1/§6.4). */
+export interface TeamSpawnArgs {
+  task: string;
+  teamPrompt?: string;
+  members: Array<{ name: string; persona: string; role?: 'orchestrator' | 'worker' | 'reviewer'; task?: string }>;
+  sharedMount?: string;
+  ttlSeconds?: number;
+  maxMembers?: number;
+}
+
+/** `GET …/teams/{teamId}` normalized status payload (spec §6.2). */
+export interface TeamStatus {
+  teamId: string;
+  status: 'starting' | 'running' | 'succeeded' | 'failed' | 'timed_out' | 'cancelled';
+  members: Array<Record<string, unknown>>;
+  results: Record<string, TeamMemberResult>;
+  summary: string;
+}
+
+/** Terminal team outcome returned by `completion()` (spec §6.4). */
+export interface TeamResult {
+  status: 'succeeded' | 'failed' | 'timed_out' | 'cancelled';
+  members: Record<string, TeamMemberResult>;
+  summary: string;
+}
+
+/** Handle over a spawned/attached team (spec §6.4). */
+export interface TeamHandle {
+  teamId: string;
+  channel: string;
+  sharedMountRoot: string;
+  status(): Promise<TeamStatus>;
+  completion(): Promise<TeamResult>;
+  cancel(): Promise<void>;
+}
+
+/** Cloud team invocation surface, mirroring `ctx.workflow` (spec §6.4). */
+export interface TeamContext {
+  spawn(args: TeamSpawnArgs): Promise<TeamHandle>;
+  attach(teamId: string): Promise<TeamHandle>;
+}
+
 export interface ScheduleContext {
   at(when: Date, payload: unknown): Promise<void>;
   cancel(name: string): Promise<void>;
