@@ -292,6 +292,12 @@ export interface WorkforceCtx extends IntegrationClients {
   memory: MemoryContext;
   /** Cloud workflows invocation (HTTP). */
   workflow: WorkflowContext;
+  /**
+   * Spawn + coordinate a team of sandboxed agents (spec §6.4). Present only
+   * when the handler sandbox has cloud credentials (`WORKFORCE_WORKSPACE_TOKEN`
+   * + `WORKFORCE_CLOUD_BASE_URL`); `undefined` otherwise.
+   */
+  team?: TeamContext;
   /** Schedule one-off follow-up ticks. */
   schedule: ScheduleContext;
   /** Structured logger; every line is forwarded to the gateway. */

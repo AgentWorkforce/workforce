@@ -342,6 +342,9 @@ function jsonResponse(body: unknown, init: ResponseInit = {}): Response {
   });
 }
 
+// Safe under node:test because top-level tests run sequentially by default
+// (no `{ concurrency: true }` here), so the global swap never overlaps; the
+// `finally` restore guarantees the original fetch is back even on failure.
 async function withFetch(
   fetchImpl: (input: RequestInfo | URL, init?: RequestInit) => Promise<Response> | Response,
   run: () => Promise<void>
