@@ -93,6 +93,8 @@ export {
 
 // Trigger registry + lint helper
 export {
+  ADAPTERS_WITHOUT_KNOWN_TRIGGERS,
+  KNOWN_TRIGGER_CATALOG,
   KNOWN_TRIGGERS,
   lintTriggers,
   type KnownProviderName,

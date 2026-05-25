@@ -27,15 +27,14 @@
       "scope": { "repo": "AgentWorkforce/workforce" },
       "triggers": [
         { "on": "pull_request.opened" },
-        { "on": "issue_comment.created", "match": "@mention" },
+        { "on": "pull_request_review_comment.created", "match": "@mention" },
         { "on": "check_run.completed", "where": "conclusion=failure" }
       ]
     },
-    "linear": { "triggers": [{ "on": "issue.created" }] },
-    "slack": { "triggers": [{ "on": "app_mention" }] },
+    "linear": { "triggers": [{ "on": "issue.create" }] },
+    "slack": { "triggers": [{ "on": "message.created" }] },
     "notion": {
-      "scope": { "database": "db_123" },
-      "triggers": [{ "on": "page.updated" }]
+      "scope": { "database": "db_123" }
     },
     "jira": {
       "scope": { "project": "ENG" },

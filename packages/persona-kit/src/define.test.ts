@@ -22,9 +22,9 @@ test('definePersona returns authored specs that parse successfully', () => {
           { on: 'off_registry.github_event' }
         ]
       },
-      linear: { triggers: [{ on: 'issue.created' }] },
-      slack: { triggers: [{ on: 'app_mention' }] },
-      notion: { triggers: [{ on: 'page.updated' }] },
+      linear: { triggers: [{ on: 'issue.create' }] },
+      slack: { triggers: [{ on: 'message.created' }] },
+      confluence: { triggers: [{ on: 'page.updated' }] },
       jira: { triggers: [{ on: 'comment.created' }] },
       customProvider: { triggers: [{ on: 'custom.event' }] }
     },
