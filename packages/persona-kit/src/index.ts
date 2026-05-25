@@ -47,6 +47,16 @@ export type {
   WatchRule
 } from './types.js';
 
+// Typed persona authoring
+export {
+  definePersona,
+  type PersonaDefinition,
+  type TriggerNameFor,
+  type TypedIntegrationConfig,
+  type TypedIntegrations,
+  type TypedTrigger
+} from './define.js';
+
 // Parsers + sidecar resolver
 export {
   assertInputName,

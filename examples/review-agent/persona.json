@@ -1,26 +1,45 @@
 {
   "id": "review-agent",
   "intent": "review",
-  "tags": ["review"],
+  "tags": [
+    "review"
+  ],
   "description": "Reviews opened PRs, responds to @mentions in comments, attempts autofix on red CI.",
   "cloud": true,
   "useSubscription": true,
   "integrations": {
     "github": {
       "triggers": [
-        { "on": "pull_request.opened" },
-        { "on": "issue_comment.created", "match": "@mention" },
-        { "on": "pull_request_review_comment.created", "match": "@mention" },
-        { "on": "check_run.completed", "where": "conclusion=failure" }
+        {
+          "on": "pull_request.opened"
+        },
+        {
+          "on": "issue_comment.created",
+          "match": "@mention"
+        },
+        {
+          "on": "pull_request_review_comment.created",
+          "match": "@mention"
+        },
+        {
+          "on": "check_run.completed",
+          "where": "conclusion=failure"
+        }
       ]
     },
     "slack": {
-      "triggers": [{ "on": "app_mention" }]
+      "triggers": [
+        {
+          "on": "app_mention"
+        }
+      ]
     }
   },
   "memory": {
     "enabled": true,
-    "scopes": ["workspace"]
+    "scopes": [
+      "workspace"
+    ]
   },
   "onEvent": "./agent.ts",
   "harness": "codex",

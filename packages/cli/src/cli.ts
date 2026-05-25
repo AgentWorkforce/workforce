@@ -87,6 +87,7 @@ import {
   type PersonaSource
 } from './local-personas.js';
 import { installPersonas, type PersonaInstallResult } from './persona-install.js';
+import { runPersonaCompileCommand } from './persona-compile.js';
 import { pickPersona, type PickCandidate, type PickResult } from './persona-picker.js';
 import { recordRecent, loadRecents, runPersonaPickerTui, type TuiCandidate } from './persona-tui.js';
 
@@ -191,6 +192,9 @@ Commands:
                       including which cascade layer defined it (cwd, user,
                       dir:<n>, library). Flags:
                         --json        emit the resolved PersonaSpec as JSON
+  persona compile <path/to/persona.ts>
+                      Compile a typed persona.ts authoring file to sibling
+                      persona.json after validating it with persona-kit.
   install [flags] <pkg|path>
                       Copy persona JSON files from an npm package or local
                       package directory into
@@ -4266,6 +4270,15 @@ export async function main(): Promise<void> {
 
   if (subcommand === 'show') {
     runShow(rest);
+  }
+
+  if (subcommand === 'persona') {
+    try {
+      await runPersonaCompileCommand(rest);
+      return;
+    } catch (err) {
+      die((err as Error)?.message ?? String(err), false);
+    }
   }
 
   if (subcommand === 'install') {
