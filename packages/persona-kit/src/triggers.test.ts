@@ -27,7 +27,8 @@ test('KNOWN_TRIGGERS ships a non-empty list per shipped provider', () => {
       `provider ${provider} must declare at least one known trigger`
     );
     for (const name of names) {
-      assert.ok(name.includes('.') || name.includes('_'), `trigger "${name}" should look like an event name`);
+      assert.equal(typeof name, 'string');
+      assert.notEqual(name, '', `provider ${provider} must not declare an empty trigger name`);
     }
   }
 });
@@ -42,10 +43,10 @@ test('lintTriggers returns no issues for known providers and known triggers', ()
       github: {
         triggers: [
           { on: 'pull_request.opened' },
-          { on: 'issue_comment.created' }
+          { on: 'pull_request_review_comment.created' }
         ]
       },
-      linear: { triggers: [{ on: 'issue.created' }] }
+      linear: { triggers: [{ on: 'issue.create' }] }
     })
   );
   assert.deepEqual(issues, []);

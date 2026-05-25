@@ -47,6 +47,16 @@ export type {
   WatchRule
 } from './types.js';
 
+// Typed persona authoring
+export {
+  definePersona,
+  type PersonaDefinition,
+  type TriggerNameFor,
+  type TypedIntegrationConfig,
+  type TypedIntegrations,
+  type TypedTrigger
+} from './define.js';
+
 // Parsers + sidecar resolver
 export {
   assertInputName,
@@ -83,6 +93,8 @@ export {
 
 // Trigger registry + lint helper
 export {
+  ADAPTERS_WITHOUT_KNOWN_TRIGGERS,
+  KNOWN_TRIGGER_CATALOG,
   KNOWN_TRIGGERS,
   lintTriggers,
   type KnownProviderName,

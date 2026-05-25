@@ -1,4 +1,5 @@
 import type { PersonaSpec } from './types.js';
+import { KNOWN_TRIGGER_CATALOG } from '@relayfile/adapter-core/triggers';
 
 /**
  * Known event names per Relayfile provider, used by the deploy CLI to lint
@@ -6,30 +7,15 @@ import type { PersonaSpec } from './types.js';
  * authoritative source of truth — unknown names here produce a warning,
  * not a failure, so adding a new event upstream doesn't gate workforce
  * releases.
- *
- * This file ships intentionally sparse in v1; the full per-provider list
- * lands when the Relayfile adapter packages publish their normalized
- * event catalogs.
  */
-export const KNOWN_TRIGGERS = {
-  github: [
-    'pull_request.opened',
-    'pull_request.synchronize',
-    'pull_request.closed',
-    'pull_request_review_comment.created',
-    'issue_comment.created',
-    'issues.opened',
-    'check_run.completed',
-    'workflow_run.completed'
-  ],
-  linear: ['issue.created', 'issue.updated', 'comment.created'],
-  slack: ['app_mention', 'message.channels'],
-  notion: ['page.updated', 'page.created'],
-  jira: ['issue.created', 'issue.updated', 'comment.created']
-} as const satisfies Record<string, readonly string[]>;
+export const KNOWN_TRIGGERS = KNOWN_TRIGGER_CATALOG;
 
-export type KnownProviderName = keyof typeof KNOWN_TRIGGERS;
-export type KnownTriggerName<P extends KnownProviderName> = (typeof KNOWN_TRIGGERS)[P][number];
+export {
+  ADAPTERS_WITHOUT_KNOWN_TRIGGERS,
+  KNOWN_TRIGGER_CATALOG,
+  type KnownProviderName,
+  type KnownTriggerName
+} from '@relayfile/adapter-core/triggers';
 
 export type TriggerLintLevel = 'warning';
 

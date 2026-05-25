@@ -146,13 +146,13 @@ export type McpServerSpec =
 /**
  * A single event trigger declared by an integration. `on` is a Relayfile-
  * adapter-normalized event name (e.g. `pull_request.opened`,
- * `issue.created`, `app_mention`). `match` and `where` are filter sugars
+ * `issue.create`, `message.created`). `match` and `where` are filter sugars
  * the deploy CLI lints against a known registry; unknown values warn but
  * do not fail parse, so the cloud runtime stays the source of truth.
  *
  * Examples:
  *   { on: "pull_request.opened" }
- *   { on: "issue_comment.created", match: "@mention" }
+ *   { on: "pull_request_review_comment.created", match: "@mention" }
  *   { on: "check_run.completed", where: "conclusion=failure" }
  */
 export interface PersonaIntegrationTrigger {

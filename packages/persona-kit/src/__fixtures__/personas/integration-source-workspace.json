@@ -13,7 +13,7 @@
   "integrations": {
     "slack": {
       "source": { "kind": "workspace" },
-      "triggers": [{ "on": "app_mention" }]
+      "triggers": [{ "on": "message.created" }]
     }
   }
 }
