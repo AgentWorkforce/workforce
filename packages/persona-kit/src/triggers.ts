@@ -1,5 +1,5 @@
 import type { PersonaSpec } from './types.js';
-import { KNOWN_TRIGGER_CATALOG } from './known-triggers.generated.js';
+import { KNOWN_TRIGGER_CATALOG } from '@relayfile/adapter-core/triggers';
 
 /**
  * Known event names per Relayfile provider, used by the deploy CLI to lint
@@ -15,7 +15,7 @@ export {
   KNOWN_TRIGGER_CATALOG,
   type KnownProviderName,
   type KnownTriggerName
-} from './known-triggers.generated.js';
+} from '@relayfile/adapter-core/triggers';
 
 export type TriggerLintLevel = 'warning';
 

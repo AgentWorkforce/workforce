@@ -33,15 +33,13 @@
     "typecheck": "tsc -p tsconfig.json --noEmit",
     "test": "tsc -p tsconfig.json && node --test dist/*.test.js",
     "emit:schema": "node ./scripts/emit-schema.mjs",
-    "sync:known-triggers": "node ./scripts/sync-known-triggers.mjs",
-    "check:known-triggers": "node ./scripts/sync-known-triggers.mjs --check",
     "lint": "tsc -p tsconfig.json --noEmit"
   },
   "dependencies": {
+    "@relayfile/adapter-core": "^0.3.13",
     "@relayfile/local-mount": "^0.7.24"
   },
   "devDependencies": {
-    "@relayfile/adapter-core": "0.3.12",
     "ts-json-schema-generator": "^2.3.0"
   }
 }

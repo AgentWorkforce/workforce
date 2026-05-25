@@ -92,13 +92,13 @@ importers:
 
   packages/persona-kit:
     dependencies:
+      '@relayfile/adapter-core':
+        specifier: ^0.3.13
+        version: 0.3.13(@relayfile/sdk@0.7.40)
       '@relayfile/local-mount':
         specifier: ^0.7.24
         version: 0.7.24
     devDependencies:
-      '@relayfile/adapter-core':
-        specifier: 0.3.12
-        version: 0.3.12(@relayfile/sdk@0.7.40)
       ts-json-schema-generator:
         specifier: ^2.3.0
         version: 2.9.0
@@ -846,8 +846,8 @@ packages:
     resolution: {integrity: sha512-C5eVSepGrlQY5b1yg+LfROLYhDW/w1WFVsuitRzvbXMr+qpFYFHLoMNxa9R0Q6ZiP02r6EXSazii2VNo2LZ0Vg==}
     engines: {node: '>=22'}
 
-  '@relayfile/adapter-core@0.3.12':
-    resolution: {integrity: sha512-moxFEJ3ZxXeHneMD1YgFGBgJGPsqCAdFcgH+cNLBXyJd2/+d7A8hPiGV36lXs3WG3W2eEVFdyCf5LSyhC+9CDg==}
+  '@relayfile/adapter-core@0.3.13':
+    resolution: {integrity: sha512-4mi4b/qRS2vGZR/bew7A+LWs55bPHi9ZTH27IJVBCVZj0o6/rEzDuY1ber2HGi7yx6or6knuHs6d9XtxjCBvPg==}
     engines: {node: '>=18'}
     hasBin: true
     peerDependencies:
@@ -3094,7 +3094,7 @@ snapshots:
       '@relayburn/sdk-linux-arm64-gnu': 2.5.2
       '@relayburn/sdk-linux-x64-gnu': 2.5.2
 
-  '@relayfile/adapter-core@0.3.12(@relayfile/sdk@0.7.40)':
+  '@relayfile/adapter-core@0.3.13(@relayfile/sdk@0.7.40)':
     dependencies:
       '@relayfile/sdk': 0.7.40
       '@scalar/postman-to-openapi': 0.6.3
