@@ -45,7 +45,7 @@ const integrations = {
 export default definePersona({
   id: 'github-email-digest',
   intent: 'relay-orchestrator',
-  tags: ['proactive', 'email', 'triage', 'digest'],
+  tags: ['documentation', 'discovery'],
   description:
     'Proactive agent: 3×/day, summarizes new GitHub emails from your Gmail inbox, DMs you the digest on Slack, and archives only the messages you approve (by labelling them).',
   cloud: true,

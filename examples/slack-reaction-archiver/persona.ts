@@ -15,7 +15,7 @@ import { definePersona } from '@agentworkforce/persona-kit';
 export default definePersona({
   id: 'slack-reaction-archiver',
   intent: 'relay-orchestrator',
-  tags: ['proactive', 'slack', 'email', 'archive'],
+  tags: ['implementation'],
   description:
     'React with ✅ to a GitHub-email digest in Slack and this agent archives those Gmail messages — the Slack-native approval gate for github-email-digest.',
   cloud: true,
