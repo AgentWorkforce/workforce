@@ -44,6 +44,28 @@ test('definePersona returns authored specs that parse successfully', () => {
   assert.equal(parsed.integrations?.customProvider.triggers?.[0].on, 'custom.event');
 });
 
+test('definePersona types tags against the closed PersonaTag vocabulary', () => {
+  const persona = definePersona({
+    id: 'tagged',
+    intent: 'review',
+    description: 'Tag typing fixture.',
+    tags: ['documentation', 'review'],
+    onEvent: './agent.ts',
+    harnessSettings: { reasoning: 'low', timeoutSeconds: 60 }
+  });
+  assert.deepEqual([...(persona.tags ?? [])], ['documentation', 'review']);
+
+  definePersona({
+    id: 'bad-tag',
+    intent: 'review',
+    description: 'An off-vocabulary tag must be a compile error, not a deploy-time 400.',
+    // @ts-expect-error 'proactive' is not a PersonaTag (cloud rejects it with 400 invalid_persona)
+    tags: ['proactive'],
+    onEvent: './agent.ts',
+    harnessSettings: { reasoning: 'low', timeoutSeconds: 60 }
+  });
+});
+
 test('definePersona type allows interactive personas without onEvent', () => {
   const persona = definePersona({
     id: 'interactive-author',

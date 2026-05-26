@@ -416,6 +416,42 @@ test('relayfileIntegrationResolver connect defaults to deployer_user when source
   assert.deepEqual(bodies, [{ allowedIntegrations: ['github'], scope: { kind: 'deployer_user' } }]);
 });
 
+test('relayfileIntegrationResolver connect turns 409 unknown_provider into a "did you mean" error', async () => {
+  const resolver = relayfileIntegrationResolver({
+    apiUrl: 'https://cloud.example.test',
+    workspaceId: 'ws-1',
+    workspaceToken: 'tok',
+    pollIntervalMs: 0,
+    timeoutMs: 100,
+    openUrl: () => undefined,
+    sleep: async () => undefined,
+    fetch: async (input) => {
+      const url = input.toString();
+      if (url.endsWith('/integrations/connect-session')) {
+        return okJson(
+          {
+            error: 'unknown_provider',
+            providers: [
+              { id: 'github', vfsRoot: '/github' },
+              { id: 'slack', vfsRoot: '/slack' },
+              { id: 'google-mail', vfsRoot: '/google-mail' }
+            ]
+          },
+          409
+        );
+      }
+      throw new Error(`unexpected URL ${url}`);
+    }
+  });
+
+  await assert.rejects(resolver.connect({ workspace: 'ws-1', provider: 'gmail' }), (err: Error) => {
+    assert.match(err.message, /provider "gmail" is not available/);
+    assert.match(err.message, /Did you mean "google-mail"/);
+    assert.match(err.message, /Valid providers: github, slack, google-mail/);
+    return true;
+  });
+});
+
 test('relayfileIntegrationResolver connect times out clearly', async () => {
   const resolver = relayfileIntegrationResolver({
     apiUrl: 'https://cloud.example.test',
