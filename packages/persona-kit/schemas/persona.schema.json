@@ -409,6 +409,10 @@
           "items": {
             "$ref": "#/definitions/PersonaIntegrationTrigger"
           }
+        },
+        "optional": {
+          "type": "boolean",
+          "description": "Whether this integration is OPTIONAL for deploy. Defaults to `false` (required): a declared integration is assumed load-bearing and must be connected before the agent can fire. Set `true` for a non-essential integration the agent still functions without (e.g. a best-effort Slack notify) so one-click deploy lists it as optional rather than blocking the deploy on it. Consumed by `deriveDeployRequirements` as `required = !optional`."
         }
       },
       "description": "Radio listener configuration for a RelayFile provider. The map key is the provider slug (`github`, `linear`, `slack`, `notion`, `jira`). `scope` is provider-specific filter metadata (e.g. `{ repo: \"org/repo\" }` for github, `{ database: \"<id>\" }` for notion). `triggers` are flat — all radio listener events for this provider fan into the same `onEvent` handler, which discriminates on `event.source` + `event.type`.\n\n`source` discriminates the cloud-side resolver between `user_integrations` and `workspace_integrations`; defaults to `{ kind: 'deployer_user' }` when omitted so existing personas keep their pre-discriminator behavior."

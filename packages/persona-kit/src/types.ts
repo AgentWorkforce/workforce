@@ -202,6 +202,16 @@ export interface PersonaIntegrationConfig {
   source?: IntegrationSource;
   scope?: Record<string, string>;
   triggers?: PersonaIntegrationTrigger[];
+  /**
+   * Whether this integration is OPTIONAL for deploy. Defaults to `false`
+   * (required): a declared integration is assumed load-bearing and must be
+   * connected before the agent can fire. Set `true` for a non-essential
+   * integration the agent still functions without (e.g. a best-effort Slack
+   * notify) so one-click deploy lists it as optional rather than blocking the
+   * deploy on it. Consumed by `deriveDeployRequirements` as
+   * `required = !optional`.
+   */
+  optional?: boolean;
 }
 
 /**
