@@ -1,0 +1,49 @@
+{
+  "id": "github-email-digest",
+  "intent": "relay-orchestrator",
+  "tags": ["proactive", "email", "triage", "digest"],
+  "description": "Proactive agent: 3×/day, summarizes new GitHub emails from your Gmail inbox, DMs you the digest on Slack, and archives only the messages you approve (by labelling them).",
+  "cloud": true,
+  "integrations": {
+    "gmail": {},
+    "slack": {}
+  },
+  "schedules": [{ "name": "digest", "cron": "0 8,13,18 * * *", "tz": "America/New_York" }],
+  "inputs": {
+    "SLACK_USER": {
+      "description": "Your Slack user id (e.g. U0123ABCD) — the agent DMs you here.",
+      "env": "SLACK_USER"
+    },
+    "GMAIL_ACCOUNT": {
+      "description": "Gmail account segment in the VFS path /gmail/<account>/threads.",
+      "env": "GMAIL_ACCOUNT",
+      "default": "me"
+    },
+    "APPROVAL_LABEL": {
+      "description": "Gmail label you apply to approve a message for archiving.",
+      "env": "APPROVAL_LABEL",
+      "default": "Archive-Approved"
+    },
+    "GITHUB_SENDERS": {
+      "description": "Comma-separated sender substrings that count as \"from GitHub\".",
+      "env": "GITHUB_SENDERS",
+      "default": "notifications@github.com,noreply@github.com,@github.com"
+    },
+    "DRY_RUN": {
+      "description": "Set \"true\" to compose + DM the digest but never write the archive.",
+      "env": "DRY_RUN",
+      "default": "false"
+    },
+    "FORCE_DM": {
+      "description": "Set \"true\" to DM a heartbeat even when there are no new emails (test aid).",
+      "env": "FORCE_DM",
+      "default": "false"
+    }
+  },
+  "harness": "claude",
+  "model": "claude-haiku-4-5-20251001",
+  "systemPrompt": "You triage GitHub notification emails into a tight, skimmable Slack digest.",
+  "harnessSettings": { "reasoning": "low", "timeoutSeconds": 300 },
+  "memory": { "enabled": true, "scopes": ["workspace"], "ttlDays": 30 },
+  "onEvent": "./agent.ts"
+}

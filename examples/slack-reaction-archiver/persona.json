@@ -1,0 +1,34 @@
+{
+  "id": "slack-reaction-archiver",
+  "intent": "relay-orchestrator",
+  "tags": ["proactive", "slack", "email", "archive"],
+  "description": "React with ✅ to a GitHub-email digest in Slack and this agent archives those Gmail messages — the Slack-native approval gate for github-email-digest.",
+  "cloud": true,
+  "useSubscription": true,
+  "integrations": {
+    "slack": {
+      "triggers": [{ "on": "reaction.added" }, { "on": "reaction.removed" }]
+    },
+    "gmail": {}
+  },
+  "inputs": {
+    "EMOJI": {
+      "description": "Emoji whose reaction approves archiving (no colons).",
+      "env": "EMOJI",
+      "default": "white_check_mark"
+    },
+    "GMAIL_ACCOUNT": {
+      "description": "Gmail account segment in the VFS path /gmail/<account>/threads.",
+      "env": "GMAIL_ACCOUNT",
+      "default": "me"
+    },
+    "DRY_RUN": {
+      "description": "Set \"true\" to detect + reply but never write the archive.",
+      "env": "DRY_RUN",
+      "default": "false"
+    }
+  },
+  "memory": { "enabled": false },
+  "harnessSettings": { "reasoning": "low", "timeoutSeconds": 120 },
+  "onEvent": "./agent.ts"
+}
