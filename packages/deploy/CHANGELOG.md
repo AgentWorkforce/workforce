@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [3.0.25] - 2026-05-26
+
+### Added
+
+- **Add GitHub PR merge writeback client** (#148)
+
 ## [3.0.24] - 2026-05-26
 
 ### Changed
