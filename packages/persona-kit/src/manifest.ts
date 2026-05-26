@@ -247,6 +247,18 @@ export function parseAgentManifest(value: unknown): AgentManifest {
  *
  * On a Layer-A (shared-platform) deploy this mapping is NOT used: those
  * platform secrets already exist and are never seeded per-agent.
+ *
+ * ⚠️ PROVISIONAL — Layer-B placeholder. This flat per-provider list MUST be
+ * reworked before `--isolated` ships (it is unused by the Layer-A MVP). Rework:
+ *   1. Do NOT hand-list providers — derive "is this Nango-backed?" from the
+ *      generated provider registry / source of truth so drift is a CI failure,
+ *      not a stale literal here.
+ *   2. Key the secret-set off the provider's BACKEND, not the provider verb:
+ *        - nango        → NangoSecretKey + WebRelayauthApiKey
+ *        - composio (`*-composio-relay`) → ComposioApiKey + WebRelayauthApiKey
+ *        - gitlab / Nango-webhook-gap     → + HookdeckSigningSecret
+ *   3. Drop any github-vs-slack style split — both are nango, so identical.
+ * See docs/one-click-agent-deploy.md (cloud repo) §Layer-B mapping rework.
  */
 export const DEFAULT_INTEGRATION_PLATFORM_SECRETS: Readonly<Record<string, readonly string[]>> = {
   github: ['NangoSecretKey', 'WebRelayauthApiKey'],
