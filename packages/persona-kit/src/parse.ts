@@ -71,10 +71,12 @@ export function isSidecarMode(value: unknown): value is SidecarMdMode {
 }
 
 /**
- * Parse the persona-level `tags` field. Tags are denormalized catalog
- * metadata (mirroring `tags text[]` in cloud#553), not a closed enum —
- * authors are free to label personas with provider names, intents, or
- * project codes (`["proactive", "notion", "github"]`).
+ * Parse the persona-level `tags` field. Tags are catalog metadata that the
+ * cloud validates against the closed {@link PERSONA_TAGS} vocabulary — an
+ * off-vocabulary tag is rejected at deploy with `400 invalid_persona`.
+ * `definePersona` types `tags` against that vocabulary so typed authors get a
+ * compile error first; this runtime parse stays lenient (accepts any
+ * `string[]`) for forward-compatibility, but unknown tags will not deploy.
  *
  * Shape rules:
  *  - `undefined` / `null` → `undefined` (tags are optional)
