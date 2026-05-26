@@ -46,6 +46,7 @@ export interface GithubClient {
     method?: 'merge' | 'squash' | 'rebase';
     commitTitle?: string;
     commitMessage?: string;
+    sha?: string;
   }): Promise<{ merged: boolean; sha?: string }>;
   upsertIssue(args: {
     owner: string;
@@ -172,9 +173,10 @@ export function createGithubClient(opts: IntegrationClientOptions): GithubClient
         'mergePullRequest',
         `${repoRoot(args.owner, args.repo)}/pulls/${encodeSegment(args.number)}/merge.json`,
         {
-          method: args.method ?? 'squash',
-          ...(args.commitTitle !== undefined ? { commitTitle: args.commitTitle } : {}),
-          ...(args.commitMessage !== undefined ? { commitMessage: args.commitMessage } : {})
+          merge_method: args.method ?? 'squash',
+          ...(args.commitTitle !== undefined ? { commit_title: args.commitTitle } : {}),
+          ...(args.commitMessage !== undefined ? { commit_message: args.commitMessage } : {}),
+          ...(args.sha !== undefined ? { sha: args.sha } : {})
         }
       );
       const sha =
@@ -182,9 +184,11 @@ export function createGithubClient(opts: IntegrationClientOptions): GithubClient
           ? result.receipt.sha
           : typeof result.receipt?.id === 'string'
             ? result.receipt.id
+            : typeof result.receipt?.externalId === 'string'
+              ? result.receipt.externalId
             : undefined;
       return {
-        merged: result.receipt?.merged === true || result.receipt?.merged === 'true',
+        merged: result.receipt?.merged === true || result.receipt?.merged === 'true' || Boolean(sha),
         ...(sha ? { sha } : {})
       };
     },

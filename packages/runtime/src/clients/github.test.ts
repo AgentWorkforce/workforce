@@ -92,16 +92,41 @@ test('github.mergePullRequest writes a merge draft under pulls/<n>/merge.json', 
       number: 42,
       method: 'rebase',
       commitTitle: 'Merge PR #42',
-      commitMessage: 'Ship the feature.'
+      commitMessage: 'Ship the feature.',
+      sha: 'reviewed-head'
     });
 
     assert.deepEqual(result, { merged: false });
     const mergePath = path.join(root, 'github/repos/o/r/pulls/42/merge.json');
     assert.deepEqual(JSON.parse(await readFile(mergePath, 'utf8')), {
-      method: 'rebase',
-      commitTitle: 'Merge PR #42',
-      commitMessage: 'Ship the feature.'
+      merge_method: 'rebase',
+      commit_title: 'Merge PR #42',
+      commit_message: 'Ship the feature.',
+      sha: 'reviewed-head'
     });
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
+test('github.mergePullRequest waits for a GitHub merge receipt', async () => {
+  const root = await tempMount();
+  try {
+    const client = createGithubClient({ relayfileMountRoot: root, writebackTimeoutMs: 1_000, writebackPollMs: 10 });
+    const mergePath = path.join(root, 'github/repos/o/r/pulls/42/merge.json');
+    const resultPromise = client.mergePullRequest({
+      owner: 'o',
+      repo: 'r',
+      number: 42,
+      method: 'squash',
+      sha: 'reviewed-head'
+    });
+
+    setTimeout(() => {
+      void writeFile(mergePath, `${JSON.stringify({ merged: true, sha: 'merge-sha' })}\n`, 'utf8');
+    }, 25);
+
+    assert.deepEqual(await resultPromise, { merged: true, sha: 'merge-sha' });
   } finally {
     await rm(root, { recursive: true, force: true });
   }

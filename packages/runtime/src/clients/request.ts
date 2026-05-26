@@ -61,6 +61,9 @@ export interface WritebackReceipt {
   url?: string;
   id?: string;
   identifier?: string;
+  externalId?: string;
+  merged?: boolean | string;
+  sha?: string;
   [key: string]: unknown;
 }
 
@@ -237,7 +240,9 @@ async function waitForReceipt(
       isRecord(parsed) &&
       (typeof parsed.created === 'string' ||
         typeof parsed.path === 'string' ||
-        typeof parsed.id === 'string')
+        typeof parsed.id === 'string' ||
+        typeof parsed.externalId === 'string' ||
+        typeof parsed.merged === 'boolean')
     ) {
       return parsed as WritebackReceipt;
     }
