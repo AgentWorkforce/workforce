@@ -11,9 +11,14 @@ import type {
 export type Harness = (typeof HARNESS_VALUES)[number];
 export type PersonaIntent = (typeof PERSONA_INTENTS)[number];
 /**
- * Persona tag. Denormalized catalog metadata (mirrors `tags text[]` in
- * cloud#553) — free-form, not a closed enum. The legacy {@link PERSONA_TAGS}
- * tuple is preserved only for back-compat hints in list/filter UIs.
+ * Runtime persona tag — intentionally an open `string`. The CLI uses this for
+ * arbitrary-tag catalog filtering (`--filter-tag`), and `parseTags` accepts any
+ * string for forward-compatibility, so this is NOT a closed enum.
+ *
+ * For *authoring*, {@link KnownPersonaTag} (constants.ts) is the closed
+ * vocabulary the cloud enforces — `definePersona` types `tags` against it so an
+ * off-vocabulary tag is a compile error. Two distinct types on purpose:
+ * runtime-open here, authoring-closed there.
  */
 export type PersonaTag = string;
 export type CodexSandboxMode = (typeof CODEX_SANDBOX_MODES)[number];
