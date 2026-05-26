@@ -1,9 +1,12 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
+import { mkdtemp, writeFile } from 'node:fs/promises';
+import { tmpdir } from 'node:os';
 import path from 'node:path';
 import {
   configureDeployCommandForTest,
   parseDeployArgs,
+  runDeploy,
   runLogin,
   runLogout
 } from './deploy-command.js';
@@ -54,6 +57,58 @@ function trapExit(throwOnExit = true): ExitTrap {
   return trap;
 }
 
+async function writeOneClickFixture(options: {
+  manifestInputs?: Record<string, string>;
+} = {}): Promise<{ dir: string; manifestPath: string; personaPath: string }> {
+  const dir = await mkdtemp(path.join(tmpdir(), 'workforce-one-click-'));
+  const personaPath = path.join(dir, 'persona.json');
+  const manifestPath = path.join(dir, 'agent.manifest.json');
+  await writeFile(
+    personaPath,
+    JSON.stringify({
+      id: 'issue-triage',
+      intent: 'documentation',
+      description: 'Triage incoming issues',
+      skills: [],
+      harness: 'claude',
+      model: 'anthropic/claude-3-5-sonnet',
+      systemPrompt: 'Triage issues for ${TEAM}.',
+      harnessSettings: { reasoning: 'medium', timeoutSeconds: 300 },
+      cloud: true,
+      integrations: {
+        github: {
+          triggers: [{ on: 'issues.opened' }, { on: 'issues.edited' }]
+        }
+      },
+      schedules: [{ name: 'daily', cron: '0 9 * * *', tz: 'UTC' }],
+      inputs: {
+        TEAM: { description: 'Team name' },
+        OPTIONAL_NOTE: { optional: true }
+      },
+      onEvent: './agent.ts'
+    }),
+    'utf8'
+  );
+  await writeFile(
+    manifestPath,
+    JSON.stringify({
+      schema: 'agent-manifest/v1',
+      name: 'Issue Triage',
+      persona: './persona.json',
+      workspace: 'manifest-workspace',
+      integrations: {
+        github: { required: true, reason: 'watches repository issues' }
+      },
+      secrets: {
+        NangoSecretKey: { required: true, reason: 'Layer-B only' }
+      },
+      ...(options.manifestInputs ? { inputs: options.manifestInputs } : {})
+    }),
+    'utf8'
+  );
+  return { dir, manifestPath, personaPath };
+}
+
 test('runLogin uses cloud SDK auth, picks a workspace, and writes the active pointer (no token mint)', async () => {
   const calls: string[] = [];
   const writes: unknown[] = [];
@@ -98,6 +153,113 @@ test('runLogin uses cloud SDK auth, picks a workspace, and writes the active poi
       cloudUrl: 'https://cloud.example.test'
     }]);
     assert.match(trap.stdout, /logged in: acme/);
+  } finally {
+    trap.restore();
+    restoreDeps();
+  }
+});
+
+test('runDeploy --one-click --dry-run prints the Layer-A plan without deploying', async () => {
+  const { manifestPath } = await writeOneClickFixture({ manifestInputs: { TEAM: 'platform' } });
+  const deployCalls: unknown[] = [];
+  const restoreDeps = configureDeployCommandForTest({
+    createTerminalIO: () => createBufferedIO(),
+    deploy: async (opts) => {
+      deployCalls.push(opts);
+      throw new Error('deploy should not be called during one-click dry-run');
+    }
+  });
+  const trap = trapExit(false);
+  try {
+    await runDeploy(['--one-click', manifestPath, '--dry-run']);
+    assert.deepEqual(trap.exits, [0]);
+    assert.deepEqual(deployCalls, []);
+    assert.match(trap.stdout, /one-click deploy plan/);
+    assert.match(trap.stdout, /persona: issue-triage/);
+    assert.match(trap.stdout, /workspace: manifest-workspace/);
+    assert.match(trap.stdout, /connect integrations:/);
+    assert.match(trap.stdout, /github \(required\): issues\.opened, issues\.edited/);
+    assert.match(trap.stdout, /watches repository issues/);
+    assert.match(trap.stdout, /required inputs: none/);
+    assert.match(trap.stdout, /platform secrets: none required \(shared platform\)/);
+    assert.match(trap.stdout, /fires on: github:issues\.opened, github:issues\.edited, schedule:daily/);
+  } finally {
+    trap.restore();
+    restoreDeps();
+  }
+});
+
+test('runDeploy --one-click --dry-run treats CLI-supplied inputs as provided in the plan', async () => {
+  const { manifestPath } = await writeOneClickFixture();
+  const restoreDeps = configureDeployCommandForTest({
+    createTerminalIO: () => createBufferedIO()
+  });
+  const trap = trapExit(false);
+  try {
+    await runDeploy(['--one-click', manifestPath, '--dry-run', '--input', 'TEAM=cli']);
+    assert.deepEqual(trap.exits, [0]);
+    assert.match(trap.stdout, /required inputs: none/);
+    assert.match(trap.stdout, /provided inputs: TEAM/);
+  } finally {
+    trap.restore();
+    restoreDeps();
+  }
+});
+
+test('runDeploy --one-click deploys the resolved persona in cloud update mode', async () => {
+  const { manifestPath, personaPath } = await writeOneClickFixture({ manifestInputs: { TEAM: 'platform' } });
+  const deployCalls: unknown[] = [];
+  const restoreDeps = configureDeployCommandForTest({
+    createTerminalIO: () => createBufferedIO(),
+    deploy: async (opts) => {
+      deployCalls.push(opts);
+      return {
+        deploymentId: 'dep_123',
+        mode: 'cloud',
+        workspace: opts.workspace ?? 'default',
+        bundleDir: '/tmp/bundle',
+        connectedIntegrations: ['github'],
+        schedules: ['daily'],
+        warnings: [],
+        runHandle: {
+          id: 'agent_123',
+          agentId: 'agent_123',
+          deploymentId: 'dep_123',
+          status: 'ready',
+          stop: async () => {},
+          done: Promise.resolve({ code: 0 })
+        }
+      };
+    }
+  });
+  const trap = trapExit(false);
+  try {
+    await runDeploy([
+      '--one-click',
+      manifestPath,
+      '--yes',
+      '--workspace',
+      'cli-workspace',
+      '--cloud-url',
+      'https://cloud.example.test/',
+      '--input',
+      'TEAM=cli'
+    ]);
+    assert.deepEqual(trap.exits, [0]);
+    assert.equal(deployCalls.length, 1);
+    const deployOpts = deployCalls[0] as Record<string, unknown>;
+    assert.equal(deployOpts.personaPath, personaPath);
+    assert.equal(deployOpts.mode, 'cloud');
+    assert.equal(deployOpts.workspace, 'cli-workspace');
+    assert.equal(deployOpts.cloudUrl, 'https://cloud.example.test/');
+    assert.equal(deployOpts.noPrompt, true);
+    assert.equal(deployOpts.noConnect, true);
+    assert.equal(deployOpts.onExists, 'update');
+    assert.deepEqual(deployOpts.inputs, { TEAM: 'cli' });
+    assert.equal(typeof deployOpts.io, 'object');
+    assert.match(trap.stdout, /ok: dep_123 \(mode=cloud, workspace=cli-workspace\)/);
+    assert.match(trap.stdout, /agent: agent_123/);
+    assert.match(trap.stdout, /fires on: github:issues\.opened, github:issues\.edited, schedule:daily/);
   } finally {
     trap.restore();
     restoreDeps();

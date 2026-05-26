@@ -1,4 +1,5 @@
 import path from 'node:path';
+import { readFile } from 'node:fs/promises';
 import {
   CloudApiClient,
   clearStoredAuth,
@@ -16,8 +17,19 @@ import {
   type CloudAuthRecoveryResolver,
   type DeployMode,
   type DeployOptions,
+  type DeployResult,
   type ModeLaunchHandle
 } from '@agentworkforce/deploy';
+import {
+  deriveDeployRequirements,
+  isIntent,
+  parseAgentManifest,
+  parsePersonaSpec,
+  type AgentManifest,
+  type DeployRequirements,
+  type PersonaIntent,
+  type PersonaSpec
+} from '@agentworkforce/persona-kit';
 import { BUILD_YOUR_OWN_RUNTIME_DOCS_URL, pickRuntime } from './runtime-picker.js';
 
 type LoginApiClient = Pick<CloudApiClient, 'fetch'>;
@@ -29,6 +41,7 @@ type DeployCommandDeps = {
   clearActiveWorkspace: typeof clearActiveWorkspace;
   writeActiveWorkspace: typeof writeActiveWorkspace;
   createTerminalIO: typeof createTerminalIO;
+  deploy: typeof deploy;
   createCloudApiClient(auth: StoredAuth, apiUrl: string): LoginApiClient;
 };
 
@@ -39,6 +52,7 @@ const defaultDeployCommandDeps: DeployCommandDeps = {
   clearActiveWorkspace,
   writeActiveWorkspace,
   createTerminalIO,
+  deploy,
   createCloudApiClient(auth, apiUrl) {
     return new CloudApiClient({
       apiUrl,
@@ -70,6 +84,11 @@ export async function runDeploy(args: readonly string[]): Promise<void> {
     process.exit(args.length === 0 ? 1 : 0);
   }
 
+  if (isOneClickDeploy(args)) {
+    await runOneClickDeploy(args);
+    return;
+  }
+
   let parsed = parseDeployArgs(args);
   if (!parsed.mode && (parsed.noPrompt || !process.stdin.isTTY || !process.stdout.isTTY)) {
     die('deploy: --mode is required when prompts are disabled or stdio is non-interactive');
@@ -84,7 +103,7 @@ export async function runDeploy(args: readonly string[]): Promise<void> {
   }
 
   try {
-    const result = await deploy(parsed, {
+    const result = await deployCommandDeps.deploy(parsed, {
       authRecovery: createDeployAuthRecovery(parsed)
     });
     if (parsed.dryRun) {
@@ -110,6 +129,56 @@ export async function runDeploy(args: readonly string[]): Promise<void> {
   } catch (err) {
     process.stderr.write(
       `\nagentworkforce deploy failed: ${err instanceof Error ? err.message : String(err)}\n`
+    );
+    process.exit(1);
+  }
+}
+
+async function runOneClickDeploy(args: readonly string[]): Promise<void> {
+  const parsed = parseOneClickDeployArgs(args);
+  try {
+    const resolved = await resolveOneClickManifest(parsed.manifestPath);
+    const inputs = {
+      ...(resolved.manifest.inputs ?? {}),
+      ...(parsed.inputs ?? {})
+    };
+    const requirements = deriveDeployRequirements(resolved.manifest, resolved.persona);
+    const workspace = parsed.workspace ?? resolved.manifest.workspace;
+    const plan = renderOneClickPlan({
+      manifest: resolved.manifest,
+      manifestPath: parsed.manifestPath,
+      persona: resolved.persona,
+      personaPath: resolved.personaPath,
+      requirements,
+      workspace,
+      inputs
+    });
+    process.stdout.write(plan);
+    if (parsed.dryRun) {
+      process.stdout.write('\nok: one-click dry-run\n');
+      process.exit(0);
+      return;
+    }
+
+    const deployOpts: DeployOptions = {
+      personaPath: resolved.personaPath,
+      mode: 'cloud',
+      ...(workspace ? { workspace } : {}),
+      ...(parsed.cloudUrl ? { cloudUrl: parsed.cloudUrl } : {}),
+      ...(parsed.noPrompt ? { noPrompt: true } : {}),
+      ...(parsed.noConnect ? { noConnect: true } : {}),
+      onExists: parsed.onExists ?? 'update',
+      ...(Object.keys(inputs).length > 0 ? { inputs } : {}),
+      io: deployCommandDeps.createTerminalIO()
+    };
+    const result = await deployCommandDeps.deploy(deployOpts, {
+      authRecovery: createDeployAuthRecovery(deployOpts)
+    });
+    process.stdout.write(renderOneClickResult(result, resolved.persona, requirements));
+    process.exit(0);
+  } catch (err) {
+    process.stderr.write(
+      `\nagentworkforce deploy --one-click failed: ${err instanceof Error ? err.message : String(err)}\n`
     );
     process.exit(1);
   }
@@ -232,8 +301,11 @@ export async function runLogout(args: readonly string[]): Promise<void> {
 }
 
 const DEPLOY_USAGE = `usage: agentworkforce deploy <persona-path> [flags]
+       agentworkforce deploy --one-click <agent.manifest.json> [flags]
 
 Flags:
+  --one-click <manifest>       Deploy an agent manifest into the shared cloud platform
+  --yes                        Non-interactive one-click deploy (same as --no-prompt)
   --mode dev|sandbox|cloud    Pick a run mode (prompts in an interactive terminal)
   --workspace <name>           Workforce workspace; defaults to the active workspace
   --no-connect                 Skip integration-connect prompts; fail if any are missing
@@ -278,6 +350,201 @@ Flags:
 
 const HARNESS_SOURCES = ['plan', 'byok', 'oauth'] as const;
 const ON_EXISTS_CHOICES = ['update', 'destroy', 'cancel'] as const;
+
+interface OneClickDeployArgs {
+  manifestPath: string;
+  workspace?: string;
+  dryRun?: boolean;
+  cloudUrl?: string;
+  noPrompt?: boolean;
+  noConnect?: boolean;
+  onExists?: DeployOptions['onExists'];
+  inputs?: Record<string, string>;
+}
+
+interface ResolvedOneClickManifest {
+  manifest: AgentManifest;
+  persona: PersonaSpec;
+  personaPath: string;
+}
+
+function isOneClickDeploy(args: readonly string[]): boolean {
+  return args.includes('--one-click') || args.some((arg) => arg.startsWith('--one-click='));
+}
+
+function parseOneClickDeployArgs(args: readonly string[]): OneClickDeployArgs {
+  let manifestPath: string | undefined;
+  let workspace: string | undefined;
+  let dryRun = false;
+  let cloudUrl: string | undefined;
+  let noPrompt = false;
+  let noConnect = false;
+  let onExists: DeployOptions['onExists'];
+  const inputs: Record<string, string> = {};
+
+  for (let i = 0; i < args.length; i += 1) {
+    const a = args[i];
+    if (a === '-h' || a === '--help') {
+      process.stdout.write(DEPLOY_USAGE);
+      process.exit(0);
+    } else if (a === '--one-click') {
+      manifestPath = path.resolve(expectValue('--one-click', args[++i]));
+    } else if (a.startsWith('--one-click=')) {
+      manifestPath = path.resolve(expectInlineValue('--one-click', a.slice('--one-click='.length)));
+    } else if (a === '--workspace') {
+      workspace = expectValue('--workspace', args[++i]);
+    } else if (a.startsWith('--workspace=')) {
+      workspace = expectInlineValue('--workspace', a.slice('--workspace='.length));
+    } else if (a === '--dry-run') {
+      dryRun = true;
+    } else if (a === '--yes') {
+      noPrompt = true;
+      noConnect = true;
+    } else if (a === '--cloud-url') {
+      cloudUrl = expectValue('--cloud-url', args[++i]);
+    } else if (a.startsWith('--cloud-url=')) {
+      cloudUrl = expectInlineValue('--cloud-url', a.slice('--cloud-url='.length));
+    } else if (a === '--no-prompt') {
+      noPrompt = true;
+      noConnect = true;
+    } else if (a === '--no-connect') {
+      noConnect = true;
+    } else if (a === '--on-exists') {
+      onExists = expectChoice('--on-exists', expectValue('--on-exists', args[++i]), ON_EXISTS_CHOICES);
+    } else if (a.startsWith('--on-exists=')) {
+      onExists = expectChoice('--on-exists', expectInlineValue('--on-exists', a.slice('--on-exists='.length)), ON_EXISTS_CHOICES);
+    } else if (a === '--input') {
+      parseDeployInputValue(expectDeployInputValue(args[++i]), inputs);
+    } else if (a.startsWith('--input=')) {
+      parseDeployInputValue(a.slice('--input='.length), inputs);
+    } else if (a === '--isolated' || a.startsWith('--isolated=')) {
+      die('deploy --one-click: --isolated is not supported yet; this MVP deploys into the shared platform');
+    } else if (a === '--mode' || a.startsWith('--mode=')) {
+      die('deploy --one-click always uses --mode cloud');
+    } else if (a.startsWith('--')) {
+      die(`deploy --one-click: unknown flag "${a}"`);
+    } else {
+      die(`deploy --one-click: unexpected positional argument "${a}"`);
+    }
+  }
+
+  if (!manifestPath) {
+    die('deploy --one-click: missing manifest path. Usage: agentworkforce deploy --one-click <agent.manifest.json>');
+  }
+
+  return {
+    manifestPath,
+    ...(workspace ? { workspace } : {}),
+    ...(dryRun ? { dryRun: true } : {}),
+    ...(cloudUrl ? { cloudUrl } : {}),
+    ...(noPrompt ? { noPrompt: true } : {}),
+    ...(noConnect ? { noConnect: true } : {}),
+    ...(onExists ? { onExists } : {}),
+    ...(Object.keys(inputs).length > 0 ? { inputs } : {})
+  };
+}
+
+async function resolveOneClickManifest(manifestPath: string): Promise<ResolvedOneClickManifest> {
+  const manifest = parseAgentManifest(JSON.parse(await readFile(manifestPath, 'utf8')) as unknown);
+  if (manifest.template) {
+    throw new Error(
+      `template manifests are not wired in this CLI slice yet (got template "${manifest.template}")`
+    );
+  }
+  if (!manifest.persona) {
+    throw new Error('manifest must reference a persona path');
+  }
+  const personaPath = path.resolve(path.dirname(manifestPath), manifest.persona);
+  const rawPersona = JSON.parse(await readFile(personaPath, 'utf8')) as unknown;
+  if (!rawPersona || typeof rawPersona !== 'object' || !isIntent((rawPersona as { intent?: unknown }).intent)) {
+    throw new Error('manifest persona must declare a valid intent');
+  }
+  const persona = parsePersonaSpec(rawPersona, (rawPersona as { intent: PersonaIntent }).intent);
+  return { manifest, persona, personaPath };
+}
+
+function renderOneClickPlan(input: {
+  manifest: AgentManifest;
+  manifestPath: string;
+  persona: PersonaSpec;
+  personaPath: string;
+  requirements: DeployRequirements;
+  workspace?: string;
+  inputs: Record<string, string>;
+}): string {
+  const lines = [
+    'one-click deploy plan',
+    `manifest: ${input.manifestPath}`,
+    `persona: ${input.persona.id}`,
+    `persona path: ${input.personaPath}`,
+    `workspace: ${input.workspace ?? 'active workspace'}`,
+    `deploy name: ${input.manifest.name ?? input.persona.id}`,
+    'mode: cloud (shared platform)',
+    renderIntegrationPlan(input.requirements),
+    renderRequiredInputs(input.requirements, input.inputs),
+    'platform secrets: none required (shared platform)',
+    `fires on: ${fireSummary(input.persona, input.requirements)}`
+  ];
+  if (Object.keys(input.inputs).length > 0) {
+    lines.push(`provided inputs: ${Object.keys(input.inputs).sort().join(', ')}`);
+  }
+  return `${lines.join('\n')}\n`;
+}
+
+function renderIntegrationPlan(requirements: DeployRequirements): string {
+  if (requirements.integrations.length === 0) {
+    return 'connect integrations: none';
+  }
+  const lines = ['connect integrations:'];
+  for (const item of requirements.integrations) {
+    const triggers = item.triggers.length > 0 ? item.triggers.join(', ') : 'no event triggers';
+    const suffix = item.reason ? ` - ${item.reason}` : '';
+    lines.push(`  - ${item.provider} (${item.required ? 'required' : 'optional'}): ${triggers}${suffix}`);
+  }
+  return lines.join('\n');
+}
+
+function renderRequiredInputs(requirements: DeployRequirements, providedInputs: Record<string, string>): string {
+  const missingInputs = requirements.inputs.filter((input) => !(input.name in providedInputs));
+  if (missingInputs.length === 0) {
+    return 'required inputs: none';
+  }
+  return [
+    'required inputs:',
+    ...missingInputs.map((input) => {
+      const detail = input.description ? ` - ${input.description}` : '';
+      return `  - ${input.name}${detail}`;
+    })
+  ].join('\n');
+}
+
+function renderOneClickResult(
+  result: DeployResult,
+  persona: PersonaSpec,
+  requirements: DeployRequirements
+): string {
+  const lines = [
+    `\nok: ${result.deploymentId} (mode=${result.mode}, workspace=${result.workspace})`,
+    `agent: ${readAgentId(result.runHandle) ?? result.deploymentId}`,
+    `fires on: ${fireSummary(persona, requirements)}`
+  ];
+  return `${lines.join('\n')}\n`;
+}
+
+function readAgentId(value: unknown): string | undefined {
+  if (!value || typeof value !== 'object') return undefined;
+  const agentId = (value as { agentId?: unknown }).agentId;
+  return typeof agentId === 'string' && agentId ? agentId : undefined;
+}
+
+function fireSummary(persona: PersonaSpec, requirements: DeployRequirements): string {
+  const triggers = requirements.integrations.flatMap((integration) =>
+    integration.triggers.map((trigger) => `${integration.provider}:${trigger}`)
+  );
+  const schedules = (persona.schedules ?? []).map((schedule) => `schedule:${schedule.name}`);
+  const all = [...triggers, ...schedules];
+  return all.length > 0 ? all.join(', ') : 'manual deploy only';
+}
 
 export function parseDeployArgs(args: readonly string[]): DeployOptions {
   let personaPath: string | undefined;
