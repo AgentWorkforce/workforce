@@ -79,10 +79,31 @@ test('firesOn: integration triggers + schedules + watch events, de-duped', () =>
   ]);
 });
 
-test('platformSecrets: empty for Layer A and (currently) for isolated', () => {
+test('platformSecrets: empty for Layer A; backend-derived (default nango) for isolated', () => {
   const p = persona({ integrations: { github: { triggers: [{ on: 'issues.opened' }] } } });
   assert.deepEqual(deriveDeployRequirements(p).platformSecrets, []);
-  assert.deepEqual(deriveDeployRequirements(p, { isolated: true }).platformSecrets, []);
+  const iso = deriveDeployRequirements(p, { isolated: true });
+  assert.deepEqual(iso.platformSecrets.map((s) => s.name), ['NangoSecretKey', 'WebRelayauthApiKey']);
+  assert.ok(iso.platformSecrets.every((s) => s.required));
+});
+
+test('platformSecrets: injected resolver → composio backend + gitlab webhook-gap (no hand-list)', () => {
+  const p = persona({
+    integrations: {
+      toolx: { triggers: [{ on: 'x' }] },
+      gitlab: { triggers: [{ on: 'push' }] }
+    }
+  });
+  const iso = deriveDeployRequirements(p, {
+    isolated: true,
+    resolveBackend: (prov) => (prov === 'toolx' ? 'composio' : 'nango'),
+    isWebhookGapProvider: (prov) => prov === 'gitlab'
+  });
+  const names = iso.platformSecrets.map((s) => s.name);
+  assert.ok(names.includes('ComposioApiKey'), 'composio backend → ComposioApiKey');
+  assert.ok(names.includes('NangoSecretKey'), 'nango backend → NangoSecretKey');
+  assert.ok(names.includes('WebRelayauthApiKey'));
+  assert.ok(names.includes('HookdeckSigningSecret'), 'gitlab webhook-gap → Hookdeck');
 });
 
 test('empty persona: no integrations/inputs/firesOn', () => {

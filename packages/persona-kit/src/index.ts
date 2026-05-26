@@ -109,7 +109,11 @@ export {
 // from the persona definition (single source of truth; no separate manifest).
 export {
   deriveDeployRequirements,
+  PLATFORM_SECRETS_BY_BACKEND,
+  WEBHOOK_GAP_PLATFORM_SECRET,
   type DeployRequirements,
+  type DeriveDeployRequirementsOptions,
+  type IntegrationBackend,
   type RequiredInput,
   type RequiredIntegration,
   type RequiredPlatformSecret
