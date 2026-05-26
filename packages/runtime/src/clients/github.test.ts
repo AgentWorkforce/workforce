@@ -82,6 +82,31 @@ test('github.createPullRequest writes a draft pull request file under pulls/', a
   }
 });
 
+test('github.mergePullRequest writes a merge draft under pulls/<n>/merge.json', async () => {
+  const root = await tempMount();
+  try {
+    const client = createGithubClient({ relayfileMountRoot: root, writebackTimeoutMs: 0 });
+    const result = await client.mergePullRequest({
+      owner: 'o',
+      repo: 'r',
+      number: 42,
+      method: 'rebase',
+      commitTitle: 'Merge PR #42',
+      commitMessage: 'Ship the feature.'
+    });
+
+    assert.deepEqual(result, { merged: false });
+    const mergePath = path.join(root, 'github/repos/o/r/pulls/42/merge.json');
+    assert.deepEqual(JSON.parse(await readFile(mergePath, 'utf8')), {
+      method: 'rebase',
+      commitTitle: 'Merge PR #42',
+      commitMessage: 'Ship the feature.'
+    });
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
 test('github.upsertIssue updates an existing flat issue match', async () => {
   const root = await tempMount();
   try {

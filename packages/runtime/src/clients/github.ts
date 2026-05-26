@@ -39,6 +39,14 @@ export interface GithubClient {
     base: string;
     files?: Record<string, string>;
   }): Promise<{ number: number; url: string }>;
+  mergePullRequest(args: {
+    owner: string;
+    repo: string;
+    number: number;
+    method?: 'merge' | 'squash' | 'rebase';
+    commitTitle?: string;
+    commitMessage?: string;
+  }): Promise<{ merged: boolean; sha?: string }>;
   upsertIssue(args: {
     owner: string;
     repo: string;
@@ -155,6 +163,30 @@ export function createGithubClient(opts: IntegrationClientOptions): GithubClient
       );
       const number = Number(result.receipt?.created ?? result.receipt?.id ?? 0);
       return { number: Number.isFinite(number) ? number : 0, url: result.receipt?.url ?? result.path };
+    },
+
+    async mergePullRequest(args) {
+      const result = await writeJsonFile(
+        opts,
+        'github',
+        'mergePullRequest',
+        `${repoRoot(args.owner, args.repo)}/pulls/${encodeSegment(args.number)}/merge.json`,
+        {
+          method: args.method ?? 'squash',
+          ...(args.commitTitle ? { commitTitle: args.commitTitle } : {}),
+          ...(args.commitMessage ? { commitMessage: args.commitMessage } : {})
+        }
+      );
+      const sha =
+        typeof result.receipt?.sha === 'string'
+          ? result.receipt.sha
+          : typeof result.receipt?.id === 'string'
+            ? result.receipt.id
+            : undefined;
+      return {
+        merged: result.receipt?.merged === true || result.receipt?.merged === 'true',
+        ...(sha ? { sha } : {})
+      };
     },
 
     async upsertIssue(args) {
