@@ -126,8 +126,10 @@ function extractText(raw: string): string | undefined {
  *  modify writeback (writing to the thread's VFS path). Mirrors
  *  ../github-email-digest/agent.ts. */
 async function modifyThread(ctx: WorkforceCtx, account: string, threadId: string, action: 'archive' | 'restore'): Promise<void> {
-  const root = process.env.RELAYFILE_MOUNT_ROOT?.replace(/\/$/, '') ?? '';
-  const path = `${root}/gmail/${encodeURIComponent(account)}/threads/${encodeURIComponent(threadId)}.json`;
+  const mount = process.env.RELAYFILE_MOUNT_ROOT?.replace(/\/$/, '') ?? '';
+  // Gmail provider id is `google-mail`, mounted at /google-mail (override with GMAIL_VFS_ROOT).
+  const gmailRoot = (input(ctx, 'GMAIL_VFS_ROOT') ?? '/google-mail').replace(/\/$/, '');
+  const path = `${mount}${gmailRoot}/${encodeURIComponent(account)}/threads/${encodeURIComponent(threadId)}.json`;
   const body = action === 'archive' ? { removeLabelIds: ['INBOX'] } : { addLabelIds: ['INBOX'] };
   await ctx.files.write(path, JSON.stringify(body));
 }

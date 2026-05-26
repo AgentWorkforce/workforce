@@ -7,7 +7,7 @@ explicitly OK.
 
 ```
 cron (08:00 / 13:00 / 18:00)
-  → read /gmail/<account>/threads/*.json from the Relayfile VFS   (gmail integration)
+  → read /google-mail/**/*.json from the Relayfile VFS            (google-mail integration)
   → keep messages still in INBOX, from GitHub senders
   → ARCHIVE the ones you labelled "Archive-Approved" last cycle   (gmail modify writeback)
   → summarize the NEW ones with ctx.llm                            (deduped via durable memory)
@@ -38,7 +38,8 @@ you the Slack-native approval path too.
 | Input | Default | Effect |
 | --- | --- | --- |
 | `SLACK_USER` | *(required)* | Your Slack user id, e.g. `U0123ABCD`. The agent DMs you here. |
-| `GMAIL_ACCOUNT` | `me` | Account segment in the VFS path `/gmail/<account>/threads`. |
+| `GMAIL_ACCOUNT` | `me` | Account segment under the Gmail VFS root. |
+| `GMAIL_VFS_ROOT` | `/google-mail` | Where the Gmail provider is mounted. The connect registry calls the provider `google-mail` (not `gmail`) and mounts it here. |
 | `APPROVAL_LABEL` | `Archive-Approved` | Gmail label you apply to approve archiving. |
 | `GITHUB_SENDERS` | `notifications@github.com,noreply@github.com,@github.com` | Sender substrings that count as "from GitHub". |
 | `DRY_RUN` | `false` | `true` = compose + DM, but never write the archive. Great for the first run. |
@@ -50,15 +51,41 @@ stand-alone; the runtime sets it for you in `--mode cloud`.
 ## How Gmail reads/writes work
 
 Like every Workforce integration, the handler does **not** call the Gmail API
-directly. The `gmail` integration mounts the Relayfile VFS; the handler reads
-message JSON from `/gmail/<account>/threads/*.json` and archives by *writing*
-`{"removeLabelIds":["INBOX","Archive-Approved"]}` to a message's path. Relayfile's
-writeback worker turns that file write into a `users/<account>/messages/<id>/modify`
+directly. The **`google-mail`** integration (that's the provider id — `gmail` is
+only the adapter slug and is rejected at connect with `409 unknown_provider`)
+mounts the Relayfile VFS at `/google-mail`; the handler reads message JSON from
+there and archives by *writing* `{"removeLabelIds":["INBOX","Archive-Approved"]}`
+to a message's path. Relayfile's writeback worker turns that file write into a
+`users/<account>/messages/<id>/modify`
 call. There's no `GMAIL_TOKEN` to manage — Relayfile holds the OAuth creds.
 
 > Archiving only takes effect when the Relayfile writeback worker is active for
 > your Gmail mount. With `DRY_RUN=true` the agent reports what it *would* archive
 > without writing anything.
+
+## Catching the provider-id mistake at compile time
+
+The integration key is the **cloud provider id** (`google-mail`), not the
+adapter slug (`gmail`). `definePersona` autocompletes trigger `on` names but
+does **not** yet constrain `integrations` *keys* — so `gmail` would type-check
+and only fail at deploy with `409 unknown_provider`. `persona.ts` pins the keys
+to fix that:
+
+```ts
+type IntegrationProvider =
+  | 'github' | 'slack' | 'google-mail' | 'google-calendar' | 'linear' | /* … */;
+
+const integrations = {
+  'google-mail': {},
+  slack: {}
+} satisfies Partial<Record<IntegrationProvider, IntegrationCfg>>;
+//  ^ `gmail: {}` here is a COMPILE error (TS2353), with autocomplete of valid ids.
+```
+
+The provider list is workspace-specific (the Relayfile connect registry is the
+source of truth — it's also what the `409` body lists). Ideally `persona-kit`
+constrains these keys natively; until then, pinning them locally turns a deploy
+failure into a red squiggle.
 
 ## Deploy
 

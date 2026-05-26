@@ -5,7 +5,7 @@
   "description": "Proactive agent: 3×/day, summarizes new GitHub emails from your Gmail inbox, DMs you the digest on Slack, and archives only the messages you approve (by labelling them).",
   "cloud": true,
   "integrations": {
-    "gmail": {},
+    "google-mail": {},
     "slack": {}
   },
   "schedules": [{ "name": "digest", "cron": "0 8,13,18 * * *", "tz": "America/New_York" }],
@@ -15,9 +15,14 @@
       "env": "SLACK_USER"
     },
     "GMAIL_ACCOUNT": {
-      "description": "Gmail account segment in the VFS path /gmail/<account>/threads.",
+      "description": "Gmail account segment under the Gmail VFS root.",
       "env": "GMAIL_ACCOUNT",
       "default": "me"
+    },
+    "GMAIL_VFS_ROOT": {
+      "description": "Where the Gmail provider is mounted (connect registry: /google-mail).",
+      "env": "GMAIL_VFS_ROOT",
+      "default": "/google-mail"
     },
     "APPROVAL_LABEL": {
       "description": "Gmail label you apply to approve a message for archiving.",

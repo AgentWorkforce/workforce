@@ -12,10 +12,10 @@
  *      durable memory) and DMs you the digest on Slack, telling you to apply
  *      the approval label to anything you want filed away next cycle.
  *
- * Why a schedule and not a `gmail` trigger? "Three times a day" is inherently
- * batched. The `gmail` trigger events (`file.created` etc.) fire per-message in
- * real time, which is the opposite of a thrice-daily digest. For a Slack-event-
- * triggered companion, see ../slack-reaction-archiver.
+ * Why a schedule and not a `google-mail` trigger? "Three times a day" is
+ * inherently batched. The Gmail trigger events (`file.created` etc.) fire
+ * per-message in real time, the opposite of a thrice-daily digest. For a
+ * Slack-event-triggered companion, see ../slack-reaction-archiver.
  */
 import { handler, type WorkforceCtx } from '@agentworkforce/runtime';
 
@@ -25,8 +25,11 @@ interface Config {
   approvalLabel: string;
   /** Senders that count as "from GitHub". Substring match, case-insensitive. */
   senders: string[];
-  /** Prefix the Gmail VFS is mounted under. Empty = paths start at `/gmail`. */
+  /** Prefix the Relayfile VFS is mounted under (RELAYFILE_MOUNT_ROOT). */
   mountRoot: string;
+  /** VFS root for the Gmail provider — the connect registry calls it
+   *  `google-mail` and mounts it at `/google-mail` (NOT `/gmail`). */
+  gmailRoot: string;
   /** When true, compose + DM the digest but never write the archive. */
   dryRun: boolean;
   /** When true, DM a heartbeat even when there's nothing to report (test aid). */
@@ -117,6 +120,7 @@ function readConfig(ctx: WorkforceCtx): Config {
     approvalLabel: input(ctx, 'APPROVAL_LABEL') ?? 'Archive-Approved',
     senders: sendersRaw.split(',').map((s) => s.trim().toLowerCase()).filter(Boolean),
     mountRoot: process.env.RELAYFILE_MOUNT_ROOT?.replace(/\/$/, '') ?? '',
+    gmailRoot: (input(ctx, 'GMAIL_VFS_ROOT') ?? '/google-mail').replace(/\/$/, ''),
     dryRun: (input(ctx, 'DRY_RUN') ?? '').toLowerCase() === 'true',
     forceDm: (input(ctx, 'FORCE_DM') ?? '').toLowerCase() === 'true'
   };
@@ -133,7 +137,7 @@ function input(ctx: WorkforceCtx, name: string): string | undefined {
 
 /** List every Gmail thread file under the mounted VFS and parse it. */
 async function listInboxMessages(ctx: WorkforceCtx, cfg: Config): Promise<GmailMessage[]> {
-  const dir = `${cfg.mountRoot}/gmail`;
+  const dir = `${cfg.mountRoot}${cfg.gmailRoot}`;
   const { output, exitCode } = await ctx.sandbox.exec(
     `find ${shellQuote(dir)} -type f -name '*.json' 2>/dev/null || true`
   );

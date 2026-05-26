@@ -33,8 +33,10 @@ export default definePersona({
         // { on: 'message.created', where: "channel == 'C_GITHUB_ALERTS'" }
       ]
     },
-    // gmail mounts the VFS so the handler can issue the archive writeback.
-    gmail: {}
+    // Gmail VFS for the archive writeback. The provider id is `google-mail`
+    // (mounted at /google-mail) — NOT `gmail` (that's just the adapter slug;
+    // deploying with `gmail` fails connect with 409 unknown_provider).
+    'google-mail': {}
   },
 
   inputs: {
@@ -44,9 +46,14 @@ export default definePersona({
       default: 'white_check_mark'
     },
     GMAIL_ACCOUNT: {
-      description: 'Gmail account segment in the VFS path /gmail/<account>/threads.',
+      description: 'Gmail account segment under the Gmail VFS root.',
       env: 'GMAIL_ACCOUNT',
       default: 'me'
+    },
+    GMAIL_VFS_ROOT: {
+      description: 'Where the Gmail provider is mounted (connect registry: /google-mail).',
+      env: 'GMAIL_VFS_ROOT',
+      default: '/google-mail'
     },
     DRY_RUN: {
       description: 'Set "true" to detect + reply but never write the archive.',

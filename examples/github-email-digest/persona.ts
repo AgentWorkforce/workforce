@@ -14,6 +14,34 @@
  */
 import { definePersona } from '@agentworkforce/persona-kit'; // ≥ 3.0.23
 
+/**
+ * Cloud integration provider ids — the source of truth is the Relayfile connect
+ * registry (what `agentworkforce deploy --mode cloud` accepts). Note Gmail's id
+ * is `google-mail`, NOT `gmail` (`gmail` is only the adapter slug): deploying
+ * with `gmail` fails connect with `409 unknown_provider`.
+ *
+ * persona-kit doesn't yet constrain `integrations` keys, so we pin them here:
+ * the `satisfies` below turns a wrong key into a COMPILE error with autocomplete
+ * of the valid ids — instead of a deploy-time 409. (Workspaces can also expose
+ * named aliases like `slack-nightcto`; the registry is authoritative.)
+ */
+type IntegrationProvider =
+  | 'github' | 'gitlab' | 'hubspot' | 'x' | 'slack' | 'notion' | 'linear'
+  | 'jira' | 'confluence' | 'google-mail' | 'google-calendar' | 'granola'
+  | 'fathom' | 'docker-hub';
+
+interface IntegrationCfg {
+  source?: string;
+  scope?: Record<string, string>;
+  triggers?: readonly { on: string; match?: string; where?: string }[];
+}
+
+// Key-checked integrations. `gmail: {}` here would be a compile error — try it.
+const integrations = {
+  'google-mail': {}, // Gmail VFS, mounted at /google-mail
+  slack: {} // typed ctx.slack client for the DM
+} satisfies Partial<Record<IntegrationProvider, IntegrationCfg>>;
+
 export default definePersona({
   id: 'github-email-digest',
   intent: 'relay-orchestrator',
@@ -22,16 +50,11 @@ export default definePersona({
     'Proactive agent: 3×/day, summarizes new GitHub emails from your Gmail inbox, DMs you the digest on Slack, and archives only the messages you approve (by labelling them).',
   cloud: true,
 
-  // `gmail` mounts the Relayfile VFS at /gmail so the handler can read inbox
-  // messages and issue the archive writeback. `slack` gives the handler the
-  // typed ctx.slack client for the DM. No triggers here — this persona is
-  // schedule-driven (see below). If you typed a `triggers` block under gmail,
-  // your editor would now autocomplete file.created / file.updated /
-  // file.deleted thanks to PR #113.
-  integrations: {
-    gmail: {},
-    slack: {}
-  },
+  // `google-mail` mounts the Gmail VFS at /google-mail so the handler can read
+  // inbox messages and issue the archive writeback; `slack` gives the handler
+  // the typed ctx.slack client for the DM. No triggers here — schedule-driven
+  // (below). See ../slack-reaction-archiver for trigger `on` autocomplete.
+  integrations,
 
   // Three times a day. cron is "minute hour … " — 08:00, 13:00, 18:00.
   // Change `tz` to your timezone (IANA name); it defaults to UTC otherwise.
@@ -43,9 +66,14 @@ export default definePersona({
       env: 'SLACK_USER'
     },
     GMAIL_ACCOUNT: {
-      description: 'Gmail account segment in the VFS path /gmail/<account>/threads.',
+      description: 'Gmail account segment under the Gmail VFS root.',
       env: 'GMAIL_ACCOUNT',
       default: 'me'
+    },
+    GMAIL_VFS_ROOT: {
+      description: 'Where the Gmail provider is mounted (connect registry: /google-mail).',
+      env: 'GMAIL_VFS_ROOT',
+      default: '/google-mail'
     },
     APPROVAL_LABEL: {
       description: 'Gmail label you apply to approve a message for archiving.',

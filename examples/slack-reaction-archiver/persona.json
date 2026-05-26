@@ -9,7 +9,7 @@
     "slack": {
       "triggers": [{ "on": "reaction.added" }, { "on": "reaction.removed" }]
     },
-    "gmail": {}
+    "google-mail": {}
   },
   "inputs": {
     "EMOJI": {
@@ -18,9 +18,14 @@
       "default": "white_check_mark"
     },
     "GMAIL_ACCOUNT": {
-      "description": "Gmail account segment in the VFS path /gmail/<account>/threads.",
+      "description": "Gmail account segment under the Gmail VFS root.",
       "env": "GMAIL_ACCOUNT",
       "default": "me"
+    },
+    "GMAIL_VFS_ROOT": {
+      "description": "Where the Gmail provider is mounted (connect registry: /google-mail).",
+      "env": "GMAIL_VFS_ROOT",
+      "default": "/google-mail"
     },
     "DRY_RUN": {
       "description": "Set \"true\" to detect + reply but never write the archive.",

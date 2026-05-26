@@ -16,7 +16,7 @@ integrations: {
       { on: 'reaction.removed' }  // un-✅ → restore to inbox
     ]
   },
-  gmail: {}
+  'google-mail': {}  // provider id is google-mail, NOT gmail
 }
 ```
 
@@ -69,7 +69,8 @@ scans for those tokens. If it can't read the reacted message, it does
 | Input | Default | Effect |
 | --- | --- | --- |
 | `EMOJI` | `white_check_mark` | Reaction that approves archiving (no colons). |
-| `GMAIL_ACCOUNT` | `me` | Account segment in `/gmail/<account>/threads`. |
+| `GMAIL_ACCOUNT` | `me` | Account segment under the Gmail VFS root. |
+| `GMAIL_VFS_ROOT` | `/google-mail` | Where the Gmail provider (`google-mail`) is mounted. |
 | `DRY_RUN` | `false` | `true` = detect + reply, but never write the archive. |
 
 ## Deploy
