@@ -156,7 +156,8 @@ class MockNotionEssayRuntime {
         createPullRequest: async (args) => {
           this.githubPullRequests.push(args);
           return { number: 17, url: 'https://github.com/AgentWorkforce/proactive-agents/pull/17' };
-        }
+        },
+        mergePullRequest: async () => ({ merged: true, sha: 'merge-sha' })
       }
     };
   }
