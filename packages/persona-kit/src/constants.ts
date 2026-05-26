@@ -20,8 +20,13 @@ export const PERSONA_TAGS = [
   'analytics'
 ] as const;
 
-/** A valid persona tag (one of {@link PERSONA_TAGS}). */
-export type PersonaTag = (typeof PERSONA_TAGS)[number];
+/**
+ * The closed authoring vocabulary as a union (one of {@link PERSONA_TAGS}).
+ * Distinct from the runtime `PersonaTag` (= `string`) in types.ts, which stays
+ * open for catalog filtering/legacy data — this is the strict type
+ * `definePersona` holds authors to so a bad tag is a compile error.
+ */
+export type KnownPersonaTag = (typeof PERSONA_TAGS)[number];
 export const PERSONA_INTENTS = [
   'implement-frontend',
   'review',

@@ -13,7 +13,7 @@ import type {
   WatchRule
 } from './types.js';
 import type { KnownProviderName, KnownTriggerName } from './triggers.js';
-import type { PersonaTag } from './constants.js';
+import type { KnownPersonaTag } from './constants.js';
 
 export type TriggerNameFor<P extends string> = P extends KnownProviderName
   ? KnownTriggerName<P> | (string & {})
@@ -40,9 +40,9 @@ export type TypedIntegrations = {
 export interface PersonaDefinitionBase {
   id: string;
   intent: string;
-  /** Catalog labels — must be from the closed {@link PersonaTag} vocabulary
-   *  (the cloud rejects unknown tags with `400 invalid_persona`). */
-  tags?: readonly PersonaTag[];
+  /** Catalog labels — must be from the closed {@link KnownPersonaTag}
+   *  vocabulary (the cloud rejects unknown tags with `400 invalid_persona`). */
+  tags?: readonly KnownPersonaTag[];
   description: string;
   skills?: readonly PersonaSkill[];
   inputs?: Record<string, PersonaInputSpec | string>;

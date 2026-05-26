@@ -11,6 +11,7 @@ export {
   SIDECAR_MD_MODES,
   SKILL_SOURCE_KINDS
 } from './constants.js';
+export type { KnownPersonaTag } from './constants.js';
 
 // Types
 export type {
