@@ -263,8 +263,8 @@ export interface PersonaSpec {
    * Catalog labels from the closed {@link PERSONA_TAGS} vocabulary (e.g.
    * `['documentation', 'review']`); they do NOT overlap with {@link intent}.
    * The cloud rejects off-vocabulary tags with `400 invalid_persona`, and
-   * `definePersona` types `tags` against {@link PersonaTag} to catch that at
-   * compile time. This parsed shape stays `string[]` for runtime leniency.
+   * `definePersona` types `tags` against {@link KnownPersonaTag} to catch that
+   * at compile time. This parsed shape stays `string[]` for runtime leniency.
    * Optional; omitted, `null`, and empty-array values are treated identically.
    */
   tags?: readonly string[];

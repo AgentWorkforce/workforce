@@ -18,7 +18,7 @@
             "minLength": 1,
             "maxLength": 64
           },
-          "description": "Free-form catalog labels mirroring `tags text[]` in cloud#553. Tags are denormalized metadata for catalog filtering — they are NOT a closed enum and do NOT overlap with  {@link  intent } . Authors are free to label personas with provider names, project codes, or workflow shapes (e.g. `['proactive', 'notion', 'github']`). Optional; omitted, `null`, and empty-array values are treated identically."
+          "description": "Catalog labels from the closed  {@link  PERSONA_TAGS  }  vocabulary (e.g. `['documentation', 'review']`); they do NOT overlap with  {@link  intent } . The cloud rejects off-vocabulary tags with `400 invalid_persona`, and `definePersona` types `tags` against  {@link  KnownPersonaTag  }  to catch that at compile time. This parsed shape stays `string[]` for runtime leniency. Optional; omitted, `null`, and empty-array values are treated identically."
         },
         "description": {
           "type": "string"
