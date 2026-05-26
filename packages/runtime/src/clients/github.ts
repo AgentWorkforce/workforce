@@ -173,7 +173,7 @@ export function createGithubClient(opts: IntegrationClientOptions): GithubClient
         'mergePullRequest',
         `${repoRoot(args.owner, args.repo)}/pulls/${encodeSegment(args.number)}/merge.json`,
         {
-          merge_method: args.method ?? 'squash',
+          ...(args.method !== undefined ? { merge_method: args.method } : {}),
           ...(args.commitTitle !== undefined ? { commit_title: args.commitTitle } : {}),
           ...(args.commitMessage !== undefined ? { commit_message: args.commitMessage } : {}),
           ...(args.sha !== undefined ? { sha: args.sha } : {})
@@ -186,9 +186,10 @@ export function createGithubClient(opts: IntegrationClientOptions): GithubClient
             ? result.receipt.id
             : typeof result.receipt?.externalId === 'string'
               ? result.receipt.externalId
-            : undefined;
+              : undefined;
+      const receiptMerged = result.receipt?.merged;
       return {
-        merged: result.receipt?.merged === true || result.receipt?.merged === 'true' || Boolean(sha),
+        merged: receiptMerged === true || receiptMerged === 'true' || (receiptMerged === undefined && Boolean(sha)),
         ...(sha ? { sha } : {})
       };
     },

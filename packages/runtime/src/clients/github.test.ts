@@ -109,6 +109,29 @@ test('github.mergePullRequest writes a merge draft under pulls/<n>/merge.json', 
   }
 });
 
+test('github.mergePullRequest preserves empty commit metadata and omits the merge method by default', async () => {
+  const root = await tempMount();
+  try {
+    const client = createGithubClient({ relayfileMountRoot: root, writebackTimeoutMs: 0 });
+    const result = await client.mergePullRequest({
+      owner: 'o',
+      repo: 'r',
+      number: 42,
+      commitTitle: '',
+      commitMessage: ''
+    });
+
+    assert.deepEqual(result, { merged: false });
+    const mergePath = path.join(root, 'github/repos/o/r/pulls/42/merge.json');
+    assert.deepEqual(JSON.parse(await readFile(mergePath, 'utf8')), {
+      commit_title: '',
+      commit_message: ''
+    });
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
 test('github.mergePullRequest waits for a GitHub merge receipt', async () => {
   const root = await tempMount();
   try {
@@ -122,11 +145,82 @@ test('github.mergePullRequest waits for a GitHub merge receipt', async () => {
       sha: 'reviewed-head'
     });
 
-    setTimeout(() => {
-      void writeFile(mergePath, `${JSON.stringify({ merged: true, sha: 'merge-sha' })}\n`, 'utf8');
-    }, 25);
+    const receiptWritePromise = (async () => {
+      await new Promise((resolve) => setTimeout(resolve, 25));
+      await writeFile(mergePath, `${JSON.stringify({ merged: true, sha: 'merge-sha' })}\n`, 'utf8');
+    })();
 
-    assert.deepEqual(await resultPromise, { merged: true, sha: 'merge-sha' });
+    const [result] = await Promise.all([resultPromise, receiptWritePromise]);
+    assert.deepEqual(result, { merged: true, sha: 'merge-sha' });
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
+test('github.mergePullRequest accepts string merge receipts', async () => {
+  const root = await tempMount();
+  try {
+    const client = createGithubClient({ relayfileMountRoot: root, writebackTimeoutMs: 1_000, writebackPollMs: 10 });
+    const mergePath = path.join(root, 'github/repos/o/r/pulls/42/merge.json');
+    const resultPromise = client.mergePullRequest({
+      owner: 'o',
+      repo: 'r',
+      number: 42
+    });
+
+    const receiptWritePromise = (async () => {
+      await new Promise((resolve) => setTimeout(resolve, 25));
+      await writeFile(mergePath, `${JSON.stringify({ merged: 'true', sha: 'merge-sha' })}\n`, 'utf8');
+    })();
+
+    const [result] = await Promise.all([resultPromise, receiptWritePromise]);
+    assert.deepEqual(result, { merged: true, sha: 'merge-sha' });
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
+test('github.mergePullRequest respects explicit failed merge receipts with sha values', async () => {
+  const root = await tempMount();
+  try {
+    const client = createGithubClient({ relayfileMountRoot: root, writebackTimeoutMs: 1_000, writebackPollMs: 10 });
+    const mergePath = path.join(root, 'github/repos/o/r/pulls/42/merge.json');
+    const resultPromise = client.mergePullRequest({
+      owner: 'o',
+      repo: 'r',
+      number: 42
+    });
+
+    const receiptWritePromise = (async () => {
+      await new Promise((resolve) => setTimeout(resolve, 25));
+      await writeFile(mergePath, `${JSON.stringify({ merged: false, sha: 'head-sha' })}\n`, 'utf8');
+    })();
+
+    const [result] = await Promise.all([resultPromise, receiptWritePromise]);
+    assert.deepEqual(result, { merged: false, sha: 'head-sha' });
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
+test('github.mergePullRequest treats identifier-only receipts as merged', async () => {
+  const root = await tempMount();
+  try {
+    const client = createGithubClient({ relayfileMountRoot: root, writebackTimeoutMs: 1_000, writebackPollMs: 10 });
+    const mergePath = path.join(root, 'github/repos/o/r/pulls/42/merge.json');
+    const resultPromise = client.mergePullRequest({
+      owner: 'o',
+      repo: 'r',
+      number: 42
+    });
+
+    const receiptWritePromise = (async () => {
+      await new Promise((resolve) => setTimeout(resolve, 25));
+      await writeFile(mergePath, `${JSON.stringify({ id: 'merge-sha' })}\n`, 'utf8');
+    })();
+
+    const [result] = await Promise.all([resultPromise, receiptWritePromise]);
+    assert.deepEqual(result, { merged: true, sha: 'merge-sha' });
   } finally {
     await rm(root, { recursive: true, force: true });
   }

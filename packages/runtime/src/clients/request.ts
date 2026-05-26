@@ -242,7 +242,8 @@ async function waitForReceipt(
         typeof parsed.path === 'string' ||
         typeof parsed.id === 'string' ||
         typeof parsed.externalId === 'string' ||
-        typeof parsed.merged === 'boolean')
+        typeof parsed.merged === 'boolean' ||
+        typeof parsed.merged === 'string')
     ) {
       return parsed as WritebackReceipt;
     }
