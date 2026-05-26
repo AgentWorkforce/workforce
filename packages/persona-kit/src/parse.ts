@@ -594,7 +594,7 @@ export function parseIntegrationConfig(
   if (!isObject(value)) {
     throw new Error(`${context} must be an object`);
   }
-  const { source, scope, triggers } = value;
+  const { source, scope, triggers, optional } = value;
 
   const out: PersonaIntegrationConfig = {};
 
@@ -625,6 +625,17 @@ export function parseIntegrationConfig(
     out.triggers = triggers.map((entry, idx) =>
       parseIntegrationTrigger(entry, `${context}.triggers[${idx}]`)
     );
+  }
+
+  if (optional !== undefined) {
+    if (typeof optional !== 'boolean') {
+      throw new Error(`${context}.optional must be a boolean if provided`);
+    }
+    // Only persist when explicitly true; absence/false means "required"
+    // (the default), keeping parsed specs minimal for pre-existing personas.
+    if (optional) {
+      out.optional = true;
+    }
   }
 
   return out;
