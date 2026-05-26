@@ -1,4 +1,5 @@
 import path from 'node:path';
+import { readFile } from 'node:fs/promises';
 import {
   CloudApiClient,
   clearStoredAuth,
@@ -18,7 +19,15 @@ import {
   type DeployOptions,
   type ModeLaunchHandle
 } from '@agentworkforce/deploy';
+import {
+  deriveDeployRequirements,
+  parsePersonaSpec,
+  type DeployRequirements,
+  type PersonaIntent,
+  type PersonaSpec
+} from '@agentworkforce/persona-kit';
 import { BUILD_YOUR_OWN_RUNTIME_DOCS_URL, pickRuntime } from './runtime-picker.js';
+import { compilePersonaFile } from './persona-compile.js';
 
 type LoginApiClient = Pick<CloudApiClient, 'fetch'>;
 
@@ -29,6 +38,8 @@ type DeployCommandDeps = {
   clearActiveWorkspace: typeof clearActiveWorkspace;
   writeActiveWorkspace: typeof writeActiveWorkspace;
   createTerminalIO: typeof createTerminalIO;
+  deploy: typeof deploy;
+  compilePersonaFile: typeof compilePersonaFile;
   createCloudApiClient(auth: StoredAuth, apiUrl: string): LoginApiClient;
 };
 
@@ -39,6 +50,8 @@ const defaultDeployCommandDeps: DeployCommandDeps = {
   clearActiveWorkspace,
   writeActiveWorkspace,
   createTerminalIO,
+  deploy,
+  compilePersonaFile,
   createCloudApiClient(auth, apiUrl) {
     return new CloudApiClient({
       apiUrl,
@@ -70,6 +83,11 @@ export async function runDeploy(args: readonly string[]): Promise<void> {
     process.exit(args.length === 0 ? 1 : 0);
   }
 
+  if (args.includes('--one-click')) {
+    await runOneClickDeploy(args);
+    return;
+  }
+
   let parsed = parseDeployArgs(args);
   if (!parsed.mode && (parsed.noPrompt || !process.stdin.isTTY || !process.stdout.isTTY)) {
     die('deploy: --mode is required when prompts are disabled or stdio is non-interactive');
@@ -84,7 +102,7 @@ export async function runDeploy(args: readonly string[]): Promise<void> {
   }
 
   try {
-    const result = await deploy(parsed, {
+    const result = await deployCommandDeps.deploy(parsed, {
       authRecovery: createDeployAuthRecovery(parsed)
     });
     if (parsed.dryRun) {
@@ -113,6 +131,263 @@ export async function runDeploy(args: readonly string[]): Promise<void> {
     );
     process.exit(1);
   }
+}
+
+export async function runOneClickDeploy(args: readonly string[]): Promise<void> {
+  try {
+    const parsed = parseOneClickDeployArgs(args);
+    const loaded = await loadOneClickPersona(parsed.personaPath);
+    const requirements = deriveDeployRequirements(loaded.persona);
+    const inputs = await resolveOneClickInputs(requirements, parsed.inputs, {
+      noPrompt: parsed.noPrompt,
+      io: deployCommandDeps.createTerminalIO()
+    });
+    process.stdout.write(formatOneClickPlan(loaded.persona, requirements, inputs));
+
+    if (parsed.dryRun) {
+      process.stdout.write('\n--dry-run: plan rendered; exiting before deploy\n');
+      process.exit(0);
+      return;
+    }
+
+    const opts: DeployOptions = {
+      personaPath: loaded.personaPath,
+      mode: 'cloud',
+      onExists: 'update',
+      ...(parsed.workspace ? { workspace: parsed.workspace } : {}),
+      ...(parsed.noConnect ? { noConnect: true } : {}),
+      ...(parsed.cloudUrl ? { cloudUrl: parsed.cloudUrl } : {}),
+      ...(parsed.noPrompt ? { noPrompt: true } : {}),
+      ...(parsed.harnessSource ? { harnessSource: parsed.harnessSource } : {}),
+      ...(parsed.byokKey ? { byokKey: parsed.byokKey } : {}),
+      ...(Object.keys(inputs).length > 0 ? { inputs } : {})
+    };
+    const result = await deployCommandDeps.deploy(opts, {
+      authRecovery: createDeployAuthRecovery(opts)
+    });
+    process.stdout.write(
+      `\nok: ${result.deploymentId} (mode=${result.mode}, workspace=${result.workspace})\n`
+    );
+    process.exit(0);
+    return;
+  } catch (err) {
+    process.stderr.write(
+      `\nagentworkforce deploy --one-click failed: ${err instanceof Error ? err.message : String(err)}\n`
+    );
+    process.exit(1);
+  }
+}
+
+type OneClickDeployArgs = {
+  personaPath: string;
+  workspace?: string;
+  noConnect?: boolean;
+  dryRun?: boolean;
+  cloudUrl?: string;
+  noPrompt?: boolean;
+  harnessSource?: DeployOptions['harnessSource'];
+  byokKey?: string;
+  inputs: Record<string, string>;
+};
+
+type LoadedOneClickPersona = {
+  personaPath: string;
+  persona: PersonaSpec;
+};
+
+export function parseOneClickDeployArgs(args: readonly string[]): OneClickDeployArgs {
+  let sawOneClick = false;
+  let personaPath: string | undefined;
+  let workspace: string | undefined;
+  let noConnect = false;
+  let dryRun = false;
+  let cloudUrl: string | undefined;
+  let noPrompt = false;
+  let harnessSource: DeployOptions['harnessSource'];
+  let byokKey: string | undefined;
+  const inputs: Record<string, string> = {};
+
+  for (let i = 0; i < args.length; i += 1) {
+    const a = args[i];
+    if (a === '-h' || a === '--help') {
+      process.stdout.write(DEPLOY_USAGE);
+      process.exit(0);
+    } else if (a === '--one-click') {
+      sawOneClick = true;
+      const next = args[i + 1];
+      if (next && !next.startsWith('--')) {
+        if (personaPath) die('deploy --one-click: persona path was provided more than once');
+        personaPath = path.resolve(next);
+        i += 1;
+      }
+    } else if (a.startsWith('--one-click=')) {
+      sawOneClick = true;
+      if (personaPath) die('deploy --one-click: persona path was provided more than once');
+      personaPath = path.resolve(expectInlineValue('--one-click', a.slice('--one-click='.length)));
+    } else if (a === '--workspace') {
+      workspace = expectValue('--workspace', args[++i]);
+    } else if (a.startsWith('--workspace=')) {
+      workspace = expectInlineValue('--workspace', a.slice('--workspace='.length));
+    } else if (a === '--no-connect') {
+      noConnect = true;
+    } else if (a === '--dry-run') {
+      dryRun = true;
+    } else if (a === '--cloud-url') {
+      cloudUrl = expectValue('--cloud-url', args[++i]);
+    } else if (a.startsWith('--cloud-url=')) {
+      cloudUrl = expectInlineValue('--cloud-url', a.slice('--cloud-url='.length));
+    } else if (a === '--no-prompt') {
+      noPrompt = true;
+      noConnect = true;
+    } else if (a === '--harness-source') {
+      harnessSource = expectChoice('--harness-source', expectValue('--harness-source', args[++i]), HARNESS_SOURCES);
+    } else if (a.startsWith('--harness-source=')) {
+      harnessSource = expectChoice('--harness-source', expectInlineValue('--harness-source', a.slice('--harness-source='.length)), HARNESS_SOURCES);
+    } else if (a === '--byok-key') {
+      byokKey = expectValue('--byok-key', args[++i]);
+    } else if (a.startsWith('--byok-key=')) {
+      byokKey = expectInlineValue('--byok-key', a.slice('--byok-key='.length));
+    } else if (a === '--input') {
+      parseDeployInputValue(expectDeployInputValue(args[++i]), inputs);
+    } else if (a.startsWith('--input=')) {
+      parseDeployInputValue(a.slice('--input='.length), inputs);
+    } else if (a === '--mode' || a.startsWith('--mode=')) {
+      die('deploy --one-click always uses cloud mode; do not pass --mode');
+    } else if (a === '--on-exists' || a.startsWith('--on-exists=')) {
+      die('deploy --one-click always updates existing personas; do not pass --on-exists');
+    } else if (a === '--bundle-out' || a.startsWith('--bundle-out=')) {
+      die('deploy --one-click deploys directly to cloud; do not pass --bundle-out');
+    } else if (a === '--detach' || a === '--byo-sandbox') {
+      die(`deploy --one-click does not support ${a}`);
+    } else if (a.startsWith('--')) {
+      die(`deploy --one-click: unknown flag "${a}"`);
+    } else if (!personaPath) {
+      personaPath = path.resolve(a);
+    } else {
+      die(`deploy --one-click: unexpected positional argument "${a}"`);
+    }
+  }
+
+  if (!sawOneClick) {
+    die('deploy --one-click: internal parser error; missing --one-click');
+  }
+  if (!personaPath) {
+    die('deploy --one-click: missing persona path. Usage: agentworkforce deploy --one-click <persona-path>');
+  }
+
+  return {
+    personaPath,
+    ...(workspace ? { workspace } : {}),
+    ...(noConnect ? { noConnect: true } : {}),
+    ...(dryRun ? { dryRun: true } : {}),
+    ...(cloudUrl ? { cloudUrl } : {}),
+    ...(noPrompt ? { noPrompt: true } : {}),
+    ...(harnessSource ? { harnessSource } : {}),
+    ...(byokKey ? { byokKey } : {}),
+    inputs
+  };
+}
+
+async function loadOneClickPersona(personaPath: string): Promise<LoadedOneClickPersona> {
+  const ext = path.extname(personaPath).toLowerCase();
+  const resolvedPersonaPath = ext === '.ts' || ext === '.tsx' || ext === '.mts' || ext === '.cts'
+    ? (await deployCommandDeps.compilePersonaFile(personaPath)).outputPath
+    : personaPath;
+  if (path.extname(resolvedPersonaPath).toLowerCase() !== '.json') {
+    throw new Error('one-click deploy expects a persona.json or persona.ts path');
+  }
+
+  const raw = await readFile(resolvedPersonaPath, 'utf8');
+  const json = JSON.parse(raw) as unknown;
+  if (!json || typeof json !== 'object' || Array.isArray(json)) {
+    throw new Error(`persona at ${resolvedPersonaPath} must be a JSON object`);
+  }
+  const intent = (json as { intent?: unknown }).intent;
+  if (typeof intent !== 'string') {
+    throw new Error(`persona at ${resolvedPersonaPath} is missing string intent`);
+  }
+  return {
+    personaPath: resolvedPersonaPath,
+    persona: parsePersonaSpec(json, intent as PersonaIntent)
+  };
+}
+
+async function resolveOneClickInputs(
+  requirements: DeployRequirements,
+  provided: Record<string, string>,
+  opts: { noPrompt?: boolean; io: ReturnType<typeof createTerminalIO> }
+): Promise<Record<string, string>> {
+  const resolved = { ...provided };
+  for (const input of requirements.inputs) {
+    if (hasResolvedInput(resolved[input.name])) continue;
+    if (input.env && hasResolvedInput(process.env[input.env])) {
+      resolved[input.name] = process.env[input.env] as string;
+      continue;
+    }
+    if (opts.noPrompt) {
+      throw new Error(
+        `required input ${input.name} is missing; pass --input ${input.name}=<value>`
+        + (input.env ? ` or set ${input.env}` : '')
+      );
+    }
+    const answer = await opts.io.prompt(
+      `Input ${input.name}${input.description ? ` (${input.description})` : ''}`
+    );
+    if (!hasResolvedInput(answer)) {
+      throw new Error(`required input ${input.name} is missing`);
+    }
+    resolved[input.name] = answer;
+  }
+  return resolved;
+}
+
+function formatOneClickPlan(
+  persona: PersonaSpec,
+  requirements: DeployRequirements,
+  resolvedInputs: Record<string, string>
+): string {
+  const unresolvedInputs = requirements.inputs.filter((input) => !hasResolvedInput(resolvedInputs[input.name]));
+  return [
+    'One-click deploy plan',
+    `Persona: ${persona.id}`,
+    formatPlanList('Fires on', requirements.firesOn),
+    formatIntegrationPlan(requirements),
+    formatInputPlan(unresolvedInputs),
+    'Platform secrets: none required (shared platform)',
+    ''
+  ].join('\n');
+}
+
+function formatPlanList(label: string, items: readonly string[]): string {
+  if (items.length === 0) return `${label}: none`;
+  return `${label}:\n${items.map((item) => `- ${item}`).join('\n')}`;
+}
+
+function formatIntegrationPlan(requirements: DeployRequirements): string {
+  if (requirements.integrations.length === 0) return 'Integrations: none';
+  return [
+    'Integrations:',
+    ...requirements.integrations.map((integration) => {
+      const triggers = integration.triggers.length > 0 ? integration.triggers.join(', ') : 'no triggers';
+      return `- ${integration.provider} (${integration.required ? 'required' : 'optional'}): ${triggers}`;
+    })
+  ].join('\n');
+}
+
+function formatInputPlan(inputs: DeployRequirements['inputs']): string {
+  if (inputs.length === 0) return 'Required inputs: none';
+  return [
+    'Required inputs:',
+    ...inputs.map((input) => {
+      const env = input.env ? ` env=${input.env}` : '';
+      const description = input.description ? ` - ${input.description}` : '';
+      return `- ${input.name}${env}${description}`;
+    })
+  ].join('\n');
+}
+
+function hasResolvedInput(value: string | undefined): boolean {
+  return typeof value === 'string' && value.length > 0;
 }
 
 function createDeployAuthRecovery(opts: DeployOptions): CloudAuthRecoveryResolver {
