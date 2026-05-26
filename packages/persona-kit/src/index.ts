@@ -104,6 +104,21 @@ export {
   type TriggerLintLevel
 } from './triggers.js';
 
+// Agent manifest (one-click deploy "app.json"-analog)
+export {
+  AGENT_MANIFEST_SCHEMA,
+  DEFAULT_INTEGRATION_PLATFORM_SECRETS,
+  deriveDeployRequirements,
+  parseAgentManifest,
+  type AgentManifest,
+  type AgentManifestIntegration,
+  type AgentManifestSecret,
+  type DeployRequirements,
+  type RequiredInput,
+  type RequiredIntegration,
+  type RequiredPlatformSecret
+} from './manifest.js';
+
 // Skill materialization
 export {
   buildCleanupArtifacts,
