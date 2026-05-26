@@ -173,8 +173,8 @@ export function createGithubClient(opts: IntegrationClientOptions): GithubClient
         `${repoRoot(args.owner, args.repo)}/pulls/${encodeSegment(args.number)}/merge.json`,
         {
           method: args.method ?? 'squash',
-          ...(args.commitTitle ? { commitTitle: args.commitTitle } : {}),
-          ...(args.commitMessage ? { commitMessage: args.commitMessage } : {})
+          ...(args.commitTitle !== undefined ? { commitTitle: args.commitTitle } : {}),
+          ...(args.commitMessage !== undefined ? { commitMessage: args.commitMessage } : {})
         }
       );
       const sha =
