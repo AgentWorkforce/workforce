@@ -25,8 +25,13 @@ const POLL_TIMEOUT_MS = 60_000;
 const POLL_INTERVAL_MS = 2_000;
 
 type CloudDeployStatus = 'ready' | 'starting' | 'active' | 'failed' | 'cancelled';
-type HarnessSource = 'plan' | 'byok' | 'oauth';
+export type HarnessSource = 'plan' | 'byok' | 'oauth';
 type OnExistsChoice = 'update' | 'destroy' | 'cancel';
+
+export interface CloudSubscriptionReadyResult {
+  provider: string;
+  credentialSelections?: Record<string, string>;
+}
 
 export interface CloudRunHandle extends ModeLaunchHandle {
   agentId: string;
@@ -131,7 +136,7 @@ export const cloudLauncher: ModeLauncher = {
           noPrompt
         });
 
-    const credentialSelections = await ensureHarnessReady({
+    const credentialSelections = input.credentialSelections ?? await ensureHarnessReady({
       cloudUrl,
       workspaceId: input.workspace,
       token: auth.token,
@@ -444,6 +449,104 @@ async function ensureHarnessOauth(args: {
     `timed out waiting for ${args.persona.harness} OAuth credentials`
   );
   args.io.info(`cloud: ${args.persona.harness} credentials connected`);
+}
+
+export function validateCloudSubscriptionSupport(args: {
+  persona: PersonaSpec;
+  harnessSource?: HarnessSource;
+}): void {
+  resolveSubscriptionHarnessSource(args);
+}
+
+export async function ensureCloudSubscriptionReady(args: {
+  cloudUrl: string;
+  workspaceId: string;
+  token: string;
+  persona: PersonaSpec;
+  io: ModeLaunchInput['io'];
+  noPrompt: boolean;
+  harnessSource?: HarnessSource;
+  byokKey?: string;
+}): Promise<CloudSubscriptionReadyResult> {
+  const source = resolveSubscriptionHarnessSource(args);
+  const provider = deriveModelProvider(args.persona);
+
+  if (source === 'byok') {
+    const key = await resolveByokKey(args);
+    const credentialId = await saveProviderCredential({
+      cloudUrl: args.cloudUrl,
+      workspaceId: args.workspaceId,
+      token: args.token,
+      modelProvider: provider,
+      authType: 'byo_api_key',
+      apiKey: key
+    });
+    args.io.info(`subscription: using BYOK credentials for ${provider}`);
+    return {
+      provider,
+      credentialSelections: { [provider]: credentialId }
+    };
+  }
+
+  await ensureSubscriptionOauth(args);
+  return { provider };
+}
+
+function resolveSubscriptionHarnessSource(args: {
+  persona: PersonaSpec;
+  harnessSource?: HarnessSource;
+}): Exclude<HarnessSource, 'plan'> {
+  const rawSource = args.harnessSource ?? process.env.WORKFORCE_DEPLOY_HARNESS_SOURCE?.trim();
+  const source = rawSource ? expectHarnessSource(rawSource) : 'oauth';
+  if (source === 'plan') {
+    throw new Error(
+      `persona "${args.persona.id}" sets useSubscription:true; use --harness-source oauth to connect your LLM provider, ` +
+        'use --harness-source byok with --byok-key, or remove useSubscription to use workforce-billed inference.'
+    );
+  }
+  return source;
+}
+
+async function ensureSubscriptionOauth(args: {
+  cloudUrl: string;
+  workspaceId: string;
+  token: string;
+  persona: PersonaSpec;
+  io: ModeLaunchInput['io'];
+  noPrompt: boolean;
+}): Promise<void> {
+  const provider = deriveModelProvider(args.persona);
+  if (await isHarnessOauthConnected(args)) {
+    args.io.info(`subscription: ${provider} credentials already connected`);
+    return;
+  }
+  if (args.noPrompt) {
+    throw new Error(
+      `persona "${args.persona.id}" sets useSubscription:true but ${provider} credentials are not connected. ` +
+        'Run without --no-prompt to connect them, pass --harness-source byok with --byok-key, or remove useSubscription to use workforce-billed inference.'
+    );
+  }
+  const ok = await args.io.confirm(
+    `Connect ${provider} credentials for useSubscription now? (opens browser)`,
+    { defaultValue: true }
+  );
+  if (!ok) {
+    throw new Error('user declined the subscription provider connect; deploy aborted');
+  }
+  await cloudCredentialDeps.connectProvider({
+    provider,
+    apiUrl: args.cloudUrl,
+    language: 'typescript',
+    io: {
+      log: (...parts: unknown[]) => args.io.info(parts.map(String).join(' ')),
+      error: (...parts: unknown[]) => args.io.error(parts.map(String).join(' '))
+    }
+  });
+  await pollUntil(
+    () => isHarnessOauthConnected(args),
+    `timed out waiting for ${provider} OAuth credentials`
+  );
+  args.io.info(`subscription: ${provider} credentials connected`);
 }
 
 async function handleExistingPersona(args: {

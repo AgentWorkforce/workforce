@@ -82,6 +82,150 @@ test('github.createPullRequest writes a draft pull request file under pulls/', a
   }
 });
 
+test('github.mergePullRequest writes a merge draft under pulls/<n>/merge.json', async () => {
+  const root = await tempMount();
+  try {
+    const client = createGithubClient({ relayfileMountRoot: root, writebackTimeoutMs: 0 });
+    const result = await client.mergePullRequest({
+      owner: 'o',
+      repo: 'r',
+      number: 42,
+      method: 'rebase',
+      commitTitle: 'Merge PR #42',
+      commitMessage: 'Ship the feature.',
+      sha: 'reviewed-head'
+    });
+
+    assert.deepEqual(result, { merged: false });
+    const mergePath = path.join(root, 'github/repos/o/r/pulls/42/merge.json');
+    assert.deepEqual(JSON.parse(await readFile(mergePath, 'utf8')), {
+      merge_method: 'rebase',
+      commit_title: 'Merge PR #42',
+      commit_message: 'Ship the feature.',
+      sha: 'reviewed-head'
+    });
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
+test('github.mergePullRequest preserves empty commit metadata and omits the merge method by default', async () => {
+  const root = await tempMount();
+  try {
+    const client = createGithubClient({ relayfileMountRoot: root, writebackTimeoutMs: 0 });
+    const result = await client.mergePullRequest({
+      owner: 'o',
+      repo: 'r',
+      number: 42,
+      commitTitle: '',
+      commitMessage: ''
+    });
+
+    assert.deepEqual(result, { merged: false });
+    const mergePath = path.join(root, 'github/repos/o/r/pulls/42/merge.json');
+    assert.deepEqual(JSON.parse(await readFile(mergePath, 'utf8')), {
+      commit_title: '',
+      commit_message: ''
+    });
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
+test('github.mergePullRequest waits for a GitHub merge receipt', async () => {
+  const root = await tempMount();
+  try {
+    const client = createGithubClient({ relayfileMountRoot: root, writebackTimeoutMs: 1_000, writebackPollMs: 10 });
+    const mergePath = path.join(root, 'github/repos/o/r/pulls/42/merge.json');
+    const resultPromise = client.mergePullRequest({
+      owner: 'o',
+      repo: 'r',
+      number: 42,
+      method: 'squash',
+      sha: 'reviewed-head'
+    });
+
+    const receiptWritePromise = (async () => {
+      await new Promise((resolve) => setTimeout(resolve, 25));
+      await writeFile(mergePath, `${JSON.stringify({ merged: true, sha: 'merge-sha' })}\n`, 'utf8');
+    })();
+
+    const [result] = await Promise.all([resultPromise, receiptWritePromise]);
+    assert.deepEqual(result, { merged: true, sha: 'merge-sha' });
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
+test('github.mergePullRequest accepts string merge receipts', async () => {
+  const root = await tempMount();
+  try {
+    const client = createGithubClient({ relayfileMountRoot: root, writebackTimeoutMs: 1_000, writebackPollMs: 10 });
+    const mergePath = path.join(root, 'github/repos/o/r/pulls/42/merge.json');
+    const resultPromise = client.mergePullRequest({
+      owner: 'o',
+      repo: 'r',
+      number: 42
+    });
+
+    const receiptWritePromise = (async () => {
+      await new Promise((resolve) => setTimeout(resolve, 25));
+      await writeFile(mergePath, `${JSON.stringify({ merged: 'true', sha: 'merge-sha' })}\n`, 'utf8');
+    })();
+
+    const [result] = await Promise.all([resultPromise, receiptWritePromise]);
+    assert.deepEqual(result, { merged: true, sha: 'merge-sha' });
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
+test('github.mergePullRequest respects explicit failed merge receipts with sha values', async () => {
+  const root = await tempMount();
+  try {
+    const client = createGithubClient({ relayfileMountRoot: root, writebackTimeoutMs: 1_000, writebackPollMs: 10 });
+    const mergePath = path.join(root, 'github/repos/o/r/pulls/42/merge.json');
+    const resultPromise = client.mergePullRequest({
+      owner: 'o',
+      repo: 'r',
+      number: 42
+    });
+
+    const receiptWritePromise = (async () => {
+      await new Promise((resolve) => setTimeout(resolve, 25));
+      await writeFile(mergePath, `${JSON.stringify({ merged: false, sha: 'head-sha' })}\n`, 'utf8');
+    })();
+
+    const [result] = await Promise.all([resultPromise, receiptWritePromise]);
+    assert.deepEqual(result, { merged: false, sha: 'head-sha' });
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
+test('github.mergePullRequest treats identifier-only receipts as merged', async () => {
+  const root = await tempMount();
+  try {
+    const client = createGithubClient({ relayfileMountRoot: root, writebackTimeoutMs: 1_000, writebackPollMs: 10 });
+    const mergePath = path.join(root, 'github/repos/o/r/pulls/42/merge.json');
+    const resultPromise = client.mergePullRequest({
+      owner: 'o',
+      repo: 'r',
+      number: 42
+    });
+
+    const receiptWritePromise = (async () => {
+      await new Promise((resolve) => setTimeout(resolve, 25));
+      await writeFile(mergePath, `${JSON.stringify({ id: 'merge-sha' })}\n`, 'utf8');
+    })();
+
+    const [result] = await Promise.all([resultPromise, receiptWritePromise]);
+    assert.deepEqual(result, { merged: true, sha: 'merge-sha' });
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
 test('github.upsertIssue updates an existing flat issue match', async () => {
   const root = await tempMount();
   try {

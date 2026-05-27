@@ -7,6 +7,25 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [3.0.26] - 2026-05-27
+
+### Added
+
+- Accept authored `persona.ts`/JS source modules anywhere deploy preflight accepts
+  persona JSON, preserving sibling-file `import.meta.url` reads during evaluation.
+
+## [3.0.25] - 2026-05-26
+
+### Added
+
+- **Add GitHub PR merge writeback client** (#148)
+
+## [3.0.24] - 2026-05-26
+
+### Changed
+
+- Deploy/persona-kit: catch integration-provider + persona-tag footguns before the cloud rejects them (#141)
+
 ## [3.0.22] - 2026-05-24
 
 ### Dependencies
@@ -91,4 +110,3 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Added
 
 - **--mode cloud (OSS-generic persona+bundle POST)** (#102)
-

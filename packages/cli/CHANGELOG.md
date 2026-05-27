@@ -7,6 +7,22 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [3.0.26] - 2026-05-27
+
+### Fixed
+
+- `agentworkforce persona compile` now evaluates typed persona modules beside
+  their source file, so `import.meta.url` sibling-file reads behave correctly.
+- `agentworkforce deploy` now accepts authored persona source modules in
+  addition to prebuilt JSON, and the CLI ships current trigger lint data for
+  Slack `message.created` plus the `google-mail` deploy provider id.
+
+## [3.0.23] - 2026-05-26
+
+### Changed
+
+- Vendor Relayfile trigger catalog in persona-kit (#139)
+
 ## [3.0.20] - 2026-05-23
 
 ### Added

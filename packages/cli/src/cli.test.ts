@@ -697,6 +697,75 @@ test('main: --version prints the package version', async () => {
   }
 });
 
+test('main: persona compile dispatches to the typed persona compiler', async () => {
+  const root = mkdtempSync(join(tmpdir(), 'aw-persona-compile-cli-'));
+  const workforceHome = join(root, 'home', '.agentworkforce', 'workforce');
+  mkdirSync(join(workforceHome, 'personas'), { recursive: true });
+  const personaPath = join(root, 'persona.ts');
+  writeFileSync(
+    personaPath,
+    `export default {
+  id: 'cli-compiled',
+  intent: 'review',
+  description: 'Compiled through the CLI dispatcher.',
+  onEvent: './agent.ts',
+  harnessSettings: { reasoning: 'medium', timeoutSeconds: 60 }
+};
+`,
+    'utf8'
+  );
+
+  try {
+    const { stderr, stdout, exitCode } = await runCliCapturingStderr(
+      ['persona', 'compile', personaPath],
+      { AGENT_WORKFORCE_HOME: workforceHome }
+    );
+    assert.equal(exitCode, 0);
+    assert.equal(stderr, '');
+    assert.match(stdout, /Compiled .*persona\.ts -> .*persona\.json \(cli-compiled\)/);
+    const compiled = JSON.parse(readFileSync(join(root, 'persona.json'), 'utf8')) as {
+      id: string;
+    };
+    assert.equal(compiled.id, 'cli-compiled');
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test('main: deploy dry-run accepts an authored persona.ts path', async () => {
+  const root = mkdtempSync(join(tmpdir(), 'aw-persona-deploy-cli-'));
+  const workforceHome = join(root, 'home', '.agentworkforce', 'workforce');
+  mkdirSync(join(workforceHome, 'personas'), { recursive: true });
+  const personaPath = join(root, 'persona.ts');
+  writeFileSync(join(root, 'agent.ts'), 'export default async () => {};', 'utf8');
+  writeFileSync(
+    personaPath,
+    `export default {
+  id: 'cli-deploy-source',
+  intent: 'review',
+  description: 'Deploy through the CLI dispatcher.',
+  cloud: true,
+  schedules: [{ name: 'daily', cron: '0 9 * * *' }],
+  onEvent: './agent.ts',
+  harnessSettings: { reasoning: 'medium', timeoutSeconds: 60 }
+};
+`,
+    'utf8'
+  );
+
+  try {
+    const { stderr, stdout, exitCode } = await runCliCapturingStderr(
+      ['deploy', personaPath, '--mode', 'dev', '--dry-run'],
+      { AGENT_WORKFORCE_HOME: workforceHome }
+    );
+    assert.equal(exitCode, 0);
+    assert.equal(stderr, '');
+    assert.match(stdout, /ok: cli-deploy-source \(dry-run\)/);
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
 test('main: local personas with custom intents appear in list and unknown-persona help', async () => {
   const { mkdtempSync, mkdirSync, rmSync, writeFileSync } = await import('node:fs');
   const { tmpdir } = await import('node:os');

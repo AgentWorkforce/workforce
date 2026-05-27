@@ -8,7 +8,24 @@ import { KNOWN_TRIGGER_CATALOG } from '@relayfile/adapter-core/triggers';
  * not a failure, so adding a new event upstream doesn't gate workforce
  * releases.
  */
-export const KNOWN_TRIGGERS = KNOWN_TRIGGER_CATALOG;
+export const KNOWN_TRIGGER_PROVIDER_ALIASES = {
+  'google-mail': 'gmail'
+} as const satisfies Record<string, keyof typeof KNOWN_TRIGGER_CATALOG>;
+
+const KNOWN_TRIGGER_ALIAS_CATALOG = Object.fromEntries(
+  Object.entries(KNOWN_TRIGGER_PROVIDER_ALIASES).map(([alias, canonical]) => [
+    alias,
+    KNOWN_TRIGGER_CATALOG[canonical]
+  ])
+) as {
+  [Provider in keyof typeof KNOWN_TRIGGER_PROVIDER_ALIASES]:
+    (typeof KNOWN_TRIGGER_CATALOG)[(typeof KNOWN_TRIGGER_PROVIDER_ALIASES)[Provider]];
+};
+
+export const KNOWN_TRIGGERS = {
+  ...KNOWN_TRIGGER_CATALOG,
+  ...KNOWN_TRIGGER_ALIAS_CATALOG
+};
 
 export {
   ADAPTERS_WITHOUT_KNOWN_TRIGGERS,
@@ -58,7 +75,7 @@ export function lintTriggers(persona: PersonaSpec): TriggerLintIssue[] {
     for (const [provider, config] of Object.entries(integrations)) {
       const triggers = config.triggers;
       if (!triggers) continue;
-      const known = (KNOWN_TRIGGERS as Record<string, readonly string[] | undefined>)[provider];
+      const known = knownTriggersForProvider(provider);
 
       if (!known) {
         // Unknown provider: warn once on the integration as a whole so we
@@ -116,4 +133,8 @@ export function lintTriggers(persona: PersonaSpec): TriggerLintIssue[] {
   }
 
   return issues;
+}
+
+function knownTriggersForProvider(provider: string): readonly string[] | undefined {
+  return (KNOWN_TRIGGERS as Record<string, readonly string[] | undefined>)[provider];
 }

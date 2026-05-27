@@ -39,6 +39,15 @@ export interface GithubClient {
     base: string;
     files?: Record<string, string>;
   }): Promise<{ number: number; url: string }>;
+  mergePullRequest(args: {
+    owner: string;
+    repo: string;
+    number: number;
+    method?: 'merge' | 'squash' | 'rebase';
+    commitTitle?: string;
+    commitMessage?: string;
+    sha?: string;
+  }): Promise<{ merged: boolean; sha?: string }>;
   upsertIssue(args: {
     owner: string;
     repo: string;
@@ -155,6 +164,34 @@ export function createGithubClient(opts: IntegrationClientOptions): GithubClient
       );
       const number = Number(result.receipt?.created ?? result.receipt?.id ?? 0);
       return { number: Number.isFinite(number) ? number : 0, url: result.receipt?.url ?? result.path };
+    },
+
+    async mergePullRequest(args) {
+      const result = await writeJsonFile(
+        opts,
+        'github',
+        'mergePullRequest',
+        `${repoRoot(args.owner, args.repo)}/pulls/${encodeSegment(args.number)}/merge.json`,
+        {
+          ...(args.method !== undefined ? { merge_method: args.method } : {}),
+          ...(args.commitTitle !== undefined ? { commit_title: args.commitTitle } : {}),
+          ...(args.commitMessage !== undefined ? { commit_message: args.commitMessage } : {}),
+          ...(args.sha !== undefined ? { sha: args.sha } : {})
+        }
+      );
+      const sha =
+        typeof result.receipt?.sha === 'string'
+          ? result.receipt.sha
+          : typeof result.receipt?.id === 'string'
+            ? result.receipt.id
+            : typeof result.receipt?.externalId === 'string'
+              ? result.receipt.externalId
+              : undefined;
+      const receiptMerged = result.receipt?.merged;
+      return {
+        merged: receiptMerged === true || receiptMerged === 'true' || (receiptMerged === undefined && Boolean(sha)),
+        ...(sha ? { sha } : {})
+      };
     },
 
     async upsertIssue(args) {

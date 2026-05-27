@@ -7,6 +7,32 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [3.0.26] - 2026-05-27
+
+### Fixed
+
+- Align trigger lint with deploy provider ids by accepting `google-mail` as the
+  Gmail trigger catalog alias, and cover Slack `message.created` as a canonical
+  Slack trigger.
+
+## [3.0.25] - 2026-05-26
+
+### Dependencies
+
+- Bump @relayfile/adapter-core ^0.3.13 → ^0.3.17 (#144)
+
+## [3.0.24] - 2026-05-26
+
+### Changed
+
+- Deploy/persona-kit: catch integration-provider + persona-tag footguns before the cloud rejects them (#141)
+
+## [3.0.23] - 2026-05-26
+
+### Changed
+
+- Vendor Relayfile trigger catalog in persona-kit (#139)
+
 ## [3.0.20] - 2026-05-23
 
 ### Added
@@ -97,4 +123,3 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Changed
 
 - Persona-kit: add local skill source provider
-

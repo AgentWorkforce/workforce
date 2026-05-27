@@ -421,6 +421,42 @@ test('relayfileIntegrationResolver connect defaults to deployer_user when source
   assert.deepEqual(bodies, [{ allowedIntegrations: ['github'], scope: { kind: 'deployer_user' } }]);
 });
 
+test('relayfileIntegrationResolver connect turns 409 unknown_provider into a "did you mean" error', async () => {
+  const resolver = relayfileIntegrationResolver({
+    apiUrl: 'https://cloud.example.test',
+    workspaceId: 'ws-1',
+    workspaceToken: 'tok',
+    pollIntervalMs: 0,
+    timeoutMs: 100,
+    openUrl: () => undefined,
+    sleep: async () => undefined,
+    fetch: async (input) => {
+      const url = input.toString();
+      if (url.endsWith('/integrations/connect-session')) {
+        return okJson(
+          {
+            error: 'unknown_provider',
+            providers: [
+              { id: 'github', vfsRoot: '/github' },
+              { id: 'slack', vfsRoot: '/slack' },
+              { id: 'google-mail', vfsRoot: '/google-mail' }
+            ]
+          },
+          409
+        );
+      }
+      throw new Error(`unexpected URL ${url}`);
+    }
+  });
+
+  await assert.rejects(resolver.connect({ workspace: 'ws-1', provider: 'gmail' }), (err: Error) => {
+    assert.match(err.message, /provider "gmail" is not available/);
+    assert.match(err.message, /Did you mean "google-mail"/);
+    assert.match(err.message, /Valid providers: github, slack, google-mail/);
+    return true;
+  });
+});
+
 test('relayfileIntegrationResolver connect times out clearly', async () => {
   const resolver = relayfileIntegrationResolver({
     apiUrl: 'https://cloud.example.test',
@@ -640,6 +676,84 @@ test('connectIntegrations fails status-check errors without opening a connect fl
     }
   ]);
   assert.ok(io.messages.some((message) => message.level === 'error' && message.message.includes('failed while checking connection status')));
+});
+
+test('connectIntegrations fails useSubscription without a resolver before integration checks', async () => {
+  const io = createBufferedIO();
+  let integrationChecked = false;
+  let integrationConnected = false;
+
+  await assert.rejects(
+    connectIntegrations({
+      persona: {
+        id: 'essay',
+        intent: 'essay',
+        description: 'test persona',
+        tags: ['implementation'],
+        useSubscription: true,
+        integrations: { notion: {} }
+      } as never,
+      workspace: 'ws-1',
+      noConnect: false,
+      io,
+      integrations: {
+        async isConnected() {
+          integrationChecked = true;
+          return false;
+        },
+        async connect() {
+          integrationConnected = true;
+          return { connectionId: 'conn-notion' };
+        }
+      }
+    }),
+    /useSubscription:true.*no subscription connector/
+  );
+
+  assert.equal(integrationChecked, false);
+  assert.equal(integrationConnected, false);
+});
+
+test('connectIntegrations connects subscription provider before integration checks', async () => {
+  const io = createBufferedIO();
+  const order: string[] = [];
+
+  const result = await connectIntegrations({
+    persona: {
+      id: 'essay',
+      intent: 'essay',
+      description: 'test persona',
+      tags: ['implementation'],
+      useSubscription: true,
+      integrations: { notion: {} }
+    } as never,
+    workspace: 'ws-1',
+    noConnect: false,
+    io,
+    integrations: {
+      async isConnected() {
+        order.push('integration-check');
+        return true;
+      },
+      async connect() {
+        order.push('integration-connect');
+        return { connectionId: 'conn-notion' };
+      }
+    },
+    subscription: {
+      async isConnected() {
+        order.push('subscription-check');
+        return false;
+      },
+      async connect() {
+        order.push('subscription-connect');
+        return { provider: 'anthropic' };
+      }
+    }
+  });
+
+  assert.deepEqual(order, ['subscription-check', 'subscription-connect', 'integration-check']);
+  assert.equal(result.subscriptionProvider, 'anthropic');
 });
 
 test('connectIntegrations honors --no-prompt for subscription provider setup', async () => {

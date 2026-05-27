@@ -168,12 +168,33 @@ export function relayfileIntegrationResolver(opts: {
         allowedIntegrations: [provider],
         scope: scopeRequest(effectiveSource)
       };
-      const session = await requestJson(fetchImpl, `${apiUrl}/api/v1/workspaces/${encodeURIComponent(
-        workspaceId
-      )}/integrations/connect-session`, token, {
-        method: 'POST',
-        body: JSON.stringify(sessionBody)
-      });
+      let session: unknown;
+      try {
+        session = await requestJson(fetchImpl, `${apiUrl}/api/v1/workspaces/${encodeURIComponent(
+          workspaceId
+        )}/integrations/connect-session`, token, {
+          method: 'POST',
+          body: JSON.stringify(sessionBody)
+        });
+      } catch (err) {
+        // Turn the cloud's `409 unknown_provider` into an actionable message:
+        // the integration key must be the cloud provider id (e.g. `google-mail`),
+        // not the adapter slug (`gmail`). Suggest the closest valid id.
+        if (isCloudRequestError(err) && err.code === 'unknown_provider') {
+          const valid = err.providers ?? [];
+          const suggestion = suggestProvider(provider, valid);
+          throw cloudRequestError(
+            `integration provider "${provider}" is not available in workspace ${workspaceId}.` +
+              (suggestion
+                ? ` Did you mean "${suggestion}"? The integration key must be the cloud provider id, not the adapter slug (e.g. Gmail is "google-mail", not "gmail").`
+                : '') +
+              (valid.length ? ` Valid providers: ${valid.join(', ')}.` : ''),
+            err.status,
+            { code: 'unknown_provider', providers: valid }
+          );
+        }
+        throw err;
+      }
       const sessionUrl = readString(session, 'sessionUrl')
         ?? readString(session, 'connectLink')
         ?? readString(session, 'url');
@@ -307,6 +328,12 @@ export interface ConnectAllResult {
 export async function connectIntegrations(input: ConnectAllInput): Promise<ConnectAllResult> {
   const integrations = input.persona.integrations ?? {};
   const outcomes: IntegrationConnectOutcome[] = [];
+  const subscription = input.persona.useSubscription
+    ? requireSubscriptionResolver(input.persona.id, input.subscription)
+    : undefined;
+  const subscriptionProvider = subscription
+    ? await connectSubscriptionProvider(input, subscription)
+    : undefined;
 
   for (const provider of Object.keys(integrations)) {
     const integrationEntry = integrations[provider] ?? {};
@@ -426,49 +453,54 @@ export async function connectIntegrations(input: ConnectAllInput): Promise<Conne
     }
   }
 
-  // Track the subscription provider only when this deploy actually
-  // connected one — already-connected cases stay logged but do not
-  // leak a sentinel string up to callers reading `subscriptionProvider`.
-  let subscriptionProvider: string | undefined;
-  if (input.persona.useSubscription) {
-    if (!input.subscription) {
-      throw new Error(
-        'persona has useSubscription:true but no subscription resolver was supplied to the deploy orchestrator'
-      );
-    }
-    const isConn = await input.subscription
-      .isConnected({ workspace: input.workspace })
-      .catch(() => false);
-    if (!isConn) {
-      if (input.noPrompt) {
-        throw new Error(
-          'persona requires a subscription provider connection, but --no-prompt was passed. Connect it before deploying or run without --no-prompt.'
-        );
-      }
-      if (input.noConnect) {
-        throw new Error(
-          'persona requires a subscription provider connection, but --no-connect was passed'
-        );
-      }
-      const ok = await input.io.confirm(
-        'persona has useSubscription:true — connect your LLM provider now?',
-        { defaultValue: true }
-      );
-      if (!ok) {
-        throw new Error('user declined the subscription provider connect; deploy aborted');
-      }
-      const result = await input.subscription.connect({ workspace: input.workspace });
-      subscriptionProvider = result.provider;
-      input.io.info(`subscription: connected (${result.provider})`);
-    } else {
-      input.io.info('subscription: already connected');
-    }
-  }
-
   return {
     outcomes,
     ...(subscriptionProvider ? { subscriptionProvider } : {})
   };
+}
+
+async function connectSubscriptionProvider(
+  input: ConnectAllInput,
+  subscription: ProviderSubscriptionResolver
+): Promise<string | undefined> {
+  const isConn = await subscription
+    .isConnected({ workspace: input.workspace })
+    .catch(() => false);
+  if (isConn) {
+    input.io.info('subscription: already connected');
+    return undefined;
+  }
+  if (input.noPrompt) {
+    throw new Error(
+      'persona requires a subscription provider connection, but --no-prompt was passed. Connect it before deploying or run without --no-prompt.'
+    );
+  }
+  if (input.noConnect) {
+    throw new Error(
+      'persona requires a subscription provider connection, but --no-connect was passed'
+    );
+  }
+  const ok = await input.io.confirm(
+    'persona has useSubscription:true — connect your LLM provider now?',
+    { defaultValue: true }
+  );
+  if (!ok) {
+    throw new Error('user declined the subscription provider connect; deploy aborted');
+  }
+  const result = await subscription.connect({ workspace: input.workspace });
+  input.io.info(`subscription: connected (${result.provider})`);
+  return result.provider;
+}
+
+function requireSubscriptionResolver(
+  personaId: string,
+  subscription: ProviderSubscriptionResolver | undefined
+): ProviderSubscriptionResolver {
+  if (subscription) return subscription;
+  throw new Error(
+    `persona "${personaId}" sets useSubscription:true, but no subscription connector is available. ` +
+      'Use the deploy orchestrator cloud mode, provide a subscription resolver, or remove useSubscription to use workforce-billed inference.'
+  );
 }
 
 async function checkProviderConnected(
@@ -501,12 +533,115 @@ async function checkProviderConnected(
  */
 interface CloudRequestError extends Error {
   status: number;
+  /** Machine-readable error code from the cloud body, when present. */
+  code?: string;
+  /** Valid provider ids the cloud returned (set on `unknown_provider` 409s). */
+  providers?: string[];
 }
 
-function cloudRequestError(message: string, status: number): CloudRequestError {
+function cloudRequestError(
+  message: string,
+  status: number,
+  extra: { code?: string; providers?: string[] } = {}
+): CloudRequestError {
   const err = new Error(message) as CloudRequestError;
   err.status = status;
+  if (extra.code !== undefined) err.code = extra.code;
+  if (extra.providers !== undefined) err.providers = extra.providers;
   return err;
+}
+
+/**
+ * The cloud rejects an unrecognized integration provider with
+ * `409 {"error":"unknown_provider","providers":[{id,...},...]}`. Parse that
+ * shape so callers can surface the valid ids + a "did you mean" suggestion
+ * instead of dumping raw JSON. Returns undefined for any other body.
+ */
+function parseUnknownProvider(body: string): string[] | undefined {
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(body);
+  } catch {
+    return undefined;
+  }
+  if (
+    typeof parsed !== 'object' ||
+    parsed === null ||
+    (parsed as { error?: unknown }).error !== 'unknown_provider'
+  ) {
+    return undefined;
+  }
+  const providers = (parsed as { providers?: unknown }).providers;
+  if (!Array.isArray(providers)) return [];
+  return providers
+    .map((p) => readString(p, 'id'))
+    .filter((id): id is string => typeof id === 'string' && id.length > 0);
+}
+
+/**
+ * Suggest the closest valid provider id to a mistyped one — chiefly to catch
+ * the adapter-slug-vs-cloud-id footgun (e.g. `gmail` → `google-mail`). Known
+ * aliases win; otherwise we pick the candidate sharing the longest substring,
+ * tie-broken by edit distance. Returns undefined when nothing is close.
+ */
+function suggestProvider(requested: string, candidates: string[]): string | undefined {
+  const req = requested.toLowerCase();
+  const aliases: Record<string, string> = {
+    gmail: 'google-mail',
+    googlemail: 'google-mail',
+    google_mail: 'google-mail',
+    gcal: 'google-calendar',
+    googlecalendar: 'google-calendar',
+    google_calendar: 'google-calendar',
+    dockerhub: 'docker-hub',
+    docker_hub: 'docker-hub'
+  };
+  const aliased = aliases[req];
+  if (aliased && candidates.includes(aliased)) return aliased;
+
+  let best: { id: string; lcs: number; dist: number } | undefined;
+  for (const id of candidates) {
+    const lcs = longestCommonSubstring(req, id.toLowerCase());
+    const dist = levenshtein(req, id.toLowerCase());
+    if (!best || lcs > best.lcs || (lcs === best.lcs && dist < best.dist)) {
+      best = { id, lcs, dist };
+    }
+  }
+  if (!best) return undefined;
+  return best.lcs >= 3 || best.dist <= 3 ? best.id : undefined;
+}
+
+function longestCommonSubstring(a: string, b: string): number {
+  let best = 0;
+  const dp = new Array<number>(b.length + 1).fill(0);
+  for (let i = 1; i <= a.length; i += 1) {
+    let prev = 0;
+    for (let j = 1; j <= b.length; j += 1) {
+      const tmp = dp[j];
+      if (a[i - 1] === b[j - 1]) {
+        dp[j] = prev + 1;
+        if (dp[j] > best) best = dp[j];
+      } else {
+        dp[j] = 0;
+      }
+      prev = tmp;
+    }
+  }
+  return best;
+}
+
+function levenshtein(a: string, b: string): number {
+  const row = Array.from({ length: b.length + 1 }, (_, i) => i);
+  for (let i = 1; i <= a.length; i += 1) {
+    let prev = row[0];
+    row[0] = i;
+    for (let j = 1; j <= b.length; j += 1) {
+      const tmp = row[j];
+      row[j] = a[i - 1] === b[j - 1] ? prev : Math.min(prev, row[j], row[j - 1]) + 1;
+      prev = tmp;
+    }
+  }
+  return row[b.length];
 }
 
 function isCloudRequestError(err: unknown): err is CloudRequestError {
@@ -540,10 +675,18 @@ async function requestJson(
     );
   }
   if (!res.ok) {
-    throw cloudRequestError(
-      `cloud integration request failed: ${res.status} ${await res.text().catch(() => '')}`.trim(),
-      res.status
-    );
+    const body = await res.text().catch(() => '');
+    if (res.status === 409) {
+      const providers = parseUnknownProvider(body);
+      if (providers) {
+        throw cloudRequestError(
+          `cloud integration request failed: unknown integration provider.${providers.length ? ` Valid providers: ${providers.join(', ')}.` : ''}`,
+          409,
+          { code: 'unknown_provider', providers }
+        );
+      }
+    }
+    throw cloudRequestError(`cloud integration request failed: ${res.status} ${body}`.trim(), res.status);
   }
   return await res.json();
 }

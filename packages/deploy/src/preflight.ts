@@ -6,6 +6,10 @@ import {
   type PersonaIntent,
   type PersonaSpec
 } from '@agentworkforce/persona-kit';
+import {
+  isPersonaSourcePath,
+  loadPersonaSourceFile
+} from './persona-source.js';
 import type { DeployPreflight } from './types.js';
 
 /**
@@ -23,24 +27,12 @@ export async function preflightPersona(personaPath: string): Promise<DeployPrefl
   const absPath = path.resolve(personaPath);
   const personaDir = path.dirname(absPath);
 
-  const raw = await readFile(absPath, 'utf8').catch((err: NodeJS.ErrnoException) => {
-    if (err.code === 'ENOENT') {
-      throw new Error(`persona JSON not found at ${absPath}`);
-    }
-    throw err;
-  });
-
-  let json: unknown;
-  try {
-    json = JSON.parse(raw);
-  } catch (err) {
-    throw new Error(
-      `persona JSON at ${absPath} is not valid JSON: ${err instanceof Error ? err.message : String(err)}`
-    );
-  }
+  const json = isPersonaSourcePath(absPath)
+    ? await readPersonaSource(absPath)
+    : await readPersonaJson(absPath);
 
   if (typeof json !== 'object' || json === null) {
-    throw new Error(`persona JSON at ${absPath} must be a top-level object`);
+    throw new Error(`persona at ${absPath} must be a top-level object`);
   }
 
   // The persona-kit parser is intent-aware; we pass the intent it declares
@@ -50,7 +42,7 @@ export async function preflightPersona(personaPath: string): Promise<DeployPrefl
   // declared intent.
   const declaredIntent = (json as { intent?: unknown }).intent;
   if (typeof declaredIntent !== 'string' || !declaredIntent) {
-    throw new Error(`persona JSON at ${absPath} is missing top-level "intent"`);
+    throw new Error(`persona at ${absPath} is missing top-level "intent"`);
   }
 
   const persona: PersonaSpec = parsePersonaSpec(json, declaredIntent as PersonaIntent);
@@ -104,4 +96,29 @@ export async function preflightPersona(personaPath: string): Promise<DeployPrefl
     integrations: persona.integrations ? Object.keys(persona.integrations) : [],
     warnings
   };
+}
+
+async function readPersonaJson(absPath: string): Promise<unknown> {
+  const raw = await readFile(absPath, 'utf8').catch((err: NodeJS.ErrnoException) => {
+    if (err.code === 'ENOENT') {
+      throw new Error(`persona JSON not found at ${absPath}`);
+    }
+    throw err;
+  });
+
+  let json: unknown;
+  try {
+    json = JSON.parse(raw);
+  } catch (err) {
+    throw new Error(
+      `persona JSON at ${absPath} is not valid JSON: ${err instanceof Error ? err.message : String(err)}`
+    );
+  }
+
+  return json;
+}
+
+async function readPersonaSource(absPath: string): Promise<unknown> {
+  const { persona } = await loadPersonaSourceFile(absPath);
+  return persona;
 }

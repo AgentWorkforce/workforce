@@ -3,7 +3,7 @@ import type { PersonaSpec } from '@agentworkforce/persona-kit';
 export type DeployMode = 'dev' | 'sandbox' | 'cloud';
 
 export interface DeployOptions {
-  /** Absolute path to the persona JSON file. Required. */
+  /** Path to the persona JSON file or authored persona source module. Required. */
   personaPath: string;
   /** Run mode. Defaults to `sandbox` if Daytona creds resolve, else `dev`. */
   mode?: DeployMode;
@@ -141,6 +141,8 @@ export interface ModeLaunchInput {
   onExists?: 'update' | 'destroy' | 'cancel';
   /** Runtime inputs forwarded to launchers that support them. */
   inputs?: Record<string, string>;
+  /** Provider credential selections resolved before launch. Cloud mode includes these in the deploy request. */
+  credentialSelections?: Record<string, string>;
   /** Runtime log streaming hook. */
   onLog?: (line: string) => void;
 }
@@ -166,9 +168,9 @@ export interface IntegrationConnectOutcome {
 /** Surface a parsed persona only after we know it passed the deploy preflight. */
 export interface DeployPreflight {
   persona: PersonaSpec;
-  /** Persona JSON path resolved to absolute. */
+  /** Persona path resolved to absolute. */
   personaPath: string;
-  /** Absolute path to the directory containing the persona JSON. */
+  /** Absolute path to the directory containing the persona file. */
   personaDir: string;
   /** Absolute path to the resolved `onEvent` file. */
   onEventPath: string;
