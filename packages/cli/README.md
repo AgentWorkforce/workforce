@@ -10,7 +10,9 @@ agentworkforce create [--save-in-directory=<target>] [--save-default] [--install
 agentworkforce agent [--install-in-repo] [--no-launch-metadata] <persona>[@<tier>]
 agentworkforce list [flags]
 agentworkforce show <persona>[@<tier>]
+agentworkforce persona compile <path/to/persona.ts|persona.js>
 agentworkforce install [flags] <pkg|path>
+agentworkforce deploy <path/to/persona.json|persona.ts|persona.js> [flags]
 agentworkforce sources <list|add|remove>
 agentworkforce harness check
 agentworkforce destroy <persona-or-agent-id> [--workspace <id>] [--cloud-url <url>] [--no-prompt]
@@ -25,8 +27,12 @@ agentworkforce --version
 - `list` — print the persona catalog as a table (or JSON). See
   [`## List`](#list) below for every flag.
 - `show` — print the resolved spec for one persona.
+- `persona compile` — evaluate an authored `persona.ts` or `persona.js`
+  module and write a sibling `persona.json`.
 - `install` — copy persona JSON files from an npm or local persona pack into
   the current project's fixed cwd source directory.
+- `deploy` — deploy a cloud-enabled persona. The path may be prebuilt JSON or
+  an authored source module such as `persona.ts` or `persona.js`.
 - `sources` — list, add, or remove persona source directories.
 - `harness check` — probe which harnesses (`claude`, `codex`, `opencode`)
   are installed. See [`## Harness check`](#harness-check) below.

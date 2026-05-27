@@ -7,6 +7,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- Accept authored `persona.ts`/JS source modules anywhere deploy preflight accepts
+  persona JSON, preserving sibling-file `import.meta.url` reads during evaluation.
+
 ## [3.0.25] - 2026-05-26
 
 ### Added
@@ -103,4 +108,3 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Added
 
 - **--mode cloud (OSS-generic persona+bundle POST)** (#102)
-

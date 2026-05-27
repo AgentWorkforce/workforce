@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- Align trigger lint with deploy provider ids by accepting `google-mail` as the
+  Gmail trigger catalog alias, and cover Slack `message.created` as a canonical
+  Slack trigger.
+
 ## [3.0.25] - 2026-05-26
 
 ### Dependencies
@@ -115,4 +121,3 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Changed
 
 - Persona-kit: add local skill source provider
-

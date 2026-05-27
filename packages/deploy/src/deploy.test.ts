@@ -47,6 +47,28 @@ async function withTempPersona(
   };
 }
 
+async function withTempPersonaSource(
+  source: string,
+  extraFiles: Record<string, string> = {}
+): Promise<{ dir: string; personaPath: string; cleanup: () => Promise<void> }> {
+  const dir = await mkdtemp(path.join(os.tmpdir(), 'wf-deploy-source-test-'));
+  const personaPath = path.join(dir, 'persona.ts');
+  await writeFile(personaPath, source, 'utf8');
+  await writeFile(path.join(dir, 'agent.ts'), 'export default async () => {};', 'utf8');
+  await Promise.all(
+    Object.entries(extraFiles).map(async ([name, content]) => {
+      const target = path.join(dir, name);
+      await mkdir(path.dirname(target), { recursive: true });
+      await writeFile(target, content, 'utf8');
+    })
+  );
+  return {
+    dir,
+    personaPath,
+    cleanup: () => rm(dir, { recursive: true, force: true })
+  };
+}
+
 async function withWorkspaceEnv<T>(
   env: { workspace?: string; token?: string },
   fn: () => Promise<T>
@@ -135,6 +157,45 @@ test('preflightPersona accepts a valid deploy-shaped persona', async () => {
     assert.deepEqual(pre.schedules, ['weekly']);
     assert.deepEqual(pre.integrations, []);
     assert.equal(pre.warnings.length, 0);
+  } finally {
+    await cleanup();
+  }
+});
+
+test('preflightPersona accepts authored persona.ts and preserves sibling import.meta.url reads', async () => {
+  const { personaPath, cleanup } = await withTempPersonaSource(
+    `import { description } from './helpers/description';
+import { definePersona } from '@agentworkforce/persona-kit';
+
+export default definePersona({
+  id: 'typed-demo',
+  intent: 'documentation',
+  tags: ['documentation'],
+  description,
+  cloud: true,
+  schedules: [{ name: 'weekly', cron: '0 9 * * 6' }],
+  onEvent: './agent.ts',
+  harnessSettings: { reasoning: 'medium', timeoutSeconds: 300 }
+});
+`,
+    {
+      'helpers/description.ts': `import { readFileSync } from 'node:fs';
+import { fileURLToPath } from 'node:url';
+
+export const description = readFileSync(
+  fileURLToPath(new URL('./description.txt', import.meta.url)),
+  'utf8'
+).trim();
+`,
+      'helpers/description.txt': 'Compiled beside the helper file.\n'
+    }
+  );
+  try {
+    const pre = await preflightPersona(personaPath);
+    assert.equal(pre.persona.id, 'typed-demo');
+    assert.equal(pre.persona.description, 'Compiled beside the helper file.');
+    assert.equal(pre.personaPath, personaPath);
+    assert.deepEqual(pre.schedules, ['weekly']);
   } finally {
     await cleanup();
   }

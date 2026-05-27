@@ -3,10 +3,10 @@
 <center>Deployable AI agent personas, versioned and shared like code.</center>
 <br />
 
-A persona is a deployable agent. It is one JSON file that names the harness,
-model, skills, permissions, integrations, schedules, sandbox policy, memory,
-and event handler for an agent that can run locally or in the cloud-facing
-runtime.
+A persona is a deployable agent. It is a JSON file, or a typed `persona.ts`
+source module, that names the harness, model, skills, permissions,
+integrations, schedules, sandbox policy, memory, and event handler for an agent
+that can run locally or in the cloud-facing runtime.
 
 ```bash
 workforce deploy ./review-agent.json
@@ -22,6 +22,14 @@ Deploy the weekly digest example:
 
 ```bash
 workforce deploy ./examples/weekly-digest/persona.json
+```
+
+Typed personas can be deployed directly, or compiled first when you need a
+portable JSON artifact:
+
+```bash
+agentworkforce deploy ./examples/review-agent/persona.ts --mode dev --dry-run
+agentworkforce persona compile ./examples/review-agent/persona.ts
 ```
 
 Run the same persona in a Daytona sandbox with either workforce-managed auth:
@@ -66,7 +74,7 @@ upserts a GitHub issue. See
       ]
     },
     "slack": {
-      "triggers": [{ "on": "app_mention" }]
+      "triggers": [{ "on": "message.created", "match": "@mention" }]
     }
   },
   "sandbox": true,
@@ -111,7 +119,7 @@ Deploy v1 targets the Tier-1 Relayfile providers:
 | --- | --- |
 | GitHub | `pull_request.opened`, `issue_comment.created`, `check_run.completed` |
 | Linear | `issue.created`, `issue.updated`, `comment.created` |
-| Slack | `app_mention`, channel messages, reactions |
+| Slack | `message.created`, `message.updated`, reactions |
 | Notion | page, database, block, and comment updates |
 | Jira | issue, comment, project, and sprint updates |
 
