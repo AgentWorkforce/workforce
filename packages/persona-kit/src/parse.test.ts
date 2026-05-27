@@ -311,6 +311,28 @@ test('parseInputs rejects names that violate the env-var convention', () => {
   assert.throws(() => parseInputs({ foo: 'x' }, 'inputs'), /inputs\.foo must be an env-style name/);
 });
 
+test('parseInputs keeps a picker alongside env/optional', () => {
+  const inputs = parseInputs(
+    {
+      BENJAMIN: { env: 'BENJAMIN', optional: true, picker: { provider: 'slack', resource: 'users' } }
+    },
+    'inputs'
+  );
+  assert.deepEqual(inputs?.BENJAMIN.picker, { provider: 'slack', resource: 'users' });
+  assert.equal(inputs?.BENJAMIN.optional, true);
+});
+
+test('parseInputs rejects a picker missing provider or resource', () => {
+  assert.throws(
+    () => parseInputs({ FOO: { picker: { provider: 'slack' } } }, 'inputs'),
+    /inputs\.FOO\.picker\.resource must be a non-empty string/
+  );
+  assert.throws(
+    () => parseInputs({ FOO: { picker: { resource: 'users' } } }, 'inputs'),
+    /inputs\.FOO\.picker\.provider must be a non-empty string/
+  );
+});
+
 test('parseHarnessSettings accepts optional codex fields and rejects bad ones', () => {
   const ok = parseHarnessSettings(
     {

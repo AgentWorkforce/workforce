@@ -88,6 +88,32 @@ export interface PersonaInputSpec {
    * misconfigured launches surface loudly.
    */
   optional?: boolean;
+  /**
+   * Declares that this input's value is an id chosen from a live list backed
+   * by an integration connection (e.g. a Slack user id, a Linear team id).
+   * When set, the deploy CLI offers the operator a picker right after the
+   * provider's OAuth connect — fetching the options through the cloud and
+   * writing the chosen id into this input — instead of making them paste a
+   * raw id. Purely an onboarding affordance: the runtime still resolves the
+   * value the usual way (explicit value → env → default), so a `picker` can
+   * coexist with `env`/`default`/`optional`.
+   */
+  picker?: PersonaInputPicker;
+}
+
+/**
+ * How the deploy CLI sources a picker's options for a {@link PersonaInputSpec}.
+ * `provider` must be one the persona declares under `integrations` (so it is
+ * connected before the picker runs). `resource` names what to list from that
+ * provider — known values today are `users`, `channels` (Slack), and `teams`
+ * (Linear); the value is passed through to the cloud, so new resources don't
+ * require a persona-kit release.
+ */
+export interface PersonaInputPicker {
+  /** Integration provider whose connection backs the option list (e.g. `slack`, `linear`). */
+  provider: string;
+  /** Resource to list from that provider (e.g. `users`, `channels`, `teams`). */
+  resource: string;
 }
 
 /**

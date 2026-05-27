@@ -313,7 +313,7 @@ export function parseInputs(
     if (!isObject(raw)) {
       throw new Error(`${context}.${name} must be a string default or an object`);
     }
-    const { description, env, default: defaultValue, optional } = raw;
+    const { description, env, default: defaultValue, optional, picker } = raw;
     const parsed: PersonaInputSpec = {};
     if (description !== undefined) {
       if (typeof description !== 'string' || !description.trim()) {
@@ -344,6 +344,19 @@ export function parseInputs(
         );
       }
       parsed.optional = optional;
+    }
+    if (picker !== undefined) {
+      if (!isObject(picker)) {
+        throw new Error(`${context}.${name}.picker must be an object if provided`);
+      }
+      const { provider, resource } = picker;
+      if (typeof provider !== 'string' || !provider.trim()) {
+        throw new Error(`${context}.${name}.picker.provider must be a non-empty string`);
+      }
+      if (typeof resource !== 'string' || !resource.trim()) {
+        throw new Error(`${context}.${name}.picker.resource must be a non-empty string`);
+      }
+      parsed.picker = { provider, resource };
     }
     out[name] = parsed;
   }
