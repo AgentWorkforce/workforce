@@ -48,6 +48,15 @@ export interface DeployIO {
   prompt(question: string, opts?: { defaultValue?: string }): Promise<string>;
   /** Confirmation prompt; resolves to true/false. */
   confirm(question: string, opts?: { defaultValue?: boolean }): Promise<boolean>;
+  /**
+   * Single-choice picker; resolves to the chosen option's `value`. Optional:
+   * the onboarding picker falls back to a numbered `prompt` when an IO does
+   * not implement it, so existing IOs keep working unchanged.
+   */
+  select?(
+    question: string,
+    options: Array<{ value: string; label: string; hint?: string }>
+  ): Promise<string>;
 }
 
 /** The result returned by a successful `deploy(...)` call. */

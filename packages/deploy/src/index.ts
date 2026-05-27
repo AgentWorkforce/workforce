@@ -18,14 +18,19 @@ import type {
 export { pickMode, type CloudAuthRecoveryResolver, type DeployResolvers };
 export { preflightPersona };
 export {
+  collectPickerInputs,
   connectIntegrations,
   envIntegrationResolver,
   relayfileCatalogConfigKeyResolver,
   relayfileIntegrationResolver,
+  relayfileOptionsResolver,
+  type CollectPickerInputsInput,
   type ConnectAllInput,
   type ConnectAllResult,
   type IntegrationAuthRecoveryResolver,
   type IntegrationConnectResolver,
+  type IntegrationOptionsResolver,
+  type PickerOption,
   type ProviderConfigKeyResolver,
   type ProviderSubscriptionResolver
 } from './connect.js';

@@ -764,3 +764,157 @@ function openBrowser(url: string): void {
   });
   child.unref();
 }
+
+// --- Onboarding pickers ------------------------------------------------------
+// Inputs annotated with `picker: { provider, resource }` in the persona name a
+// value the operator should *choose* (a Slack user, a Linear team, …) rather
+// than paste. After the provider is connected, the orchestrator fetches the
+// candidate list from the cloud and prompts. This is a pure convenience layer:
+// a picked value lands in the same `inputs` map an explicit `--input` would, so
+// everything downstream is unchanged, and the step degrades gracefully (skip +
+// warn) whenever it can't run — no value, no prompt, or an offline lookup.
+
+/** One selectable candidate behind a {@link PersonaInputSpec.picker}. */
+export interface PickerOption {
+  value: string;
+  label: string;
+  hint?: string;
+}
+
+/** Resolves the candidate list for a persona input's `picker`. */
+export interface IntegrationOptionsResolver {
+  list(args: { workspace: string; provider: string; resource: string }): Promise<PickerOption[]>;
+}
+
+/**
+ * Cloud-backed options resolver: `GET /api/v1/workspaces/<ws>/integrations/<provider>/options/<resource>`.
+ * The cloud triggers the provider's Nango `list-*` action and returns a
+ * normalized `{ options: [{ value, label, hint? }] }` body. Mirrors
+ * {@link relayfileCatalogConfigKeyResolver}'s auth + transport.
+ */
+export function relayfileOptionsResolver(opts: {
+  apiUrl: string;
+  workspaceToken: string | (() => string | Promise<string>);
+  fetch?: typeof fetch;
+}): IntegrationOptionsResolver {
+  const fetchImpl = opts.fetch ?? fetch;
+  const apiUrl = opts.apiUrl.replace(/\/+$/, '');
+  return {
+    async list({ workspace, provider, resource }) {
+      const token = await resolveWorkspaceToken(opts.workspaceToken);
+      const url =
+        `${apiUrl}/api/v1/workspaces/${encodeURIComponent(workspace)}` +
+        `/integrations/${encodeURIComponent(provider)}/options/${encodeURIComponent(resource)}`;
+      const body = await requestJson(fetchImpl, url, token);
+      const raw = body && typeof body === 'object' ? (body as { options?: unknown }).options : undefined;
+      if (!Array.isArray(raw)) return [];
+      const options: PickerOption[] = [];
+      for (const entry of raw) {
+        const value = readString(entry, 'value');
+        if (!value) continue;
+        const label = readString(entry, 'label') ?? value;
+        const hint = readString(entry, 'hint');
+        options.push({ value, label, ...(hint ? { hint } : {}) });
+      }
+      return options;
+    }
+  };
+}
+
+export interface CollectPickerInputsInput {
+  persona: PersonaSpec;
+  workspace: string;
+  io: DeployIO;
+  resolver: IntegrationOptionsResolver;
+  /** Inputs resolved so far (e.g. from `--input`). Not mutated. */
+  inputs: Record<string, string>;
+  /** Providers that were just connected — pickers for others are skipped. */
+  connectedProviders: string[];
+  env?: NodeJS.ProcessEnv;
+  /** When true, never prompt; picker-annotated inputs are left to resolve normally. */
+  noPrompt?: boolean;
+}
+
+/**
+ * Walk the persona's picker-annotated inputs and, for any without a value yet,
+ * prompt the operator to choose one. Returns a new inputs map (the original is
+ * left untouched). Every failure mode is non-fatal: the input is simply left
+ * unset so the runtime resolves it the usual way (env → default) or fails loudly
+ * later, and the operator can always fall back to `--input NAME=…`.
+ */
+export async function collectPickerInputs(input: CollectPickerInputsInput): Promise<Record<string, string>> {
+  const resolved: Record<string, string> = { ...input.inputs };
+  const declared = input.persona.inputs ?? {};
+  const env = input.env ?? process.env;
+  const connected = new Set(input.connectedProviders);
+
+  for (const [name, spec] of Object.entries(declared)) {
+    const picker = spec.picker;
+    if (!picker) continue;
+
+    // Already have a value? An explicit --input or a set env var wins; never
+    // override what the operator already chose.
+    const envName = spec.env ?? name;
+    const existing = resolved[name] ?? (env[envName] ?? undefined);
+    if (existing !== undefined && existing.trim() !== '') continue;
+
+    if (input.noPrompt) continue;
+    if (!connected.has(picker.provider)) {
+      // The provider wasn't connected this run (declared elsewhere, env path,
+      // or skipped) — we can't reliably list it, so leave the input alone.
+      continue;
+    }
+
+    let options: PickerOption[];
+    try {
+      options = await input.resolver.list({
+        workspace: input.workspace,
+        provider: picker.provider,
+        resource: picker.resource
+      });
+    } catch (err) {
+      const message = err instanceof Error ? err.message : String(err);
+      input.io.warn(
+        `could not list ${picker.provider} ${picker.resource} for input ${name} (${message}); pass --input ${name}=… to set it`
+      );
+      continue;
+    }
+
+    if (options.length === 0) {
+      input.io.warn(
+        `no ${picker.provider} ${picker.resource} available for input ${name}; pass --input ${name}=… to set it`
+      );
+      continue;
+    }
+
+    const label = spec.description ? `${name} — ${spec.description}` : name;
+    const chosen = await selectOption(input.io, `Select ${label}`, options);
+    if (chosen) resolved[name] = chosen;
+  }
+
+  return resolved;
+}
+
+/**
+ * Render a chooser for `options` and return the picked value. Uses the IO's
+ * native `select` when available (rich CLIs); otherwise falls back to a
+ * numbered prompt that also accepts a pasted raw value.
+ */
+async function selectOption(io: DeployIO, question: string, options: PickerOption[]): Promise<string | undefined> {
+  if (io.select) {
+    return io.select(question, options);
+  }
+  io.info(`${question}:`);
+  options.forEach((option, index) => {
+    const hint = option.hint ? ` — ${option.hint}` : '';
+    io.info(`  ${index + 1}) ${option.label}${hint}  [${option.value}]`);
+  });
+  const answer = (await io.prompt(`Enter 1-${options.length} (or paste a value)`, { defaultValue: '1' })).trim();
+  if (answer === '') return options[0]?.value;
+  const index = Number.parseInt(answer, 10);
+  if (Number.isInteger(index) && index >= 1 && index <= options.length) {
+    return options[index - 1]?.value;
+  }
+  // Not a valid index — treat the answer as a directly-pasted value.
+  return answer;
+}
