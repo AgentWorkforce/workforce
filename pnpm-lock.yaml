@@ -44,9 +44,6 @@ importers:
       '@relayfile/local-mount':
         specifier: ^0.7.24
         version: 0.7.24
-      esbuild:
-        specifier: ^0.25.0
-        version: 0.25.12
       ora:
         specifier: ^9.4.0
         version: 9.4.0

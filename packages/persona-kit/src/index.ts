@@ -96,6 +96,7 @@ export {
 export {
   ADAPTERS_WITHOUT_KNOWN_TRIGGERS,
   KNOWN_TRIGGER_CATALOG,
+  KNOWN_TRIGGER_PROVIDER_ALIASES,
   KNOWN_TRIGGERS,
   lintTriggers,
   type KnownProviderName,

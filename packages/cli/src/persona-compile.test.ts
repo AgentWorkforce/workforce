@@ -1,6 +1,13 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import {
+  mkdirSync,
+  mkdtempSync,
+  readFileSync,
+  readdirSync,
+  rmSync,
+  writeFileSync
+} from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
@@ -61,6 +68,213 @@ export default definePersona({
       'off_registry.github_event'
     );
     assert.equal(compiled.integrations?.unknown.triggers?.[0].on, 'whatever.happened');
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test('compilePersonaFile evaluates authored persona.ts beside sibling files', async () => {
+  const root = mkdtempSync(join(tmpdir(), 'aw-persona-compile-sibling-'));
+  try {
+    const inputPath = join(root, 'persona.ts');
+    const outputPath = join(root, 'persona.json');
+    writeFileSync(join(root, 'description.txt'), 'Description from sibling file.\n', 'utf8');
+    writeFileSync(
+      inputPath,
+      `import { readFileSync } from 'node:fs';
+import { fileURLToPath } from 'node:url';
+import { definePersona } from '@agentworkforce/persona-kit';
+
+const description = readFileSync(
+  fileURLToPath(new URL('./description.txt', import.meta.url)),
+  'utf8'
+).trim();
+
+export default definePersona({
+  id: 'sibling-persona',
+  intent: 'review',
+  description,
+  onEvent: './agent.ts',
+  harnessSettings: {
+    reasoning: 'medium',
+    timeoutSeconds: 60
+  }
+});
+`,
+      'utf8'
+    );
+
+    const result = await compilePersonaFile(inputPath);
+    const compiled = JSON.parse(readFileSync(outputPath, 'utf8')) as {
+      description: string;
+    };
+
+    assert.equal(result.personaId, 'sibling-persona');
+    assert.equal(compiled.description, 'Description from sibling file.');
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test('compilePersonaFile preserves module-relative import.meta.url in local helpers', async () => {
+  const root = mkdtempSync(join(tmpdir(), 'aw-persona-compile-helper-url-'));
+  try {
+    const inputPath = join(root, 'persona.ts');
+    const outputPath = join(root, 'persona.json');
+    mkdirSync(join(root, 'helpers'));
+    writeFileSync(join(root, 'helpers', 'description.txt'), 'Description from helper.\n', 'utf8');
+    writeFileSync(
+      join(root, 'helpers', 'description.ts'),
+      `import { readFileSync } from 'node:fs';
+import { fileURLToPath } from 'node:url';
+
+export const description = readFileSync(
+  fileURLToPath(new URL('./description.txt', import.meta.url)),
+  'utf8'
+).trim();
+`,
+      'utf8'
+    );
+    writeFileSync(
+      inputPath,
+      `import { definePersona } from '@agentworkforce/persona-kit';
+import { description } from './helpers/description';
+
+export default definePersona({
+  id: 'helper-url-persona',
+  intent: 'review',
+  description,
+  onEvent: './agent.ts',
+  harnessSettings: {
+    reasoning: 'medium',
+    timeoutSeconds: 60
+  }
+});
+`,
+      'utf8'
+    );
+
+    const result = await compilePersonaFile(inputPath);
+    const compiled = JSON.parse(readFileSync(outputPath, 'utf8')) as {
+      description: string;
+    };
+
+    assert.equal(result.personaId, 'helper-url-persona');
+    assert.equal(compiled.description, 'Description from helper.');
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test('compilePersonaFile evaluates CommonJS persona modules with node builtins', async () => {
+  const root = mkdtempSync(join(tmpdir(), 'aw-persona-compile-cjs-'));
+  try {
+    const inputPath = join(root, 'persona.cjs');
+    const outputPath = join(root, 'persona.json');
+    writeFileSync(join(root, 'description.txt'), 'Description from CommonJS.\n', 'utf8');
+    writeFileSync(
+      inputPath,
+      `const { readFileSync } = require('node:fs');
+
+exports.default = {
+  id: 'cjs-persona',
+  intent: 'review',
+  description: readFileSync(__dirname + '/description.txt', 'utf8').trim(),
+  onEvent: './agent.ts',
+  harnessSettings: {
+    reasoning: 'medium',
+    timeoutSeconds: 60
+  }
+};
+`,
+      'utf8'
+    );
+
+    const result = await compilePersonaFile(inputPath);
+    const compiled = JSON.parse(readFileSync(outputPath, 'utf8')) as {
+      description: string;
+    };
+
+    assert.equal(result.personaId, 'cjs-persona');
+    assert.equal(compiled.description, 'Description from CommonJS.');
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test('compilePersonaFile rewrites module locations inside template expressions', async () => {
+  const root = mkdtempSync(join(tmpdir(), 'aw-persona-compile-template-location-'));
+  try {
+    const inputPath = join(root, 'persona.ts');
+    const outputPath = join(root, 'persona.json');
+    writeFileSync(join(root, 'description.txt'), 'Description from template path.\n', 'utf8');
+    writeFileSync(
+      inputPath,
+      `import { readFileSync } from 'node:fs';
+import { fileURLToPath } from 'node:url';
+import { definePersona } from '@agentworkforce/persona-kit';
+
+const descriptionFromDir = readFileSync(\`\${__dirname}/description.txt\`, 'utf8').trim();
+const descriptionFromUrl = readFileSync(
+  fileURLToPath(new URL('./description.txt', \`\${import.meta.url}\`)),
+  'utf8'
+).trim();
+
+export default definePersona({
+  id: 'template-location-persona',
+  intent: 'review',
+  description: \`\${descriptionFromDir} / \${descriptionFromUrl}\`,
+  onEvent: './agent.ts',
+  harnessSettings: {
+    reasoning: 'medium',
+    timeoutSeconds: 60
+  }
+});
+`,
+      'utf8'
+    );
+
+    const result = await compilePersonaFile(inputPath);
+    const compiled = JSON.parse(readFileSync(outputPath, 'utf8')) as {
+      description: string;
+    };
+
+    assert.equal(result.personaId, 'template-location-persona');
+    assert.equal(
+      compiled.description,
+      'Description from template path. / Description from template path.'
+    );
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test('compilePersonaFile removes the temporary evaluated module', async () => {
+  const root = mkdtempSync(join(tmpdir(), 'aw-persona-compile-cleanup-'));
+  try {
+    const inputPath = join(root, 'persona.ts');
+    const tempPrefix = 'agentworkforce-persona-';
+    const existingTempDirs = new Set(
+      readdirSync(tmpdir()).filter((name) => name.startsWith(tempPrefix))
+    );
+    writeFileSync(
+      inputPath,
+      `export default {
+  id: 'cleanup-persona',
+  intent: 'review',
+  description: 'Cleanup persona fixture.',
+  onEvent: './agent.ts',
+  harnessSettings: { reasoning: 'medium', timeoutSeconds: 60 }
+};
+`,
+      'utf8'
+    );
+
+    await compilePersonaFile(inputPath);
+    const leftovers = readdirSync(tmpdir()).filter((name) =>
+      name.startsWith(tempPrefix) && !existingTempDirs.has(name)
+    );
+    assert.deepEqual(leftovers, []);
   } finally {
     rmSync(root, { recursive: true, force: true });
   }

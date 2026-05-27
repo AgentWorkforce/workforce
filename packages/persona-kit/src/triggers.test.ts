@@ -46,10 +46,34 @@ test('lintTriggers returns no issues for known providers and known triggers', ()
           { on: 'pull_request_review_comment.created' }
         ]
       },
-      linear: { triggers: [{ on: 'issue.create' }] }
+      linear: { triggers: [{ on: 'issue.create' }] },
+      slack: { triggers: [{ on: 'message.created' }] }
     })
   );
   assert.deepEqual(issues, []);
+});
+
+test('lintTriggers accepts cloud provider aliases backed by adapter trigger catalogs', () => {
+  const issues = lintTriggers(
+    specWithIntegrations({
+      'google-mail': { triggers: [{ on: 'file.created' }] }
+    })
+  );
+  assert.deepEqual(issues, []);
+});
+
+test('lintTriggers warns per unknown trigger for aliased cloud providers', () => {
+  const issues = lintTriggers(
+    specWithIntegrations({
+      'google-mail': { triggers: [{ on: 'made.up' }] }
+    })
+  );
+  assert.equal(issues.length, 1);
+  assert.equal(issues[0].level, 'warning');
+  assert.equal(issues[0].code, 'unknown_trigger');
+  assert.equal(issues[0].provider, 'google-mail');
+  assert.equal(issues[0].trigger, 'made.up');
+  assert.equal(issues[0].path, 'integrations.google-mail.triggers[0].on');
 });
 
 test('lintTriggers warns once per unknown provider', () => {

@@ -50,6 +50,12 @@ export { canonicalizeCloudUrl, resolveCloudUrl, type CloudUrlContext } from './c
 export { formatHttpErrorBody } from './error-format.js';
 export { createTerminalIO, createBufferedIO, type BufferedIO } from './io.js';
 export { bundleStager } from './bundle.js';
+export {
+  assertReadableFile,
+  isPersonaSourcePath,
+  loadPersonaSourceFile,
+  type PersonaSourceLoadResult
+} from './persona-source.js';
 export { devLauncher } from './modes/dev.js';
 export { sandboxLauncher, resolveSandboxAuth, type SandboxAuth } from './modes/sandbox.js';
 export { cloudLauncher } from './modes/cloud/index.js';

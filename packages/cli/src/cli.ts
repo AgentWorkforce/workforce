@@ -220,7 +220,9 @@ Commands:
                       (non-TTY) with a hint.
                       Exit codes: 0 match, 2 no match, 3 picker unavailable.
   deploy <persona-path> [flags]
-                      Deploy a persona as a managed agent. Modes:
+                      Deploy a persona as a managed agent. <persona-path> may
+                      be prebuilt persona.json or authored persona.ts/js.
+                      Modes:
                         --mode dev          run the persona locally (default if
                                             no Daytona/workspace creds resolve)
                         --mode sandbox      run inside a Daytona sandbox
