@@ -633,9 +633,7 @@ test('deploy can recover cloud integration auth by logging in and retrying with 
     if (auth === 'Bearer stale-token') {
       return jsonResponse({ error: 'Unauthorized' }, 401);
     }
-    return jsonResponse([
-      { provider: 'notion', providerConfigKey: 'notion-relay', status: 'ready' }
-    ]);
+    return jsonResponse({ provider: 'notion', configKey: 'notion-relay', status: 'ready' });
   }) as typeof fetch;
 
   try {

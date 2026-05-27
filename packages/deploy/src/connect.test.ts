@@ -19,7 +19,7 @@ function okJson(body: unknown, status = 200): Response {
   });
 }
 
-test('relayfileIntegrationResolver isConnected defaults to /me/integrations (deployer_user)', async () => {
+test('relayfileIntegrationResolver isConnected reads workspace provider status by default', async () => {
   const urls: string[] = [];
   const resolver = relayfileIntegrationResolver({
     apiUrl: 'https://cloud.example.test',
@@ -27,20 +27,16 @@ test('relayfileIntegrationResolver isConnected defaults to /me/integrations (dep
     workspaceToken: 'tok',
     fetch: async (url) => {
       urls.push(String(url));
-      return okJson([
-        { provider: 'github', providerConfigKey: 'github-relay', status: 'ready' }
-      ]);
+      return okJson({ provider: 'github', configKey: 'github-relay', ready: true });
     }
   });
   assert.equal(await resolver.isConnected({ workspace: 'ws-runtime', provider: 'github' }), true);
-  assert.equal(await resolver.isConnected({ workspace: 'ws-runtime', provider: 'notion' }), false);
   assert.deepEqual(urls, [
-    'https://cloud.example.test/api/v1/me/integrations',
-    'https://cloud.example.test/api/v1/me/integrations'
+    'https://cloud.example.test/api/v1/workspaces/ws-runtime/integrations/github/status?scope=deployer_user'
   ]);
 });
 
-test('relayfileIntegrationResolver isConnected hits /workspaces/<id>/integrations for workspace source', async () => {
+test('relayfileIntegrationResolver isConnected scopes workspace provider status checks', async () => {
   const urls: string[] = [];
   const resolver = relayfileIntegrationResolver({
     apiUrl: 'https://cloud.example.test',
@@ -48,9 +44,7 @@ test('relayfileIntegrationResolver isConnected hits /workspaces/<id>/integration
     workspaceToken: 'tok',
     fetch: async (url) => {
       urls.push(String(url));
-      return okJson([
-        { provider: 'github', providerConfigKey: 'github-relay', status: 'ready' }
-      ]);
+      return okJson({ provider: 'github', configKey: 'github-relay', ready: true });
     }
   });
   assert.equal(
@@ -62,7 +56,7 @@ test('relayfileIntegrationResolver isConnected hits /workspaces/<id>/integration
     true
   );
   assert.deepEqual(urls, [
-    'https://cloud.example.test/api/v1/workspaces/ws-runtime/integrations'
+    'https://cloud.example.test/api/v1/workspaces/ws-runtime/integrations/github/status?scope=workspace'
   ]);
 });
 
@@ -75,7 +69,7 @@ test('relayfileIntegrationResolver isConnected rejects rows whose providerConfig
     workspaceId: 'ws-1',
     workspaceToken: 'tok',
     fetch: async () =>
-      okJson([{ provider: 'slack', providerConfigKey: 'slack-ricky', status: 'ready' }])
+      okJson({ provider: 'slack', configKey: 'slack-ricky', ready: true })
   });
   assert.equal(
     await resolver.isConnected({
@@ -93,7 +87,7 @@ test('relayfileIntegrationResolver isConnected accepts a matching providerConfig
     workspaceId: 'ws-1',
     workspaceToken: 'tok',
     fetch: async () =>
-      okJson([{ provider: 'slack', providerConfigKey: 'slack-relay', status: 'ready' }])
+      okJson({ provider: 'slack', configKey: 'slack-relay', ready: true })
   });
   assert.equal(
     await resolver.isConnected({
@@ -113,7 +107,7 @@ test('relayfileIntegrationResolver isConnected falls back to provider-name match
     apiUrl: 'https://cloud.example.test',
     workspaceId: 'ws-1',
     workspaceToken: 'tok',
-    fetch: async () => okJson([{ provider: 'slack', status: 'ready' }])
+    fetch: async () => okJson({ provider: 'slack', status: 'ready' })
   });
   assert.equal(
     await resolver.isConnected({
@@ -125,21 +119,34 @@ test('relayfileIntegrationResolver isConnected falls back to provider-name match
   );
 });
 
-for (const status of ['ready', 'pending', 'syncing', 'degraded'] as const) {
-  test(`relayfileIntegrationResolver isConnected accepts status="${status}" as connected`, async () => {
+for (const status of ['pending', 'syncing', 'degraded'] as const) {
+  test(`relayfileIntegrationResolver isConnected rejects status="${status}" until ready`, async () => {
     const resolver = relayfileIntegrationResolver({
       apiUrl: 'https://cloud.example.test',
       workspaceId: 'ws-1',
       workspaceToken: 'tok',
-      fetch: async () => okJson([{ provider: 'slack', providerConfigKey: 'slack-relay', status }])
+      fetch: async () => okJson({ provider: 'slack', configKey: 'slack-relay', status })
     });
     assert.equal(
       await resolver.isConnected({ workspace: 'ws-1', provider: 'slack' }),
-      true,
-      `status="${status}" should count as connected`
+      false,
+      `status="${status}" should not count as ready`
     );
   });
 }
+
+test('relayfileIntegrationResolver isConnected accepts ready runtime status as connected', async () => {
+  const resolver = relayfileIntegrationResolver({
+    apiUrl: 'https://cloud.example.test',
+    workspaceId: 'ws-1',
+    workspaceToken: 'tok',
+    fetch: async () => okJson({ provider: 'slack', configKey: 'slack-relay', status: 'ready' })
+  });
+  assert.equal(
+    await resolver.isConnected({ workspace: 'ws-1', provider: 'slack' }),
+    true
+  );
+});
 
 test('relayfileIntegrationResolver isConnected rejects status="error"', async () => {
   // A failed initial sync or errored writeback means the persona cannot
@@ -150,7 +157,7 @@ test('relayfileIntegrationResolver isConnected rejects status="error"', async ()
     workspaceId: 'ws-1',
     workspaceToken: 'tok',
     fetch: async () =>
-      okJson([{ provider: 'slack', providerConfigKey: 'slack-relay', status: 'error' }])
+      okJson({ provider: 'slack', configKey: 'slack-relay', status: 'error' })
   });
   assert.equal(
     await resolver.isConnected({ workspace: 'ws-1', provider: 'slack' }),
@@ -165,7 +172,7 @@ test('relayfileIntegrationResolver isConnected ignores rows with only a connecti
     apiUrl: 'https://cloud.example.test',
     workspaceId: 'ws-1',
     workspaceToken: 'tok',
-    fetch: async () => okJson([{ provider: 'slack', connectionId: 'orphan' }])
+    fetch: async () => okJson({ provider: 'slack', connectionId: 'orphan' })
   });
   assert.equal(
     await resolver.isConnected({ workspace: 'ws-1', provider: 'slack' }),
@@ -173,7 +180,7 @@ test('relayfileIntegrationResolver isConnected ignores rows with only a connecti
   );
 });
 
-test('relayfileIntegrationResolver isConnected does NOT fall back when /me/integrations returns 5xx with "404" in the body', async () => {
+test('relayfileIntegrationResolver isConnected does NOT fall back when status returns 5xx with "404" in the body', async () => {
   // Regression: previous implementation regex-matched "404" anywhere in the
   // error message and treated a 500 whose body mentioned "/api/v1/foo/404"
   // (or any other 404 substring) as a missing-endpoint signal. The check
@@ -192,11 +199,12 @@ test('relayfileIntegrationResolver isConnected does NOT fall back when /me/integ
     resolver.isConnected({ workspace: 'ws-runtime', provider: 'github' }),
     /cloud integration request failed: 500/
   );
-  // Only the /me call should have happened — no silent fallback to workspace.
-  assert.deepEqual(urls, ['https://cloud.example.test/api/v1/me/integrations']);
+  assert.deepEqual(urls, [
+    'https://cloud.example.test/api/v1/workspaces/ws-runtime/integrations/github/status?scope=deployer_user'
+  ]);
 });
 
-test('relayfileIntegrationResolver isConnected falls back to workspace endpoint when /me/integrations 404s', async () => {
+test('relayfileIntegrationResolver isConnected falls back to ready-only list matching when status 404s', async () => {
   const io = createBufferedIO();
   const urls: string[] = [];
   const resolver = relayfileIntegrationResolver({
@@ -206,7 +214,7 @@ test('relayfileIntegrationResolver isConnected falls back to workspace endpoint 
     io,
     fetch: async (url) => {
       urls.push(String(url));
-      if (String(url).endsWith('/me/integrations')) {
+      if (String(url).includes('/integrations/github/status')) {
         return new Response('not found', { status: 404 });
       }
       return okJson([{ provider: 'github', status: 'ready' }]);
@@ -217,12 +225,12 @@ test('relayfileIntegrationResolver isConnected falls back to workspace endpoint 
     true
   );
   assert.deepEqual(urls, [
-    'https://cloud.example.test/api/v1/me/integrations',
+    'https://cloud.example.test/api/v1/workspaces/ws-runtime/integrations/github/status?scope=deployer_user',
     'https://cloud.example.test/api/v1/workspaces/ws-runtime/integrations'
   ]);
   assert.ok(
     io.messages.some(
-      (m) => m.level === 'warn' && /me\/integrations/.test(m.message)
+      (m) => m.level === 'warn' && /integrations\/<provider>\/status/.test(m.message)
     )
   );
 });
@@ -273,9 +281,7 @@ test('relayfileIntegrationResolver reads the latest workspace token for each req
       if (auth === 'Bearer old-token') {
         return okJson({ error: 'Unauthorized' }, 401);
       }
-      return okJson([
-        { provider: 'github', providerConfigKey: 'github-relay', status: 'ready' }
-      ]);
+      return okJson({ provider: 'github', configKey: 'github-relay', status: 'ready' });
     }
   });
 
@@ -526,6 +532,49 @@ test('connectIntegrations fails fast on auth errors without prompting to connect
   assert.doesNotMatch(outcome.message ?? '', /agent-relay cloud/);
   assert.ok(io.messages.some((message) => message.level === 'warn' && message.message.includes('failed to check connection status for notion')));
   assert.ok(io.messages.some((message) => message.level === 'error' && message.message.includes('auth failed')));
+});
+
+test('connectIntegrations --reconnect opens connect flow even when status is already ready', async () => {
+  const io = createBufferedIO();
+  let confirmCalled = false;
+  let connectCalled = false;
+  io.confirm = async () => {
+    confirmCalled = true;
+    return false;
+  };
+
+  const result = await connectIntegrations({
+    persona: {
+      id: 'linear-assistant',
+      intent: 'assistant',
+      description: 'test persona',
+      tags: ['implementation'],
+      integrations: { slack: {} }
+    } as never,
+    workspace: '50587328-441d-4acb-b8f3-dbe1b3c5de99',
+    noConnect: true,
+    noPrompt: true,
+    reconnectProviders: ['slack'],
+    io,
+    integrations: {
+      async isConnected() {
+        return true;
+      },
+      async connect(args) {
+        connectCalled = true;
+        assert.equal(args.workspace, '50587328-441d-4acb-b8f3-dbe1b3c5de99');
+        assert.equal(args.provider, 'slack');
+        return { connectionId: 'conn-slack' };
+      }
+    }
+  });
+
+  assert.equal(confirmCalled, false);
+  assert.equal(connectCalled, true);
+  assert.deepEqual(result.outcomes, [{ provider: 'slack', status: 'connected-now' }]);
+  assert.ok(io.messages.some((message) =>
+    message.level === 'info' && /reconnect requested/.test(message.message)
+  ));
 });
 
 test('relayfileIntegrationResolver surfaces the agentworkforce-native error on 401', async () => {

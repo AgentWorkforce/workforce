@@ -237,6 +237,7 @@ Flags:
   --mode dev|sandbox|cloud    Pick a run mode (prompts in an interactive terminal)
   --workspace <name>           Workforce workspace; defaults to the active workspace
   --no-connect                 Skip integration-connect prompts; fail if any are missing
+  --reconnect <provider>       Force a fresh integration connect flow (repeatable)
   --byo-sandbox                Force BYO Daytona auth even when logged in
   --detach                     Background the runner instead of streaming logs
   --bundle-out <dir>           Emit the bundle to <dir> and exit (no launch)
@@ -294,6 +295,7 @@ export function parseDeployArgs(args: readonly string[]): DeployOptions {
   let byokKey: string | undefined;
   let onExists: DeployOptions['onExists'];
   const inputs: Record<string, string> = {};
+  const reconnectProviders: string[] = [];
 
   for (let i = 0; i < args.length; i += 1) {
     const a = args[i];
@@ -310,6 +312,10 @@ export function parseDeployArgs(args: readonly string[]): DeployOptions {
       workspace = expectValue('--workspace', args[++i]);
     } else if (a === '--no-connect') {
       noConnect = true;
+    } else if (a === '--reconnect') {
+      reconnectProviders.push(...parseProviderList(expectValue('--reconnect', args[++i])));
+    } else if (a.startsWith('--reconnect=')) {
+      reconnectProviders.push(...parseProviderList(expectInlineValue('--reconnect', a.slice('--reconnect='.length))));
     } else if (a === '--byo-sandbox') {
       byoSandbox = true;
     } else if (a === '--detach') {
@@ -365,11 +371,20 @@ export function parseDeployArgs(args: readonly string[]): DeployOptions {
     ...(dryRun ? { dryRun: true } : {}),
     ...(cloudUrl ? { cloudUrl } : {}),
     ...(noPrompt ? { noPrompt: true } : {}),
+    ...(reconnectProviders.length > 0 ? { reconnectProviders: [...new Set(reconnectProviders)] } : {}),
     ...(harnessSource ? { harnessSource } : {}),
     ...(byokKey ? { byokKey } : {}),
     ...(onExists ? { onExists } : {}),
     ...(Object.keys(inputs).length > 0 ? { inputs } : {})
   };
+}
+
+function parseProviderList(value: string): string[] {
+  const providers = value.split(',').map((entry) => entry.trim()).filter(Boolean);
+  if (providers.length === 0) {
+    die('--reconnect: expected <provider>');
+  }
+  return providers;
 }
 
 function expectDeployInputValue(value: string | undefined): string {
