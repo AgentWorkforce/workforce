@@ -132,6 +132,8 @@ export interface ModeLaunchInput {
   onExists?: 'update' | 'destroy' | 'cancel';
   /** Runtime inputs forwarded to launchers that support them. */
   inputs?: Record<string, string>;
+  /** Provider credential selections resolved before launch. Cloud mode includes these in the deploy request. */
+  credentialSelections?: Record<string, string>;
   /** Runtime log streaming hook. */
   onLog?: (line: string) => void;
 }

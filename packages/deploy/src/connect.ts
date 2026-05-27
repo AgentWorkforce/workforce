@@ -328,6 +328,12 @@ export interface ConnectAllResult {
 export async function connectIntegrations(input: ConnectAllInput): Promise<ConnectAllResult> {
   const integrations = input.persona.integrations ?? {};
   const outcomes: IntegrationConnectOutcome[] = [];
+  const subscription = input.persona.useSubscription
+    ? requireSubscriptionResolver(input.persona.id, input.subscription)
+    : undefined;
+  const subscriptionProvider = subscription
+    ? await connectSubscriptionProvider(input, subscription)
+    : undefined;
 
   for (const provider of Object.keys(integrations)) {
     const integrationEntry = integrations[provider] ?? {};
@@ -447,49 +453,54 @@ export async function connectIntegrations(input: ConnectAllInput): Promise<Conne
     }
   }
 
-  // Track the subscription provider only when this deploy actually
-  // connected one — already-connected cases stay logged but do not
-  // leak a sentinel string up to callers reading `subscriptionProvider`.
-  let subscriptionProvider: string | undefined;
-  if (input.persona.useSubscription) {
-    if (!input.subscription) {
-      throw new Error(
-        'persona has useSubscription:true but no subscription resolver was supplied to the deploy orchestrator'
-      );
-    }
-    const isConn = await input.subscription
-      .isConnected({ workspace: input.workspace })
-      .catch(() => false);
-    if (!isConn) {
-      if (input.noPrompt) {
-        throw new Error(
-          'persona requires a subscription provider connection, but --no-prompt was passed. Connect it before deploying or run without --no-prompt.'
-        );
-      }
-      if (input.noConnect) {
-        throw new Error(
-          'persona requires a subscription provider connection, but --no-connect was passed'
-        );
-      }
-      const ok = await input.io.confirm(
-        'persona has useSubscription:true — connect your LLM provider now?',
-        { defaultValue: true }
-      );
-      if (!ok) {
-        throw new Error('user declined the subscription provider connect; deploy aborted');
-      }
-      const result = await input.subscription.connect({ workspace: input.workspace });
-      subscriptionProvider = result.provider;
-      input.io.info(`subscription: connected (${result.provider})`);
-    } else {
-      input.io.info('subscription: already connected');
-    }
-  }
-
   return {
     outcomes,
     ...(subscriptionProvider ? { subscriptionProvider } : {})
   };
+}
+
+async function connectSubscriptionProvider(
+  input: ConnectAllInput,
+  subscription: ProviderSubscriptionResolver
+): Promise<string | undefined> {
+  const isConn = await subscription
+    .isConnected({ workspace: input.workspace })
+    .catch(() => false);
+  if (isConn) {
+    input.io.info('subscription: already connected');
+    return undefined;
+  }
+  if (input.noPrompt) {
+    throw new Error(
+      'persona requires a subscription provider connection, but --no-prompt was passed. Connect it before deploying or run without --no-prompt.'
+    );
+  }
+  if (input.noConnect) {
+    throw new Error(
+      'persona requires a subscription provider connection, but --no-connect was passed'
+    );
+  }
+  const ok = await input.io.confirm(
+    'persona has useSubscription:true — connect your LLM provider now?',
+    { defaultValue: true }
+  );
+  if (!ok) {
+    throw new Error('user declined the subscription provider connect; deploy aborted');
+  }
+  const result = await subscription.connect({ workspace: input.workspace });
+  input.io.info(`subscription: connected (${result.provider})`);
+  return result.provider;
+}
+
+function requireSubscriptionResolver(
+  personaId: string,
+  subscription: ProviderSubscriptionResolver | undefined
+): ProviderSubscriptionResolver {
+  if (subscription) return subscription;
+  throw new Error(
+    `persona "${personaId}" sets useSubscription:true, but no subscription connector is available. ` +
+      'Use the deploy orchestrator cloud mode, provide a subscription resolver, or remove useSubscription to use workforce-billed inference.'
+  );
 }
 
 async function checkProviderConnected(

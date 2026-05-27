@@ -263,6 +263,166 @@ test('deploy --dry-run validates persona and exits before side effects', async (
   }
 });
 
+test('deploy --dry-run accepts useSubscription personas in cloud mode', async () => {
+  const { personaPath, cleanup } = await withTempPersona(
+    basePersonaJson({ useSubscription: true })
+  );
+  const io = createBufferedIO();
+  try {
+    const result = await deploy({ personaPath, mode: 'cloud', dryRun: true, io });
+    assert.equal(result.deploymentId, 'demo');
+    assert.equal(result.mode, 'cloud');
+    assert.ok(io.messages.find((m) => m.message.includes('--dry-run')));
+    assert.ok(!io.messages.find((m) => m.message.startsWith('workspace:')));
+  } finally {
+    await cleanup();
+  }
+});
+
+test('deploy --dry-run rejects useSubscription when cloud mode is not selected', async () => {
+  const { personaPath, cleanup } = await withTempPersona(
+    basePersonaJson({ useSubscription: true })
+  );
+  const io = createBufferedIO();
+  try {
+    await assert.rejects(
+      deploy({ personaPath, mode: 'dev', dryRun: true, io }),
+      /requires --mode cloud/
+    );
+    assert.ok(!io.messages.find((m) => m.message.startsWith('workspace:')));
+  } finally {
+    await cleanup();
+  }
+});
+
+test('deploy --dry-run rejects useSubscription with workforce plan credentials', async () => {
+  const { personaPath, cleanup } = await withTempPersona(
+    basePersonaJson({ useSubscription: true })
+  );
+  const io = createBufferedIO();
+  try {
+    await assert.rejects(
+      deploy({ personaPath, mode: 'cloud', dryRun: true, harnessSource: 'plan', io }),
+      /use --harness-source oauth/
+    );
+    assert.ok(!io.messages.find((m) => m.message.startsWith('workspace:')));
+  } finally {
+    await cleanup();
+  }
+});
+
+test('deploy accepts useSubscription when a subscription resolver is supplied', async () => {
+  const { personaPath, cleanup } = await withTempPersona(
+    basePersonaJson({ useSubscription: true })
+  );
+  const io = createBufferedIO();
+  try {
+    const result = await deploy(
+      { personaPath, dryRun: true, io },
+      {
+        subscription: {
+          async isConnected() {
+            throw new Error('dry-run should not check subscription status');
+          },
+          async connect() {
+            throw new Error('dry-run should not connect subscriptions');
+          }
+        }
+      }
+    );
+    assert.equal(result.deploymentId, 'demo');
+    assert.ok(io.messages.find((m) => m.message.includes('--dry-run')));
+  } finally {
+    await cleanup();
+  }
+});
+
+test('deploy prepares useSubscription BYOK credentials before integration side effects', async () => {
+  const { personaPath, cleanup } = await withTempPersona(
+    basePersonaJson({
+      useSubscription: true,
+      integrations: { github: { triggers: [{ on: 'pull_request.opened' }] } }
+    })
+  );
+  const io = createBufferedIO();
+  const originalFetch = globalThis.fetch;
+  const order: string[] = [];
+  let launchedSelections: Record<string, string> | undefined;
+  try {
+    globalThis.fetch = (async (input, init) => {
+      const url = String(input);
+      if (url.endsWith('/provider-credentials/byok')) {
+        order.push('subscription-byok');
+        assert.equal(init?.method, 'POST');
+        assert.deepEqual(JSON.parse(String(init?.body)), {
+          modelProvider: 'anthropic',
+          model_provider: 'anthropic',
+          key: 'sk-test',
+          api_key: 'sk-test'
+        });
+        return jsonResponse({ providerCredentialId: 'cred-byok' }, 201);
+      }
+      throw new Error(`unexpected URL ${url}`);
+    }) as typeof fetch;
+
+    const result = await deploy(
+      {
+        personaPath,
+        mode: 'cloud',
+        harnessSource: 'byok',
+        byokKey: 'sk-test',
+        cloudUrl: 'https://cloud.example.test',
+        io
+      },
+      {
+        workspaceAuth: {
+          async resolveWorkspace() {
+            order.push('workspace');
+            return { workspace: 'ws-test', token: 'tok' };
+          }
+        },
+        providerConfigKeys: {
+          async resolve() {
+            return undefined;
+          }
+        },
+        integrations: {
+          async isConnected() {
+            order.push('integration-check');
+            return true;
+          },
+          async connect() {
+            order.push('integration-connect');
+            return { connectionId: 'conn-github' };
+          }
+        },
+        bundle: successfulBundleStager(),
+        modes: {
+          cloud: {
+            async launch(input) {
+              order.push('launch');
+              launchedSelections = input.credentialSelections;
+              return {
+                id: 'cloud-1',
+                async stop() {
+                  /* no-op */
+                },
+                done: Promise.resolve({ code: 0 })
+              };
+            }
+          }
+        }
+      }
+    );
+    assert.equal(result.deploymentId, 'demo');
+    assert.deepEqual(order, ['workspace', 'subscription-byok', 'integration-check', 'launch']);
+    assert.deepEqual(launchedSelections, { anthropic: 'cred-byok' });
+  } finally {
+    globalThis.fetch = originalFetch;
+    await cleanup();
+  }
+});
+
 test('deploy fails clearly when integration is not connected and --no-connect is set', async () => {
   const { personaPath, cleanup } = await withTempPersona(
     basePersonaJson({ integrations: { github: { triggers: [{ on: 'pull_request.opened' }] } } })
