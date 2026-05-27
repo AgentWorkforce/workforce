@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [3.0.26] - 2026-05-27
+
 ### Fixed
 
 - `agentworkforce persona compile` now evaluates typed persona modules beside
