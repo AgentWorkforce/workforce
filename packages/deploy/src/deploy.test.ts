@@ -10,8 +10,10 @@ import type {
   BundleStager,
   CloudAuthRecoveryResolver,
   IntegrationConnectResolver,
+  IntegrationOptionsResolver,
   ModeLaunchInput,
   ModeLauncher,
+  ProviderConfigKeyResolver,
   WorkspaceAuth
 } from './index.js';
 
@@ -1013,4 +1015,87 @@ test('deploy: clear error when nothing resolves and noPrompt is set', async () =
   });
 
   await cleanup();
+});
+
+test('deploy merges explicit --input with picker-collected values for the launcher', async () => {
+  // Regression: when the operator passes any --input, the public deploy()
+  // wrapper used to overwrite the launcher inputs with the CLI set only,
+  // dropping picker-collected picks. Assert both reach the launcher.
+  const { personaPath, cleanup } = await withTempPersona(
+    basePersonaJson({
+      integrations: { slack: {} },
+      inputs: {
+        EXPLICIT: { description: 'set via --input', optional: true },
+        BENJAMIN: {
+          description: 'picked from slack users',
+          optional: true,
+          picker: { provider: 'slack', resource: 'users' }
+        }
+      }
+    })
+  );
+  const io = createBufferedIO();
+  io.scriptAnswers(['1']); // numbered-prompt fallback: pick the first user
+
+  const workspaceAuth: WorkspaceAuth = {
+    async resolveWorkspace() {
+      return { workspace: 'ws-test', token: 'tok' };
+    }
+  };
+  const integrations: IntegrationConnectResolver = {
+    async isConnected() {
+      return true; // slack already connected → picker fires
+    },
+    async connect() {
+      return { connectionId: 'conn-slack' };
+    }
+  };
+  // Stub so cloud mode doesn't reach for the live catalog endpoint.
+  const providerConfigKeys: ProviderConfigKeyResolver = {
+    async resolve() {
+      return undefined;
+    }
+  };
+  const integrationOptions: IntegrationOptionsResolver = {
+    async list({ provider, resource }) {
+      assert.equal(provider, 'slack');
+      assert.equal(resource, 'users');
+      return [
+        { value: 'U1', label: 'Benjamin', hint: 'ben@watchdog.no' },
+        { value: 'U2', label: 'Amy' }
+      ];
+    }
+  };
+
+  let launchedInputs: Record<string, string> | undefined;
+  try {
+    await deploy(
+      { personaPath, mode: 'cloud', io, inputs: { EXPLICIT: 'explicit-val' } },
+      {
+        workspaceAuth,
+        integrations,
+        providerConfigKeys,
+        integrationOptions,
+        bundle: successfulBundleStager(),
+        modes: {
+          cloud: {
+            async launch(input: ModeLaunchInput) {
+              launchedInputs = input.inputs;
+              return {
+                id: 'cloud-1',
+                async stop() {
+                  /* no-op */
+                },
+                done: Promise.resolve({ code: 0 })
+              };
+            }
+          }
+        }
+      }
+    );
+
+    assert.deepEqual(launchedInputs, { EXPLICIT: 'explicit-val', BENJAMIN: 'U1' });
+  } finally {
+    await cleanup();
+  }
 });

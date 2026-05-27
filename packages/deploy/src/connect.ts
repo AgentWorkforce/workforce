@@ -1001,7 +1001,14 @@ export async function collectPickerInputs(input: CollectPickerInputsInput): Prom
     const existing = resolved[name] ?? (env[envName] ?? undefined);
     if (existing !== undefined && existing.trim() !== '') continue;
 
-    if (input.noPrompt) continue;
+    if (input.noPrompt) {
+      // Non-interactive run: surface why the value is unset rather than
+      // letting it silently fall through to env/default.
+      input.io.warn(
+        `skipping ${picker.provider} ${picker.resource} picker for input ${name} because --no-prompt is set; pass --input ${name}=… to set it`
+      );
+      continue;
+    }
     if (!connected.has(picker.provider)) {
       // The provider wasn't connected this run (declared elsewhere, env path,
       // or skipped) — we can't reliably list it, so leave the input alone.
@@ -1054,10 +1061,12 @@ async function selectOption(io: DeployIO, question: string, options: PickerOptio
   });
   const answer = (await io.prompt(`Enter 1-${options.length} (or paste a value)`, { defaultValue: '1' })).trim();
   if (answer === '') return options[0]?.value;
+  // Only a pure decimal string is an index — `String(index) === answer` rejects
+  // pasted ids like `1abc` (which parseInt would coerce to 1), matching the
+  // terminal IO's select(). Anything else is treated as a pasted raw value.
   const index = Number.parseInt(answer, 10);
-  if (Number.isInteger(index) && index >= 1 && index <= options.length) {
+  if (String(index) === answer && index >= 1 && index <= options.length) {
     return options[index - 1]?.value;
   }
-  // Not a valid index — treat the answer as a directly-pasted value.
   return answer;
 }
