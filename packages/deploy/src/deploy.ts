@@ -5,13 +5,16 @@ import type { PersonaSpec } from '@agentworkforce/persona-kit';
 import { bundleStager } from './bundle.js';
 import { resolveCloudUrl } from './cloud-url.js';
 import {
+  collectPickerInputs,
   connectIntegrations,
   envIntegrationResolver,
   relayfileCatalogConfigKeyResolver,
   relayfileIntegrationResolver,
+  relayfileOptionsResolver,
   type ConnectAllInput,
   type IntegrationAuthRecoveryResolver,
   type IntegrationConnectResolver,
+  type IntegrationOptionsResolver,
   type ProviderConfigKeyResolver,
   type ProviderSubscriptionResolver
 } from './connect.js';
@@ -52,6 +55,12 @@ export interface DeployResolvers {
   authRecovery?: CloudAuthRecoveryResolver;
   subscription?: ProviderSubscriptionResolver;
   providerConfigKeys?: ProviderConfigKeyResolver;
+  /**
+   * Resolves candidate lists for picker-annotated inputs. Defaults to a
+   * cloud-backed resolver in `cloud` mode; supply your own (or a fake) to
+   * drive the onboarding pickers in tests or non-cloud flows.
+   */
+  integrationOptions?: IntegrationOptionsResolver;
   bundle?: BundleStager;
   modes?: Partial<Record<DeployMode, ModeLauncher>>;
 }
@@ -251,6 +260,31 @@ export async function deploy(opts: DeployOptions, resolvers: DeployResolvers = {
         : {})
   });
 
+  // Onboarding pickers: turn picker-annotated inputs the operator hasn't set
+  // into a choose-from-a-list prompt, now that the backing integrations are
+  // connected. Cloud mode gets a cloud-backed resolver by default; callers can
+  // inject their own (or a fake for tests) via `resolvers.integrationOptions`.
+  let resolvedInputs: Record<string, string> = { ...(opts.inputs ?? {}) };
+  const optionsResolver =
+    resolvers.integrationOptions ??
+    (mode === 'cloud'
+      ? relayfileOptionsResolver({
+          apiUrl: normalizeCloudUrl(cloudUrl ?? defaultApiUrl()),
+          workspaceToken: () => activeToken
+        })
+      : undefined);
+  if (optionsResolver && opts.noPrompt !== true && (preflight.persona.inputs !== undefined)) {
+    resolvedInputs = await collectPickerInputs({
+      persona: preflight.persona,
+      workspace,
+      io,
+      resolver: optionsResolver,
+      inputs: resolvedInputs,
+      connectedProviders: connectedIntegrations,
+      ...(opts.noPrompt ? { noPrompt: true } : {})
+    });
+  }
+
   const bundleDir = path.resolve(
     path.join(preflight.personaDir, '.workforce', 'build', preflight.persona.id)
   );
@@ -278,7 +312,7 @@ export async function deploy(opts: DeployOptions, resolvers: DeployResolvers = {
     ...(opts.harnessSource ? { harnessSource: opts.harnessSource } : {}),
     ...(opts.byokKey ? { byokKey: opts.byokKey } : {}),
     ...(opts.onExists ? { onExists: opts.onExists } : {}),
-    ...(opts.inputs ? { inputs: opts.inputs } : {}),
+    ...(Object.keys(resolvedInputs).length > 0 ? { inputs: resolvedInputs } : {}),
     ...(credentialSelections ? { credentialSelections } : {}),
     ...(opts.onLog ? { onLog: opts.onLog } : {})
   });

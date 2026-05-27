@@ -1,9 +1,14 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
+import type { PersonaSpec } from '@agentworkforce/persona-kit';
 import {
+  collectPickerInputs,
   connectIntegrations,
   relayfileCatalogConfigKeyResolver,
-  relayfileIntegrationResolver
+  relayfileIntegrationResolver,
+  relayfileOptionsResolver,
+  type IntegrationOptionsResolver,
+  type PickerOption
 } from './connect.js';
 import { createBufferedIO } from './io.js';
 
@@ -797,4 +802,194 @@ test('connectIntegrations honors --no-prompt for subscription provider setup', a
 
   assert.equal(confirmCalled, false);
   assert.equal(subscriptionConnectCalled, false);
+});
+
+// --- onboarding pickers ------------------------------------------------------
+
+function personaWithBenjaminPicker(): PersonaSpec {
+  return {
+    inputs: {
+      BENJAMIN: {
+        description: 'Who to DM',
+        env: 'BENJAMIN',
+        optional: true,
+        picker: { provider: 'slack', resource: 'users' }
+      }
+    }
+  } as unknown as PersonaSpec;
+}
+
+function fakeOptionsResolver(
+  options: PickerOption[],
+  calls: Array<{ provider: string; resource: string }>
+): IntegrationOptionsResolver {
+  return {
+    async list({ provider, resource }) {
+      calls.push({ provider, resource });
+      return options;
+    }
+  };
+}
+
+test('collectPickerInputs prompts for an unset picker input and records the pick', async () => {
+  const io = createBufferedIO();
+  io.scriptAnswers(['2']); // numbered-prompt fallback: choose the 2nd option
+  const calls: Array<{ provider: string; resource: string }> = [];
+  const resolver = fakeOptionsResolver(
+    [
+      { value: 'U1', label: 'Benjamin', hint: 'ben@watchdog.no' },
+      { value: 'U2', label: 'Amy' }
+    ],
+    calls
+  );
+
+  const resolved = await collectPickerInputs({
+    persona: personaWithBenjaminPicker(),
+    workspace: 'ws-1',
+    io,
+    resolver,
+    inputs: {},
+    connectedProviders: ['slack'],
+    env: {}
+  });
+
+  assert.equal(resolved.BENJAMIN, 'U2');
+  assert.deepEqual(calls, [{ provider: 'slack', resource: 'users' }]);
+});
+
+test('collectPickerInputs leaves an already-provided input untouched', async () => {
+  const io = createBufferedIO();
+  const calls: Array<{ provider: string; resource: string }> = [];
+  const resolver = fakeOptionsResolver([{ value: 'U9', label: 'Nope' }], calls);
+
+  // value present via --input
+  const fromInput = await collectPickerInputs({
+    persona: personaWithBenjaminPicker(),
+    workspace: 'ws-1',
+    io,
+    resolver,
+    inputs: { BENJAMIN: 'U7' },
+    connectedProviders: ['slack'],
+    env: {}
+  });
+  assert.equal(fromInput.BENJAMIN, 'U7');
+
+  // value present via env
+  const fromEnv = await collectPickerInputs({
+    persona: personaWithBenjaminPicker(),
+    workspace: 'ws-1',
+    io,
+    resolver,
+    inputs: {},
+    connectedProviders: ['slack'],
+    env: { BENJAMIN: 'U8' }
+  });
+  assert.equal(fromEnv.BENJAMIN, undefined); // not chosen; runtime resolves from env
+
+  assert.equal(calls.length, 0); // resolver never consulted when a value exists
+});
+
+test('collectPickerInputs skips when the provider was not connected', async () => {
+  const io = createBufferedIO();
+  const calls: Array<{ provider: string; resource: string }> = [];
+  const resolver = fakeOptionsResolver([{ value: 'U1', label: 'Benjamin' }], calls);
+
+  const resolved = await collectPickerInputs({
+    persona: personaWithBenjaminPicker(),
+    workspace: 'ws-1',
+    io,
+    resolver,
+    inputs: {},
+    connectedProviders: [], // slack not connected this run
+    env: {}
+  });
+
+  assert.equal(resolved.BENJAMIN, undefined);
+  assert.equal(calls.length, 0);
+});
+
+test('collectPickerInputs warns and skips when no options are available', async () => {
+  const io = createBufferedIO();
+  const calls: Array<{ provider: string; resource: string }> = [];
+  const resolver = fakeOptionsResolver([], calls);
+
+  const resolved = await collectPickerInputs({
+    persona: personaWithBenjaminPicker(),
+    workspace: 'ws-1',
+    io,
+    resolver,
+    inputs: {},
+    connectedProviders: ['slack'],
+    env: {}
+  });
+
+  assert.equal(resolved.BENJAMIN, undefined);
+  assert.ok(io.messages.some((m) => m.level === 'warn' && /no slack users available/.test(m.message)));
+});
+
+test('collectPickerInputs warns and skips when the lookup throws', async () => {
+  const io = createBufferedIO();
+  const resolver: IntegrationOptionsResolver = {
+    async list() {
+      throw new Error('boom');
+    }
+  };
+
+  const resolved = await collectPickerInputs({
+    persona: personaWithBenjaminPicker(),
+    workspace: 'ws-1',
+    io,
+    resolver,
+    inputs: {},
+    connectedProviders: ['slack'],
+    env: {}
+  });
+
+  assert.equal(resolved.BENJAMIN, undefined);
+  assert.ok(io.messages.some((m) => m.level === 'warn' && /boom/.test(m.message)));
+});
+
+test('collectPickerInputs does nothing under noPrompt', async () => {
+  const io = createBufferedIO();
+  const calls: Array<{ provider: string; resource: string }> = [];
+  const resolver = fakeOptionsResolver([{ value: 'U1', label: 'Benjamin' }], calls);
+
+  const resolved = await collectPickerInputs({
+    persona: personaWithBenjaminPicker(),
+    workspace: 'ws-1',
+    io,
+    resolver,
+    inputs: {},
+    connectedProviders: ['slack'],
+    env: {},
+    noPrompt: true
+  });
+
+  assert.equal(resolved.BENJAMIN, undefined);
+  assert.equal(calls.length, 0);
+});
+
+test('relayfileOptionsResolver normalizes the cloud options response', async () => {
+  const urls: string[] = [];
+  const resolver = relayfileOptionsResolver({
+    apiUrl: 'https://cloud.example.test',
+    workspaceToken: 'tok',
+    fetch: async (url) => {
+      urls.push(String(url));
+      return okJson({
+        ok: true,
+        options: [
+          { value: 'team-1', label: 'Engineering', hint: 'ENG' },
+          { value: '', label: 'skip-me' },
+          { label: 'no-value' }
+        ]
+      });
+    }
+  });
+
+  const options = await resolver.list({ workspace: 'ws 1', provider: 'linear', resource: 'teams' });
+  assert.deepEqual(options, [{ value: 'team-1', label: 'Engineering', hint: 'ENG' }]);
+  assert.deepEqual(urls, [
+    'https://cloud.example.test/api/v1/workspaces/ws%201/integrations/linear/options/teams'
+  ]);
 });

@@ -18,14 +18,19 @@ import type {
 export { pickMode, type CloudAuthRecoveryResolver, type DeployResolvers };
 export { preflightPersona };
 export {
+  collectPickerInputs,
   connectIntegrations,
   envIntegrationResolver,
   relayfileCatalogConfigKeyResolver,
   relayfileIntegrationResolver,
+  relayfileOptionsResolver,
+  type CollectPickerInputsInput,
   type ConnectAllInput,
   type ConnectAllResult,
   type IntegrationAuthRecoveryResolver,
   type IntegrationConnectResolver,
+  type IntegrationOptionsResolver,
+  type PickerOption,
   type ProviderConfigKeyResolver,
   type ProviderSubscriptionResolver
 } from './connect.js';
@@ -131,13 +136,18 @@ function wrapLauncher(
 ): ModeLauncher {
   return {
     async launch(input: ModeLaunchInput) {
+      // `input.inputs` carries deployInternal's resolved set — the CLI
+      // `--input` values plus any picker-collected picks. Merge so those picks
+      // survive; the closure `inputs` (CLI only) is authoritative on overlap,
+      // but pickers skip already-set keys so overlapping values are identical.
+      const mergedInputs = { ...(input.inputs ?? {}), ...inputs };
       return launcher.launch({
         ...input,
         env: {
           ...(input.env ?? {}),
-          ...toInputEnv(inputs)
+          ...toInputEnv(mergedInputs)
         },
-        inputs,
+        inputs: mergedInputs,
         ...(cloudUrl ? { cloudUrl } : {})
       });
     }
