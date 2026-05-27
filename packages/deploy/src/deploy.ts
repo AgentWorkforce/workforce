@@ -1,6 +1,7 @@
 import path from 'node:path';
 import { mkdir } from 'node:fs/promises';
 import { defaultApiUrl } from '@agent-relay/cloud';
+import type { PersonaSpec } from '@agentworkforce/persona-kit';
 import { bundleStager } from './bundle.js';
 import { resolveCloudUrl } from './cloud-url.js';
 import {
@@ -22,7 +23,11 @@ import {
 } from './login.js';
 import { devLauncher } from './modes/dev.js';
 import { sandboxLauncher } from './modes/sandbox.js';
-import { cloudLauncher } from './modes/cloud/index.js';
+import {
+  cloudLauncher,
+  ensureCloudSubscriptionReady,
+  validateCloudSubscriptionSupport
+} from './modes/cloud/index.js';
 import { preflightPersona } from './preflight.js';
 import type {
   BundleStager,
@@ -107,6 +112,7 @@ export async function deploy(opts: DeployOptions, resolvers: DeployResolvers = {
   io.info(`workforce deploy → ${opts.personaPath}`);
 
   const preflight = await preflightPersona(opts.personaPath);
+  const mode: DeployMode = opts.mode ?? pickMode(opts);
   warnings.push(...preflight.warnings);
   for (const w of preflight.warnings) io.warn(w);
 
@@ -114,11 +120,17 @@ export async function deploy(opts: DeployOptions, resolvers: DeployResolvers = {
     `persona ${preflight.persona.id}: ${preflight.integrations.length} integration(s), ${preflight.schedules.length} schedule(s)`
   );
 
+  validateSubscriptionSupport(preflight.persona, {
+    mode,
+    subscription: resolvers.subscription,
+    ...(opts.harnessSource ? { harnessSource: opts.harnessSource } : {})
+  });
+
   if (opts.dryRun) {
     io.info('--dry-run: persona validated; exiting before any side effects');
     return {
       deploymentId: preflight.persona.id,
-      mode: opts.mode ?? pickMode(opts),
+      mode,
       workspace: opts.workspace ?? '(dry-run)',
       bundleDir: '(dry-run)',
       connectedIntegrations: [],
@@ -143,7 +155,7 @@ export async function deploy(opts: DeployOptions, resolvers: DeployResolvers = {
     io.info(`--bundle-out: bundle ready at ${bundleDir}; skipping launch`);
     return {
       deploymentId: preflight.persona.id,
-      mode: opts.mode ?? pickMode(opts),
+      mode,
       workspace: opts.workspace ?? '(bundle-only)',
       bundleDir,
       connectedIntegrations: [],
@@ -152,7 +164,6 @@ export async function deploy(opts: DeployOptions, resolvers: DeployResolvers = {
     };
   }
 
-  const mode: DeployMode = opts.mode ?? pickMode(opts);
   const active = await readActiveWorkspace().catch(() => null);
   const cloudUrl = resolveCloudUrl({
     ...(opts.cloudUrl ? { flag: opts.cloudUrl } : {}),
@@ -184,6 +195,23 @@ export async function deploy(opts: DeployOptions, resolvers: DeployResolvers = {
   }
   io.info(`workspace: ${workspace}`);
   let activeToken = resolvedAuth.token;
+  let subscription = resolvers.subscription;
+  let credentialSelections: Record<string, string> | undefined;
+
+  if (preflight.persona.useSubscription && !subscription) {
+    const result = await ensureCloudSubscriptionReady({
+      cloudUrl: normalizeCloudUrl(cloudUrl ?? defaultApiUrl()),
+      workspaceId: workspace,
+      token: activeToken,
+      persona: preflight.persona,
+      io,
+      noPrompt: opts.noPrompt === true || opts.noConnect === true,
+      ...(opts.harnessSource ? { harnessSource: opts.harnessSource } : {}),
+      ...(opts.byokKey ? { byokKey: opts.byokKey } : {})
+    });
+    credentialSelections = result.credentialSelections;
+    subscription = alreadyConnectedSubscriptionResolver(result.provider);
+  }
 
   const connectedIntegrations = await connectAndCollectIntegrations({
     persona: preflight.persona,
@@ -209,7 +237,7 @@ export async function deploy(opts: DeployOptions, resolvers: DeployResolvers = {
           )
         }
       : {}),
-    ...(resolvers.subscription ? { subscription: resolvers.subscription } : {}),
+    ...(subscription ? { subscription } : {}),
     ...(resolvers.providerConfigKeys
       ? { providerConfigKeys: resolvers.providerConfigKeys }
       : mode === 'cloud'
@@ -251,6 +279,7 @@ export async function deploy(opts: DeployOptions, resolvers: DeployResolvers = {
     ...(opts.byokKey ? { byokKey: opts.byokKey } : {}),
     ...(opts.onExists ? { onExists: opts.onExists } : {}),
     ...(opts.inputs ? { inputs: opts.inputs } : {}),
+    ...(credentialSelections ? { credentialSelections } : {}),
     ...(opts.onLog ? { onLog: opts.onLog } : {})
   });
   io.info(`launched: ${mode}/${handle.id}`);
@@ -313,6 +342,38 @@ function defaultIntegrationResolver(args: {
     workspaceToken: args.token,
     io: args.io
   });
+}
+
+function validateSubscriptionSupport(
+  persona: PersonaSpec,
+  args: {
+    mode: DeployMode;
+    subscription?: ProviderSubscriptionResolver;
+    harnessSource?: 'plan' | 'byok' | 'oauth';
+  }
+): void {
+  if (!persona.useSubscription || args.subscription) return;
+  if (args.mode !== 'cloud') {
+    throw new Error(
+      `persona "${persona.id}" sets useSubscription:true, which requires --mode cloud so the deploy CLI can connect an LLM provider. ` +
+        'Use --mode cloud with --harness-source oauth or byok, or remove useSubscription to use workforce-billed inference.'
+    );
+  }
+  validateCloudSubscriptionSupport({
+    persona,
+    ...(args.harnessSource ? { harnessSource: args.harnessSource } : {})
+  });
+}
+
+function alreadyConnectedSubscriptionResolver(provider: string): ProviderSubscriptionResolver {
+  return {
+    async isConnected() {
+      return true;
+    },
+    async connect() {
+      return { provider };
+    }
+  };
 }
 
 function authRecoveryForIntegrations(
