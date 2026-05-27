@@ -105,6 +105,20 @@ export {
   type TriggerLintLevel
 } from './triggers.js';
 
+// Deploy requirements — derive what a deployer must provide, read directly
+// from the persona definition (single source of truth; no separate manifest).
+export {
+  deriveDeployRequirements,
+  PLATFORM_SECRETS_BY_BACKEND,
+  WEBHOOK_GAP_PLATFORM_SECRET,
+  type DeployRequirements,
+  type DeriveDeployRequirementsOptions,
+  type IntegrationBackend,
+  type RequiredInput,
+  type RequiredIntegration,
+  type RequiredPlatformSecret
+} from './deploy-requirements.js';
+
 // Skill materialization
 export {
   buildCleanupArtifacts,
