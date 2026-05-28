@@ -39,3 +39,20 @@ export class WorkforceIntegrationError extends Error {
     this.retryable = options.retryable ?? false;
   }
 }
+
+/**
+ * Thrown when handler code calls `ctx.sandbox.exec()` on a persona that
+ * declared `sandbox: 'optional'` or `sandbox: false`. Refactor the handler
+ * to use provider client list methods (`ctx.linear.listProjects()`,
+ * `ctx.gmail.listThreads()`, etc.) instead of `find` + `read` loops.
+ */
+export class SandboxNotAvailableError extends Error {
+  constructor(operation?: string) {
+    super(
+      operation
+        ? `sandbox.exec('${operation}') is not available: persona uses sandbox:'optional'. Use provider list methods (e.g. ctx.linear.listProjects()) instead of ctx.sandbox.exec(find ...)`
+        : `sandbox.exec() is not available: persona uses sandbox:'optional'. Use provider list methods instead of ctx.sandbox.exec(find ...)`
+    );
+    this.name = 'SandboxNotAvailableError';
+  }
+}

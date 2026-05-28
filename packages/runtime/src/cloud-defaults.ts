@@ -11,6 +11,7 @@ import {
   resolveStringMapLenient,
   type PersonaSpec
 } from '@agentworkforce/persona-kit';
+import { SandboxNotAvailableError } from './errors.js';
 import { createGithubClient } from './clients/github.js';
 import { createJiraClient } from './clients/jira.js';
 import { createLinearClient } from './clients/linear.js';
@@ -68,8 +69,16 @@ export interface CloudRuntimeDefaults {
 export function createCloudRuntimeDefaults(options: CloudDefaultOptions): CloudRuntimeDefaults {
   const env = options.env ?? process.env;
   const root = resolveCloudWorkspaceRoot(env);
-  const sandbox = createProcessSandbox(root, env);
-  const files = filesFromSandbox(sandbox);
+  // persona-kit publishes PersonaSpec without the sandbox field until the next
+  // release; use a type assertion locally so this file compiles against the
+  // published package while the field is added upstream.
+  const personaSandbox = (options.persona as { sandbox?: boolean | 'required' | 'optional' }).sandbox;
+  const isSandboxOptional = personaSandbox === false || personaSandbox === 'optional';
+  const baseSandbox = createProcessSandbox(root, env);
+  const sandbox = isSandboxOptional
+    ? createSandboxOptionalSandbox(baseSandbox)
+    : baseSandbox;
+  const files = filesFromSandbox(baseSandbox);
   const integrations = createDefaultIntegrations({
     persona: options.persona,
     workspaceId: options.workspaceId,
@@ -140,6 +149,27 @@ function createProcessSandbox(root: string, env: NodeJS.ProcessEnv): SandboxCont
       const target = resolveWorkspacePath(cwd, filePath);
       await mkdir(path.dirname(target), { recursive: true });
       await writeFile(target, contents, 'utf8');
+    }
+  };
+}
+
+/**
+ * Wraps a base SandboxContext for personas that declared `sandbox: 'optional'`.
+ * `exec()` throws `SandboxNotAvailableError` to signal the handler must not
+ * use shell commands; `readFile`/`writeFile` delegate to the base sandbox so
+ * VFS-backed provider clients work without modification.
+ */
+function createSandboxOptionalSandbox(base: SandboxContext): SandboxContext {
+  return {
+    cwd: base.cwd,
+    exec() {
+      throw new SandboxNotAvailableError();
+    },
+    readFile(filePath) {
+      return base.readFile(filePath);
+    },
+    writeFile(filePath, contents) {
+      return base.writeFile(filePath, contents);
     }
   };
 }

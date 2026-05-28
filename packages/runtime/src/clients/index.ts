@@ -29,4 +29,4 @@ export {
   type WritebackResult
 } from './request.js';
 
-export { WorkforceIntegrationError } from '../errors.js';
+export { WorkforceIntegrationError, SandboxNotAvailableError } from '../errors.js';

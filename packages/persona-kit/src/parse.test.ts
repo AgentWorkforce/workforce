@@ -91,7 +91,7 @@ test('parsePersonaSpec accepts deploy-v1 optional fields', () => {
   assert.equal(spec.onEvent, './agent.ts');
 });
 
-test('parsePersonaSpec rejects removed deploy-v1 traits and sandbox keys', () => {
+test('parsePersonaSpec rejects removed deploy-v1 traits but accepts sandbox', () => {
   assert.throws(
     () => parsePersonaSpec(validSpec({ traits: { voice: 'warm' } }), 'documentation'),
     {
@@ -99,12 +99,19 @@ test('parsePersonaSpec rejects removed deploy-v1 traits and sandbox keys', () =>
         'traits was removed in v1; personality is handled by the persona-personality-builder tool (out of scope for v1). See docs/plans/deploy-v1.md'
     }
   );
+  // sandbox field is now accepted with values: true, false, 'required', 'optional'
+  const specOptional = parsePersonaSpec(validSpec({ sandbox: 'optional' }), 'documentation');
+  assert.equal(specOptional.sandbox, 'optional');
+  const specFalse = parsePersonaSpec(validSpec({ sandbox: false }), 'documentation');
+  assert.equal(specFalse.sandbox, false);
+  const specTrue = parsePersonaSpec(validSpec({ sandbox: true }), 'documentation');
+  assert.equal(specTrue.sandbox, true);
+  const specRequired = parsePersonaSpec(validSpec({ sandbox: 'required' }), 'documentation');
+  assert.equal(specRequired.sandbox, 'required');
+  // Invalid sandbox value throws
   assert.throws(
-    () => parsePersonaSpec(validSpec({ sandbox: true }), 'documentation'),
-    {
-      message:
-        "sandbox was removed in v1; sandbox is on by default at deploy time. Use 'workforce deploy --no-sandbox' or runtime config to opt out. See docs/plans/deploy-v1.md"
-    }
+    () => parsePersonaSpec(validSpec({ sandbox: 'invalid' }), 'documentation'),
+    /sandbox must be one of: true, false, 'required', 'optional'/
   );
 });
 
