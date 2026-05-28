@@ -657,6 +657,11 @@ test('parseIntegrations preserves scope + triggers; rejects empty trigger arrays
 test('parseIntegrations default-injects source=deployer_user when the persona omits it', () => {
   const i = parseIntegrations({ github: {} }, 'integrations');
   assert.deepEqual(i?.github.source, { kind: 'deployer_user' });
+  assert.equal(
+    (i?.github as { __agentworkforceImplicitSource?: unknown }).__agentworkforceImplicitSource,
+    true
+  );
+  assert.equal(Object.keys(i?.github ?? {}).includes('__agentworkforceImplicitSource'), false);
 });
 
 test('parseIntegrations round-trips all three valid IntegrationSource kinds', () => {
@@ -671,6 +676,10 @@ test('parseIntegrations round-trips all three valid IntegrationSource kinds', ()
     'integrations'
   );
   assert.deepEqual(i?.github.source, { kind: 'deployer_user' });
+  assert.equal(
+    (i?.github as { __agentworkforceImplicitSource?: unknown }).__agentworkforceImplicitSource,
+    undefined
+  );
   assert.deepEqual(i?.slack.source, { kind: 'workspace' });
   assert.deepEqual(i?.linear.source, {
     kind: 'workspace_service_account',
