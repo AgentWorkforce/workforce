@@ -285,6 +285,21 @@ export function parseMount(
   };
 }
 
+/**
+ * Parse the sandbox field from a persona spec.
+ * Valid values: `true`, `false`. Missing/undefined means default (sandbox always booted).
+ */
+function parseSandbox(
+  value: unknown,
+  context: string
+): boolean | undefined {
+  if (value === undefined) return undefined;
+  if (value === true || value === false) return value;
+  throw new Error(
+    `${context} must be true or false (got ${JSON.stringify(value)})`
+  );
+}
+
 export const INPUT_NAME_RE = /^[A-Z_][A-Z0-9_]*$/;
 
 export function assertInputName(name: string, context: string): void {
@@ -850,11 +865,6 @@ export function parsePersonaSpec(value: unknown, expectedIntent: PersonaIntent):
       'traits was removed in v1; personality is handled by the persona-personality-builder tool (out of scope for v1). See docs/plans/deploy-v1.md'
     );
   }
-  if ('sandbox' in value) {
-    throw new Error(
-      "sandbox was removed in v1; sandbox is on by default at deploy time. Use 'workforce deploy --no-sandbox' or runtime config to opt out. See docs/plans/deploy-v1.md"
-    );
-  }
 
   const {
     id,
@@ -871,6 +881,7 @@ export function parsePersonaSpec(value: unknown, expectedIntent: PersonaIntent):
     mcpServers,
     permissions,
     mount,
+    sandbox,
     claudeMd,
     claudeMdMode,
     agentsMd,
@@ -989,6 +1000,7 @@ export function parsePersonaSpec(value: unknown, expectedIntent: PersonaIntent):
   const parsedWatch = parseWatch(watch, `persona[${expectedIntent}].watch`);
   const parsedMemory = parseMemory(memory, `persona[${expectedIntent}].memory`);
   const parsedOnEvent = parseOnEvent(onEvent, `persona[${expectedIntent}].onEvent`);
+  const parsedSandbox = parseSandbox(sandbox, `persona[${expectedIntent}].sandbox`);
 
   return {
     id,
@@ -1005,6 +1017,7 @@ export function parsePersonaSpec(value: unknown, expectedIntent: PersonaIntent):
     ...(parsedMcpServers ? { mcpServers: parsedMcpServers } : {}),
     ...(parsedPermissions ? { permissions: parsedPermissions } : {}),
     ...(parsedMount ? { mount: parsedMount } : {}),
+    ...(parsedSandbox !== undefined ? { sandbox: parsedSandbox } : {}),
     ...(typeof claudeMd === 'string' ? { claudeMd } : {}),
     ...(claudeMdMode ? { claudeMdMode: claudeMdMode as SidecarMdMode } : {}),
     ...(typeof agentsMd === 'string' ? { agentsMd } : {}),

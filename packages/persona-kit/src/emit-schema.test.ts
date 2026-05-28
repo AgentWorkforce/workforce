@@ -69,7 +69,6 @@ test('generated schema reflects locked v1 persona fields', async () => {
   const personaSpec = definitions.PersonaSpec;
   const properties = personaSpec.properties ?? {};
 
-  assert.equal('sandbox' in properties, false);
   assert.equal('traits' in properties, false);
   assert.deepEqual(definitions.PersonaMemoryScope.enum, ['workspace', 'user', 'global']);
   assert.equal('PersonaSandbox' in definitions, false);

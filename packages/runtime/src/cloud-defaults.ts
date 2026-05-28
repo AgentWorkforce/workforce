@@ -11,11 +11,7 @@ import {
   resolveStringMapLenient,
   type PersonaSpec
 } from '@agentworkforce/persona-kit';
-import { createGithubClient } from './clients/github.js';
-import { createJiraClient } from './clients/jira.js';
-import { createLinearClient } from './clients/linear.js';
-import { createNotionClient } from './clients/notion.js';
-import { createSlackClient } from './clients/slack.js';
+import { SandboxNotAvailableError } from './errors.js';
 import type {
   FilesContext,
   HarnessRunArgs,
@@ -60,7 +56,6 @@ export interface CloudDefaultOptions {
 export interface CloudRuntimeDefaults {
   sandbox: SandboxContext;
   files: FilesContext;
-  integrations?: Record<string, unknown>;
   workflow?: WorkflowContext;
   harnessRunner: (args: HarnessRunArgs) => Promise<HarnessRunResult>;
 }
@@ -68,14 +63,12 @@ export interface CloudRuntimeDefaults {
 export function createCloudRuntimeDefaults(options: CloudDefaultOptions): CloudRuntimeDefaults {
   const env = options.env ?? process.env;
   const root = resolveCloudWorkspaceRoot(env);
-  const sandbox = createProcessSandbox(root, env);
-  const files = filesFromSandbox(sandbox);
-  const integrations = createDefaultIntegrations({
-    persona: options.persona,
-    workspaceId: options.workspaceId,
-    workspaceRoot: root,
-    env
-  });
+  const isSandboxOptional = options.persona.sandbox === false;
+  const baseSandbox = createProcessSandbox(root, env);
+  const sandbox = isSandboxOptional
+    ? createSandboxOptionalSandbox(baseSandbox)
+    : baseSandbox;
+  const files = filesFromSandbox(baseSandbox);
   const workflow = createDefaultWorkflow({
     workspaceRoot: root,
     env
@@ -83,7 +76,6 @@ export function createCloudRuntimeDefaults(options: CloudDefaultOptions): CloudR
   return {
     sandbox,
     files,
-    ...(integrations ? { integrations } : {}),
     ...(workflow ? { workflow } : {}),
     harnessRunner: createProcessHarnessRunner({
       ...options,
@@ -144,6 +136,27 @@ function createProcessSandbox(root: string, env: NodeJS.ProcessEnv): SandboxCont
   };
 }
 
+/**
+ * Wraps a base SandboxContext for personas that declared `sandbox: false`.
+ * `exec()` rejects with `SandboxNotAvailableError` so `.catch(...)` chains
+ * see it; `readFile`/`writeFile` delegate to the base sandbox so VFS reads
+ * and writes still work without modification.
+ */
+function createSandboxOptionalSandbox(base: SandboxContext): SandboxContext {
+  return {
+    cwd: base.cwd,
+    async exec() {
+      throw new SandboxNotAvailableError();
+    },
+    readFile(filePath) {
+      return base.readFile(filePath);
+    },
+    writeFile(filePath, contents) {
+      return base.writeFile(filePath, contents);
+    }
+  };
+}
+
 function filesFromSandbox(sandbox: SandboxContext): FilesContext {
   return {
     read(path) {
@@ -153,61 +166,6 @@ function filesFromSandbox(sandbox: SandboxContext): FilesContext {
       return sandbox.writeFile(path, contents);
     }
   };
-}
-
-function createDefaultIntegrations(args: {
-  persona: PersonaSpec;
-  workspaceId: string;
-  workspaceRoot: string;
-  env: NodeJS.ProcessEnv;
-}): Record<string, unknown> | undefined {
-  const integrations: Record<string, unknown> = {};
-  const common = {
-    relayfileMountRoot: firstNonEmpty(args.env.RELAYFILE_MOUNT_ROOT, args.env.RELAYFILE_ROOT) ?? args.workspaceRoot,
-    workspaceCwd: args.workspaceRoot,
-    workspaceId: args.workspaceId,
-    writebackTimeoutMs: numberFromEnv(args.env.WORKFORCE_RELAYFILE_WRITEBACK_TIMEOUT_MS),
-    writebackPollMs: numberFromEnv(args.env.WORKFORCE_RELAYFILE_WRITEBACK_POLL_MS),
-    relayfileBaseUrl: args.env.RELAYFILE_BASE_URL,
-    relayfileApiToken: args.env.RELAYFILE_TOKEN
-  };
-  const workspaceCloudApiToken = firstNonEmpty(args.env.WORKFORCE_WORKSPACE_TOKEN);
-  const cloudApiToken = firstNonEmpty(workspaceCloudApiToken, args.env.WORKFORCE_AGENT_TOKEN);
-  if (args.persona.integrations?.github) {
-    integrations.github = createGithubClient({
-      ...common,
-      connectionId: args.env.WORKFORCE_INTEGRATION_GITHUB_CONNECTION_ID,
-      cloudApiToken
-    });
-  }
-  if (args.persona.integrations?.slack && workspaceCloudApiToken) {
-    integrations.slack = createSlackClient({
-      ...common,
-      connectionId: args.env.WORKFORCE_INTEGRATION_SLACK_CONNECTION_ID,
-      cloudApiToken: workspaceCloudApiToken,
-      slackTeamId: args.env.WORKFORCE_INTEGRATION_SLACK_TEAM_ID
-    });
-  }
-  if (args.persona.integrations?.linear) {
-    integrations.linear = createLinearClient({
-      ...common,
-      connectionId: args.env.WORKFORCE_INTEGRATION_LINEAR_CONNECTION_ID
-    });
-  }
-  if (args.persona.integrations?.notion) {
-    integrations.notion = createNotionClient({
-      ...common,
-      connectionId: args.env.WORKFORCE_INTEGRATION_NOTION_CONNECTION_ID
-    });
-  }
-  if (args.persona.integrations?.jira && workspaceCloudApiToken) {
-    integrations.jira = createJiraClient({
-      ...common,
-      connectionId: args.env.WORKFORCE_INTEGRATION_JIRA_CONNECTION_ID,
-      cloudApiToken: workspaceCloudApiToken
-    });
-  }
-  return Object.keys(integrations).length > 0 ? integrations : undefined;
 }
 
 function createDefaultWorkflow(args: {

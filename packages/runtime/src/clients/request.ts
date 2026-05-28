@@ -15,9 +15,10 @@ import { WorkforceIntegrationError } from '../errors.js';
  * workflows) and gets writeback durability + retry semantics for free.
  *
  * The handler-side ergonomics stay identical to the direct-REST shape
- * — `await ctx.github.comment(target, body)` returns when the write
- * lands and, by default, waits briefly for the provider receipt.
- * Setting `writebackTimeoutMs` to `0` keeps fire-and-forget behavior.
+ * — `await writeJsonFile(client, 'github', 'comment', commentPath, { body })`
+ * returns when the write lands and, by default, waits briefly for the
+ * provider receipt. Setting `writebackTimeoutMs` to `0` keeps
+ * fire-and-forget behavior.
  */
 export interface IntegrationClientOptions {
   /** Absolute path to the Relayfile mount the handler is running in. */

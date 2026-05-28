@@ -144,11 +144,12 @@ export function buildCtx(options: CtxBuildOptions): WorkforceCtx {
     log
   };
 
-  // Per-integration clients attach as named ctx fields. The deploy step
-  // decides the concrete shape of each client — `github` is a typed
-  // `GithubClient`, others are `unknown` until they ship. Handlers
-  // narrow with a runtime check (`if (ctx.linear)`) and cast against
-  // the future client interface.
+  // Optional per-integration subsystems attach as named ctx fields. The
+  // cloud-default runtime does not populate this — handlers read provider
+  // data through the runtime's VFS helpers (listJsonFiles / readJsonFile /
+  // writeJsonFile) against the provider path conventions. The passthrough
+  // is kept so external callers can still inject custom clients when they
+  // build their own ctx.
   //
   // Reserved fields are guarded so a malformed persona that declares
   // an integration named `harness` or `sandbox` cannot clobber core

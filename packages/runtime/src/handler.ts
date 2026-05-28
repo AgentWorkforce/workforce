@@ -9,11 +9,17 @@ import type { WorkforceHandler, WorkforceHandlerExport } from './types.js';
  *
  * Usage:
  * ```ts
- * import { handler } from '@agentworkforce/runtime';
+ * import { handler, writeJsonFile, resolveMountRoot } from '@agentworkforce/runtime';
  *
  * export default handler(async (ctx, event) => {
  *   if (event.source === 'github' && event.type === 'pull_request.opened') {
- *     await ctx.github!.comment(...);
+ *     await writeJsonFile(
+ *       { relayfileMountRoot: resolveMountRoot({}) },
+ *       'github',
+ *       'comment',
+ *       `/github/repos/${owner}/${repo}/issues/${number}/comments/${draftFile('comment')}`,
+ *       { body: '…' }
+ *     );
  *   }
  * });
  * ```

@@ -70,6 +70,10 @@
           "$ref": "#/definitions/PersonaPermissions",
           "description": "Permission policy (allow/deny lists, mode) for the harness session. Only wired for `claude` today (via `--allowedTools`, `--disallowedTools`, `--permission-mode`); other harnesses warn and skip."
         },
+        "sandbox": {
+          "type": "boolean",
+          "description": "Sandbox boot policy for this persona. Controls whether the runtime boots an isolated sandbox (Daytona/process) for harness execution and file ops.\n\n- **`true`** (default) — always boot a sandbox. The persona can use   `ctx.sandbox.exec()` to shell out, `ctx.files.read/write`, and   `ctx.harness.run()`.\n- **`false`** — skip sandbox boot entirely. Handler code reads provider   data via the runtime's VFS helpers (`listJsonFiles` / `readJsonFile`   / `writeJsonFile`) against provider path conventions (e.g.   `/linear/issues`, `/slack/channels`) instead of `ctx.sandbox.exec(find …)`   + `ctx.files.read()` loops. `ctx.harness.run()` still works.   `ctx.sandbox.exec()` rejects with `SandboxNotAvailableError`.\n\nSetting this to `false` dramatically reduces cold-start latency (no sandbox boot ≈ milliseconds vs seconds) and is appropriate for read-mostly handler agents that consume pre-synced VFS data directly rather than shell-globbing JSON files."
+        },
         "mount": {
           "$ref": "#/definitions/PersonaMount",
           "description": "Relayfile mount policy for file visibility and writability. Applied by launchers that run the harness inside `@relayfile/local-mount`."

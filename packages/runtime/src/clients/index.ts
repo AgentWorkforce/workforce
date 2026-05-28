@@ -1,20 +1,7 @@
-export {
-  createGithubClient,
-  type GithubClient
-} from './github.js';
-
-export { createLinearClient, type LinearClient } from './linear.js';
-
-export { createSlackClient, type SlackClient } from './slack.js';
-
-export { createNotionClient, type NotionClient } from './notion.js';
-
-export { createJiraClient, type JiraClient } from './jira.js';
-
-// Shared VFS-backed transport surface. Consumers building custom
-// clients (a new provider, an in-house writeback variant) can import
-// these directly instead of recreating the path-validation +
-// receipt-polling logic.
+// Shared VFS-backed transport surface. All provider interactions go through
+// these helpers — no per-provider client code lives in the runtime. Handlers
+// and custom clients import these directly instead of recreating the
+// path-validation + receipt-polling logic.
 export {
   draftFile,
   encodeSegment,
@@ -29,4 +16,4 @@ export {
   type WritebackResult
 } from './request.js';
 
-export { WorkforceIntegrationError } from '../errors.js';
+export { WorkforceIntegrationError, SandboxNotAvailableError } from '../errors.js';

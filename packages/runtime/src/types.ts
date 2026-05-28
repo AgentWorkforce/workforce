@@ -3,11 +3,6 @@ import type {
   PersonaSpec,
   PersonaMemoryScope
 } from '@agentworkforce/persona-kit';
-import type { GithubClient } from './clients/github.js';
-import type { LinearClient } from './clients/linear.js';
-import type { SlackClient } from './clients/slack.js';
-import type { NotionClient } from './clients/notion.js';
-import type { JiraClient } from './clients/jira.js';
 
 /**
  * Source of an event delivered to a persona's `onEvent` handler. The
@@ -179,20 +174,6 @@ export interface LlmContext {
   complete(prompt: string, opts?: { maxTokens?: number }): Promise<string>;
 }
 
-/**
- * Per-integration clients attached to the ctx. All Tier-1 providers
- * (github, linear, slack, notion, jira) ship typed VFS-backed clients;
- * a persona only sees the fields its `integrations` block declared, so
- * cron-only handlers get an undefined field across the board.
- */
-export interface IntegrationClients {
-  github?: GithubClient;
-  linear?: LinearClient;
-  slack?: SlackClient;
-  notion?: NotionClient;
-  jira?: JiraClient;
-}
-
 export interface WorkforcePersonaContext extends Omit<PersonaSpec, 'inputs'> {
   /** Resolved input values from the agent row and persona defaults. */
   readonly inputs: Record<string, string>;
@@ -213,12 +194,12 @@ export interface WorkforceDeploymentContext {
 }
 
 /**
- * The context object handlers receive on every event invocation. Per-
- * integration fields are populated only for providers the persona
- * declared in `integrations`. Cron-only personas get a context with all
- * integration fields undefined.
+ * The context object handlers receive on every event invocation.
+ * Provider data is accessed via the VFS helpers exported from the runtime
+ * (listJsonFiles / readJsonFile / writeJsonFile) using provider path
+ * conventions (e.g. /linear/issues, /slack/channels).
  */
-export interface WorkforceCtx extends IntegrationClients {
+export interface WorkforceCtx {
   /** Read-only persona metadata plus resolved runtime inputs. */
   readonly persona: WorkforcePersonaContext;
   /** Agent row metadata for the agent handling this event. */

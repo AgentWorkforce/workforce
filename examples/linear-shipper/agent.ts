@@ -1,18 +1,35 @@
-import { handler } from '@agentworkforce/runtime';
+import {
+  draftFile,
+  encodeSegment,
+  handler,
+  readJsonFile,
+  resolveMountRoot,
+  writeJsonFile,
+  type IntegrationClientOptions,
+  type WorkforceCtx
+} from '@agentworkforce/runtime';
 
 type LinearIssueEvent = {
   issue?: { id?: string; identifier?: string; title?: string; url?: string };
 };
 
-function inputDefault(ctx: Parameters<Parameters<typeof handler>[0]>[0], name: string): string {
+interface LinearIssueFile {
+  id?: string;
+  identifier?: string;
+  title?: string;
+  description?: string;
+  url?: string;
+  [key: string]: unknown;
+}
+
+function vfsClient(): IntegrationClientOptions {
+  return { relayfileMountRoot: resolveMountRoot({}) };
+}
+
+function inputDefault(ctx: WorkforceCtx, name: string): string {
   // Mirror `resolvePersonaInputs` precedence (packages/persona-kit/src/inputs.ts):
   // explicit env var (spec.env ?? input name) wins over the runtime-resolved
   // value, which in turn wins over the static spec default.
-  //
-  // NOTE: the raw spec lives at `ctx.persona.inputSpecs` (Record<string, PersonaInputSpec>);
-  // `ctx.persona.inputs` is the already-resolved Record<string, string>. The earlier
-  // version of this helper read .env / .default off `inputs` directly, which only
-  // worked because the type was looser before the WorkforceCtx readonly tightening.
   const spec = ctx.persona.inputSpecs?.[name];
   const envName = spec?.env ?? name;
   const fromEnv = process.env[envName];
@@ -37,8 +54,6 @@ function safeRepoDirName(value: string): string {
 
 export default handler(async (ctx, event) => {
   if (event.source !== 'linear' || event.type !== 'issue.created') return;
-  if (!ctx.linear) throw new Error('linear-shipper requires the linear integration');
-  if (!ctx.github) throw new Error('linear-shipper requires the github integration');
 
   const payload =
     typeof event.payload === 'object' && event.payload !== null
@@ -48,7 +63,14 @@ export default handler(async (ctx, event) => {
   const issueId = issueRef?.id ?? issueRef?.identifier;
   if (!issueId) throw new Error('Linear event is missing an issue id');
 
-  const issue = await ctx.linear.getIssue(issueId);
+  const client = vfsClient();
+  const issue = await readJsonFile<LinearIssueFile>(
+    client,
+    'linear',
+    'getIssue',
+    `/linear/issues/${encodeSegment(issueId)}.json`
+  );
+
   const repoUrl = inputDefault(ctx, 'REPO_URL');
   const owner = inputDefault(ctx, 'GITHUB_OWNER');
   const repo = safeRepoDirName(inputDefault(ctx, 'GITHUB_REPO'));
@@ -56,23 +78,44 @@ export default handler(async (ctx, event) => {
 
   await ctx.sandbox.exec(`git clone ${shellQuote(repoUrl)} ${shellQuote(repoDir)}`);
   const result = await ctx.harness.run({
-    prompt: `Implement this Linear issue. Create the smallest reviewable change and include verification notes.\n\nTitle: ${issue.title}\n\n${issue.description ?? ''}`,
+    prompt: `Implement this Linear issue. Create the smallest reviewable change and include verification notes.\n\nTitle: ${issue.title ?? ''}\n\n${issue.description ?? ''}`,
     cwd: repoDir
   });
 
-  // TODO(human): createPr is not in the published GithubClient contract yet.
-  const created = await ctx.github.createIssue({
-    owner,
-    repo,
-    title: `Draft PR needed: ${issue.title}`,
-    body: [
-      `Linear issue: ${issue.url ?? issueId}`,
-      '',
-      'The harness produced an implementation attempt, but GithubClient.createPr is not exposed yet.',
-      '',
-      result.output
-    ].join('\n')
-  });
+  // No createPullRequest writeback path yet — fall back to a placeholder issue
+  // so the workflow stays observable end-to-end.
+  const created = await writeJsonFile(
+    client,
+    'github',
+    'createIssue',
+    `/github/repos/${encodeSegment(owner)}/${encodeSegment(repo)}/issues/${draftFile('create issue')}`,
+    {
+      title: `Draft PR needed: ${issue.title ?? issueId}`,
+      body: [
+        `Linear issue: ${issue.url ?? issueId}`,
+        '',
+        'Implementation attempt captured below; the github createPullRequest writeback is not exposed yet.',
+        '',
+        result.output
+      ].join('\n')
+    }
+  );
 
-  await ctx.linear.comment(issueId, `Implementation attempt captured in GitHub issue: ${created.url}`);
+  // Only post a back-link comment when writeback returned a real receipt —
+  // surfacing the in-mount draft path as if it were a clickable issue URL
+  // would be misleading.
+  const issueUrl = created.receipt?.url;
+  if (!issueUrl) {
+    ctx.log('warn', 'linear-shipper.github-issue.no-receipt', { draftPath: created.path });
+    return;
+  }
+  await writeJsonFile(
+    client,
+    'linear',
+    'comment',
+    `/linear/issues/${encodeSegment(issueId)}/comments/${draftFile('comment')}`,
+    {
+      body: `Implementation attempt captured in GitHub issue: ${issueUrl}`
+    }
+  );
 });

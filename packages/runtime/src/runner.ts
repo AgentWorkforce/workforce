@@ -98,10 +98,7 @@ export async function startRunner(options: StartRunnerOptions): Promise<void> {
     workspaceId,
     log: log ?? defaultRunnerLog
   });
-  const integrations = {
-    ...(cloudDefaults.integrations ?? {}),
-    ...(options.subsystems?.integrations ?? {})
-  };
+  const integrations = options.subsystems?.integrations ?? {};
 
   const ctx = buildCtx({
     persona: options.persona,

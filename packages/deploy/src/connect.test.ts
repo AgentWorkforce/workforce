@@ -203,7 +203,6 @@ test('relayfileIntegrationResolver isConnected does not widen explicit deployer_
     'https://cloud.example.test/api/v1/workspaces/ws-runtime/integrations/slack/status?scope=deployer_user'
   ]);
 });
-
 test('relayfileIntegrationResolver isConnected rejects status="error"', async () => {
   // A failed initial sync or errored writeback means the persona cannot
   // rely on the integration at dispatch time. Re-prompt OAuth so the user
@@ -517,7 +516,6 @@ test('relayfileIntegrationResolver connect ignores fallback rows with a differen
     /Timed out waiting for slack OAuth/
   );
 });
-
 test('relayfileIntegrationResolver connect sends scope=workspace and scopes status polls (workspace source)', async () => {
   const bodies: unknown[] = [];
   const statusUrls: string[] = [];

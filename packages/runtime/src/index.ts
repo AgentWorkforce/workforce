@@ -7,7 +7,6 @@ export type {
   HarnessRunArgs,
   HarnessRunResult,
   FilesContext,
-  IntegrationClients,
   LlmContext,
   MemoryContext,
   MemoryItem,
@@ -30,26 +29,11 @@ export type {
   WorkforceProviderEvent
 } from './types.js';
 
-// Integration clients — Relayfile-VFS-backed. All five Tier-1 providers
-// ship typed clients on `WorkforceCtx`. Construct them with
-// `IntegrationClientOptions` (mount root + writeback timing) — the
-// runtime wires this up automatically when a persona declares the
-// matching integration.
+// VFS-backed transport helpers. All provider interactions go through these
+// — no per-provider client code in the runtime. Handlers use listJsonFiles /
+// readJsonFile / writeJsonFile directly against the provider path conventions
+// (e.g. /linear/issues, /slack/channels).
 export {
-  createGithubClient,
-  createLinearClient,
-  createNotionClient,
-  createJiraClient,
-  createSlackClient,
-  type GithubClient,
-  type LinearClient,
-  type NotionClient,
-  type JiraClient,
-  type SlackClient,
-  type IntegrationClientOptions,
-  type WritebackReceipt,
-  type WritebackResult,
-  WorkforceIntegrationError,
   draftFile,
   encodeSegment,
   listDirectoryEntries,
@@ -57,7 +41,12 @@ export {
   readJsonFile,
   readTextFile,
   resolveMountRoot,
-  writeJsonFile
+  writeJsonFile,
+  type IntegrationClientOptions,
+  type WritebackReceipt,
+  type WritebackResult,
+  WorkforceIntegrationError,
+  SandboxNotAvailableError
 } from './clients/index.js';
 
 // Re-export persona-kit types personas commonly reference at the handler

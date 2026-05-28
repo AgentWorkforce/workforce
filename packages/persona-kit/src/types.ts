@@ -340,6 +340,26 @@ export interface PersonaSpec {
    */
   permissions?: PersonaPermissions;
   /**
+   * Sandbox boot policy for this persona. Controls whether the runtime boots
+   * an isolated sandbox (Daytona/process) for harness execution and file ops.
+   *
+   * - **`true`** (default) — always boot a sandbox. The persona can use
+   *   `ctx.sandbox.exec()` to shell out, `ctx.files.read/write`, and
+   *   `ctx.harness.run()`.
+   * - **`false`** — skip sandbox boot entirely. Handler code reads provider
+   *   data via the runtime's VFS helpers (`listJsonFiles` / `readJsonFile`
+   *   / `writeJsonFile`) against provider path conventions (e.g.
+   *   `/linear/issues`, `/slack/channels`) instead of `ctx.sandbox.exec(find …)`
+   *   + `ctx.files.read()` loops. `ctx.harness.run()` still works.
+   *   `ctx.sandbox.exec()` rejects with `SandboxNotAvailableError`.
+   *
+   * Setting this to `false` dramatically reduces cold-start latency
+   * (no sandbox boot ≈ milliseconds vs seconds) and is appropriate for
+   * read-mostly handler agents that consume pre-synced VFS data directly
+   * rather than shell-globbing JSON files.
+   */
+  sandbox?: boolean;
+  /**
    * Relayfile mount policy for file visibility and writability. Applied by
    * launchers that run the harness inside `@relayfile/local-mount`.
    */

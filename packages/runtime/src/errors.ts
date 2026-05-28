@@ -39,3 +39,20 @@ export class WorkforceIntegrationError extends Error {
     this.retryable = options.retryable ?? false;
   }
 }
+
+/**
+ * Thrown when handler code calls `ctx.sandbox.exec()` on a persona that
+ * declared `sandbox: false`. Refactor the handler to use VFS helpers
+ * (listJsonFiles / readJsonFile / writeJsonFile) against the provider
+ * path conventions instead of exec-based find + read loops.
+ */
+export class SandboxNotAvailableError extends Error {
+  constructor(operation?: string) {
+    super(
+      operation
+        ? `sandbox.exec('${operation}') is not available: persona uses sandbox: false. Use VFS helpers (listJsonFiles / readJsonFile) against provider paths instead.`
+        : `sandbox.exec() is not available: persona uses sandbox: false. Use VFS helpers against provider paths instead.`
+    );
+    this.name = 'SandboxNotAvailableError';
+  }
+}
