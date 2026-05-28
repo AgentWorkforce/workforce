@@ -1,29 +1,33 @@
-import { createGithubClient, type GithubClient } from '@agentworkforce/runtime';
+import {
+  draftFile,
+  encodeSegment,
+  readJsonFile,
+  resolveMountRoot,
+  writeJsonFile,
+  type IntegrationClientOptions
+} from '@agentworkforce/runtime';
 import type { WorkforceMcpConfig } from '../config.js';
 
 /**
  * Integration tools are flat methods of the form
  * `integration.<provider>.<method>` (e.g. `integration.github.comment`).
  * Each provider is wired lazily — the MCP server constructs the client
- * on first call so harness invocations that never touch GitHub don't
- * pay for the setup.
+ * options on first call so harness invocations that never touch GitHub
+ * don't pay for the setup.
  *
- * Workforce integration clients are Relayfile-VFS-backed: tools write
- * canonical JSON files inside the Relayfile mount and the writeback
- * worker turns those into real provider API calls. The MCP server
- * picks up the mount root from `RELAYFILE_MOUNT_ROOT` (or
- * `RELAYFILE_ROOT`); the runtime sets this automatically when it
- * spawns the harness via `ctx.harness.run`.
+ * Workforce integrations are Relayfile-VFS-backed: tools write canonical
+ * JSON files inside the Relayfile mount and the writeback worker turns
+ * those into real provider API calls. The MCP server picks up the mount
+ * root from `RELAYFILE_MOUNT_ROOT` (or `RELAYFILE_ROOT`); the runtime
+ * sets this automatically when it spawns the harness via `ctx.harness.run`.
  */
 export interface IntegrationToolDeps {
   config: WorkforceMcpConfig;
 }
 
-/** Provider clients lazily constructed and cached for the server's lifetime. */
-type ProviderClient = GithubClient;
-
+/** IntegrationClientOptions cached by mount root. */
 interface ClientCache {
-  github?: GithubClient;
+  github?: IntegrationClientOptions;
 }
 
 const clientCache: ClientCache = {};
@@ -75,72 +79,109 @@ async function invokeGithub(
   switch (method) {
     case 'comment': {
       const { target, body } = asObject(args, 'integration.github.comment');
-      return client.comment(asTarget(target), asNonEmptyString(body, 'body'));
+      const { owner, repo, number } = asTarget(target);
+      const result = await writeJsonFile(client, 'github', 'comment',
+        `/github/repos/${encodeSegment(owner)}/${encodeSegment(repo)}/issues/${number}/comments/${draftFile('comment')}`,
+        { body });
+      return {
+        id: result.receipt?.id ?? result.receipt?.created ?? '',
+        url: result.receipt?.url ?? result.path
+      };
     }
     case 'createIssue': {
       const fields = asObject(args, 'integration.github.createIssue');
-      return client.createIssue({
-        owner: asNonEmptyString(fields.owner, 'owner'),
-        repo: asNonEmptyString(fields.repo, 'repo'),
-        title: asNonEmptyString(fields.title, 'title'),
-        body: asNonEmptyString(fields.body, 'body'),
-        ...(Array.isArray(fields.labels) ? { labels: fields.labels.filter(isString) } : {})
-      });
+      const owner = asNonEmptyString(fields.owner, 'owner');
+      const repo = asNonEmptyString(fields.repo, 'repo');
+      const result = await writeJsonFile(client, 'github', 'createIssue',
+        `/github/repos/${encodeSegment(owner)}/${encodeSegment(repo)}/issues/${draftFile('create issue')}`,
+        {
+          title: asNonEmptyString(fields.title, 'title'),
+          body: asNonEmptyString(fields.body, 'body'),
+          ...(Array.isArray(fields.labels) ? { labels: fields.labels.filter(isString) } : {})
+        });
+      return {
+        id: result.receipt?.id ?? '',
+        identifier: result.receipt?.identifier ?? '',
+        url: result.receipt?.url ?? result.path
+      };
     }
     case 'upsertIssue': {
       const fields = asObject(args, 'integration.github.upsertIssue');
-      return client.upsertIssue({
-        owner: asNonEmptyString(fields.owner, 'owner'),
-        repo: asNonEmptyString(fields.repo, 'repo'),
-        title: asNonEmptyString(fields.title, 'title'),
-        body: asNonEmptyString(fields.body, 'body'),
-        matchTitle: asNonEmptyString(fields.matchTitle, 'matchTitle'),
-        ...(Array.isArray(fields.labels) ? { labels: fields.labels.filter(isString) } : {})
-      });
+      const owner = asNonEmptyString(fields.owner, 'owner');
+      const repo = asNonEmptyString(fields.repo, 'repo');
+      const result = await writeJsonFile(client, 'github', 'upsertIssue',
+        `/github/repos/${encodeSegment(owner)}/${encodeSegment(repo)}/issues/${draftFile('upsert issue')}`,
+        {
+          title: asNonEmptyString(fields.title, 'title'),
+          body: asNonEmptyString(fields.body, 'body'),
+          matchTitle: asNonEmptyString(fields.matchTitle, 'matchTitle'),
+          ...(Array.isArray(fields.labels) ? { labels: fields.labels.filter(isString) } : {})
+        });
+      return {
+        id: result.receipt?.id ?? '',
+        identifier: result.receipt?.identifier ?? '',
+        url: result.receipt?.url ?? result.path
+      };
     }
     case 'getPr': {
-      const { target } = asObject(args, 'integration.github.getPr');
-      return client.getPr(asTarget(target));
+      const { owner, repo, number } = asTarget(args);
+      const pr = await readJsonFile<{ title?: string; body?: string; state?: string; url?: string; [key: string]: unknown }>(
+        client, 'github', 'getPr',
+        `/github/repos/${encodeSegment(owner)}/${encodeSegment(repo)}/pulls/${number}.json`);
+      return {
+        title: pr.title,
+        body: pr.body,
+        state: pr.state,
+        url: pr.url,
+        data: pr
+      };
     }
     case 'postReview': {
       const { target, review } = asObject(args, 'integration.github.postReview');
+      const { owner, repo, number } = asTarget(target);
       const reviewObj = asObject(review, 'review');
       const eventField = reviewObj.event;
       if (eventField !== 'COMMENT' && eventField !== 'APPROVE' && eventField !== 'REQUEST_CHANGES') {
         throw new Error('review.event must be one of: COMMENT, APPROVE, REQUEST_CHANGES');
       }
-      return client.postReview(asTarget(target), {
-        body: asNonEmptyString(reviewObj.body, 'review.body'),
-        event: eventField,
-        ...(Array.isArray(reviewObj.comments)
-          ? {
-              comments: reviewObj.comments
-                .filter((c): c is Record<string, unknown> => typeof c === 'object' && c !== null)
-                .map((c) => ({
-                  path: asNonEmptyString(c.path, 'comment.path'),
-                  line: asNumber(c.line, 'comment.line'),
-                  body: asNonEmptyString(c.body, 'comment.body')
-                }))
-            }
-          : {})
-      });
+      const result = await writeJsonFile(client, 'github', 'postReview',
+        `/github/repos/${encodeSegment(owner)}/${encodeSegment(repo)}/pulls/${number}/reviews/${draftFile('review')}`,
+        {
+          body: asNonEmptyString(reviewObj.body, 'review.body'),
+          event: eventField,
+          ...(Array.isArray(reviewObj.comments)
+            ? {
+                comments: reviewObj.comments
+                  .filter((c): c is Record<string, unknown> => typeof c === 'object' && c !== null)
+                  .map((c) => ({
+                    path: asNonEmptyString(c.path, 'comment.path'),
+                    line: asNumber(c.line, 'comment.line'),
+                    body: asNonEmptyString(c.body, 'comment.body')
+                  }))
+              }
+            : {})
+        });
+      return {
+        id: result.receipt?.id ?? '',
+        url: result.receipt?.url ?? result.path
+      };
     }
     default:
       throw new Error(`integration.github.${method} is not implemented`);
   }
 }
 
-function resolveGithub(deps: IntegrationToolDeps): ProviderClient {
+function resolveGithub(deps: IntegrationToolDeps): IntegrationClientOptions {
   if (clientCache.github) return clientCache.github;
   if (!deps.config.relayfileMountRoot) {
     throw new Error(
       'integration.github is not configured: RELAYFILE_MOUNT_ROOT is required so the github client can write drafts into the Relayfile mount. The workforce runtime sets this automatically when spawning the harness via ctx.harness.run.'
     );
   }
-  clientCache.github = createGithubClient({
+  clientCache.github = {
     relayfileMountRoot: deps.config.relayfileMountRoot,
     writebackTimeoutMs: deps.config.writebackTimeoutMs
-  });
+  };
   return clientCache.github;
 }
 

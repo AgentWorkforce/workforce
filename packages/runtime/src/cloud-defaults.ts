@@ -64,11 +64,7 @@ export interface CloudRuntimeDefaults {
 export function createCloudRuntimeDefaults(options: CloudDefaultOptions): CloudRuntimeDefaults {
   const env = options.env ?? process.env;
   const root = resolveCloudWorkspaceRoot(env);
-  // persona-kit publishes PersonaSpec without the sandbox field until the next
-  // release; use a type assertion locally so this file compiles against the
-  // published package while the field is added upstream.
-  const personaSandbox = (options.persona as { sandbox?: boolean }).sandbox;
-  const isSandboxOptional = personaSandbox === false;
+  const isSandboxOptional = options.persona.sandbox === false;
   const baseSandbox = createProcessSandbox(root, env);
   const sandbox = isSandboxOptional
     ? createSandboxOptionalSandbox(baseSandbox)
