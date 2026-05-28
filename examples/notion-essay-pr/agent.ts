@@ -1,5 +1,10 @@
 import {
+  draftFile,
+  encodeSegment,
   handler,
+  resolveMountRoot,
+  writeJsonFile,
+  type IntegrationClientOptions,
   type WorkforceCtx,
   type WorkforceProviderEvent
 } from '@agentworkforce/runtime';
@@ -20,6 +25,10 @@ interface RepoTarget {
   repo: string;
 }
 
+function vfsClient(): IntegrationClientOptions {
+  return { relayfileMountRoot: resolveMountRoot({}) };
+}
+
 export default handler(async (ctx, event) => {
   if (event.source !== 'notion' || event.type !== 'page.created') {
     ctx.log('debug', 'notion-essay-pr.ignored', {
@@ -32,7 +41,6 @@ export default handler(async (ctx, event) => {
 });
 
 async function handleNotionPageCreated(ctx: WorkforceCtx, event: WorkforceProviderEvent): Promise<void> {
-  if (!ctx.github) throw new Error('notion-essay-pr requires the github integration');
   const payload = readPayload(event.payload);
   const pageId = pageIdFrom(payload);
   const pageTitle = pageTitleFrom(payload, event.summary?.title);
@@ -50,18 +58,24 @@ async function handleNotionPageCreated(ctx: WorkforceCtx, event: WorkforceProvid
 
   await ctx.files.write(outputPath, essay);
   const branch = `essay/${safeBranchSegment(pageId)}`;
-  const pr = await ctx.github.createPullRequest({
-    ...repoTarget,
-    title: `Essay: ${pageTitle}`,
-    body: `Drafted from Notion page ${pageId}.\n\nOutput: ${outputPath}`,
-    head: branch,
-    base: 'main',
-    files: {
-      [`output/${safeFileSegment(pageId)}.md`]: essay
+  const pr = await writeJsonFile(
+    vfsClient(),
+    'github',
+    'createPullRequest',
+    `/github/repos/${encodeSegment(repoTarget.owner)}/${encodeSegment(repoTarget.repo)}/pulls/${draftFile('create pr')}`,
+    {
+      title: `Essay: ${pageTitle}`,
+      body: `Drafted from Notion page ${pageId}.\n\nOutput: ${outputPath}`,
+      head: branch,
+      base: 'main',
+      files: {
+        [`output/${safeFileSegment(pageId)}.md`]: essay
+      }
     }
-  });
+  );
 
-  await ctx.memory.save(`Notion essay PR opened for ${pageTitle}: ${pr.url}`, {
+  const prUrl = pr.receipt?.url ?? pr.path;
+  await ctx.memory.save(`Notion essay PR opened for ${pageTitle}: ${prUrl}`, {
     scope: 'workspace',
     tags: ['notion-essay-pr', `page:${pageId}`]
   });
@@ -70,7 +84,7 @@ async function handleNotionPageCreated(ctx: WorkforceCtx, event: WorkforceProvid
     pageId,
     pageTitle,
     outputPath,
-    prUrl: pr.url
+    prUrl
   });
 }
 

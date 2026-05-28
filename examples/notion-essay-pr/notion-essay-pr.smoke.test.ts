@@ -1,35 +1,41 @@
 import assert from 'node:assert/strict';
+import { mkdtemp, mkdir, readdir, readFile, writeFile } from 'node:fs/promises';
+import { tmpdir } from 'node:os';
+import path from 'node:path';
 import test from 'node:test';
 import notionEssayPr from './agent.js';
 import type { WorkforceCtx, WorkforceProviderEvent } from '@agentworkforce/runtime';
 
 test('notion-essay-pr smoke skeleton runs Notion page to essay PR with mocks', async () => {
-  const runtime = new MockNotionEssayRuntime();
-  await runtime.spawnAndDispatch(notionEssayPr);
+  const runtime = await MockNotionEssayRuntime.create();
+  try {
+    await runtime.spawnAndDispatch(notionEssayPr);
 
-  assert.equal(runtime.sandboxSpawned, true);
-  assert.equal(runtime.files.get('/workspace/AGENTS.md'), '# Agent: notion-essay-pr\n');
-  assert.deepEqual(runtime.fileReads, ['/notion/pages/page-123.md']);
-  assert.equal(runtime.files.get('/workspace/output/page-123.md'), '# A useful essay\n\nDraft body.\n');
-  assert.equal(runtime.githubPullRequests.length, 1);
-  assert.deepEqual(runtime.githubPullRequests[0], {
-    owner: 'AgentWorkforce',
-    repo: 'proactive-agents',
-    title: 'Essay: Launch notes',
-    body: 'Drafted from Notion page page-123.\n\nOutput: /workspace/output/page-123.md',
-    head: 'essay/page-123',
-    base: 'main',
-    files: {
-      'output/page-123.md': '# A useful essay\n\nDraft body.\n'
-    }
-  });
-  assert.deepEqual(runtime.memorySaves, [
-    {
-      content: 'Notion essay PR opened for Launch notes: https://github.com/AgentWorkforce/proactive-agents/pull/17',
-      scope: 'workspace',
-      tags: ['notion-essay-pr', 'page:page-123']
-    }
-  ]);
+    assert.equal(runtime.sandboxSpawned, true);
+    assert.equal(runtime.files.get('/workspace/AGENTS.md'), '# Agent: notion-essay-pr\n');
+    assert.deepEqual(runtime.fileReads, ['/notion/pages/page-123.md']);
+    assert.equal(runtime.files.get('/workspace/output/page-123.md'), '# A useful essay\n\nDraft body.\n');
+
+    const writebacks = await runtime.collectPullRequestWritebacks();
+    assert.equal(writebacks.length, 1);
+    assert.deepEqual(writebacks[0], {
+      title: 'Essay: Launch notes',
+      body: 'Drafted from Notion page page-123.\n\nOutput: /workspace/output/page-123.md',
+      head: 'essay/page-123',
+      base: 'main',
+      files: {
+        'output/page-123.md': '# A useful essay\n\nDraft body.\n'
+      }
+    });
+
+    assert.equal(runtime.memorySaves.length, 1);
+    const save = runtime.memorySaves[0]!;
+    assert.match(save.content, /^Notion essay PR opened for Launch notes: /);
+    assert.equal(save.scope, 'workspace');
+    assert.deepEqual(save.tags, ['notion-essay-pr', 'page:page-123']);
+  } finally {
+    delete process.env.RELAYFILE_MOUNT_ROOT;
+  }
 });
 
 class MockNotionEssayRuntime {
@@ -37,9 +43,20 @@ class MockNotionEssayRuntime {
     ['/notion/pages/page-123.md', '# Launch notes\n\nWe shipped the first customer-facing deploy path.']
   ]);
   readonly fileReads: string[] = [];
-  readonly githubPullRequests: Array<Record<string, unknown>> = [];
   readonly memorySaves: Array<{ content: string; scope?: string; tags?: string[] }> = [];
   sandboxSpawned = false;
+
+  readonly relayfileRoot: string;
+
+  static async create(): Promise<MockNotionEssayRuntime> {
+    const root = await mkdtemp(path.join(tmpdir(), 'notion-essay-pr-'));
+    process.env.RELAYFILE_MOUNT_ROOT = root;
+    return new MockNotionEssayRuntime(root);
+  }
+
+  private constructor(relayfileRoot: string) {
+    this.relayfileRoot = relayfileRoot;
+  }
 
   async spawnAndDispatch(handler: (ctx: WorkforceCtx, event: WorkforceProviderEvent) => Promise<void> | void): Promise<void> {
     this.sandboxSpawned = true;
@@ -59,6 +76,25 @@ class MockNotionEssayRuntime {
         title: 'Launch notes'
       }
     });
+  }
+
+  async collectPullRequestWritebacks(): Promise<Array<Record<string, unknown>>> {
+    const dir = path.join(
+      this.relayfileRoot,
+      'github',
+      'repos',
+      'AgentWorkforce',
+      'proactive-agents',
+      'pulls'
+    );
+    const entries = await readdir(dir).catch(() => []);
+    const out: Array<Record<string, unknown>> = [];
+    for (const entry of entries) {
+      if (!entry.endsWith('.json')) continue;
+      const body = JSON.parse(await readFile(path.join(dir, entry), 'utf8')) as Record<string, unknown>;
+      out.push(body);
+    }
+    return out;
   }
 
   private ctx(): WorkforceCtx {
@@ -95,12 +131,12 @@ class MockNotionEssayRuntime {
         async exec() {
           return { output: '', exitCode: 0 };
         },
-        readFile: (path) => this.read(path),
-        writeFile: (path, contents) => this.write(path, contents)
+        readFile: (filePath) => this.read(filePath),
+        writeFile: (filePath, contents) => this.write(filePath, contents)
       },
       files: {
-        read: (path) => this.read(path),
-        write: (path, contents) => this.write(path, contents)
+        read: (filePath) => this.read(filePath),
+        write: (filePath, contents) => this.write(filePath, contents)
       },
       memory: {
         async recall() {
@@ -133,30 +169,26 @@ class MockNotionEssayRuntime {
           /* unused */
         }
       },
-      log: () => undefined,
-      github: {
-        comment: async () => ({ id: 'comment-1', url: 'https://example.test/comment' }),
-        createIssue: async () => ({ number: 1, url: 'https://example.test/issue' }),
-        upsertIssue: async () => ({ number: 1, url: 'https://example.test/issue', created: true }),
-        getPr: async () => ({ title: '', body: '', diff: '', head: '', base: '', author: '' }),
-        postReview: async () => undefined,
-        createPullRequest: async (args) => {
-          this.githubPullRequests.push(args);
-          return { number: 17, url: 'https://github.com/AgentWorkforce/proactive-agents/pull/17' };
-        },
-        mergePullRequest: async () => ({ merged: true, sha: 'merge-sha' })
-      }
+      log: () => undefined
     };
   }
 
-  private async read(path: string): Promise<string> {
-    this.fileReads.push(path);
-    const value = this.files.get(path);
-    if (value === undefined) throw new Error(`missing file: ${path}`);
+  private async read(filePath: string): Promise<string> {
+    this.fileReads.push(filePath);
+    const value = this.files.get(filePath);
+    if (value === undefined) throw new Error(`missing file: ${filePath}`);
     return value;
   }
 
-  private async write(path: string, contents: string): Promise<void> {
-    this.files.set(path, contents);
+  private async write(filePath: string, contents: string): Promise<void> {
+    this.files.set(filePath, contents);
+    // Also mirror /workspace-rooted writes into the temp mount so the
+    // agent's `ctx.files.write('/workspace/output/...')` calls land on
+    // disk where assertions can read them back if needed.
+    if (filePath.startsWith('/workspace/')) {
+      const target = path.join(this.relayfileRoot, filePath.replace(/^\//, ''));
+      await mkdir(path.dirname(target), { recursive: true });
+      await writeFile(target, contents, 'utf8');
+    }
   }
 }

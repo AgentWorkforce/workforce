@@ -1,6 +1,22 @@
-import { handler } from '@agentworkforce/runtime';
+import {
+  draftFile,
+  encodeSegment,
+  handler,
+  readJsonFile,
+  resolveMountRoot,
+  writeJsonFile,
+  type IntegrationClientOptions,
+  type WorkforceCtx
+} from '@agentworkforce/runtime';
 
 type GithubTarget = { owner: string; repo: string; number: number };
+
+function vfsClient(): IntegrationClientOptions {
+  // Resolve the Relayfile mount the cloud-managed runtime exposes through
+  // env (RELAYFILE_MOUNT_ROOT / RELAYFILE_ROOT). Falls back to process.cwd()
+  // for local smoke runs.
+  return { relayfileMountRoot: resolveMountRoot({}) };
+}
 
 function payloadOf(eventPayload: unknown): Record<string, unknown> {
   return typeof eventPayload === 'object' && eventPayload !== null
@@ -29,30 +45,59 @@ function githubTarget(event: Record<string, unknown>): GithubTarget {
   return { owner, repo, number };
 }
 
-async function reviewPullRequest(ctx: Parameters<Parameters<typeof handler>[0]>[0], event: Record<string, unknown>) {
-  if (!ctx.github) throw new Error('review-agent requires the github integration');
-  const target = githubTarget(event);
-  const pr = await ctx.github.getPr(target);
-  const result = await ctx.harness.run({
-    prompt: `Review this PR for correctness, risk, and missing tests.\n\nTitle: ${pr.title}\nAuthor: ${pr.author}\nBase: ${pr.base}\nHead: ${pr.head}\n\n${pr.diff}`,
-    cwd: ctx.sandbox.cwd
-  });
-  await ctx.github.postReview(target, { event: 'COMMENT', body: result.output });
+function prMetaPath({ owner, repo, number }: GithubTarget): string {
+  return `/github/repos/${encodeSegment(owner)}/${encodeSegment(repo)}/pulls/${number}.json`;
 }
 
-async function replyToGithubMention(ctx: Parameters<Parameters<typeof handler>[0]>[0], event: Record<string, unknown>) {
-  if (!ctx.github) throw new Error('review-agent requires the github integration');
+function issueCommentDraftPath({ owner, repo, number }: GithubTarget): string {
+  return `/github/repos/${encodeSegment(owner)}/${encodeSegment(repo)}/issues/${number}/comments/${draftFile('comment')}`;
+}
+
+function reviewDraftPath({ owner, repo, number }: GithubTarget): string {
+  return `/github/repos/${encodeSegment(owner)}/${encodeSegment(repo)}/pulls/${number}/reviews/${draftFile('review')}`;
+}
+
+function slackReplyDraftPath(channel: string, threadTs: string): string {
+  return `/slack/channels/${encodeSegment(channel)}/messages/${encodeSegment(threadTs)}/reply/${draftFile('reply')}`;
+}
+
+interface GithubPrMeta {
+  title?: string;
+  body?: string;
+  author?: string;
+  base?: string;
+  head?: string;
+  diff?: string;
+  [key: string]: unknown;
+}
+
+async function reviewPullRequest(ctx: WorkforceCtx, event: Record<string, unknown>) {
+  const target = githubTarget(event);
+  const client = vfsClient();
+  const pr = await readJsonFile<GithubPrMeta>(client, 'github', 'getPr', prMetaPath(target));
+  const result = await ctx.harness.run({
+    prompt: `Review this PR for correctness, risk, and missing tests.\n\nTitle: ${pr.title ?? ''}\nAuthor: ${pr.author ?? ''}\nBase: ${pr.base ?? ''}\nHead: ${pr.head ?? ''}\n\n${pr.diff ?? ''}`,
+    cwd: ctx.sandbox.cwd
+  });
+  await writeJsonFile(client, 'github', 'postReview', reviewDraftPath(target), {
+    body: result.output,
+    event: 'COMMENT'
+  });
+}
+
+async function replyToGithubMention(ctx: WorkforceCtx, event: Record<string, unknown>) {
   const target = githubTarget(event);
   const comment = event.comment as { body?: string } | undefined;
   const result = await ctx.harness.run({
     prompt: `Reply to this GitHub discussion in context. Keep it specific and actionable.\n\n${comment?.body ?? ''}`,
     cwd: ctx.sandbox.cwd
   });
-  await ctx.github.comment(target, result.output);
+  await writeJsonFile(vfsClient(), 'github', 'comment', issueCommentDraftPath(target), {
+    body: result.output
+  });
 }
 
-async function handleFailedCheck(ctx: Parameters<Parameters<typeof handler>[0]>[0], event: Record<string, unknown>) {
-  if (!ctx.github) throw new Error('review-agent requires the github integration');
+async function handleFailedCheck(ctx: WorkforceCtx, event: Record<string, unknown>) {
   const checkRun = event.check_run as { conclusion?: string; output?: { title?: string; summary?: string } } | undefined;
   if (checkRun?.conclusion !== 'failure') return;
   const target = githubTarget(event);
@@ -60,11 +105,12 @@ async function handleFailedCheck(ctx: Parameters<Parameters<typeof handler>[0]>[
     prompt: `CI failed. Inspect the failure and propose the smallest safe fix.\n\n${checkRun.output?.title ?? ''}\n\n${checkRun.output?.summary ?? ''}`,
     cwd: ctx.sandbox.cwd
   });
-  await ctx.github.comment(target, result.output);
+  await writeJsonFile(vfsClient(), 'github', 'comment', issueCommentDraftPath(target), {
+    body: result.output
+  });
 }
 
-async function replyInSlack(ctx: Parameters<Parameters<typeof handler>[0]>[0], event: Record<string, unknown>) {
-  if (!ctx.slack) throw new Error('review-agent requires the slack integration');
+async function replyInSlack(ctx: WorkforceCtx, event: Record<string, unknown>) {
   const text = typeof event.text === 'string' ? event.text : '';
   const channel = typeof event.channel === 'string' ? event.channel : '';
   const ts = typeof event.threadTs === 'string'
@@ -80,7 +126,9 @@ async function replyInSlack(ctx: Parameters<Parameters<typeof handler>[0]>[0], e
     prompt: `Answer this Slack mention using the remembered context when useful.\n\nContext:\n${JSON.stringify(memories)}\n\nMessage:\n${text}`,
     cwd: ctx.sandbox.cwd
   });
-  await ctx.slack.reply({ channel, ts }, result.output);
+  await writeJsonFile(vfsClient(), 'slack', 'reply', slackReplyDraftPath(channel, ts), {
+    text: result.output
+  });
   await ctx.memory.save(`Slack mention handled: ${text.slice(0, 180)}`, {
     tags: ['slack', 'review-agent'],
     scope: 'workspace'
