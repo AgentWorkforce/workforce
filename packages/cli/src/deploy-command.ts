@@ -18,7 +18,7 @@ import {
   type DeployOptions,
   type ModeLaunchHandle
 } from '@agentworkforce/deploy';
-import { BUILD_YOUR_OWN_RUNTIME_DOCS_URL, pickRuntime } from './runtime-picker.js';
+
 
 type LoginApiClient = Pick<CloudApiClient, 'fetch'>;
 
@@ -71,9 +71,6 @@ export async function runDeploy(args: readonly string[]): Promise<void> {
   }
 
   let parsed = parseDeployArgs(args);
-  if (!parsed.mode && (parsed.noPrompt || !process.stdin.isTTY || !process.stdout.isTTY)) {
-    die('deploy: --mode is required when prompts are disabled or stdio is non-interactive');
-  }
   if (!parsed.mode) {
     parsed = { ...parsed, mode: 'cloud' };
   }
