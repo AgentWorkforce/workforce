@@ -137,20 +137,25 @@ export function relayfileIntegrationResolver(opts: {
       const token = await resolveWorkspaceToken(opts.workspaceToken);
       const effectiveSource: IntegrationSource = source ?? { kind: 'deployer_user' };
 
-      const list = await fetchIntegrationsForScope({
+      const status = await fetchIntegrationStatusForScope({
         fetchImpl,
         apiUrl,
         token,
         workspaceId,
+        provider,
         source: effectiveSource,
         io
       });
-      return listHasConnectedProvider(list, provider, {
-        ...(expectedConfigKey ? { expectedConfigKey } : {}),
-        ...(effectiveSource.kind === 'workspace_service_account'
-          ? { serviceAccountName: effectiveSource.name }
-          : {})
-      });
+      if (isIntegrationListResponse(status)) {
+        return listHasConnectedProvider(status, provider, {
+          ...(expectedConfigKey ? { expectedConfigKey } : {}),
+          ...(effectiveSource.kind === 'workspace_service_account'
+            ? { serviceAccountName: effectiveSource.name }
+            : {})
+        });
+      }
+      return statusMatchesExpectedConfigKey(status, expectedConfigKey)
+        && isConnectedStatus(status);
     },
     async connect({ workspace, provider, source }) {
       const workspaceId = workspace || opts.workspaceId;
@@ -272,6 +277,7 @@ export interface ConnectAllInput {
   workspace: string;
   noConnect: boolean;
   noPrompt?: boolean;
+  reconnectProviders?: readonly string[];
   io: DeployIO;
   integrations: IntegrationConnectResolver;
   /** Optional cloud-login recovery for interactive 401s. */
@@ -338,6 +344,7 @@ export async function connectIntegrations(input: ConnectAllInput): Promise<Conne
   for (const provider of Object.keys(integrations)) {
     const integrationEntry = integrations[provider] ?? {};
     const source: IntegrationSource = integrationEntry.source ?? { kind: 'deployer_user' };
+    const forceReconnect = input.reconnectProviders?.includes(provider) ?? false;
     const expectedConfigKey = input.providerConfigKeys
       ? await input.providerConfigKeys.resolve(provider).catch(() => undefined)
       : undefined;
@@ -353,10 +360,13 @@ export async function connectIntegrations(input: ConnectAllInput): Promise<Conne
       }
     );
 
-    if (connected) {
+    if (connected && !forceReconnect) {
       input.io.info(`integrations.${provider}: already connected`);
       outcomes.push({ provider, status: 'already-connected' });
       continue;
+    }
+    if (connected && forceReconnect) {
+      input.io.info(`integrations.${provider}: reconnect requested; opening a fresh connection flow`);
     }
 
     if (
@@ -385,7 +395,7 @@ export async function connectIntegrations(input: ConnectAllInput): Promise<Conne
             statusCheckFailure = message;
           }
         );
-        if (connected) {
+        if (connected && !forceReconnect) {
           input.io.info(`integrations.${provider}: already connected`);
           outcomes.push({ provider, status: 'already-connected' });
           continue;
@@ -405,7 +415,7 @@ export async function connectIntegrations(input: ConnectAllInput): Promise<Conne
       continue;
     }
 
-    if (input.noPrompt) {
+    if (input.noPrompt && !forceReconnect) {
       input.io.error(
         `integrations.${provider}: not connected, and --no-prompt was passed. Connect it before deploying or run without --no-prompt.`
       );
@@ -417,7 +427,7 @@ export async function connectIntegrations(input: ConnectAllInput): Promise<Conne
       return { outcomes };
     }
 
-    if (input.noConnect) {
+    if (input.noConnect && !forceReconnect) {
       input.io.error(
         `integrations.${provider}: not connected, and prompts are disabled`
       );
@@ -429,13 +439,15 @@ export async function connectIntegrations(input: ConnectAllInput): Promise<Conne
       continue;
     }
 
-    const shouldConnect = await input.io.confirm(
-      `Connect ${provider} now? (opens browser)`,
-      { defaultValue: true }
-    );
-    if (!shouldConnect) {
-      outcomes.push({ provider, status: 'skipped', message: 'user declined to connect' });
-      continue;
+    if (!forceReconnect) {
+      const shouldConnect = await input.io.confirm(
+        `Connect ${provider} now? (opens browser)`,
+        { defaultValue: true }
+      );
+      if (!shouldConnect) {
+        outcomes.push({ provider, status: 'skipped', message: 'user declined to connect' });
+        continue;
+      }
     }
 
     try {
@@ -757,6 +769,35 @@ async function fetchIntegrationsForScope(args: {
   );
 }
 
+async function fetchIntegrationStatusForScope(args: {
+  fetchImpl: typeof fetch;
+  apiUrl: string;
+  token: string;
+  workspaceId: string;
+  provider: string;
+  source: IntegrationSource;
+  io?: Pick<DeployIO, 'info' | 'warn'>;
+}): Promise<unknown> {
+  const url = new URL(
+    `${args.apiUrl}/api/v1/workspaces/${encodeURIComponent(args.workspaceId)}/integrations/${encodeURIComponent(args.provider)}/status`
+  );
+  url.searchParams.set('scope', args.source.kind);
+  if (args.source.kind === 'workspace_service_account') {
+    url.searchParams.set('serviceAccountName', args.source.name);
+  }
+  try {
+    return await requestJson(args.fetchImpl, url.toString(), args.token);
+  } catch (err) {
+    if (isCloudRequestError(err) && (err.status === 404 || err.status === 405)) {
+      args.io?.warn?.(
+        'cloud does not expose /integrations/<provider>/status yet; falling back to the integrations list with ready-only matching.'
+      );
+      return await fetchIntegrationsForScope(args);
+    }
+    throw err;
+  }
+}
+
 interface MatchOpts {
   expectedConfigKey?: string;
   serviceAccountName?: string;
@@ -794,47 +835,49 @@ function listHasConnectedProvider(
   });
 }
 
+function isIntegrationListResponse(body: unknown): boolean {
+  return Array.isArray(body)
+    || Boolean(
+      body &&
+      typeof body === 'object' &&
+      Array.isArray((body as { integrations?: unknown }).integrations)
+    );
+}
+
+function statusMatchesExpectedConfigKey(value: unknown, expectedConfigKey?: string): boolean {
+  if (!expectedConfigKey || !value || typeof value !== 'object' || Array.isArray(value)) {
+    return true;
+  }
+  const configKey =
+    readString(value, 'configKey')
+    ?? readString(value, 'providerConfigKey')
+    ?? readString(value, 'backendIntegrationId');
+  return configKey === undefined || configKey === expectedConfigKey;
+}
+
 /**
- * A row counts as "connected" when the cloud's derived state represents a
- * live OAuth grant, even if Nango's initial sync hasn't finished. The cloud
- * derives `status` from `initialSync + writeback` and emits one of:
+ * A provider counts as connected for deploy only when the cloud's
+ * runtime-visible status is ready. Pending/syncing rows mean the sandbox will
+ * not see a ready mounted provider yet, so deploy must prompt/reconnect
+ * instead of shipping a silently-dead proactive agent.
  *
  *   - `ready`     — sync complete, writeback healthy. Fully usable.
- *   - `pending`   — OAuth grant exists, sync queued (the gap between OAuth
- *                   completion and sync start). Persona can use it for
- *                   writes immediately; reads will see data once sync runs.
- *   - `syncing`   — initial sync running. Same operational status as `pending`
- *                   from the persona's perspective.
- *   - `degraded`  — sync complete but writeback lagging or paused. Connection
- *                   still works; reading at-rest data is fine; new writes may
- *                   queue but won't fail.
+ *   - `pending`   — OAuth row exists but runtime-visible sync is not ready.
+ *   - `syncing`   — initial sync is still running.
+ *   - `degraded`  — sync/writeback is unhealthy enough not to trust deploy.
  *   - `error`     — sync failed or writeback errored. Treat as not-connected
  *                   so the user re-runs OAuth (or fixes the upstream cause).
  *
- * The preflight accepts everything except `error` and missing rows. The
- * previous implementation accepted only `ready`, which forced users to wait
- * for the initial sync to complete between `agentworkforce login` and their
- * first deploy — every fresh integration sat in `pending`/`syncing` for a
- * few minutes and tripped the "not connected" branch.
- *
  * Legacy fields (`connected`, `active`, `state`, `ready: true`, `oauth.connected`)
- * are kept for compatibility with older cloud surfaces and the env resolver.
+ * are intentionally narrowed here; deploy is checking runtime readiness, not
+ * merely OAuth existence.
  */
 function isConnectedStatus(value: unknown): boolean {
   if (!value || typeof value !== 'object' || Array.isArray(value)) return false;
   const record = value as Record<string, unknown>;
-  return record.status === 'connected'
-    || record.status === 'active'
-    || record.status === 'ready'
-    || record.status === 'pending'
-    || record.status === 'syncing'
-    || record.status === 'degraded'
-    || record.state === 'connected'
+  return record.status === 'ready'
     || record.state === 'ready'
-    || record.ready === true
-    || (record.oauth !== null
-      && typeof record.oauth === 'object'
-      && (record.oauth as { connected?: unknown }).connected === true);
+    || record.ready === true;
 }
 
 /**

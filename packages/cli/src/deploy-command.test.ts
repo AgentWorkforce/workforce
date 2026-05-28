@@ -322,6 +322,17 @@ test('parseDeployArgs: multiple --input flags accumulate', () => {
   });
 });
 
+test('parseDeployArgs: --reconnect is repeatable and comma-aware', () => {
+  const parsed = parseDeployArgs([
+    './persona.json',
+    '--reconnect',
+    'slack,github',
+    '--reconnect=linear',
+  ]);
+
+  assert.deepEqual(parsed.reconnectProviders, ['slack', 'github', 'linear']);
+});
+
 test('parseDeployArgs: malformed --input exits with clean error', () => {
   const trap = trapExit();
   try {

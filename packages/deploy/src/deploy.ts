@@ -227,6 +227,7 @@ export async function deploy(opts: DeployOptions, resolvers: DeployResolvers = {
     workspace,
     noConnect: opts.noConnect === true,
     ...(opts.noPrompt ? { noPrompt: true } : {}),
+    ...(opts.reconnectProviders ? { reconnectProviders: opts.reconnectProviders } : {}),
     io,
     integrations: resolvers.integrations ?? defaultIntegrationResolver({
       mode,
