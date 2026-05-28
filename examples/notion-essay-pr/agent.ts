@@ -74,7 +74,20 @@ async function handleNotionPageCreated(ctx: WorkforceCtx, event: WorkforceProvid
     }
   );
 
-  const prUrl = pr.receipt?.url ?? pr.path;
+  // Only treat the PR as "opened" when the writeback worker returned a
+  // receipt with a real GitHub URL — `pr.path` is the in-mount draft and
+  // would mislead anyone who saw it in memory or logs.
+  const prUrl = pr.receipt?.url;
+  if (!prUrl) {
+    ctx.log('warn', 'notion-essay-pr.pr-pending', {
+      pageId,
+      pageTitle,
+      outputPath,
+      draftPath: pr.path
+    });
+    return;
+  }
+
   await ctx.memory.save(`Notion essay PR opened for ${pageTitle}: ${prUrl}`, {
     scope: 'workspace',
     tags: ['notion-essay-pr', `page:${pageId}`]

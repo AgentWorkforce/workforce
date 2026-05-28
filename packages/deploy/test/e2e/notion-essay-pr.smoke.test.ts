@@ -8,6 +8,8 @@ import type { WorkforceCtx, WorkforceProviderEvent } from '@agentworkforce/runti
 
 type NotionEssayHandler = (ctx: WorkforceCtx, event: WorkforceProviderEvent) => Promise<void> | void;
 
+const FAKE_RECEIPT_URL = 'https://github.com/AgentWorkforce/proactive-agents/pull/17';
+
 const notionEssayPr = resolveHandler(notionEssayPrModule);
 
 function resolveHandler(moduleValue: unknown): NotionEssayHandler {
@@ -21,7 +23,9 @@ function resolveHandler(moduleValue: unknown): NotionEssayHandler {
 test('notion-essay-pr e2e smoke runs a Notion page event to an essay PR with mocks', async () => {
   const runtime = await MockNotionEssayRuntime.create();
   try {
+    runtime.startFakeWriteback();
     await runtime.spawnAndDispatch(notionEssayPr);
+    runtime.stopFakeWriteback();
 
     assert.equal(runtime.sandboxSpawned, true);
     assert.equal(runtime.files.get('/workspace/AGENTS.md'), '# Agent: notion-essay-pr\n');
@@ -30,22 +34,21 @@ test('notion-essay-pr e2e smoke runs a Notion page event to an essay PR with moc
 
     const writebacks = await runtime.collectPullRequestWritebacks();
     assert.equal(writebacks.length, 1);
-    assert.deepEqual(writebacks[0], {
-      title: 'Essay: Launch notes',
-      body: 'Drafted from Notion page page-123.\n\nOutput: /workspace/output/page-123.md',
-      head: 'essay/page-123',
-      base: 'main',
-      files: {
-        'output/page-123.md': '# A useful essay\n\nDraft body.\n'
-      }
-    });
+    assert.equal(writebacks[0]?.title, 'Essay: Launch notes');
+    assert.equal(writebacks[0]?.head, 'essay/page-123');
+    assert.equal(writebacks[0]?.base, 'main');
+    assert.equal(writebacks[0]?.url, FAKE_RECEIPT_URL);
 
     assert.equal(runtime.memorySaves.length, 1);
     const save = runtime.memorySaves[0]!;
-    assert.match(save.content, /^Notion essay PR opened for Launch notes: /);
+    assert.equal(
+      save.content,
+      `Notion essay PR opened for Launch notes: ${FAKE_RECEIPT_URL}`
+    );
     assert.equal(save.scope, 'workspace');
     assert.deepEqual(save.tags, ['notion-essay-pr', 'page:page-123']);
   } finally {
+    runtime.stopFakeWriteback();
     delete process.env.RELAYFILE_MOUNT_ROOT;
   }
 });
@@ -59,6 +62,7 @@ class MockNotionEssayRuntime {
   sandboxSpawned = false;
 
   readonly relayfileRoot: string;
+  private writebackTimer: NodeJS.Timeout | undefined;
 
   static async create(): Promise<MockNotionEssayRuntime> {
     const root = await mkdtemp(path.join(tmpdir(), 'notion-essay-pr-e2e-'));
@@ -68,6 +72,53 @@ class MockNotionEssayRuntime {
 
   private constructor(relayfileRoot: string) {
     this.relayfileRoot = relayfileRoot;
+  }
+
+  /**
+   * Stand-in for the Relayfile writeback worker: every 50ms, look for
+   * freshly written draft JSON in `github/repos/.../pulls/` and rewrite
+   * it with a receipt envelope so the agent's `writeJsonFile` poll loop
+   * resolves with a real-looking URL.
+   */
+  startFakeWriteback(): void {
+    const pullsDir = path.join(
+      this.relayfileRoot,
+      'github',
+      'repos',
+      'AgentWorkforce',
+      'proactive-agents',
+      'pulls'
+    );
+    this.writebackTimer = setInterval(async () => {
+      const entries = await readdir(pullsDir).catch(() => [] as string[]);
+      for (const entry of entries) {
+        if (!entry.endsWith('.json')) continue;
+        const target = path.join(pullsDir, entry);
+        const body = await readFile(target, 'utf8').catch(() => null);
+        if (!body) continue;
+        let parsed: Record<string, unknown>;
+        try {
+          parsed = JSON.parse(body) as Record<string, unknown>;
+        } catch {
+          continue;
+        }
+        if (typeof parsed.created === 'string' || typeof parsed.url === 'string') continue;
+        const receipt = {
+          ...parsed,
+          created: new Date().toISOString(),
+          id: 'pr-17',
+          url: FAKE_RECEIPT_URL
+        };
+        await writeFile(target, `${JSON.stringify(receipt, null, 2)}\n`, 'utf8');
+      }
+    }, 50);
+  }
+
+  stopFakeWriteback(): void {
+    if (this.writebackTimer) {
+      clearInterval(this.writebackTimer);
+      this.writebackTimer = undefined;
+    }
   }
 
   async spawnAndDispatch(handler: NotionEssayHandler): Promise<void> {

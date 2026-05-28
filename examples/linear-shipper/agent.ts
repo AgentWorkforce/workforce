@@ -101,7 +101,14 @@ export default handler(async (ctx, event) => {
     }
   );
 
-  const issueUrl = created.receipt?.url ?? created.path;
+  // Only post a back-link comment when writeback returned a real receipt —
+  // surfacing the in-mount draft path as if it were a clickable issue URL
+  // would be misleading.
+  const issueUrl = created.receipt?.url;
+  if (!issueUrl) {
+    ctx.log('warn', 'linear-shipper.github-issue.no-receipt', { draftPath: created.path });
+    return;
+  }
   await writeJsonFile(
     client,
     'linear',
