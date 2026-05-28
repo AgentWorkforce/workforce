@@ -23,6 +23,9 @@
       },
       "triggers": [
         {
+          "on": "issues.opened"
+        },
+        {
           "on": "issues.labeled"
         }
       ]

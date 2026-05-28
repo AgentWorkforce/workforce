@@ -15,7 +15,7 @@ const REPO_FULL_NAME = `${REPO_OWNER}/${REPO_NAME}`;
 const LABEL = 'investigate';
 
 export default handler(async (ctx, event) => {
-  if (event.source !== 'github' || event.type !== 'issues.labeled') {
+  if (event.source !== 'github' || (event.type !== 'issues.opened' && event.type !== 'issues.labeled')) {
     ctx.log('info', 'ignoring unsupported event', { source: event.source, type: event.type });
     return;
   }

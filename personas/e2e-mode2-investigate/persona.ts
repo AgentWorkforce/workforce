@@ -33,7 +33,10 @@ export default definePersona({
   integrations: {
     github: {
       source: { kind: 'workspace' },
-      triggers: [{ on: 'issues.labeled' }]
+      triggers: [
+        { on: 'issues.opened' },
+        { on: 'issues.labeled' }
+      ]
     }
   }
 });
