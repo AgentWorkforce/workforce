@@ -1,0 +1,29 @@
+{
+  "id": "e2e-mode1-workflow",
+  "intent": "review",
+  "tags": [
+    "review"
+  ],
+  "description": "Minimal Mode 1 E2E probe: replies to AgentWorkforce/cloud issues labeled `workflow-test` by running a 3-step deterministic workflow DSL DAG and posting its output back as two GitHub comments, to prove the workflow-DSL execution path runs end-to-end.",
+  "cloud": true,
+  "onEvent": "./agent.ts",
+  "harness": "codex",
+  "model": "gpt-5",
+  "systemPrompt": "Handle the proactive event.",
+  "harnessSettings": {
+    "reasoning": "low",
+    "timeoutSeconds": 300
+  },
+  "integrations": {
+    "github": {
+      "source": {
+        "kind": "workspace"
+      },
+      "triggers": [
+        {
+          "on": "issues.opened"
+        }
+      ]
+    }
+  }
+}
