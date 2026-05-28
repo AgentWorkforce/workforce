@@ -792,11 +792,7 @@ async function fetchIntegrationStatusForScope(args: {
       args.io?.warn?.(
         'cloud does not expose /integrations/<provider>/status yet; falling back to the integrations list with ready-only matching.'
       );
-      return await requestJson(
-        args.fetchImpl,
-        `${args.apiUrl}/api/v1/workspaces/${encodeURIComponent(args.workspaceId)}/integrations`,
-        args.token
-      );
+      return await fetchIntegrationsForScope(args);
     }
     throw err;
   }

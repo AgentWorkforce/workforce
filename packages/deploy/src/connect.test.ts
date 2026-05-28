@@ -204,7 +204,7 @@ test('relayfileIntegrationResolver isConnected does NOT fall back when status re
   ]);
 });
 
-test('relayfileIntegrationResolver isConnected falls back to ready-only list matching when status 404s', async () => {
+test('relayfileIntegrationResolver isConnected falls back to deployer-user list matching when status 404s', async () => {
   const io = createBufferedIO();
   const urls: string[] = [];
   const resolver = relayfileIntegrationResolver({
@@ -226,13 +226,41 @@ test('relayfileIntegrationResolver isConnected falls back to ready-only list mat
   );
   assert.deepEqual(urls, [
     'https://cloud.example.test/api/v1/workspaces/ws-runtime/integrations/github/status?scope=deployer_user',
-    'https://cloud.example.test/api/v1/workspaces/ws-runtime/integrations'
+    'https://cloud.example.test/api/v1/me/integrations'
   ]);
   assert.ok(
     io.messages.some(
       (m) => m.level === 'warn' && /integrations\/<provider>\/status/.test(m.message)
     )
   );
+});
+
+test('relayfileIntegrationResolver isConnected falls back to workspace list matching for workspace source when status 404s', async () => {
+  const urls: string[] = [];
+  const resolver = relayfileIntegrationResolver({
+    apiUrl: 'https://cloud.example.test',
+    workspaceId: 'ws-1',
+    workspaceToken: 'tok',
+    fetch: async (url) => {
+      urls.push(String(url));
+      if (String(url).includes('/integrations/github/status')) {
+        return new Response('not found', { status: 404 });
+      }
+      return okJson([{ provider: 'github', status: 'ready' }]);
+    }
+  });
+  assert.equal(
+    await resolver.isConnected({
+      workspace: 'ws-runtime',
+      provider: 'github',
+      source: { kind: 'workspace' }
+    }),
+    true
+  );
+  assert.deepEqual(urls, [
+    'https://cloud.example.test/api/v1/workspaces/ws-runtime/integrations/github/status?scope=workspace',
+    'https://cloud.example.test/api/v1/workspaces/ws-runtime/integrations'
+  ]);
 });
 
 test('relayfileCatalogConfigKeyResolver returns the expected configKey and caches the catalog', async () => {
