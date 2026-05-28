@@ -159,6 +159,80 @@ test('buildCtx exposes ctx.files as a sandbox file helper', async () => {
   assert.deepEqual(writes, [{ path: '/workspace/output/page-1.md', contents: 'essay' }]);
 });
 
+test('buildCtx exposes typed runtime credentials from sandbox env', async () => {
+  await withEnv(
+    {
+      RELAYFILE_URL: 'https://relayfile.example.test',
+      RELAYFILE_TOKEN: 'relayfile-token',
+      RELAYFILE_WORKSPACE_ID: 'rw_test',
+      CLOUD_API_URL: 'https://cloud.example.test',
+      CLOUD_API_ACCESS_TOKEN: 'cloud-api-token'
+    },
+    async () => {
+      const ctx = ctxFor(basePersona);
+      const expected = {
+        relayfile: {
+          url: 'https://relayfile.example.test',
+          token: 'relayfile-token',
+          workspaceId: 'rw_test'
+        },
+        cloudApi: {
+          url: 'https://cloud.example.test',
+          token: 'cloud-api-token'
+        }
+      };
+
+      assert.deepEqual(ctx.credentials.tryRequire(), expected);
+      assert.deepEqual(ctx.credentials.require(), expected);
+      assert.deepEqual(ctx.credentials.relayfile, expected.relayfile);
+      assert.deepEqual(ctx.credentials.cloudApi, expected.cloudApi);
+    }
+  );
+});
+
+test('ctx.credentials returns null or throws with missing runtime credential keys', async () => {
+  await withEnv(
+    {
+      RELAYFILE_URL: 'https://relayfile.example.test',
+      RELAYFILE_TOKEN: undefined,
+      RELAYFILE_WORKSPACE_ID: 'rw_test',
+      CLOUD_API_URL: 'https://cloud.example.test',
+      CLOUD_API_ACCESS_TOKEN: 'cloud-api-token'
+    },
+    async () => {
+      const ctx = ctxFor(basePersona);
+
+      assert.equal(ctx.credentials.tryRequire(), null);
+      assert.throws(
+        () => ctx.credentials.require(),
+        /Runtime credentials are required: missing relayfile\.token/
+      );
+      assert.throws(
+        () => ctx.credentials.relayfile,
+        /Runtime credentials are required: missing relayfile\.token/
+      );
+    }
+  );
+});
+
+test('ctx.credentials strips trailing slashes from runtime credential URLs', async () => {
+  await withEnv(
+    {
+      RELAYFILE_URL: 'https://relayfile.example.test///',
+      RELAYFILE_TOKEN: 'relayfile-token',
+      RELAYFILE_WORKSPACE_ID: 'rw_test',
+      CLOUD_API_URL: 'https://cloud.example.test/',
+      CLOUD_API_ACCESS_TOKEN: 'cloud-api-token'
+    },
+    async () => {
+      const ctx = ctxFor(basePersona);
+
+      assert.equal(ctx.credentials.require().relayfile.url, 'https://relayfile.example.test');
+      assert.equal(ctx.credentials.require().cloudApi.url, 'https://cloud.example.test');
+    }
+  );
+});
+
 test('ctx.memory.save posts to the cloud memory endpoint when sandbox env is present', async () => {
   await withEnv(
     {

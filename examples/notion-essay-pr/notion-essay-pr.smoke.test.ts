@@ -190,6 +190,29 @@ class MockNotionEssayRuntime {
         read: (filePath) => this.read(filePath),
         write: (filePath, contents) => this.write(filePath, contents)
       },
+      credentials: {
+        relayfile: {
+          url: 'https://relayfile.example.test',
+          token: 'relayfile-token',
+          workspaceId: 'rw_proactive'
+        },
+        cloudApi: {
+          url: 'https://cloud.example.test',
+          token: 'cloud-api-token'
+        },
+        tryRequire() {
+          return {
+            relayfile: this.relayfile,
+            cloudApi: this.cloudApi
+          };
+        },
+        require() {
+          return {
+            relayfile: this.relayfile,
+            cloudApi: this.cloudApi
+          };
+        }
+      },
       memory: {
         async recall() {
           return [{
