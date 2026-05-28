@@ -52,6 +52,7 @@ export interface IntegrationConnectResolver {
     provider: string;
     source?: IntegrationSource;
     expectedConfigKey?: string;
+    allowWorkspaceFallback?: boolean;
   }): Promise<boolean>;
   /**
    * Run the browser-based OAuth flow and resolve when the user finishes.
@@ -70,6 +71,7 @@ export interface IntegrationConnectResolver {
     workspace: string;
     provider: string;
     source?: IntegrationSource;
+    allowWorkspaceFallback?: boolean;
   }): Promise<{ connectionId: string }>;
 }
 
@@ -132,7 +134,13 @@ export function relayfileIntegrationResolver(opts: {
   const apiUrl = opts.apiUrl.replace(/\/+$/, '');
 
   return {
-    async isConnected({ workspace, provider, source, expectedConfigKey }) {
+    async isConnected({
+      workspace,
+      provider,
+      source,
+      expectedConfigKey,
+      allowWorkspaceFallback
+    }) {
       const workspaceId = workspace || opts.workspaceId;
       const token = await resolveWorkspaceToken(opts.workspaceToken);
       const effectiveSource: IntegrationSource = source ?? { kind: 'deployer_user' };
@@ -146,18 +154,33 @@ export function relayfileIntegrationResolver(opts: {
         source: effectiveSource,
         io
       });
-      if (isIntegrationListResponse(status)) {
-        return listHasConnectedProvider(status, provider, {
-          ...(expectedConfigKey ? { expectedConfigKey } : {}),
-          ...(effectiveSource.kind === 'workspace_service_account'
-            ? { serviceAccountName: effectiveSource.name }
-            : {})
-        });
+      if (statusIsConnectedForSource(status, provider, effectiveSource, expectedConfigKey)) {
+        return true;
       }
-      return statusMatchesExpectedConfigKey(status, expectedConfigKey)
-        && isConnectedStatus(status);
+
+      const fallbackSource = workspaceFallbackSource(
+        effectiveSource,
+        allowWorkspaceFallback === true
+      );
+      if (!fallbackSource) return false;
+
+      const fallbackStatus = await fetchIntegrationStatusForScope({
+        fetchImpl,
+        apiUrl,
+        token,
+        workspaceId,
+        provider,
+        source: fallbackSource,
+        io
+      });
+      return statusIsConnectedForSource(
+        fallbackStatus,
+        provider,
+        fallbackSource,
+        expectedConfigKey
+      );
     },
-    async connect({ workspace, provider, source }) {
+    async connect({ workspace, provider, source, allowWorkspaceFallback }) {
       const workspaceId = workspace || opts.workspaceId;
       const token = await resolveWorkspaceToken(opts.workspaceToken);
       const effectiveSource: IntegrationSource = source ?? { kind: 'deployer_user' };
@@ -207,6 +230,7 @@ export function relayfileIntegrationResolver(opts: {
         throw new Error(`integration ${provider} connect-session did not return a session URL`);
       }
       const sessionId = readString(session, 'sessionId') ?? readString(session, 'connectionId');
+      const sessionConfigKey = readProviderConfigKey(session);
       io?.info(`Connecting ${provider}: opening ${sessionUrl}`);
       try {
         await (opts.openUrl ?? openBrowser)(sessionUrl);
@@ -217,30 +241,55 @@ export function relayfileIntegrationResolver(opts: {
       const deadline = Date.now() + (opts.timeoutMs ?? 5 * 60_000);
       while (Date.now() < deadline) {
         await sleepImpl(opts.pollIntervalMs ?? 2_000);
-        const statusUrl = new URL(`${apiUrl}/api/v1/workspaces/${encodeURIComponent(
-          workspaceId
-        )}/integrations/${encodeURIComponent(provider)}/status`);
-        if (sessionId) statusUrl.searchParams.set('connectionId', sessionId);
-        // Scope the status poll to the same table the connect-session
-        // wrote into. Older clouds ignore the param and read from
-        // workspace_integrations (today's behavior).
-        const scopeParam = effectiveSource.kind;
-        statusUrl.searchParams.set('scope', scopeParam);
-        if (effectiveSource.kind === 'workspace_service_account') {
-          statusUrl.searchParams.set('serviceAccountName', effectiveSource.name);
-        }
-        const status = await requestJson(
+        const pollToken = await resolveWorkspaceToken(opts.workspaceToken);
+        const status = await fetchIntegrationStatusForScope({
           fetchImpl,
-          statusUrl.toString(),
-          await resolveWorkspaceToken(opts.workspaceToken)
-        );
-        if (isConnectedStatus(status)) {
-          const connectionId = readString(status, 'connectionId')
-            ?? readString(status, 'currentConnectionId')
+          apiUrl,
+          token: pollToken,
+          workspaceId,
+          provider,
+          source: effectiveSource,
+          ...(sessionId ? { connectionId: sessionId } : {}),
+          io
+        });
+        if (statusIsConnectedForSource(status, provider, effectiveSource)) {
+          const connectionId = readConnectionId(status)
             ?? sessionId
             ?? provider;
           io?.info(`${provider} connected.`);
           return { connectionId };
+        }
+
+        const fallbackSource = workspaceFallbackSource(
+          effectiveSource,
+          allowWorkspaceFallback === true
+        );
+        if (fallbackSource) {
+          const fallbackStatus = await fetchIntegrationStatusForScope({
+            fetchImpl,
+            apiUrl,
+            token: pollToken,
+            workspaceId,
+            provider,
+            source: fallbackSource,
+            ...(sessionId ? { connectionId: sessionId } : {}),
+            io
+          });
+          if (
+            statusIsConnectedForSource(
+              fallbackStatus,
+              provider,
+              fallbackSource,
+              sessionConfigKey
+            ) &&
+            statusMatchesConnectionId(fallbackStatus, sessionId)
+          ) {
+            const connectionId = readConnectionId(fallbackStatus)
+              ?? sessionId
+              ?? provider;
+            io?.info(`${provider} connected.`);
+            return { connectionId };
+          }
         }
       }
 
@@ -454,7 +503,8 @@ export async function connectIntegrations(input: ConnectAllInput): Promise<Conne
       const result = await input.integrations.connect({
         workspace: input.workspace,
         provider,
-        source
+        source,
+        allowWorkspaceFallback: integrationAllowsWorkspaceFallback(integrationEntry)
       });
       input.io.info(`integrations.${provider}: connected (${result.connectionId})`);
       outcomes.push({ provider, status: 'connected-now' });
@@ -527,6 +577,9 @@ async function checkProviderConnected(
       workspace: input.workspace,
       provider,
       source,
+      allowWorkspaceFallback: integrationAllowsWorkspaceFallback(
+        input.persona.integrations?.[provider]
+      ),
       ...(expectedConfigKey ? { expectedConfigKey } : {})
     })
     .catch((err) => {
@@ -776,11 +829,13 @@ async function fetchIntegrationStatusForScope(args: {
   workspaceId: string;
   provider: string;
   source: IntegrationSource;
+  connectionId?: string;
   io?: Pick<DeployIO, 'info' | 'warn'>;
 }): Promise<unknown> {
   const url = new URL(
     `${args.apiUrl}/api/v1/workspaces/${encodeURIComponent(args.workspaceId)}/integrations/${encodeURIComponent(args.provider)}/status`
   );
+  if (args.connectionId) url.searchParams.set('connectionId', args.connectionId);
   url.searchParams.set('scope', args.source.kind);
   if (args.source.kind === 'workspace_service_account') {
     url.searchParams.set('serviceAccountName', args.source.name);
@@ -835,6 +890,63 @@ function listHasConnectedProvider(
   });
 }
 
+function statusIsConnectedForSource(
+  status: unknown,
+  provider: string,
+  source: IntegrationSource,
+  expectedConfigKey?: string
+): boolean {
+  if (isIntegrationListResponse(status)) {
+    return listHasConnectedProvider(status, provider, {
+      ...(expectedConfigKey ? { expectedConfigKey } : {}),
+      ...(source.kind === 'workspace_service_account'
+        ? { serviceAccountName: source.name }
+        : {})
+    });
+  }
+  return statusMatchesExpectedConfigKey(status, expectedConfigKey)
+    && isConnectedStatus(status);
+}
+
+function workspaceFallbackSource(
+  source: IntegrationSource,
+  allowWorkspaceFallback: boolean
+): IntegrationSource | undefined {
+  // Bare legacy personas parse to deployer_user, but older cloud deploy/connect
+  // flows wrote and resolved default integrations at workspace scope. Try the
+  // workspace row as a compatibility fallback after the deployer-user row is
+  // absent or not ready. Explicitly authored deployer_user/workspace/service-
+  // account sources still check their exact table and do not get widened.
+  return allowWorkspaceFallback && source.kind === 'deployer_user'
+    ? { kind: 'workspace' }
+    : undefined;
+}
+
+function readConnectionId(status: unknown): string | undefined {
+  return readString(status, 'connectionId')
+    ?? readString(status, 'currentConnectionId');
+}
+
+function readProviderConfigKey(value: unknown): string | undefined {
+  return readString(value, 'configKey')
+    ?? readString(value, 'providerConfigKey')
+    ?? readString(value, 'backendIntegrationId');
+}
+
+function statusMatchesConnectionId(status: unknown, expectedConnectionId: string | undefined): boolean {
+  if (!expectedConnectionId) return true;
+  const actual = readConnectionId(status);
+  return actual === undefined || actual === expectedConnectionId;
+}
+
+function integrationAllowsWorkspaceFallback(value: unknown): boolean {
+  return Boolean(
+    value &&
+    typeof value === 'object' &&
+    (value as { __agentworkforceImplicitSource?: unknown }).__agentworkforceImplicitSource === true
+  );
+}
+
 function isIntegrationListResponse(body: unknown): boolean {
   return Array.isArray(body)
     || Boolean(
@@ -849,9 +961,7 @@ function statusMatchesExpectedConfigKey(value: unknown, expectedConfigKey?: stri
     return true;
   }
   const configKey =
-    readString(value, 'configKey')
-    ?? readString(value, 'providerConfigKey')
-    ?? readString(value, 'backendIntegrationId');
+    readProviderConfigKey(value);
   return configKey === undefined || configKey === expectedConfigKey;
 }
 

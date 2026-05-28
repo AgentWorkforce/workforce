@@ -618,6 +618,12 @@ export function parseIntegrationConfig(
     source === undefined
       ? { kind: 'deployer_user' }
       : parseIntegrationSource(source, `${context}.source`);
+  if (source === undefined) {
+    Object.defineProperty(out, '__agentworkforceImplicitSource', {
+      value: true,
+      enumerable: false
+    });
+  }
 
   if (scope !== undefined) {
     const parsedScope = parseStringMap(scope, `${context}.scope`);
