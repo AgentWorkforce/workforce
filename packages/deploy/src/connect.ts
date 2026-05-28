@@ -146,16 +146,28 @@ export function relayfileIntegrationResolver(opts: {
         source: effectiveSource,
         io
       });
-      if (isIntegrationListResponse(status)) {
-        return listHasConnectedProvider(status, provider, {
-          ...(expectedConfigKey ? { expectedConfigKey } : {}),
-          ...(effectiveSource.kind === 'workspace_service_account'
-            ? { serviceAccountName: effectiveSource.name }
-            : {})
-        });
+      if (statusIsConnectedForSource(status, provider, effectiveSource, expectedConfigKey)) {
+        return true;
       }
-      return statusMatchesExpectedConfigKey(status, expectedConfigKey)
-        && isConnectedStatus(status);
+
+      const fallbackSource = workspaceFallbackSource(effectiveSource);
+      if (!fallbackSource) return false;
+
+      const fallbackStatus = await fetchIntegrationStatusForScope({
+        fetchImpl,
+        apiUrl,
+        token,
+        workspaceId,
+        provider,
+        source: fallbackSource,
+        io
+      });
+      return statusIsConnectedForSource(
+        fallbackStatus,
+        provider,
+        fallbackSource,
+        expectedConfigKey
+      );
     },
     async connect({ workspace, provider, source }) {
       const workspaceId = workspace || opts.workspaceId;
@@ -217,30 +229,42 @@ export function relayfileIntegrationResolver(opts: {
       const deadline = Date.now() + (opts.timeoutMs ?? 5 * 60_000);
       while (Date.now() < deadline) {
         await sleepImpl(opts.pollIntervalMs ?? 2_000);
-        const statusUrl = new URL(`${apiUrl}/api/v1/workspaces/${encodeURIComponent(
-          workspaceId
-        )}/integrations/${encodeURIComponent(provider)}/status`);
-        if (sessionId) statusUrl.searchParams.set('connectionId', sessionId);
-        // Scope the status poll to the same table the connect-session
-        // wrote into. Older clouds ignore the param and read from
-        // workspace_integrations (today's behavior).
-        const scopeParam = effectiveSource.kind;
-        statusUrl.searchParams.set('scope', scopeParam);
-        if (effectiveSource.kind === 'workspace_service_account') {
-          statusUrl.searchParams.set('serviceAccountName', effectiveSource.name);
-        }
-        const status = await requestJson(
+        const status = await fetchIntegrationStatusForScope({
           fetchImpl,
-          statusUrl.toString(),
-          await resolveWorkspaceToken(opts.workspaceToken)
-        );
-        if (isConnectedStatus(status)) {
-          const connectionId = readString(status, 'connectionId')
-            ?? readString(status, 'currentConnectionId')
+          apiUrl,
+          token: await resolveWorkspaceToken(opts.workspaceToken),
+          workspaceId,
+          provider,
+          source: effectiveSource,
+          ...(sessionId ? { connectionId: sessionId } : {}),
+          io
+        });
+        if (statusIsConnectedForSource(status, provider, effectiveSource)) {
+          const connectionId = readConnectionId(status)
             ?? sessionId
             ?? provider;
           io?.info(`${provider} connected.`);
           return { connectionId };
+        }
+
+        const fallbackSource = workspaceFallbackSource(effectiveSource);
+        if (fallbackSource) {
+          const fallbackStatus = await fetchIntegrationStatusForScope({
+            fetchImpl,
+            apiUrl,
+            token: await resolveWorkspaceToken(opts.workspaceToken),
+            workspaceId,
+            provider,
+            source: fallbackSource,
+            io
+          });
+          if (statusIsConnectedForSource(fallbackStatus, provider, fallbackSource)) {
+            const connectionId = readConnectionId(fallbackStatus)
+              ?? sessionId
+              ?? provider;
+            io?.info(`${provider} connected.`);
+            return { connectionId };
+          }
         }
       }
 
@@ -776,11 +800,13 @@ async function fetchIntegrationStatusForScope(args: {
   workspaceId: string;
   provider: string;
   source: IntegrationSource;
+  connectionId?: string;
   io?: Pick<DeployIO, 'info' | 'warn'>;
 }): Promise<unknown> {
   const url = new URL(
     `${args.apiUrl}/api/v1/workspaces/${encodeURIComponent(args.workspaceId)}/integrations/${encodeURIComponent(args.provider)}/status`
   );
+  if (args.connectionId) url.searchParams.set('connectionId', args.connectionId);
   url.searchParams.set('scope', args.source.kind);
   if (args.source.kind === 'workspace_service_account') {
     url.searchParams.set('serviceAccountName', args.source.name);
@@ -833,6 +859,38 @@ function listHasConnectedProvider(
     }
     return isConnectedStatus(record);
   });
+}
+
+function statusIsConnectedForSource(
+  status: unknown,
+  provider: string,
+  source: IntegrationSource,
+  expectedConfigKey?: string
+): boolean {
+  if (isIntegrationListResponse(status)) {
+    return listHasConnectedProvider(status, provider, {
+      ...(expectedConfigKey ? { expectedConfigKey } : {}),
+      ...(source.kind === 'workspace_service_account'
+        ? { serviceAccountName: source.name }
+        : {})
+    });
+  }
+  return statusMatchesExpectedConfigKey(status, expectedConfigKey)
+    && isConnectedStatus(status);
+}
+
+function workspaceFallbackSource(source: IntegrationSource): IntegrationSource | undefined {
+  // Bare legacy personas parse to deployer_user, but older cloud deploy/connect
+  // flows wrote and resolved default integrations at workspace scope. Try the
+  // workspace row as a compatibility fallback after the deployer-user row is
+  // absent or not ready; explicit workspace/service-account sources already
+  // check their exact table and do not need fallback.
+  return source.kind === 'deployer_user' ? { kind: 'workspace' } : undefined;
+}
+
+function readConnectionId(status: unknown): string | undefined {
+  return readString(status, 'connectionId')
+    ?? readString(status, 'currentConnectionId');
 }
 
 function isIntegrationListResponse(body: unknown): boolean {
