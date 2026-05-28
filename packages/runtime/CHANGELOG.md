@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [3.0.31] - 2026-05-28
+
+### Added
+
+- **Make sandbox a boolean field — skip boot with sandbox: false** (#159)
+
 ## [3.0.25] - 2026-05-26
 
 ### Added

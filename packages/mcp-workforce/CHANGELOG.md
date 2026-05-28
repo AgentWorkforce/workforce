@@ -1,6 +1,6 @@
 # Changelog
 
-All notable changes to `@agentworkforce/daytona-runner` will be documented in this file.
+All notable changes to `@agentworkforce/mcp-workforce` will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
@@ -9,13 +9,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [3.0.31] - 2026-05-28
 
-### Released
+### Added
 
-- v3.0.31
-
-## [3.0.22] - 2026-05-24
-
-### Dependencies
-
-- Bump @daytonaio/sdk to ^0.179.0 (#134)
+- **Make sandbox a boolean field — skip boot with sandbox: false** (#159)
 
