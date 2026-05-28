@@ -265,7 +265,12 @@ const fallbackSource = workspaceFallbackSource(
 
         if (sessionId) {
           const canonicalStatus = await fetchIntegrationStatusForScope(statusArgs);
-          if (statusIsConnectedForSource(canonicalStatus, provider, effectiveSource)) {
+          if (statusIsConnectedForSource(
+            canonicalStatus,
+            provider,
+            effectiveSource,
+            sessionConfigKey
+          )) {
             const connectionId = readConnectionId(canonicalStatus)
               ?? sessionId
               ?? provider;
@@ -1030,9 +1035,7 @@ function isConnectedStatus(value: unknown): boolean {
   }
   return record.status === 'ready'
     || record.state === 'ready'
-    || record.ready === true
-    || record.connected === true
-    || record.active === true;
+    || record.ready === true;
 }
 
 /**
