@@ -167,7 +167,8 @@ test('relayfileIntegrationResolver isConnected falls back to workspace scope for
     await resolver.isConnected({
       workspace: 'ws-runtime',
       provider: 'slack',
-      expectedConfigKey: 'slack-relay'
+      expectedConfigKey: 'slack-relay',
+      allowWorkspaceFallback: true
     }),
     true
   );
@@ -177,6 +178,31 @@ test('relayfileIntegrationResolver isConnected falls back to workspace scope for
   ]);
 });
 
+test('relayfileIntegrationResolver isConnected does not widen explicit deployer_user source', async () => {
+  const urls: string[] = [];
+  const resolver = relayfileIntegrationResolver({
+    apiUrl: 'https://cloud.example.test',
+    workspaceId: 'ws-1',
+    workspaceToken: 'tok',
+    fetch: async (url) => {
+      urls.push(String(url));
+      return okJson({ provider: 'slack', configKey: 'slack-relay', status: 'pending' });
+    }
+  });
+
+  assert.equal(
+    await resolver.isConnected({
+      workspace: 'ws-runtime',
+      provider: 'slack',
+      source: { kind: 'deployer_user' },
+      expectedConfigKey: 'slack-relay'
+    }),
+    false
+  );
+  assert.deepEqual(urls, [
+    'https://cloud.example.test/api/v1/workspaces/ws-runtime/integrations/slack/status?scope=deployer_user'
+  ]);
+});
 test('relayfileIntegrationResolver isConnected rejects status="error"', async () => {
   // A failed initial sync or errored writeback means the persona cannot
   // rely on the integration at dispatch time. Re-prompt OAuth so the user
@@ -432,21 +458,64 @@ test('relayfileIntegrationResolver connect resolves when OAuth completes at work
       return okJson({
         provider: 'slack',
         status: 'ready',
-        connectionId: 'conn-slack-workspace'
+        connectionId: 'conn-slack'
       });
     }
   });
 
-  assert.deepEqual(await resolver.connect({ workspace: 'ws-runtime', provider: 'slack' }), {
-    connectionId: 'conn-slack-workspace'
-  });
+  assert.deepEqual(
+    await resolver.connect({
+      workspace: 'ws-runtime',
+      provider: 'slack',
+      allowWorkspaceFallback: true
+    }),
+    { connectionId: 'conn-slack' }
+  );
   assert.deepEqual(opened, ['https://connect.example.test/slack']);
   assert.deepEqual(statusUrls, [
     'https://cloud.example.test/api/v1/workspaces/ws-runtime/integrations/slack/status?connectionId=conn-slack&scope=deployer_user',
-    'https://cloud.example.test/api/v1/workspaces/ws-runtime/integrations/slack/status?scope=workspace'
+    'https://cloud.example.test/api/v1/workspaces/ws-runtime/integrations/slack/status?connectionId=conn-slack&scope=workspace'
   ]);
 });
 
+test('relayfileIntegrationResolver connect ignores fallback rows with a different connectionId', async () => {
+  const resolver = relayfileIntegrationResolver({
+    apiUrl: 'https://cloud.example.test',
+    workspaceId: 'ws-1',
+    workspaceToken: 'tok',
+    pollIntervalMs: 0,
+    timeoutMs: 1,
+    openUrl: () => undefined,
+    sleep: async () => undefined,
+    fetch: async (input, init) => {
+      const url = input.toString();
+      if (url.endsWith('/integrations/connect-session')) {
+        assert.equal(init?.method, 'POST');
+        return okJson({
+          sessionUrl: 'https://connect.example.test/slack',
+          connectionId: 'conn-slack-new'
+        });
+      }
+      if (url.includes('scope=deployer_user')) {
+        return okJson({ provider: 'slack', status: 'pending' });
+      }
+      return okJson({
+        provider: 'slack',
+        status: 'ready',
+        connectionId: 'conn-slack-other'
+      });
+    }
+  });
+
+  await assert.rejects(
+    resolver.connect({
+      workspace: 'ws-runtime',
+      provider: 'slack',
+      allowWorkspaceFallback: true
+    }),
+    /Timed out waiting for slack OAuth/
+  );
+});
 test('relayfileIntegrationResolver connect sends scope=workspace and scopes status polls (workspace source)', async () => {
   const bodies: unknown[] = [];
   const statusUrls: string[] = [];
