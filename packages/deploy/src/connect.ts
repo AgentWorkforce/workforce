@@ -229,10 +229,11 @@ export function relayfileIntegrationResolver(opts: {
       const deadline = Date.now() + (opts.timeoutMs ?? 5 * 60_000);
       while (Date.now() < deadline) {
         await sleepImpl(opts.pollIntervalMs ?? 2_000);
+        const pollToken = await resolveWorkspaceToken(opts.workspaceToken);
         const status = await fetchIntegrationStatusForScope({
           fetchImpl,
           apiUrl,
-          token: await resolveWorkspaceToken(opts.workspaceToken),
+          token: pollToken,
           workspaceId,
           provider,
           source: effectiveSource,
@@ -252,7 +253,7 @@ export function relayfileIntegrationResolver(opts: {
           const fallbackStatus = await fetchIntegrationStatusForScope({
             fetchImpl,
             apiUrl,
-            token: await resolveWorkspaceToken(opts.workspaceToken),
+            token: pollToken,
             workspaceId,
             provider,
             source: fallbackSource,
