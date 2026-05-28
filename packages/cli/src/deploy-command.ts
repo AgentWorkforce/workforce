@@ -75,12 +75,7 @@ export async function runDeploy(args: readonly string[]): Promise<void> {
     die('deploy: --mode is required when prompts are disabled or stdio is non-interactive');
   }
   if (!parsed.mode) {
-    const picked = await pickRuntime();
-    if (picked === 'docs') {
-      process.stdout.write(`${BUILD_YOUR_OWN_RUNTIME_DOCS_URL}\n`);
-      process.exit(0);
-    }
-    parsed = { ...parsed, mode: picked };
+    parsed = { ...parsed, mode: 'cloud' };
   }
 
   try {
