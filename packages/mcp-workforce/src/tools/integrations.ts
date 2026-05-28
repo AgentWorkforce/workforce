@@ -80,9 +80,10 @@ async function invokeGithub(
     case 'comment': {
       const { target, body } = asObject(args, 'integration.github.comment');
       const { owner, repo, number } = asTarget(target);
+      const commentBody = asNonEmptyString(body, 'body');
       const result = await writeJsonFile(client, 'github', 'comment',
         `/github/repos/${encodeSegment(owner)}/${encodeSegment(repo)}/issues/${number}/comments/${draftFile('comment')}`,
-        { body });
+        { body: commentBody });
       return {
         id: result.receipt?.id ?? result.receipt?.created ?? '',
         url: result.receipt?.url ?? result.path
@@ -124,7 +125,8 @@ async function invokeGithub(
       };
     }
     case 'getPr': {
-      const { owner, repo, number } = asTarget(args);
+      const { target } = asObject(args, 'integration.github.getPr');
+      const { owner, repo, number } = asTarget(target);
       const pr = await readJsonFile<{ title?: string; body?: string; state?: string; url?: string; [key: string]: unknown }>(
         client, 'github', 'getPr',
         `/github/repos/${encodeSegment(owner)}/${encodeSegment(repo)}/pulls/${number}.json`);
@@ -155,7 +157,7 @@ async function invokeGithub(
                   .filter((c): c is Record<string, unknown> => typeof c === 'object' && c !== null)
                   .map((c) => ({
                     path: asNonEmptyString(c.path, 'comment.path'),
-                    line: asNumber(c.line, 'comment.line'),
+                    line: asPositiveInteger(c.line, 'comment.line'),
                     body: asNonEmptyString(c.body, 'comment.body')
                   }))
               }
@@ -199,9 +201,9 @@ function asNonEmptyString(value: unknown, label: string): string {
   return value;
 }
 
-function asNumber(value: unknown, label: string): number {
-  if (typeof value !== 'number' || !Number.isFinite(value)) {
-    throw new Error(`${label}: must be a finite number`);
+function asPositiveInteger(value: unknown, label: string): number {
+  if (typeof value !== 'number' || !Number.isInteger(value) || value <= 0) {
+    throw new Error(`${label}: must be a positive integer`);
   }
   return value;
 }
@@ -215,7 +217,7 @@ function asTarget(value: unknown): { owner: string; repo: string; number: number
   return {
     owner: asNonEmptyString(obj.owner, 'target.owner'),
     repo: asNonEmptyString(obj.repo, 'target.repo'),
-    number: asNumber(obj.number, 'target.number')
+    number: asPositiveInteger(obj.number, 'target.number')
   };
 }
 

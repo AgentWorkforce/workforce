@@ -56,7 +56,6 @@ export interface CloudDefaultOptions {
 export interface CloudRuntimeDefaults {
   sandbox: SandboxContext;
   files: FilesContext;
-  integrations?: Record<string, unknown>;
   workflow?: WorkflowContext;
   harnessRunner: (args: HarnessRunArgs) => Promise<HarnessRunResult>;
 }
@@ -70,7 +69,6 @@ export function createCloudRuntimeDefaults(options: CloudDefaultOptions): CloudR
     ? createSandboxOptionalSandbox(baseSandbox)
     : baseSandbox;
   const files = filesFromSandbox(baseSandbox);
-  const integrations = createDefaultIntegrations();
   const workflow = createDefaultWorkflow({
     workspaceRoot: root,
     env
@@ -78,7 +76,6 @@ export function createCloudRuntimeDefaults(options: CloudDefaultOptions): CloudR
   return {
     sandbox,
     files,
-    ...(integrations ? { integrations } : {}),
     ...(workflow ? { workflow } : {}),
     harnessRunner: createProcessHarnessRunner({
       ...options,
@@ -140,15 +137,15 @@ function createProcessSandbox(root: string, env: NodeJS.ProcessEnv): SandboxCont
 }
 
 /**
- * Wraps a base SandboxContext for personas that declared `sandbox: 'optional'`.
- * `exec()` throws `SandboxNotAvailableError` to signal the handler must not
- * use shell commands; `readFile`/`writeFile` delegate to the base sandbox so
- * VFS-backed provider clients work without modification.
+ * Wraps a base SandboxContext for personas that declared `sandbox: false`.
+ * `exec()` rejects with `SandboxNotAvailableError` so `.catch(...)` chains
+ * see it; `readFile`/`writeFile` delegate to the base sandbox so VFS reads
+ * and writes still work without modification.
  */
 function createSandboxOptionalSandbox(base: SandboxContext): SandboxContext {
   return {
     cwd: base.cwd,
-    exec() {
+    async exec() {
       throw new SandboxNotAvailableError();
     },
     readFile(filePath) {
@@ -169,13 +166,6 @@ function filesFromSandbox(sandbox: SandboxContext): FilesContext {
       return sandbox.writeFile(path, contents);
     }
   };
-}
-
-// Provider interactions now go through the VFS helpers exported from
-// the runtime (listJsonFiles / readJsonFile / writeJsonFile). Handlers
-// import these directly — no per-provider client code in the runtime.
-function createDefaultIntegrations(): undefined {
-  return undefined;
 }
 
 function createDefaultWorkflow(args: {
