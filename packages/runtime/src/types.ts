@@ -120,6 +120,29 @@ export interface FilesContext {
   write(path: string, contents: string): Promise<void>;
 }
 
+export interface RelayfileCredentials {
+  url: string;
+  token: string;
+  workspaceId: string;
+}
+
+export interface CloudApiCredentials {
+  url: string;
+  token: string;
+}
+
+export interface RequiredRuntimeCredentials {
+  relayfile: RelayfileCredentials;
+  cloudApi: CloudApiCredentials;
+}
+
+export interface CredentialsContext {
+  readonly relayfile: RelayfileCredentials;
+  readonly cloudApi: CloudApiCredentials;
+  tryRequire(): RequiredRuntimeCredentials | null;
+  require(): RequiredRuntimeCredentials;
+}
+
 export interface MemorySaveOptions {
   tags?: string[];
   scope?: PersonaMemoryScope;
@@ -220,6 +243,8 @@ export interface WorkforceCtx {
   sandbox: SandboxContext;
   /** Relayfile/sandbox file helpers for handlers that should not shell out. */
   files: FilesContext;
+  /** Runtime credentials populated by the cloud persona launcher. */
+  credentials: CredentialsContext;
   /** Persistent memory (no-op when persona.memory is false or unset). */
   memory: MemoryContext;
   /** Cloud workflows invocation (HTTP). */

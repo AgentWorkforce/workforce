@@ -3,7 +3,9 @@ import type {
   LlmContext,
   MemoryContext,
   FilesContext,
+  CredentialsContext,
   MemoryItem,
+  RequiredRuntimeCredentials,
   ScheduleContext,
   SandboxContext,
   WorkforceAgentContext,
@@ -138,6 +140,7 @@ export function buildCtx(options: CtxBuildOptions): WorkforceCtx {
     harness: { run: options.harnessRunner },
     sandbox: options.sandbox,
     files,
+    credentials: credentialsFromEnv(),
     memory: options.memory ?? defaultMemoryFor(options.persona.memory, options.workspaceId, log),
     workflow: options.workflow ?? UNAVAILABLE_WORKFLOW,
     schedule: options.schedule ?? UNAVAILABLE_SCHEDULE,
@@ -179,6 +182,7 @@ const CORE_CTX_FIELDS: ReadonlySet<string> = new Set([
   'harness',
   'sandbox',
   'files',
+  'credentials',
   'memory',
   'workflow',
   'schedule',
@@ -194,6 +198,69 @@ function filesFromSandbox(sandbox: SandboxContext): FilesContext {
       return sandbox.writeFile(path, contents);
     }
   };
+}
+
+function credentialsFromEnv(processEnv: NodeJS.ProcessEnv = process.env): CredentialsContext {
+  return {
+    get relayfile() {
+      return requireRuntimeCredentials(processEnv).relayfile;
+    },
+    get cloudApi() {
+      return requireRuntimeCredentials(processEnv).cloudApi;
+    },
+    tryRequire() {
+      const snapshot = readRuntimeCredentialSnapshot(processEnv);
+      return snapshot.missing.length > 0 ? null : snapshot.credentials;
+    },
+    require() {
+      return requireRuntimeCredentials(processEnv);
+    }
+  };
+}
+
+function requireRuntimeCredentials(processEnv: NodeJS.ProcessEnv): RequiredRuntimeCredentials {
+  const snapshot = readRuntimeCredentialSnapshot(processEnv);
+  if (snapshot.missing.length > 0) {
+    throw new Error(`Runtime credentials are required: missing ${snapshot.missing.join(', ')}`);
+  }
+  return snapshot.credentials;
+}
+
+function readRuntimeCredentialSnapshot(processEnv: NodeJS.ProcessEnv): {
+  credentials: RequiredRuntimeCredentials;
+  missing: string[];
+} {
+  const relayfileUrl = normalizeOptionalUrl(firstNonEmpty(processEnv.RELAYFILE_URL));
+  const relayfileToken = firstNonEmpty(processEnv.RELAYFILE_TOKEN);
+  const relayfileWorkspaceId = firstNonEmpty(processEnv.RELAYFILE_WORKSPACE_ID);
+  const cloudApiUrl = normalizeOptionalUrl(firstNonEmpty(processEnv.CLOUD_API_URL));
+  const cloudApiToken = firstNonEmpty(processEnv.CLOUD_API_ACCESS_TOKEN);
+  const missing = [
+    ...(!relayfileUrl ? ['relayfile.url'] : []),
+    ...(!relayfileToken ? ['relayfile.token'] : []),
+    ...(!relayfileWorkspaceId ? ['relayfile.workspaceId'] : []),
+    ...(!cloudApiUrl ? ['cloudApi.url'] : []),
+    ...(!cloudApiToken ? ['cloudApi.token'] : [])
+  ];
+
+  return {
+    credentials: {
+      relayfile: {
+        url: relayfileUrl ?? '',
+        token: relayfileToken ?? '',
+        workspaceId: relayfileWorkspaceId ?? ''
+      },
+      cloudApi: {
+        url: cloudApiUrl ?? '',
+        token: cloudApiToken ?? ''
+      }
+    },
+    missing
+  };
+}
+
+function normalizeOptionalUrl(value: string | undefined): string | undefined {
+  return value ? normalizeBaseUrl(value) : undefined;
 }
 
 function defaultMemoryFor(
