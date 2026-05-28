@@ -99,19 +99,18 @@ test('parsePersonaSpec rejects removed deploy-v1 traits but accepts sandbox', ()
         'traits was removed in v1; personality is handled by the persona-personality-builder tool (out of scope for v1). See docs/plans/deploy-v1.md'
     }
   );
-  // sandbox field is now accepted with values: true, false, 'required', 'optional'
-  const specOptional = parsePersonaSpec(validSpec({ sandbox: 'optional' }), 'documentation');
-  assert.equal(specOptional.sandbox, 'optional');
+  // sandbox field is now accepted with boolean values
   const specFalse = parsePersonaSpec(validSpec({ sandbox: false }), 'documentation');
   assert.equal(specFalse.sandbox, false);
   const specTrue = parsePersonaSpec(validSpec({ sandbox: true }), 'documentation');
   assert.equal(specTrue.sandbox, true);
-  const specRequired = parsePersonaSpec(validSpec({ sandbox: 'required' }), 'documentation');
-  assert.equal(specRequired.sandbox, 'required');
+  // omitting sandbox is fine (defaults to true at runtime)
+  const specOmitted = parsePersonaSpec(validSpec({}), 'documentation');
+  assert.equal(specOmitted.sandbox, undefined);
   // Invalid sandbox value throws
   assert.throws(
-    () => parsePersonaSpec(validSpec({ sandbox: 'invalid' }), 'documentation'),
-    /sandbox must be one of: true, false, 'required', 'optional'/
+    () => parsePersonaSpec(validSpec({ sandbox: 'optional' }), 'documentation'),
+    /sandbox must be true or false/
   );
 });
 

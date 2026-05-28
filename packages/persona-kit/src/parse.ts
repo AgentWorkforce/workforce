@@ -287,18 +287,16 @@ export function parseMount(
 
 /**
  * Parse the sandbox field from a persona spec.
- * Valid values: `true`, `false`, `'required'`, `'optional'`.
- * Missing/undefined means default (sandbox always booted).
+ * Valid values: `true`, `false`. Missing/undefined means default (sandbox always booted).
  */
 function parseSandbox(
   value: unknown,
   context: string
-): boolean | 'required' | 'optional' | undefined {
+): boolean | undefined {
   if (value === undefined) return undefined;
   if (value === true || value === false) return value;
-  if (value === 'required' || value === 'optional') return value;
   throw new Error(
-    `${context} must be one of: true, false, 'required', 'optional' (got ${JSON.stringify(value)})`
+    `${context} must be true or false (got ${JSON.stringify(value)})`
   );
 }
 

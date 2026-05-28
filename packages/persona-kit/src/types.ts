@@ -343,22 +343,21 @@ export interface PersonaSpec {
    * Sandbox boot policy for this persona. Controls whether the runtime boots
    * an isolated sandbox (Daytona/process) for harness execution and file ops.
    *
-   * - **`true`** / **`'required'`** — always boot a sandbox (default, preserves
-   *   existing behavior). The persona can use `ctx.sandbox.exec()` to shell
-   *   out, `ctx.files.read/write`, and `ctx.harness.run()`.
-   * - **`false`** / **`'optional'`** — skip sandbox boot entirely. Handler code
-   *   must use provider client methods (`ctx.linear.listProjects()`,
-   *   `ctx.gmail.listThreads()`, etc.) instead of `ctx.sandbox.exec(find ...)` +
-   *   `ctx.files.read()` loops. `ctx.harness.run()` still works (spawns the
-   *   harness without sandbox isolation). `ctx.sandbox.exec()` throws
+   * - **`true`** (default) — always boot a sandbox. The persona can use
+   *   `ctx.sandbox.exec()` to shell out, `ctx.files.read/write`, and
+   *   `ctx.harness.run()`.
+   * - **`false`** — skip sandbox boot entirely. Handler code must use provider
+   *   client methods (`ctx.linear.listProjects()`, `ctx.gmail.listThreads()`,
+   *   etc.) instead of `ctx.sandbox.exec(find ...)` + `ctx.files.read()` loops.
+   *   `ctx.harness.run()` still works. `ctx.sandbox.exec()` throws
    *   `SandboxNotAvailableError` — refactor to use provider list methods.
    *
-   * Setting this to `'optional'` dramatically reduces cold-start latency
+   * Setting this to `false` dramatically reduces cold-start latency
    * (no sandbox boot ≈ milliseconds vs seconds) and is appropriate for
    * read-mostly handler agents that consume pre-synced VFS data via typed
    * provider clients rather than shell-globbing JSON files.
    */
-  sandbox?: boolean | 'required' | 'optional';
+  sandbox?: boolean;
   /**
    * Relayfile mount policy for file visibility and writability. Applied by
    * launchers that run the harness inside `@relayfile/local-mount`.

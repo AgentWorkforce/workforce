@@ -110,6 +110,9 @@ importers:
       '@agentworkforce/persona-kit':
         specifier: workspace:*
         version: link:../persona-kit
+      '@relayfile/adapter-linear':
+        specifier: ^0.3.4
+        version: 0.3.5(@relayfile/sdk@0.7.40)
 
   packages/workload-router:
     dependencies:
@@ -847,6 +850,19 @@ packages:
     resolution: {integrity: sha512-utsAPrw2XarG0cSGPSHQ+tbIKDtUzlUUbCdCXoKtcHPn9Trq77Wf72yzvkDvR5HnKfYDI6q7nJJe69hyOKtn7Q==}
     engines: {node: '>=18'}
     hasBin: true
+    peerDependencies:
+      '@relayfile/sdk': '>=0.6.0 <1'
+
+  '@relayfile/adapter-core@0.3.22':
+    resolution: {integrity: sha512-pBhB0udePN+3mhaTDgY7guke++qQahTPJi2jOUGA3mLZlbhMMsJHgr51/1XcxSFMs5ILvjqCSl32aED4g55g/w==}
+    engines: {node: '>=18'}
+    hasBin: true
+    peerDependencies:
+      '@relayfile/sdk': '>=0.6.0 <1'
+
+  '@relayfile/adapter-linear@0.3.5':
+    resolution: {integrity: sha512-ERxl4LwGnH5nA/sTGKHsCvRf7PUU+DwLAlsD//kUgGOx40NthtX/n0ckbMqBK+hagRdRmHbmb/pVbnYFlT+LaQ==}
+    engines: {node: '>=18'}
     peerDependencies:
       '@relayfile/sdk': '>=0.6.0 <1'
 
@@ -3098,6 +3114,19 @@ snapshots:
       cheerio: 1.2.0
       minimatch: 10.2.5
       yaml: 2.9.0
+
+  '@relayfile/adapter-core@0.3.22(@relayfile/sdk@0.7.40)':
+    dependencies:
+      '@relayfile/sdk': 0.7.40
+      '@scalar/postman-to-openapi': 0.6.3
+      cheerio: 1.2.0
+      minimatch: 10.2.5
+      yaml: 2.9.0
+
+  '@relayfile/adapter-linear@0.3.5(@relayfile/sdk@0.7.40)':
+    dependencies:
+      '@relayfile/adapter-core': 0.3.22(@relayfile/sdk@0.7.40)
+      '@relayfile/sdk': 0.7.40
 
   '@relayfile/core@0.7.40': {}
 
