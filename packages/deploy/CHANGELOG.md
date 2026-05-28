@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [3.0.29] - 2026-05-28
+
+### Fixed
+
+- Detect workspace-scoped integration fallback (#157)
+
 ## [3.0.28] - 2026-05-28
 
 ### Changed
