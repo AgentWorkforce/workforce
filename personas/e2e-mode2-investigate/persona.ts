@@ -14,8 +14,8 @@ import { definePersona } from '@agentworkforce/persona-kit';
  */
 export default definePersona({
   id: 'e2e-mode2-investigate',
-  intent: 'investigate',
-  tags: ['investigate'],
+  intent: 'debugging',
+  tags: ['debugging'],
   description:
     'Mode 2 E2E investigation probe: triggers on issues labeled `investigate`, uses the codex harness to read repo code + analyze the issue, then posts a substantive diagnosis comment.',
   cloud: true,
