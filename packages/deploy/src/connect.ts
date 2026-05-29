@@ -158,7 +158,7 @@ export function relayfileIntegrationResolver(opts: {
         return true;
       }
 
-const fallbackSource = workspaceFallbackSource(
+      const fallbackSource = workspaceFallbackSource(
         effectiveSource,
         allowWorkspaceFallback === true
       );
@@ -260,7 +260,7 @@ const fallbackSource = workspaceFallbackSource(
           return { connectionId };
         }
 
-const fallbackSource = workspaceFallbackSource(
+        const fallbackSource = workspaceFallbackSource(
           effectiveSource,
           allowWorkspaceFallback === true
         );

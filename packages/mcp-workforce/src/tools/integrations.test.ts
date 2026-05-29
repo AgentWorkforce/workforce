@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdtemp, readdir, readFile, rm } from 'node:fs/promises';
+import { mkdir, mkdtemp, readdir, readFile, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { dispatchIntegration, _resetIntegrationCache } from './integrations.js';
@@ -72,6 +72,42 @@ test('dispatchIntegration writes a github comment draft under the Relayfile moun
     assert.deepEqual(JSON.parse(await readFile(path.join(commentsDir, drafts[0] ?? ''), 'utf8')), {
       body: 'hello'
     });
+  } finally {
+    await rm(mount, { recursive: true, force: true });
+    _resetIntegrationCache();
+  }
+});
+
+test('dispatchIntegration reads github PR metadata and diff from nested canonical files', async () => {
+  _resetIntegrationCache();
+  const mount = await tempMount();
+  try {
+    const pullRoot = path.join(mount, 'github/repos/o/r/pulls/42__feature');
+    await mkdir(pullRoot, { recursive: true });
+    await writeFile(
+      path.join(pullRoot, 'meta.json'),
+      JSON.stringify({
+        title: 'Add deploy v1',
+        body: 'ships it',
+        head: { ref: 'feature' },
+        base: { ref: 'main' },
+        user: { login: 'kgnt' }
+      }),
+      'utf8'
+    );
+    await writeFile(path.join(pullRoot, 'diff.patch'), 'diff --git a/x b/x\n', 'utf8');
+
+    const result = (await dispatchIntegration(
+      'integration.github.getPr',
+      { target: { owner: 'o', repo: 'r', number: 42 } },
+      { config: config({ relayfileMountRoot: mount }) }
+    )) as Record<string, unknown>;
+
+    assert.equal(result.title, 'Add deploy v1');
+    assert.equal(result.head, 'feature');
+    assert.equal(result.base, 'main');
+    assert.equal(result.author, 'kgnt');
+    assert.equal(result.diff, 'diff --git a/x b/x\n');
   } finally {
     await rm(mount, { recursive: true, force: true });
     _resetIntegrationCache();

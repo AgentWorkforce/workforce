@@ -1,8 +1,9 @@
 import {
   draftFile,
   encodeSegment,
+  listDirectoryEntries,
   readJsonFile,
-  resolveMountRoot,
+  readTextFile,
   writeJsonFile,
   type IntegrationClientOptions
 } from '@agentworkforce/runtime';
@@ -31,6 +32,20 @@ interface ClientCache {
 }
 
 const clientCache: ClientCache = {};
+
+interface GithubPullRequestFile {
+  title?: string;
+  body?: string | null;
+  head?: { ref?: string } | string;
+  base?: { ref?: string } | string;
+  user?: { login?: string } | string;
+  author?: string;
+  state?: string;
+  url?: string;
+  html_url?: string;
+  diff?: string;
+  [key: string]: unknown;
+}
 
 /**
  * Top-level dispatcher. `tool` is a string like `integration.github.comment`;
@@ -127,16 +142,7 @@ async function invokeGithub(
     case 'getPr': {
       const { target } = asObject(args, 'integration.github.getPr');
       const { owner, repo, number } = asTarget(target);
-      const pr = await readJsonFile<{ title?: string; body?: string; state?: string; url?: string; [key: string]: unknown }>(
-        client, 'github', 'getPr',
-        `/github/repos/${encodeSegment(owner)}/${encodeSegment(repo)}/pulls/${number}.json`);
-      return {
-        title: pr.title,
-        body: pr.body,
-        state: pr.state,
-        url: pr.url,
-        data: pr
-      };
+      return readGithubPullRequest(client, { owner, repo, number });
     }
     case 'postReview': {
       const { target, review } = asObject(args, 'integration.github.postReview');
@@ -171,6 +177,71 @@ async function invokeGithub(
     default:
       throw new Error(`integration.github.${method} is not implemented`);
   }
+}
+
+function repoRoot(owner: string, repo: string): string {
+  return `/github/repos/${encodeSegment(owner)}/${encodeSegment(repo)}`;
+}
+
+async function readGithubPullRequest(
+  client: IntegrationClientOptions,
+  target: { owner: string; repo: string; number: number }
+): Promise<Record<string, unknown>> {
+  const pullsRoot = `${repoRoot(target.owner, target.repo)}/pulls`;
+  const pullSegment = await findNumberSegment(client, pullsRoot, target.number);
+  const pullRoot = `${pullsRoot}/${pullSegment}`;
+  const pr = await readJsonFile<GithubPullRequestFile>(
+    client,
+    'github',
+    'getPr',
+    `${pullRoot}/meta.json`
+  ).catch(() =>
+    readJsonFile<GithubPullRequestFile>(
+      client,
+      'github',
+      'getPr',
+      `${pullRoot}/metadata.json`
+    ).catch(() =>
+      readJsonFile<GithubPullRequestFile>(
+        client,
+        'github',
+        'getPr',
+        `${pullsRoot}/${encodeSegment(target.number)}.json`
+      )
+    )
+  );
+  const diff = await readTextFile(client, 'github', 'getPr.diff', `${pullRoot}/diff.patch`).catch(() => '');
+  return {
+    title: pr.title ?? '',
+    body: pr.body ?? '',
+    state: pr.state,
+    url: pr.url ?? pr.html_url,
+    head: readRef(pr.head),
+    base: readRef(pr.base),
+    author: readAuthor(pr),
+    diff: pr.diff ?? diff,
+    data: pr
+  };
+}
+
+async function findNumberSegment(
+  client: IntegrationClientOptions,
+  pullsRoot: string,
+  number: number
+): Promise<string> {
+  const prefix = `${number}__`;
+  const entries = await listDirectoryEntries(client, 'github', 'getPr.find', pullsRoot);
+  return entries.find((entry) => entry === String(number) || entry.startsWith(prefix)) ?? String(number);
+}
+
+function readRef(value: GithubPullRequestFile['head']): string {
+  if (typeof value === 'string') return value;
+  return value?.ref ?? '';
+}
+
+function readAuthor(value: GithubPullRequestFile): string {
+  if (typeof value.user === 'string') return value.user;
+  return value.user?.login ?? value.author ?? '';
 }
 
 function resolveGithub(deps: IntegrationToolDeps): IntegrationClientOptions {

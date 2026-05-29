@@ -2,7 +2,9 @@ import {
   draftFile,
   encodeSegment,
   handler,
+  listDirectoryEntries,
   readJsonFile,
+  readTextFile,
   resolveMountRoot,
   writeJsonFile,
   type IntegrationClientOptions,
@@ -49,6 +51,10 @@ function prMetaPath({ owner, repo, number }: GithubTarget): string {
   return `/github/repos/${encodeSegment(owner)}/${encodeSegment(repo)}/pulls/${number}.json`;
 }
 
+function pullsRoot({ owner, repo }: GithubTarget): string {
+  return `/github/repos/${encodeSegment(owner)}/${encodeSegment(repo)}/pulls`;
+}
+
 function issueCommentDraftPath({ owner, repo, number }: GithubTarget): string {
   return `/github/repos/${encodeSegment(owner)}/${encodeSegment(repo)}/issues/${number}/comments/${draftFile('comment')}`;
 }
@@ -63,18 +69,64 @@ function slackReplyDraftPath(channel: string, threadTs: string): string {
 
 interface GithubPrMeta {
   title?: string;
-  body?: string;
+  body?: string | null;
   author?: string;
-  base?: string;
-  head?: string;
+  user?: { login?: string } | string;
+  base?: { ref?: string } | string;
+  head?: { ref?: string } | string;
   diff?: string;
   [key: string]: unknown;
+}
+
+async function readGithubPrMeta(client: IntegrationClientOptions, target: GithubTarget): Promise<{
+  title: string;
+  body: string;
+  author: string;
+  base: string;
+  head: string;
+  diff: string;
+}> {
+  const root = pullsRoot(target);
+  const segment = await findPullSegment(client, root, target.number);
+  const nestedRoot = `${root}/${segment}`;
+  const pr = await readJsonFile<GithubPrMeta>(client, 'github', 'getPr', `${nestedRoot}/meta.json`)
+    .catch(() => readJsonFile<GithubPrMeta>(client, 'github', 'getPr', `${nestedRoot}/metadata.json`))
+    .catch(() => readJsonFile<GithubPrMeta>(client, 'github', 'getPr', prMetaPath(target)));
+  const diff = await readTextFile(client, 'github', 'getPr.diff', `${nestedRoot}/diff.patch`).catch(() => '');
+  return {
+    title: pr.title ?? '',
+    body: pr.body ?? '',
+    author: readAuthor(pr),
+    base: readRef(pr.base),
+    head: readRef(pr.head),
+    diff: pr.diff ?? diff
+  };
+}
+
+async function findPullSegment(
+  client: IntegrationClientOptions,
+  root: string,
+  number: number
+): Promise<string> {
+  const prefix = `${number}__`;
+  const entries = await listDirectoryEntries(client, 'github', 'getPr.find', root);
+  return entries.find((entry) => entry === String(number) || entry.startsWith(prefix)) ?? String(number);
+}
+
+function readRef(value: GithubPrMeta['head']): string {
+  if (typeof value === 'string') return value;
+  return value?.ref ?? '';
+}
+
+function readAuthor(value: GithubPrMeta): string {
+  if (typeof value.user === 'string') return value.user;
+  return value.user?.login ?? value.author ?? '';
 }
 
 async function reviewPullRequest(ctx: WorkforceCtx, event: Record<string, unknown>) {
   const target = githubTarget(event);
   const client = vfsClient();
-  const pr = await readJsonFile<GithubPrMeta>(client, 'github', 'getPr', prMetaPath(target));
+  const pr = await readGithubPrMeta(client, target);
   const result = await ctx.harness.run({
     prompt: `Review this PR for correctness, risk, and missing tests.\n\nTitle: ${pr.title ?? ''}\nAuthor: ${pr.author ?? ''}\nBase: ${pr.base ?? ''}\nHead: ${pr.head ?? ''}\n\n${pr.diff ?? ''}`,
     cwd: ctx.sandbox.cwd
