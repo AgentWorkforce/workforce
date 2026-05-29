@@ -36,7 +36,10 @@ export interface HarnessSettings {
    * missing capability; `danger-full-access` is the fully unsandboxed fallback.
    */
   sandboxMode?: CodexSandboxMode;
-  /** @deprecated `--ask-for-approval` was removed in codex 0.1.77+. Use `dangerouslyBypassApprovalsAndSandbox` or `sandboxMode` instead. Setting this field emits a warning and has no effect. */
+  /**
+   * @deprecated
+   * @description `--ask-for-approval` was removed in codex 0.1.77+. Use `dangerouslyBypassApprovalsAndSandbox` or `sandboxMode` instead. Setting this field emits a warning and has no effect.
+   */
   approvalPolicy?: CodexApprovalPolicy;
   /**
    * Allow outbound network access inside Codex's workspace-write sandbox

@@ -261,7 +261,8 @@
         },
         "approvalPolicy": {
           "$ref": "#/definitions/CodexApprovalPolicy",
-          "description": "Codex CLI approval policy (`--ask-for-approval`)."
+          "deprecated": true,
+          "description": "`--ask-for-approval` was removed in codex 0.1.77+. Use `dangerouslyBypassApprovalsAndSandbox` or `sandboxMode` instead. Setting this field emits a warning and has no effect."
         },
         "workspaceWriteNetworkAccess": {
           "type": "boolean",
