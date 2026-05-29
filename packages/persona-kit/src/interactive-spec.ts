@@ -253,6 +253,17 @@ export function buildInteractiveSpec(input: BuildInteractiveSpecInput): Interact
       if (mcpServers && Object.keys(mcpServers).length > 0) {
         appendCodexMcpServerArgs(args, mcpServers, warnings);
       }
+      if (harnessSettings?.approvalPolicy) {
+        // `--ask-for-approval` was removed in codex 0.1.77+ (replaced by
+        // `--sandbox` + `--dangerously-bypass-approvals-and-sandbox`).
+        // Warn unconditionally — regardless of whether dangerouslyBypassApprovalsAndSandbox
+        // is also set — so callers are alerted even when the bypass flag masks it.
+        warnings.push(
+          `codex harnessSettings.approvalPolicy ("${harnessSettings.approvalPolicy}") is not supported in codex 0.1.77+; ` +
+            `the --ask-for-approval flag was removed. Use dangerouslyBypassApprovalsAndSandbox: true for non-interactive execution, ` +
+            `or sandboxMode for filesystem access control.`
+        );
+      }
       if (harnessSettings?.dangerouslyBypassApprovalsAndSandbox) {
         // Single combined flag — collapses "no sandbox + never ask" and
         // suppresses codex's interactive "are you sure?" startup
@@ -261,9 +272,6 @@ export function buildInteractiveSpec(input: BuildInteractiveSpecInput): Interact
       } else {
         if (harnessSettings?.sandboxMode) {
           args.push('--sandbox', harnessSettings.sandboxMode);
-        }
-        if (harnessSettings?.approvalPolicy) {
-          args.push('--ask-for-approval', harnessSettings.approvalPolicy);
         }
         if (harnessSettings?.workspaceWriteNetworkAccess !== undefined) {
           args.push(
