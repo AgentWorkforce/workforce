@@ -151,6 +151,28 @@ test('codex emits the single bypass flag when dangerouslyBypassApprovalsAndSandb
   ]);
 });
 
+test('codex warns for approvalPolicy even when dangerouslyBypassApprovalsAndSandbox is also set', () => {
+  const result = buildInteractiveSpec({
+    harness: 'codex',
+    personaId: 'test-persona',
+    model: 'openai-codex/gpt-5.3-codex',
+    systemPrompt: 'x',
+    harnessSettings: {
+      reasoning: 'high',
+      timeoutSeconds: 1200,
+      dangerouslyBypassApprovalsAndSandbox: true,
+      approvalPolicy: 'on-request',
+    }
+  });
+  // bypass flag is still emitted
+  assert.ok(result.args.includes('--dangerously-bypass-approvals-and-sandbox'));
+  // approvalPolicy warning fires even though dangerouslyBypassApprovalsAndSandbox masked it
+  assert.ok(
+    result.warnings.some((w) => w.includes('approvalPolicy') && w.includes('not supported')),
+    'expected deprecation warning for approvalPolicy even when bypass flag is set'
+  );
+});
+
 test('codex translates http mcpServers into --config mcp_servers.* args', () => {
   const result = buildInteractiveSpec({
     harness: 'codex',
