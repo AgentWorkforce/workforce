@@ -114,17 +114,20 @@ test('codex translates sandbox harness settings to launch flags', () => {
       webSearch: true
     }
   });
+  // approvalPolicy emits a warning but no flag (--ask-for-approval was removed in codex 0.1.77+)
   assert.deepEqual(result.args, [
     '-m',
     'gpt-5.3-codex',
     '--sandbox',
     'workspace-write',
-    '--ask-for-approval',
-    'on-request',
     '-c',
     'sandbox_workspace_write.network_access=true',
     '--search'
   ]);
+  assert.ok(
+    result.warnings.some((w) => w.includes('approvalPolicy') && w.includes('not supported')),
+    'expected a deprecation warning for approvalPolicy'
+  );
 });
 
 test('codex emits the single bypass flag when dangerouslyBypassApprovalsAndSandbox is set', () => {

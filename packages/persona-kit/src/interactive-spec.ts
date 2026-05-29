@@ -263,7 +263,15 @@ export function buildInteractiveSpec(input: BuildInteractiveSpecInput): Interact
           args.push('--sandbox', harnessSettings.sandboxMode);
         }
         if (harnessSettings?.approvalPolicy) {
-          args.push('--ask-for-approval', harnessSettings.approvalPolicy);
+          // `--ask-for-approval` was removed in codex 0.1.77+ (replaced by
+          // `--sandbox` + `--dangerously-bypass-approvals-and-sandbox`).
+          // Emit a warning and skip the flag rather than pass an unknown arg
+          // that causes codex to exit immediately with a parse error.
+          warnings.push(
+            `codex harnessSettings.approvalPolicy ("${harnessSettings.approvalPolicy}") is not supported in codex 0.1.77+; ` +
+              `the --ask-for-approval flag was removed. Use dangerouslyBypassApprovalsAndSandbox: true for non-interactive execution, ` +
+              `or sandboxMode for filesystem access control.`
+          );
         }
         if (harnessSettings?.workspaceWriteNetworkAccess !== undefined) {
           args.push(
