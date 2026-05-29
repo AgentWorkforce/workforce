@@ -148,6 +148,79 @@ test('relayfileIntegrationResolver isConnected accepts ready runtime status as c
   );
 });
 
+test('relayfileIntegrationResolver isConnected accepts canonical OAuth-connected status before initial sync is ready', async () => {
+  const resolver = relayfileIntegrationResolver({
+    apiUrl: 'https://cloud.example.test',
+    workspaceId: 'ws-1',
+    workspaceToken: 'tok',
+    fetch: async () => okJson({
+      provider: 'slack',
+      configKey: 'slack-relay',
+      ready: false,
+      state: 'pending',
+      connectionMatched: true,
+      currentConnectionId: 'conn-slack',
+      oauth: { connected: true }
+    })
+  });
+  assert.equal(
+    await resolver.isConnected({
+      workspace: 'ws-1',
+      provider: 'slack',
+      expectedConfigKey: 'slack-relay'
+    }),
+    true
+  );
+});
+
+test('relayfileIntegrationResolver isConnected rejects OAuth status for a mismatched requested connection', async () => {
+  const resolver = relayfileIntegrationResolver({
+    apiUrl: 'https://cloud.example.test',
+    workspaceId: 'ws-1',
+    workspaceToken: 'tok',
+    fetch: async () => okJson({
+      provider: 'slack',
+      configKey: 'slack-relay',
+      ready: false,
+      state: 'pending',
+      connectionMatched: false,
+      currentConnectionId: 'conn-other',
+      oauth: { connected: true }
+    })
+  });
+  assert.equal(
+    await resolver.isConnected({
+      workspace: 'ws-1',
+      provider: 'slack',
+      expectedConfigKey: 'slack-relay'
+    }),
+    false
+  );
+});
+
+test('relayfileIntegrationResolver isConnected ignores legacy connected fields without OAuth or ready status', async () => {
+  const resolver = relayfileIntegrationResolver({
+    apiUrl: 'https://cloud.example.test',
+    workspaceId: 'ws-1',
+    workspaceToken: 'tok',
+    fetch: async () => okJson({
+      provider: 'slack',
+      configKey: 'slack-relay',
+      connectionMatched: true,
+      connected: true,
+      active: true
+    })
+  });
+  assert.equal(
+    await resolver.isConnected({
+      workspace: 'ws-1',
+      provider: 'slack',
+      expectedConfigKey: 'slack-relay'
+    }),
+    false
+  );
+});
+
 test('relayfileIntegrationResolver isConnected falls back to workspace scope for legacy default personas', async () => {
   const urls: string[] = [];
   const resolver = relayfileIntegrationResolver({
@@ -474,17 +547,114 @@ test('relayfileIntegrationResolver connect resolves when OAuth completes at work
   assert.deepEqual(opened, ['https://connect.example.test/slack']);
   assert.deepEqual(statusUrls, [
     'https://cloud.example.test/api/v1/workspaces/ws-runtime/integrations/slack/status?connectionId=conn-slack&scope=deployer_user',
+    'https://cloud.example.test/api/v1/workspaces/ws-runtime/integrations/slack/status?scope=deployer_user',
     'https://cloud.example.test/api/v1/workspaces/ws-runtime/integrations/slack/status?connectionId=conn-slack&scope=workspace'
   ]);
 });
 
-test('relayfileIntegrationResolver connect ignores fallback rows with a different connectionId', async () => {
+test('relayfileIntegrationResolver connect reconciles canonical status when setup-session id differs', async () => {
+  const statusUrls: string[] = [];
+  const resolver = relayfileIntegrationResolver({
+    apiUrl: 'https://cloud.example.test',
+    workspaceId: 'ws-1',
+    workspaceToken: 'tok',
+    pollIntervalMs: 0,
+    timeoutMs: 100,
+    openUrl: () => undefined,
+    sleep: async () => undefined,
+    fetch: async (input, init) => {
+      const url = input.toString();
+      if (url.endsWith('/integrations/connect-session')) {
+        assert.equal(init?.method, 'POST');
+        return okJson({
+          sessionUrl: 'https://connect.example.test/slack',
+          connectionId: 'setup-session-id'
+        });
+      }
+      statusUrls.push(url);
+      if (url.includes('connectionId=setup-session-id')) {
+        return okJson({
+          provider: 'slack',
+          configKey: 'slack-relay',
+          ready: false,
+          state: 'pending',
+          connectionMatched: false,
+          currentConnectionId: 'conn-slack-final',
+          oauth: { connected: true }
+        });
+      }
+      return okJson({
+        provider: 'slack',
+        configKey: 'slack-relay',
+        ready: false,
+        state: 'pending',
+        connectionMatched: true,
+        currentConnectionId: 'conn-slack-final',
+        oauth: { connected: true }
+      });
+    }
+  });
+
+  assert.deepEqual(
+    await resolver.connect({ workspace: 'ws-runtime', provider: 'slack' }),
+    { connectionId: 'conn-slack-final' }
+  );
+  assert.deepEqual(statusUrls, [
+    'https://cloud.example.test/api/v1/workspaces/ws-runtime/integrations/slack/status?connectionId=setup-session-id&scope=deployer_user',
+    'https://cloud.example.test/api/v1/workspaces/ws-runtime/integrations/slack/status?scope=deployer_user'
+  ]);
+});
+
+test('relayfileIntegrationResolver connect rejects canonical status with a different configKey', async () => {
   const resolver = relayfileIntegrationResolver({
     apiUrl: 'https://cloud.example.test',
     workspaceId: 'ws-1',
     workspaceToken: 'tok',
     pollIntervalMs: 0,
     timeoutMs: 1,
+    openUrl: () => undefined,
+    sleep: async () => undefined,
+    fetch: async (input) => {
+      const url = input.toString();
+      if (url.endsWith('/integrations/connect-session')) {
+        return okJson({
+          sessionUrl: 'https://connect.example.test/slack',
+          connectionId: 'setup-session-id',
+          configKey: 'slack-relay'
+        });
+      }
+      if (url.includes('connectionId=setup-session-id')) {
+        return okJson({
+          provider: 'slack',
+          configKey: 'slack-relay',
+          connectionMatched: false,
+          oauth: { connected: true }
+        });
+      }
+      return okJson({
+        provider: 'slack',
+        configKey: 'slack-ricky',
+        connectionMatched: true,
+        currentConnectionId: 'conn-slack-ricky',
+        oauth: { connected: true }
+      });
+    }
+  });
+
+  await assert.rejects(
+    resolver.connect({ workspace: 'ws-runtime', provider: 'slack' }),
+    /Timed out waiting for slack OAuth/
+  );
+});
+
+test('relayfileIntegrationResolver connect reconciles canonical fallback rows with a different connectionId', async () => {
+  const statusUrls: string[] = [];
+  const resolver = relayfileIntegrationResolver({
+    apiUrl: 'https://cloud.example.test',
+    workspaceId: 'ws-1',
+    workspaceToken: 'tok',
+    pollIntervalMs: 0,
+    timeoutMs: 100,
     openUrl: () => undefined,
     sleep: async () => undefined,
     fetch: async (input, init) => {
@@ -496,6 +666,7 @@ test('relayfileIntegrationResolver connect ignores fallback rows with a differen
           connectionId: 'conn-slack-new'
         });
       }
+      statusUrls.push(url);
       if (url.includes('scope=deployer_user')) {
         return okJson({ provider: 'slack', status: 'pending' });
       }
@@ -507,14 +678,20 @@ test('relayfileIntegrationResolver connect ignores fallback rows with a differen
     }
   });
 
-  await assert.rejects(
-    resolver.connect({
+  assert.deepEqual(
+    await resolver.connect({
       workspace: 'ws-runtime',
       provider: 'slack',
       allowWorkspaceFallback: true
     }),
-    /Timed out waiting for slack OAuth/
+    { connectionId: 'conn-slack-other' }
   );
+  assert.deepEqual(statusUrls, [
+    'https://cloud.example.test/api/v1/workspaces/ws-runtime/integrations/slack/status?connectionId=conn-slack-new&scope=deployer_user',
+    'https://cloud.example.test/api/v1/workspaces/ws-runtime/integrations/slack/status?scope=deployer_user',
+    'https://cloud.example.test/api/v1/workspaces/ws-runtime/integrations/slack/status?connectionId=conn-slack-new&scope=workspace',
+    'https://cloud.example.test/api/v1/workspaces/ws-runtime/integrations/slack/status?scope=workspace'
+  ]);
 });
 test('relayfileIntegrationResolver connect sends scope=workspace and scopes status polls (workspace source)', async () => {
   const bodies: unknown[] = [];

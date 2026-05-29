@@ -242,15 +242,18 @@ const fallbackSource = workspaceFallbackSource(
       while (Date.now() < deadline) {
         await sleepImpl(opts.pollIntervalMs ?? 2_000);
         const pollToken = await resolveWorkspaceToken(opts.workspaceToken);
-        const status = await fetchIntegrationStatusForScope({
+        const statusArgs = {
           fetchImpl,
           apiUrl,
           token: pollToken,
           workspaceId,
           provider,
           source: effectiveSource,
-          ...(sessionId ? { connectionId: sessionId } : {}),
           io
+        };
+        const status = await fetchIntegrationStatusForScope({
+          ...statusArgs,
+          ...(sessionId ? { connectionId: sessionId } : {})
         });
         if (statusIsConnectedForSource(status, provider, effectiveSource)) {
           const connectionId = readConnectionId(status)
@@ -260,7 +263,23 @@ const fallbackSource = workspaceFallbackSource(
           return { connectionId };
         }
 
-const fallbackSource = workspaceFallbackSource(
+        if (sessionId) {
+          const canonicalStatus = await fetchIntegrationStatusForScope(statusArgs);
+          if (statusIsConnectedForSource(
+            canonicalStatus,
+            provider,
+            effectiveSource,
+            sessionConfigKey
+          )) {
+            const connectionId = readConnectionId(canonicalStatus)
+              ?? sessionId
+              ?? provider;
+            io?.info(`${provider} connected.`);
+            return { connectionId };
+          }
+        }
+
+        const fallbackSource = workspaceFallbackSource(
           effectiveSource,
           allowWorkspaceFallback === true
         );
@@ -289,6 +308,31 @@ const fallbackSource = workspaceFallbackSource(
               ?? provider;
             io?.info(`${provider} connected.`);
             return { connectionId };
+          }
+          if (sessionId) {
+            const canonicalFallbackStatus = await fetchIntegrationStatusForScope({
+              fetchImpl,
+              apiUrl,
+              token: pollToken,
+              workspaceId,
+              provider,
+              source: fallbackSource,
+              io
+            });
+            if (
+              statusIsConnectedForSource(
+                canonicalFallbackStatus,
+                provider,
+                fallbackSource,
+                sessionConfigKey
+              )
+            ) {
+              const connectionId = readConnectionId(canonicalFallbackStatus)
+                ?? sessionId
+                ?? provider;
+              io?.info(`${provider} connected.`);
+              return { connectionId };
+            }
           }
         }
       }
@@ -966,25 +1010,29 @@ function statusMatchesExpectedConfigKey(value: unknown, expectedConfigKey?: stri
 }
 
 /**
- * A provider counts as connected for deploy only when the cloud's
- * runtime-visible status is ready. Pending/syncing rows mean the sandbox will
- * not see a ready mounted provider yet, so deploy must prompt/reconnect
- * instead of shipping a silently-dead proactive agent.
+ * A provider counts as connected for deploy when the cloud confirms the
+ * canonical credential row/backend connection exists. Top-level `ready` still
+ * means initial sync/writeback are healthy, but OAuth completion can precede
+ * that readiness and should not force deploy back through OAuth.
  *
- *   - `ready`     — sync complete, writeback healthy. Fully usable.
- *   - `pending`   — OAuth row exists but runtime-visible sync is not ready.
- *   - `syncing`   — initial sync is still running.
- *   - `degraded`  — sync/writeback is unhealthy enough not to trust deploy.
- *   - `error`     — sync failed or writeback errored. Treat as not-connected
- *                   so the user re-runs OAuth (or fixes the upstream cause).
- *
- * Legacy fields (`connected`, `active`, `state`, `ready: true`, `oauth.connected`)
- * are intentionally narrowed here; deploy is checking runtime readiness, not
- * merely OAuth existence.
+ * When the status route is asked about a specific setup-session id, it returns
+ * `connectionMatched:false` for a different final connection. Treat that as
+ * not connected for the exact poll; the caller also performs a canonical
+ * no-connectionId poll to reconcile successful OAuth completion.
  */
 function isConnectedStatus(value: unknown): boolean {
   if (!value || typeof value !== 'object' || Array.isArray(value)) return false;
   const record = value as Record<string, unknown>;
+  if (record.connectionMatched === false) {
+    return false;
+  }
+  const oauth = record.oauth;
+  if (oauth && typeof oauth === 'object' && !Array.isArray(oauth)) {
+    const oauthRecord = oauth as Record<string, unknown>;
+    if (oauthRecord.connected === true) {
+      return true;
+    }
+  }
   return record.status === 'ready'
     || record.state === 'ready'
     || record.ready === true;
