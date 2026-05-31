@@ -11,6 +11,7 @@ import {
   parseHarnessSettings,
   parseIntegrations,
   parseInputs,
+  parseCapabilities,
   parseMemory,
   parseMcpServers,
   parseMount,
@@ -582,6 +583,47 @@ test('parseMemory rejects unknown scopes and non-positive ttl', () => {
   assert.throws(() => parseMemory({ scopes: [] }, 'memory'), /scopes must be a non-empty array/);
   assert.throws(() => parseMemory({ ttlDays: 0 }, 'memory'), /ttlDays must be a positive number/);
   assert.throws(() => parseMemory({ dedupMs: -1 }, 'memory'), /dedupMs must be a non-negative number/);
+});
+
+test('parseCapabilities accepts known capability declarations', () => {
+  assert.equal(parseCapabilities(undefined, 'capabilities'), undefined);
+  assert.equal(parseCapabilities({}, 'capabilities'), undefined);
+  assert.deepEqual(
+    parseCapabilities(
+      {
+        review: true,
+        issueClaim: {},
+        conflictAutofix: { enabled: false, mode: 'dry-run' },
+        pullRequest: { enabled: true }
+      },
+      'capabilities'
+    ),
+    {
+      review: true,
+      issueClaim: {},
+      conflictAutofix: { enabled: false, mode: 'dry-run' },
+      pullRequest: { enabled: true }
+    }
+  );
+});
+
+test('parseCapabilities rejects malformed capability declarations', () => {
+  assert.throws(
+    () => parseCapabilities([], 'capabilities'),
+    /capabilities must be an object if provided/
+  );
+  assert.throws(
+    () => parseCapabilities({ review: [] }, 'capabilities'),
+    /capabilities\.review must be a boolean or object if provided/
+  );
+  assert.throws(
+    () => parseCapabilities({ review: 'yes' }, 'capabilities'),
+    /capabilities\.review must be a boolean or object if provided/
+  );
+  assert.throws(
+    () => parseCapabilities({ review: { enabled: 'yes' } }, 'capabilities'),
+    /capabilities\.review\.enabled must be a boolean if provided/
+  );
 });
 
 test('parseSchedules validates cron, requires unique names, preserves tz when set', () => {

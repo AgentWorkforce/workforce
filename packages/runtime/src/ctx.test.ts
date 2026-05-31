@@ -396,8 +396,11 @@ test('ctx.memory stays a safe no-op when cloud auth is absent', async () => {
       WORKFORCE_CLOUD_URL: undefined,
       WORKFORCE_AGENT_TOKEN: undefined,
       RELAY_AGENT_TOKEN: undefined,
+      RELAYFILE_TOKEN: undefined,
       RELAY_API_KEY: undefined,
-      WORKFORCE_WORKSPACE_TOKEN: undefined
+      WORKFORCE_WORKSPACE_TOKEN: undefined,
+      RELAY_AGENT_TOKENS: undefined,
+      RELAY_AGENT_NAME: undefined
     },
     async () => {
       let fetchCalled = false;
