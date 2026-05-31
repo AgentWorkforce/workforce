@@ -448,3 +448,114 @@ test('warnings are returned, not printed — library consumers route I/O themsel
   assert.ok(Array.isArray(result.warnings));
   assert.equal(result.warnings.length, 1);
 });
+
+test('relayMcp injects a relaycast server into the claude --mcp-config payload', () => {
+  const result = buildInteractiveSpec({
+    harness: 'claude',
+    personaId: 'test-persona',
+    model: 'claude-sonnet-4-6',
+    systemPrompt: 'x',
+    relayMcp: {
+      apiKey: 'wk_live_abc',
+      agentName: 'Reviewer2',
+      baseUrl: 'https://api.relaycast.dev',
+      defaultWorkspace: 'ws_1'
+    }
+  });
+  const mcpIdx = result.args.indexOf('--mcp-config');
+  const payload = JSON.parse(result.args[mcpIdx + 1]);
+  assert.deepEqual(payload.mcpServers.relaycast, {
+    type: 'stdio',
+    command: 'npx',
+    args: ['-y', '@relaycast/mcp'],
+    env: {
+      RELAY_API_KEY: 'wk_live_abc',
+      RELAY_AGENT_NAME: 'Reviewer2',
+      RELAY_AGENT_TYPE: 'agent',
+      RELAY_STRICT_AGENT_NAME: '1',
+      RELAY_BASE_URL: 'https://api.relaycast.dev',
+      RELAY_DEFAULT_WORKSPACE: 'ws_1'
+    }
+  });
+  // --strict-mcp-config still present: relaycast rides inside the strict payload.
+  assert.ok(result.args.includes('--strict-mcp-config'));
+});
+
+test('relayMcp omits RELAY_BASE_URL / RELAY_DEFAULT_WORKSPACE when not provided', () => {
+  const result = buildInteractiveSpec({
+    harness: 'claude',
+    personaId: 'p',
+    model: 'm',
+    systemPrompt: 'x',
+    relayMcp: { apiKey: 'wk_live_abc', agentName: 'Solo1' }
+  });
+  const mcpIdx = result.args.indexOf('--mcp-config');
+  const env = JSON.parse(result.args[mcpIdx + 1]).mcpServers.relaycast.env;
+  assert.deepEqual(env, {
+    RELAY_API_KEY: 'wk_live_abc',
+    RELAY_AGENT_NAME: 'Solo1',
+    RELAY_AGENT_TYPE: 'agent',
+    RELAY_STRICT_AGENT_NAME: '1'
+  });
+});
+
+test('relayMcp merges alongside persona-declared servers; a persona relaycast wins', () => {
+  const result = buildInteractiveSpec({
+    harness: 'claude',
+    personaId: 'p',
+    model: 'm',
+    systemPrompt: 'x',
+    mcpServers: {
+      posthog: { type: 'http', url: 'https://mcp.posthog.com/mcp' },
+      relaycast: { type: 'stdio', command: 'custom-relaycast' }
+    },
+    relayMcp: { apiKey: 'wk_live_abc', agentName: 'Solo1' }
+  });
+  const mcpIdx = result.args.indexOf('--mcp-config');
+  const payload = JSON.parse(result.args[mcpIdx + 1]);
+  // Persona's own server set is preserved...
+  assert.ok(payload.mcpServers.posthog);
+  // ...and a persona-declared `relaycast` overrides the injected one.
+  assert.deepEqual(payload.mcpServers.relaycast, {
+    type: 'stdio',
+    command: 'custom-relaycast'
+  });
+});
+
+test('without relayMcp the claude payload carries no relaycast server', () => {
+  const result = buildInteractiveSpec({
+    harness: 'claude',
+    personaId: 'p',
+    model: 'm',
+    systemPrompt: 'x'
+  });
+  const mcpIdx = result.args.indexOf('--mcp-config');
+  const payload = JSON.parse(result.args[mcpIdx + 1]);
+  assert.equal(payload.mcpServers.relaycast, undefined);
+});
+
+test('relayMcp wires relaycast into codex --config args', () => {
+  const result = buildInteractiveSpec({
+    harness: 'codex',
+    personaId: 'p',
+    model: 'm',
+    systemPrompt: 'x',
+    relayMcp: { apiKey: 'wk_live_abc', agentName: 'Coder1' }
+  });
+  const joined = result.args.join(' ');
+  assert.ok(joined.includes('mcp_servers.relaycast.command'));
+  assert.ok(joined.includes('RELAY_AGENT_NAME'));
+});
+
+test('relayMcp under opencode warns that MCP injection is unsupported', () => {
+  const result = buildInteractiveSpec({
+    harness: 'opencode',
+    personaId: 'p',
+    model: 'opencode/gpt-5',
+    systemPrompt: 'x',
+    relayMcp: { apiKey: 'wk_live_abc', agentName: 'Op1' }
+  });
+  assert.ok(
+    result.warnings.some((w) => w.includes('opencode harness is not yet wired for runtime MCP injection'))
+  );
+});

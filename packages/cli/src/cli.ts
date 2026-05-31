@@ -55,6 +55,7 @@ import {
   type PersonaSelection,
   type PersonaSpec,
   type PersonaTag,
+  type RelayMcpConfig,
   type SidecarMdMode,
   type SkillMaterializationPlan
 } from '@agentworkforce/persona-kit';
@@ -490,6 +491,33 @@ function emitDropWarnings(lines: string[]): void {
   process.stderr.write(
     `        (referenced env vars were not set — proceeding without those values; if the agent relies on them it may need to authenticate interactively, e.g. via OAuth.)\n`
   );
+}
+
+/**
+ * Detect that we're launching under an Agent Relay broker and, if so, build the
+ * relaycast wiring to inject into the harness's MCP config so the persona can
+ * message the team — the same capability a non-persona broker spawn gets.
+ *
+ * The broker sets `RELAY_API_KEY` (+ optional `RELAY_BASE_URL` /
+ * `RELAY_DEFAULT_WORKSPACE`) on every worker child, and the broker-assigned
+ * worker name on `RELAY_AGENT_NAME`. Both the key and the name are required:
+ * the name must match what the broker routes to so the relaycast identity and
+ * the PTY worker are the same agent. Absent either, we're not under a broker
+ * (or it's too old to expose the name) and return undefined — a plain
+ * `agentworkforce agent` run is unaffected.
+ */
+function resolveRelayMcpFromEnv(env: NodeJS.ProcessEnv): RelayMcpConfig | undefined {
+  const apiKey = env.RELAY_API_KEY?.trim();
+  const agentName = env.RELAY_AGENT_NAME?.trim();
+  if (!apiKey || !agentName) return undefined;
+  const baseUrl = env.RELAY_BASE_URL?.trim();
+  const defaultWorkspace = env.RELAY_DEFAULT_WORKSPACE?.trim();
+  return {
+    apiKey,
+    agentName,
+    ...(baseUrl ? { baseUrl } : {}),
+    ...(defaultWorkspace ? { defaultWorkspace } : {})
+  };
 }
 
 function signalExitCode(signal: NodeJS.Signals | null): number {
@@ -1343,6 +1371,7 @@ function runDryRun(selection: PersonaSelection): number {
   );
   let spec: InteractiveSpec;
   try {
+    const relayMcp = resolveRelayMcpFromEnv(process.env);
     spec = buildInteractiveSpec({
       harness,
       personaId,
@@ -1350,6 +1379,7 @@ function runDryRun(selection: PersonaSelection): number {
       systemPrompt,
       harnessSettings,
       mcpServers: mcpResolution.servers,
+      ...(relayMcp ? { relayMcp } : {}),
       permissions: effectiveSelection.permissions
     });
   } catch (err) {
@@ -1718,6 +1748,7 @@ async function runInteractive(
     }
   }
 
+  const relayMcp = resolveRelayMcpFromEnv(process.env);
   const spec = buildInteractiveSpec({
     harness,
     personaId,
@@ -1725,6 +1756,7 @@ async function runInteractive(
     systemPrompt,
     harnessSettings,
     mcpServers: resolvedMcp,
+    ...(relayMcp ? { relayMcp } : {}),
     permissions: effectiveSelection.permissions,
     ...(installRoot !== undefined ? { pluginDirs: [installRoot] } : {})
   });
