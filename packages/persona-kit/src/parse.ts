@@ -8,6 +8,7 @@ import {
   SIDECAR_MD_MODES
 } from './constants.js';
 import type {
+  CapabilityValue,
   CodexApprovalPolicy,
   CodexSandboxMode,
   Harness,
@@ -29,6 +30,7 @@ import type {
   PersonaSkill,
   PersonaSpec,
   PersonaTag,
+  ProactiveCapabilities,
   SidecarMdMode,
   WatchEvent,
   WatchRule
@@ -851,6 +853,44 @@ export function parseMemory(value: unknown, context: string): PersonaMemory | un
   return out;
 }
 
+function parseCapabilityValue(value: unknown, context: string): CapabilityValue {
+  if (typeof value === 'boolean') return value;
+  if (!isObject(value)) {
+    throw new Error(`${context} must be a boolean or object if provided`);
+  }
+  if (value.enabled !== undefined && typeof value.enabled !== 'boolean') {
+    throw new Error(`${context}.enabled must be a boolean if provided`);
+  }
+  return { ...value } as CapabilityValue;
+}
+
+export function parseCapabilities(
+  value: unknown,
+  context: string
+): ProactiveCapabilities | undefined {
+  if (value === undefined) return undefined;
+  if (!isObject(value)) {
+    throw new Error(`${context} must be an object if provided`);
+  }
+
+  const out: ProactiveCapabilities = {};
+  const { review, issueClaim, conflictAutofix, pullRequest } = value;
+  if (review !== undefined) {
+    out.review = parseCapabilityValue(review, `${context}.review`);
+  }
+  if (issueClaim !== undefined) {
+    out.issueClaim = parseCapabilityValue(issueClaim, `${context}.issueClaim`);
+  }
+  if (conflictAutofix !== undefined) {
+    out.conflictAutofix = parseCapabilityValue(conflictAutofix, `${context}.conflictAutofix`);
+  }
+  if (pullRequest !== undefined) {
+    out.pullRequest = parseCapabilityValue(pullRequest, `${context}.pullRequest`);
+  }
+
+  return Object.keys(out).length > 0 ? out : undefined;
+}
+
 export function parseOnEvent(value: unknown, context: string): string | undefined {
   if (value === undefined) return undefined;
   return assertOnEventPath(value, context);
@@ -893,6 +933,7 @@ export function parsePersonaSpec(value: unknown, expectedIntent: PersonaIntent):
     integrations,
     schedules,
     watch,
+    capabilities,
     memory,
     onEvent
   } = value;
@@ -998,6 +1039,10 @@ export function parsePersonaSpec(value: unknown, expectedIntent: PersonaIntent):
   );
   const parsedSchedules = parseSchedules(schedules, `persona[${expectedIntent}].schedules`);
   const parsedWatch = parseWatch(watch, `persona[${expectedIntent}].watch`);
+  const parsedCapabilities = parseCapabilities(
+    capabilities,
+    `persona[${expectedIntent}].capabilities`
+  );
   const parsedMemory = parseMemory(memory, `persona[${expectedIntent}].memory`);
   const parsedOnEvent = parseOnEvent(onEvent, `persona[${expectedIntent}].onEvent`);
   const parsedSandbox = parseSandbox(sandbox, `persona[${expectedIntent}].sandbox`);
@@ -1029,6 +1074,7 @@ export function parsePersonaSpec(value: unknown, expectedIntent: PersonaIntent):
     ...(parsedIntegrations ? { integrations: parsedIntegrations } : {}),
     ...(parsedSchedules ? { schedules: parsedSchedules } : {}),
     ...(parsedWatch ? { watch: parsedWatch } : {}),
+    ...(parsedCapabilities ? { capabilities: parsedCapabilities } : {}),
     ...(parsedMemory !== undefined ? { memory: parsedMemory } : {}),
     ...(parsedOnEvent !== undefined ? { onEvent: parsedOnEvent } : {})
   };
