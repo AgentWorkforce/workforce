@@ -1,4 +1,5 @@
 import type {
+  ProactiveCapabilities,
   Harness,
   HarnessSettings,
   IntegrationSource,
@@ -62,6 +63,7 @@ export interface PersonaDefinitionBase {
   integrations?: TypedIntegrations;
   schedules?: readonly PersonaSchedule[];
   watch?: readonly WatchRule[];
+  capabilities?: ProactiveCapabilities;
   memory?: PersonaMemory;
 }
 

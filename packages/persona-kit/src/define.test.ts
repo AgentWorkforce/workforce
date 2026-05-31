@@ -28,6 +28,10 @@ test('definePersona returns authored specs that parse successfully', () => {
       jira: { triggers: [{ on: 'comment.created' }] },
       customProvider: { triggers: [{ on: 'custom.event' }] }
     },
+    capabilities: {
+      review: true,
+      conflictAutofix: { enabled: false }
+    },
     onEvent: './agent.ts',
     harnessSettings: { reasoning: 'medium', timeoutSeconds: 300 }
   });
@@ -42,6 +46,10 @@ test('definePersona returns authored specs that parse successfully', () => {
     'off_registry.github_event'
   );
   assert.equal(parsed.integrations?.customProvider.triggers?.[0].on, 'custom.event');
+  assert.deepEqual(parsed.capabilities, {
+    review: true,
+    conflictAutofix: { enabled: false }
+  });
 });
 
 test('definePersona types tags against the closed PersonaTag vocabulary', () => {

@@ -1,0 +1,53 @@
+{
+  "id": "traj_rdhqus1o0ci8",
+  "version": 1,
+  "task": {
+    "title": "Add typed ProactiveCapabilities to persona-kit PersonaSpec"
+  },
+  "status": "completed",
+  "startedAt": "2026-05-31T10:29:26.181Z",
+  "completedAt": "2026-05-31T10:32:51.807Z",
+  "agents": [
+    {
+      "name": "default",
+      "role": "lead",
+      "joinedAt": "2026-05-31T10:29:31.307Z"
+    }
+  ],
+  "chapters": [
+    {
+      "id": "chap_19bcnrc6w4th",
+      "title": "Work",
+      "agentName": "default",
+      "startedAt": "2026-05-31T10:29:31.307Z",
+      "endedAt": "2026-05-31T10:32:51.807Z",
+      "events": [
+        {
+          "ts": 1780223371308,
+          "type": "decision",
+          "content": "Preserve capabilities in parsePersonaSpec: Preserve capabilities in parsePersonaSpec",
+          "raw": {
+            "question": "Preserve capabilities in parsePersonaSpec",
+            "chosen": "Preserve capabilities in parsePersonaSpec",
+            "alternatives": [],
+            "reasoning": "parsePersonaSpec reconstructs PersonaSpec and drops unknown top-level fields, so the new optional field needs parser support for define/parse round-trip"
+          },
+          "significance": "high"
+        }
+      ]
+    }
+  ],
+  "retrospective": {
+    "summary": "Added optional typed proactive capabilities to persona-kit PersonaSpec, exported the canonical types, preserved capabilities through define/parse, regenerated schema, bumped package version to 3.0.34, and validated build/typecheck/test.",
+    "approach": "Standard approach",
+    "confidence": 0.9
+  },
+  "commits": [],
+  "filesChanged": [],
+  "projectId": "/private/tmp/wt-pk",
+  "tags": [],
+  "_trace": {
+    "startRef": "a380c74cc90bbe0d9f1bc897b1cbb36808586eea",
+    "endRef": "a380c74cc90bbe0d9f1bc897b1cbb36808586eea"
+  }
+}

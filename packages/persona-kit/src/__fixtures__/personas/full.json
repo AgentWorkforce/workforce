@@ -42,6 +42,12 @@
     }
   },
   "schedules": [{ "name": "daily-review", "cron": "0 14 * * 1-5", "tz": "UTC" }],
+  "capabilities": {
+    "review": true,
+    "issueClaim": {},
+    "conflictAutofix": { "enabled": false },
+    "pullRequest": { "enabled": true }
+  },
   "memory": {
     "enabled": true,
     "scopes": ["workspace", "user", "global"],

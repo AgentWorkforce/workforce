@@ -131,6 +131,10 @@
           },
           "description": "Relayfile-change listeners for proactive cloud personas."
         },
+        "capabilities": {
+          "$ref": "#/definitions/ProactiveCapabilities",
+          "description": "Portable proactive capability declarations. A capability is enabled when its value is `true` or an object whose `.enabled !== false` (`{}` is enabled; `{ enabled: false }` is disabled). `pullRequest` is the legacy alias of `review`; both map to the review capability."
+        },
         "memory": {
           "$ref": "#/definitions/PersonaMemory",
           "description": "Memory subsystem opt-in. Wires the agent-assistant memory adapter at runtime; the persona spec only declares intent, not implementation details (api keys, adapter type, etc. come from workforce env)."
@@ -559,6 +563,44 @@
         "created",
         "updated",
         "deleted"
+      ]
+    },
+    "ProactiveCapabilities": {
+      "type": "object",
+      "properties": {
+        "review": {
+          "$ref": "#/definitions/CapabilityValue",
+          "description": "Review a PR/MR diff and post a review."
+        },
+        "issueClaim": {
+          "$ref": "#/definitions/CapabilityValue",
+          "description": "Claim an issue and open a change request."
+        },
+        "conflictAutofix": {
+          "$ref": "#/definitions/CapabilityValue",
+          "description": "Rebase a dirty PR/MR."
+        },
+        "pullRequest": {
+          "$ref": "#/definitions/CapabilityValue",
+          "description": "Legacy alias of `review`."
+        }
+      },
+      "description": "Portable proactive capability declarations.\n\nA capability is enabled when its value is `true` or an object whose `.enabled !== false` (`{}` is enabled; `{ enabled: false }` is disabled). `pullRequest` is the legacy alias of `review`; both map to the review capability."
+    },
+    "CapabilityValue": {
+      "anyOf": [
+        {
+          "type": "boolean"
+        },
+        {
+          "type": "object",
+          "properties": {
+            "enabled": {
+              "type": "boolean"
+            }
+          },
+          "additionalProperties": {}
+        }
       ]
     },
     "PersonaMemory": {

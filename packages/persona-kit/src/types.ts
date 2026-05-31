@@ -283,6 +283,29 @@ export interface PersonaMemoryConfig {
 
 export type PersonaMemory = boolean | PersonaMemoryConfig;
 
+export type CapabilityValue =
+  | boolean
+  | { enabled?: boolean; [k: string]: unknown };
+
+/**
+ * Portable proactive capability declarations.
+ *
+ * A capability is enabled when its value is `true` or an object whose
+ * `.enabled !== false` (`{}` is enabled; `{ enabled: false }` is disabled).
+ * `pullRequest` is the legacy alias of `review`; both map to the review
+ * capability.
+ */
+export interface ProactiveCapabilities {
+  /** Review a PR/MR diff and post a review. */
+  review?: CapabilityValue;
+  /** Claim an issue and open a change request. */
+  issueClaim?: CapabilityValue;
+  /** Rebase a dirty PR/MR. */
+  conflictAutofix?: CapabilityValue;
+  /** Legacy alias of `review`. */
+  pullRequest?: CapabilityValue;
+}
+
 /**
  * A persona listens for events. Three listener kinds: clock (cron schedules
  * through `schedules[]`), radio (RelayFile integration events through
@@ -421,6 +444,13 @@ export interface PersonaSpec {
   schedules?: PersonaSchedule[];
   /** Relayfile-change listeners for proactive cloud personas. */
   watch?: WatchRule[];
+  /**
+   * Portable proactive capability declarations. A capability is enabled when
+   * its value is `true` or an object whose `.enabled !== false` (`{}` is
+   * enabled; `{ enabled: false }` is disabled). `pullRequest` is the legacy
+   * alias of `review`; both map to the review capability.
+   */
+  capabilities?: ProactiveCapabilities;
   /**
    * Memory subsystem opt-in. Wires the agent-assistant memory adapter at
    * runtime; the persona spec only declares intent, not implementation

@@ -15,6 +15,7 @@ export type { KnownPersonaTag } from './constants.js';
 
 // Types
 export type {
+  CapabilityValue,
   CodexApprovalPolicy,
   CodexSandboxMode,
   Harness,
@@ -40,6 +41,7 @@ export type {
   PersonaSkill,
   PersonaSpec,
   PersonaTag,
+  ProactiveCapabilities,
   SidecarMdMode,
   SkillInstall,
   SkillMaterializationOptions,
@@ -71,6 +73,7 @@ export {
   isObject,
   isSidecarMode,
   isTag,
+  parseCapabilities,
   parseHarnessSettings,
   parseInputs,
   parseIntegrationConfig,
