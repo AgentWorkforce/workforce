@@ -505,6 +505,646 @@ test('deploy connects each missing persona integration before launch', async () 
   }
 });
 
+test('deploy dev mode injects runtime credentials for a detected writeback trigger without provider-token leakage', async () => {
+  const providerTokenSentinel = 'WORKFORCE_PROVIDER_TOKEN_SHOULD_NOT_LEAK';
+  const integrations = {
+    github: { triggers: [{ on: 'pull_request.opened' }] }
+  };
+  const { personaPath, cleanup } = await withTempPersona(basePersonaJson({ integrations }));
+  const io = createBufferedIO();
+  const originalFetch = globalThis.fetch;
+  const originalProviderToken = process.env.WORKFORCE_INTEGRATION_GITHUB_TOKEN;
+  const calls: Array<{ url: string; method: string; body?: unknown }> = [];
+  let launchedEnv: Record<string, string> | undefined;
+  let launched = false;
+
+  process.env.WORKFORCE_INTEGRATION_GITHUB_TOKEN = providerTokenSentinel;
+  globalThis.fetch = (async (input, init) => {
+    const url = String(input);
+    const method = init?.method ?? 'GET';
+    const body = init?.body ? JSON.parse(String(init.body)) : undefined;
+    calls.push({ url, method, ...(body !== undefined ? { body } : {}) });
+
+    if (url.includes('/api/v1/workspaces/ws-test/integrations/github/status')) {
+      return jsonResponse({ provider: 'github', status: 'ready' });
+    }
+    if (url.includes('/api/v1/workspaces/ws-test/runtime-credentials')) {
+      assert.equal(method, 'POST');
+      assert.equal(new Headers(init?.headers).get('authorization'), 'Bearer relay_ws_workspace');
+      assert.deepEqual(body, {
+        personaId: 'demo',
+        agentId: 'demo',
+        integrations: {
+          github: {
+            source: { kind: 'deployer_user' },
+            triggers: [{ on: 'pull_request.opened' }]
+          }
+        },
+        ttlSeconds: 3600
+      });
+      return jsonResponse({
+        relayfileUrl: 'https://relayfile.test',
+        relayfileWorkspaceId: 'ws-test',
+        relayfileToken: 'relay_pa_scoped',
+        relayfileMountPaths: ['/github/repos/**/**/pulls/**']
+      });
+    }
+    throw new Error(`unexpected URL ${url}`);
+  }) as typeof fetch;
+
+  try {
+    const result = await deploy(
+      {
+        personaPath,
+        mode: 'dev',
+        noPrompt: true,
+        cloudUrl: 'https://cloud.example.test',
+        io
+      },
+      {
+        workspaceAuth: {
+          async resolveWorkspace() {
+            return { workspace: 'ws-test', token: 'relay_ws_workspace' };
+          }
+        },
+        bundle: successfulBundleStager(),
+        modes: {
+          dev: {
+            async launch(input) {
+              launched = true;
+              launchedEnv = input.env;
+              return {
+                id: 'dev-1',
+                async stop() {
+                  /* no-op */
+                },
+                done: Promise.resolve({ code: 0 })
+              };
+            }
+          }
+        }
+      }
+    );
+
+    assert.equal(result.deploymentId, 'demo');
+    assert.equal(launched, true);
+    assert.equal(launchedEnv?.RELAYFILE_URL, 'https://relayfile.test');
+    assert.equal(launchedEnv?.RELAYFILE_WORKSPACE_ID, 'ws-test');
+    assert.equal(launchedEnv?.RELAYFILE_TOKEN, 'relay_pa_scoped');
+    assert.equal(
+      launchedEnv?.RELAYFILE_MOUNT_PATHS,
+      JSON.stringify(['/github/repos/**/**/pulls/**'])
+    );
+    assert.equal(launchedEnv?.WORKFORCE_INTEGRATION_GITHUB_TOKEN, '');
+    assert.doesNotMatch(JSON.stringify(launchedEnv), new RegExp(providerTokenSentinel));
+    assert.doesNotMatch(JSON.stringify(calls), new RegExp(providerTokenSentinel));
+    assert.doesNotMatch(JSON.stringify(io.messages), new RegExp(providerTokenSentinel));
+  } finally {
+    if (originalProviderToken === undefined) {
+      delete process.env.WORKFORCE_INTEGRATION_GITHUB_TOKEN;
+    } else {
+      process.env.WORKFORCE_INTEGRATION_GITHUB_TOKEN = originalProviderToken;
+    }
+    globalThis.fetch = originalFetch;
+    await cleanup();
+  }
+});
+
+test('deploy dev mode preserves no-trigger null-token runtime credentials', async () => {
+  const { personaPath, cleanup } = await withTempPersona(
+    basePersonaJson({ integrations: { github: {} } })
+  );
+  const io = createBufferedIO();
+  const originalFetch = globalThis.fetch;
+  let launchedEnv: Record<string, string> | undefined;
+
+  globalThis.fetch = (async (input, init) => {
+    const url = String(input);
+    const method = init?.method ?? 'GET';
+    const body = init?.body ? JSON.parse(String(init.body)) : undefined;
+
+    if (url.includes('/api/v1/workspaces/ws-test/integrations/github/status')) {
+      return jsonResponse({ provider: 'github', status: 'ready' });
+    }
+    if (url.includes('/api/v1/workspaces/ws-test/runtime-credentials')) {
+      assert.equal(method, 'POST');
+      assert.deepEqual(body, {
+        personaId: 'demo',
+        agentId: 'demo',
+        integrations: {
+          github: { source: { kind: 'deployer_user' } }
+        },
+        ttlSeconds: 3600
+      });
+      return jsonResponse({
+        relayfileUrl: 'https://relayfile.test',
+        relayfileWorkspaceId: 'ws-test',
+        relayfileToken: null,
+        relayfileMountPaths: []
+      });
+    }
+    throw new Error(`unexpected URL ${url}`);
+  }) as typeof fetch;
+
+  try {
+    await deploy(
+      {
+        personaPath,
+        mode: 'dev',
+        noPrompt: true,
+        cloudUrl: 'https://cloud.example.test',
+        io
+      },
+      {
+        workspaceAuth: {
+          async resolveWorkspace() {
+            return { workspace: 'ws-test', token: 'relay_ws_workspace' };
+          }
+        },
+        bundle: successfulBundleStager(),
+        modes: {
+          dev: {
+            async launch(input) {
+              launchedEnv = input.env;
+              return {
+                id: 'dev-1',
+                async stop() {
+                  /* no-op */
+                },
+                done: Promise.resolve({ code: 0 })
+              };
+            }
+          }
+        }
+      }
+    );
+
+    assert.equal(launchedEnv?.RELAYFILE_URL, 'https://relayfile.test');
+    assert.equal(launchedEnv?.RELAYFILE_WORKSPACE_ID, 'ws-test');
+    assert.equal(launchedEnv?.RELAYFILE_TOKEN, '');
+    assert.equal(launchedEnv?.RELAYFILE_MOUNT_PATHS, '[]');
+  } finally {
+    globalThis.fetch = originalFetch;
+    await cleanup();
+  }
+});
+
+test('deploy dev mode preserves env-only provider token fallback without runtime credential masking', async () => {
+  const providerTokenSentinel = 'WORKFORCE_ENV_ONLY_PROVIDER_TOKEN';
+  const { personaPath, cleanup } = await withTempPersona(
+    basePersonaJson({
+      integrations: {
+        github: { triggers: [{ on: 'pull_request.opened' }] }
+      }
+    })
+  );
+  const io = createBufferedIO();
+  const originalFetch = globalThis.fetch;
+  const originalProviderToken = process.env.WORKFORCE_INTEGRATION_GITHUB_TOKEN;
+  const urls: string[] = [];
+  let launched = false;
+  let launchedEnv: Record<string, string> | undefined;
+  let launchedProcessProviderToken: string | undefined;
+
+  process.env.WORKFORCE_INTEGRATION_GITHUB_TOKEN = providerTokenSentinel;
+  globalThis.fetch = (async (input) => {
+    const url = String(input);
+    urls.push(url);
+    if (url.includes('/api/v1/workspaces/ws-test/integrations/github/status')) {
+      return jsonResponse({ provider: 'github', status: 'pending' });
+    }
+    throw new Error(`unexpected URL ${url}`);
+  }) as typeof fetch;
+
+  try {
+    await deploy(
+      {
+        personaPath,
+        mode: 'dev',
+        noPrompt: true,
+        cloudUrl: 'https://cloud.example.test',
+        io
+      },
+      {
+        workspaceAuth: {
+          async resolveWorkspace() {
+            return { workspace: 'ws-test', token: 'relay_ws_workspace' };
+          }
+        },
+        bundle: successfulBundleStager(),
+        modes: {
+          dev: {
+            async launch(input) {
+              launched = true;
+              launchedEnv = input.env;
+              launchedProcessProviderToken = process.env.WORKFORCE_INTEGRATION_GITHUB_TOKEN;
+              return {
+                id: 'dev-1',
+                async stop() {
+                  /* no-op */
+                },
+                done: Promise.resolve({ code: 0 })
+              };
+            }
+          }
+        }
+      }
+    );
+
+    assert.equal(launched, true);
+    assert.equal(launchedEnv, undefined);
+    assert.equal(launchedProcessProviderToken, providerTokenSentinel);
+    assert.ok(!urls.find((url) => url.endsWith('/runtime-credentials')));
+  } finally {
+    if (originalProviderToken === undefined) {
+      delete process.env.WORKFORCE_INTEGRATION_GITHUB_TOKEN;
+    } else {
+      process.env.WORKFORCE_INTEGRATION_GITHUB_TOKEN = originalProviderToken;
+    }
+    globalThis.fetch = originalFetch;
+    await cleanup();
+  }
+});
+
+test('deploy dev mode runtime credential eligibility preserves legacy workspace fallback semantics', async () => {
+  const { personaPath, cleanup } = await withTempPersona(
+    basePersonaJson({
+      integrations: {
+        github: { triggers: [{ on: 'pull_request.opened' }] }
+      }
+    })
+  );
+  const io = createBufferedIO();
+  const originalFetch = globalThis.fetch;
+  const urls: string[] = [];
+  let launchedEnv: Record<string, string> | undefined;
+
+  globalThis.fetch = (async (input, init) => {
+    const url = String(input);
+    urls.push(url);
+    if (url.includes('/api/v1/workspaces/ws-test/integrations/github/status')) {
+      const parsed = new URL(url);
+      return jsonResponse({
+        provider: 'github',
+        status: parsed.searchParams.get('scope') === 'workspace' ? 'ready' : 'pending'
+      });
+    }
+    if (url.includes('/api/v1/workspaces/ws-test/runtime-credentials')) {
+      return jsonResponse({
+        relayfileUrl: 'https://relayfile.test',
+        relayfileWorkspaceId: 'ws-test',
+        relayfileToken: 'relay_pa_workspace_fallback',
+        relayfileMountPaths: ['/github/repos/**/**/pulls/**']
+      });
+    }
+    throw new Error(`unexpected URL ${url}`);
+  }) as typeof fetch;
+
+  try {
+    await deploy(
+      {
+        personaPath,
+        mode: 'dev',
+        noPrompt: true,
+        cloudUrl: 'https://cloud.example.test',
+        io
+      },
+      {
+        workspaceAuth: {
+          async resolveWorkspace() {
+            return { workspace: 'ws-test', token: 'relay_ws_workspace' };
+          }
+        },
+        bundle: successfulBundleStager(),
+        modes: {
+          dev: {
+            async launch(input) {
+              launchedEnv = input.env;
+              return {
+                id: 'dev-1',
+                async stop() {
+                  /* no-op */
+                },
+                done: Promise.resolve({ code: 0 })
+              };
+            }
+          }
+        }
+      }
+    );
+
+    assert.equal(launchedEnv?.RELAYFILE_TOKEN, 'relay_pa_workspace_fallback');
+    assert.deepEqual(
+      urls.filter((url) => url.includes('/integrations/github/status')),
+      [
+        'https://cloud.example.test/api/v1/workspaces/ws-test/integrations/github/status?scope=deployer_user',
+        'https://cloud.example.test/api/v1/workspaces/ws-test/integrations/github/status?scope=workspace',
+        'https://cloud.example.test/api/v1/workspaces/ws-test/integrations/github/status?scope=deployer_user',
+        'https://cloud.example.test/api/v1/workspaces/ws-test/integrations/github/status?scope=workspace'
+      ]
+    );
+    assert.ok(urls.find((url) => url.endsWith('/runtime-credentials')));
+  } finally {
+    globalThis.fetch = originalFetch;
+    await cleanup();
+  }
+});
+
+test('deploy dev mode runtime credential eligibility preserves expected provider config key semantics', async () => {
+  const providerTokenSentinel = 'WORKFORCE_ENV_CONFIG_MISMATCH_TOKEN';
+  const { personaPath, cleanup } = await withTempPersona(
+    basePersonaJson({
+      integrations: {
+        github: { triggers: [{ on: 'pull_request.opened' }] }
+      }
+    })
+  );
+  const io = createBufferedIO();
+  const originalFetch = globalThis.fetch;
+  const originalProviderToken = process.env.WORKFORCE_INTEGRATION_GITHUB_TOKEN;
+  const urls: string[] = [];
+  let launchedEnv: Record<string, string> | undefined;
+  let launchedProcessProviderToken: string | undefined;
+
+  process.env.WORKFORCE_INTEGRATION_GITHUB_TOKEN = providerTokenSentinel;
+  globalThis.fetch = (async (input) => {
+    const url = String(input);
+    urls.push(url);
+    if (url.includes('/api/v1/workspaces/ws-test/integrations/github/status')) {
+      return jsonResponse({
+        provider: 'github',
+        providerConfigKey: 'github-other',
+        status: 'ready'
+      });
+    }
+    throw new Error(`unexpected URL ${url}`);
+  }) as typeof fetch;
+
+  try {
+    await deploy(
+      {
+        personaPath,
+        mode: 'dev',
+        noPrompt: true,
+        cloudUrl: 'https://cloud.example.test',
+        io
+      },
+      {
+        workspaceAuth: {
+          async resolveWorkspace() {
+            return { workspace: 'ws-test', token: 'relay_ws_workspace' };
+          }
+        },
+        providerConfigKeys: {
+          async resolve(provider) {
+            assert.equal(provider, 'github');
+            return 'github-relay';
+          }
+        },
+        bundle: successfulBundleStager(),
+        modes: {
+          dev: {
+            async launch(input) {
+              launchedEnv = input.env;
+              launchedProcessProviderToken = process.env.WORKFORCE_INTEGRATION_GITHUB_TOKEN;
+              return {
+                id: 'dev-1',
+                async stop() {
+                  /* no-op */
+                },
+                done: Promise.resolve({ code: 0 })
+              };
+            }
+          }
+        }
+      }
+    );
+
+    assert.equal(launchedEnv, undefined);
+    assert.equal(launchedProcessProviderToken, providerTokenSentinel);
+    assert.ok(!urls.find((url) => url.endsWith('/runtime-credentials')));
+  } finally {
+    if (originalProviderToken === undefined) {
+      delete process.env.WORKFORCE_INTEGRATION_GITHUB_TOKEN;
+    } else {
+      process.env.WORKFORCE_INTEGRATION_GITHUB_TOKEN = originalProviderToken;
+    }
+    globalThis.fetch = originalFetch;
+    await cleanup();
+  }
+});
+
+test('deploy dev mode rejects malformed runtime credential tokens before launch', async () => {
+  const { personaPath, cleanup } = await withTempPersona(
+    basePersonaJson({
+      integrations: {
+        github: { triggers: [{ on: 'pull_request.opened' }] }
+      }
+    })
+  );
+  const io = createBufferedIO();
+  const originalFetch = globalThis.fetch;
+  let launched = false;
+
+  globalThis.fetch = (async (input) => {
+    const url = String(input);
+    if (url.includes('/api/v1/workspaces/ws-test/integrations/github/status')) {
+      return jsonResponse({ provider: 'github', status: 'ready' });
+    }
+    if (url.includes('/api/v1/workspaces/ws-test/runtime-credentials')) {
+      return jsonResponse({
+        relayfileUrl: 'https://relayfile.test',
+        relayfileWorkspaceId: 'ws-test',
+        relayfileToken: 'not_relay_pa',
+        relayfileMountPaths: ['/github/repos/**/**/pulls/**']
+      });
+    }
+    throw new Error(`unexpected URL ${url}`);
+  }) as typeof fetch;
+
+  try {
+    await assert.rejects(
+      deploy(
+        {
+          personaPath,
+          mode: 'dev',
+          noPrompt: true,
+          cloudUrl: 'https://cloud.example.test',
+          io
+        },
+        {
+          workspaceAuth: {
+            async resolveWorkspace() {
+              return { workspace: 'ws-test', token: 'relay_ws_workspace' };
+            }
+          },
+          bundle: successfulBundleStager(),
+          modes: { dev: successfulDevLauncher(() => { launched = true; }) }
+        }
+      ),
+      /runtime-credentials returned a token without expected relay_pa_ prefix/
+    );
+    assert.equal(launched, false);
+  } finally {
+    globalThis.fetch = originalFetch;
+    await cleanup();
+  }
+});
+
+test('deploy dev mode rejects runtime credential tokens without mount paths before launch', async () => {
+  const { personaPath, cleanup } = await withTempPersona(
+    basePersonaJson({
+      integrations: {
+        github: { triggers: [{ on: 'pull_request.opened' }] }
+      }
+    })
+  );
+  const io = createBufferedIO();
+  const originalFetch = globalThis.fetch;
+  let launched = false;
+
+  globalThis.fetch = (async (input) => {
+    const url = String(input);
+    if (url.includes('/api/v1/workspaces/ws-test/integrations/github/status')) {
+      return jsonResponse({ provider: 'github', status: 'ready' });
+    }
+    if (url.includes('/api/v1/workspaces/ws-test/runtime-credentials')) {
+      return jsonResponse({
+        relayfileUrl: 'https://relayfile.test',
+        relayfileWorkspaceId: 'ws-test',
+        relayfileToken: 'relay_pa_missing_scope',
+        relayfileMountPaths: []
+      });
+    }
+    throw new Error(`unexpected URL ${url}`);
+  }) as typeof fetch;
+
+  try {
+    await assert.rejects(
+      deploy(
+        {
+          personaPath,
+          mode: 'dev',
+          noPrompt: true,
+          cloudUrl: 'https://cloud.example.test',
+          io
+        },
+        {
+          workspaceAuth: {
+            async resolveWorkspace() {
+              return { workspace: 'ws-test', token: 'relay_ws_workspace' };
+            }
+          },
+          bundle: successfulBundleStager(),
+          modes: { dev: successfulDevLauncher(() => { launched = true; }) }
+        }
+      ),
+      /runtime-credentials returned a token without relayfile mount paths/
+    );
+    assert.equal(launched, false);
+  } finally {
+    globalThis.fetch = originalFetch;
+    await cleanup();
+  }
+});
+
+test('deploy dev mode fails closed before runtime credentials when workspace token is missing', async () => {
+  const { personaPath, cleanup } = await withTempPersona(
+    basePersonaJson({
+      integrations: {
+        github: { triggers: [{ on: 'pull_request.opened' }] }
+      }
+    })
+  );
+  const originalFetch = globalThis.fetch;
+  let fetchCalled = false;
+  globalThis.fetch = (async () => {
+    fetchCalled = true;
+    throw new Error('runtime credentials should not be requested without a workspace token');
+  }) as typeof fetch;
+
+  try {
+    await assert.rejects(
+      deploy(
+        {
+          personaPath,
+          mode: 'dev',
+          noPrompt: true,
+          cloudUrl: 'https://cloud.example.test',
+          io: createBufferedIO()
+        },
+        {
+          workspaceAuth: {
+            async resolveWorkspace() {
+              return { workspace: 'ws-test', token: undefined } as unknown as {
+                workspace: string;
+                token: string;
+              };
+            }
+          },
+          bundle: successfulBundleStager(),
+          modes: { dev: successfulDevLauncher() }
+        }
+      ),
+      /workspace token is required for deploy/
+    );
+    assert.equal(fetchCalled, false);
+  } finally {
+    globalThis.fetch = originalFetch;
+    await cleanup();
+  }
+});
+
+test('deploy dev mode still fails fast for genuinely unconnected workspace integrations with --no-prompt', async () => {
+  const { personaPath, cleanup } = await withTempPersona(
+    basePersonaJson({
+      integrations: {
+        github: { triggers: [{ on: 'pull_request.opened' }] }
+      }
+    })
+  );
+  const io = createBufferedIO();
+  const originalFetch = globalThis.fetch;
+  const urls: string[] = [];
+
+  globalThis.fetch = (async (input) => {
+    const url = String(input);
+    urls.push(url);
+    if (url.includes('/api/v1/workspaces/ws-test/integrations/github/status')) {
+      return jsonResponse({ provider: 'github', status: 'pending' });
+    }
+    throw new Error(`unexpected URL ${url}`);
+  }) as typeof fetch;
+
+  try {
+    await assert.rejects(
+      deploy(
+        {
+          personaPath,
+          mode: 'dev',
+          noPrompt: true,
+          cloudUrl: 'https://cloud.example.test',
+          io
+        },
+        {
+          workspaceAuth: {
+            async resolveWorkspace() {
+              return { workspace: 'ws-test', token: 'relay_ws_workspace' };
+            }
+          },
+          bundle: successfulBundleStager(),
+          modes: { dev: successfulDevLauncher() }
+        }
+      ),
+      /deploy aborted: 1 integration\(s\) failed to connect: github/
+    );
+    assert.ok(!urls.find((url) => url.endsWith('/runtime-credentials')));
+  } finally {
+    globalThis.fetch = originalFetch;
+    await cleanup();
+  }
+});
+
 test('deploy aborts cleanly when one missing integration connect fails', async () => {
   const { personaPath, cleanup } = await withTempPersona(
     basePersonaJson({ integrations: { github: {}, notion: {} } })
