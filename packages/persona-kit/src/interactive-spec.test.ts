@@ -1,7 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 
-import { buildInteractiveSpec } from './interactive-spec.js';
+import { buildInteractiveSpec, buildNonInteractiveSpec } from './interactive-spec.js';
 
 test('claude branch always emits --mcp-config + --strict-mcp-config', () => {
   const result = buildInteractiveSpec({
@@ -348,6 +348,33 @@ test('claude branch omits --append-system-prompt when systemPrompt is empty', ()
   assert.ok(!result.args.includes('--append-system-prompt'));
   // strict-mcp still emitted — that's about isolation, not the prompt.
   assert.ok(result.args.includes('--strict-mcp-config'));
+});
+
+test('claude non-interactive spec omits unsupported --name while preserving run flags', () => {
+  const result = buildNonInteractiveSpec({
+    harness: 'claude',
+    personaId: 'daily-ship',
+    model: 'claude-sonnet-4-6',
+    systemPrompt: 'Reply pong.',
+    task: 'say pong',
+    name: 'daily-ship'
+  });
+
+  const args = result.args;
+  const modelIdx = args.indexOf('--model');
+  const promptIdx = args.indexOf('--append-system-prompt');
+  const outputIdx = args.indexOf('--output-format');
+
+  assert.equal(result.bin, 'claude');
+  assert.ok(!args.includes('--name'));
+  assert.ok(modelIdx >= 0);
+  assert.equal(args[modelIdx + 1], 'claude-sonnet-4-6');
+  assert.ok(args.includes('--print'));
+  assert.ok(outputIdx >= 0);
+  assert.equal(args[outputIdx + 1], 'text');
+  assert.ok(promptIdx >= 0);
+  assert.equal(args[promptIdx + 1], 'Reply pong.');
+  assert.equal(args[args.length - 1], 'say pong');
 });
 
 test('opencode omits agent.prompt when systemPrompt is empty', () => {
