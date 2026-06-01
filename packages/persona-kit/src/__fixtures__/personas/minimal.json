@@ -1,11 +1,16 @@
 {
   "id": "minimal",
   "intent": "documentation",
-  "tags": ["documentation"],
+  "tags": [
+    "documentation"
+  ],
   "description": "A minimal persona fixture without deploy fields.",
   "skills": [],
   "harness": "codex",
   "model": "gpt-5",
   "systemPrompt": "Write clear documentation.",
-  "harnessSettings": { "reasoning": "medium", "timeoutSeconds": 300 }
+  "harnessSettings": {
+    "reasoning": "medium",
+    "timeoutSeconds": 300
+  }
 }

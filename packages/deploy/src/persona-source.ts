@@ -7,7 +7,7 @@ import { fileURLToPath, pathToFileURL } from 'node:url';
 
 import { build, type Loader, type Plugin } from 'esbuild';
 
-const NODE_EXTERNALS = [
+export const NODE_EXTERNALS = [
   ...builtinModules,
   ...builtinModules.map((name) => `node:${name}`),
   'node:*'
@@ -24,7 +24,7 @@ const PERSONA_SOURCE_EXTENSIONS = new Set([
   '.cjs'
 ]);
 
-const RESOLVE_EXTENSIONS = [
+export const RESOLVE_EXTENSIONS = [
   '.ts',
   '.mts',
   '.cts',
@@ -106,7 +106,7 @@ function extensionOf(inputPath: string): string {
   return idx === -1 ? '' : normalized.slice(idx);
 }
 
-function packageNodePaths(absInput: string): string[] {
+export function packageNodePaths(absInput: string): string[] {
   const here = dirname(fileURLToPath(import.meta.url));
   return [
     join(dirname(absInput), 'node_modules'),
@@ -116,7 +116,7 @@ function packageNodePaths(absInput: string): string[] {
   ];
 }
 
-function preserveLocalImportMetaUrlPlugin(): Plugin {
+export function preserveLocalImportMetaUrlPlugin(): Plugin {
   return {
     name: 'agentworkforce-preserve-local-import-meta-url',
     setup(buildContext) {
@@ -345,7 +345,7 @@ function isIdentifierChar(ch: string): boolean {
   return /[A-Za-z0-9_$]/.test(ch);
 }
 
-function extractDefaultExport(value: unknown): unknown {
+export function extractDefaultExport(value: unknown): unknown {
   if (
     typeof value === 'object' &&
     value !== null &&

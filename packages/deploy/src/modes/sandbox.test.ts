@@ -153,6 +153,7 @@ async function launchWithProxySandbox(persona: ModeLaunchInput['persona']): Prom
       async () => {
         const handle = await sandboxLauncher.launch({
           persona,
+          agent: {},
           bundle,
           workspace: 'ws-demo',
           io: silentIO
@@ -191,12 +192,12 @@ test('sandboxLauncher forwards non-empty persona integrations to proxy mint', as
   const calls = await launchWithProxySandbox({
     ...input().persona,
     integrations: {
-      github: { triggers: [{ on: 'pull_request.opened' }] }
+      github: { scope: { repo: 'org/repo' } }
     }
   });
 
   assert.deepEqual((calls[0].body as { integrations: unknown }).integrations, {
-    github: { triggers: [{ on: 'pull_request.opened' }] }
+    github: { scope: { repo: 'org/repo' } }
   });
 });
 

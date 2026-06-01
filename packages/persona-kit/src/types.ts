@@ -178,11 +178,17 @@ export type McpServerSpec =
     };
 
 /**
- * A single event trigger declared by an integration. `on` is a Relayfile-
- * adapter-normalized event name (e.g. `pull_request.opened`,
+ * A single event trigger declared by an **agent** (`agent.ts`). `on` is a
+ * Relayfile-adapter-normalized event name (e.g. `pull_request.opened`,
  * `issue.create`, `message.created`). `match` and `where` are filter sugars
  * the deploy CLI lints against a known registry; unknown values warn but
  * do not fail parse, so the cloud runtime stays the source of truth.
+ *
+ * Triggers live on the agent ({@link AgentSpec.triggers}), not the persona —
+ * the persona only declares which providers it connects to
+ * ({@link PersonaIntegrationConfig}). The deploy CLI joins the two: events
+ * from `agent.triggers[provider]`, connection/scope from
+ * `persona.integrations[provider]`.
  *
  * Examples:
  *   { on: "pull_request.opened" }
@@ -216,12 +222,15 @@ export type IntegrationSource =
   | { kind: 'workspace_service_account'; name: string };
 
 /**
- * Radio listener configuration for a RelayFile provider. The map key is
- * the provider slug (`github`, `linear`, `slack`, `notion`, `jira`).
+ * Per-provider **connection** configuration for a RelayFile provider. The map
+ * key is the provider slug (`github`, `linear`, `slack`, `notion`, `jira`).
  * `scope` is provider-specific filter metadata (e.g. `{ repo: "org/repo" }`
- * for github, `{ database: "<id>" }` for notion). `triggers` are flat —
- * all radio listener events for this provider fan into the same `onEvent`
- * handler, which discriminates on `event.source` + `event.type`.
+ * for github, `{ database: "<id>" }` for notion).
+ *
+ * This declares only *that the persona connects to the provider* and how the
+ * connection resolves — **not** which events fire it. Event triggers live on
+ * the agent ({@link AgentSpec.triggers}); the deploy CLI requires every
+ * provider in `agent.triggers` to also appear here so the connection is set up.
  *
  * `source` discriminates the cloud-side resolver between `user_integrations`
  * and `workspace_integrations`; defaults to `{ kind: 'deployer_user' }` when
@@ -230,14 +239,14 @@ export type IntegrationSource =
 export interface PersonaIntegrationConfig {
   source?: IntegrationSource;
   scope?: Record<string, string>;
-  triggers?: PersonaIntegrationTrigger[];
 }
 
 /**
- * Clock listener configuration. `name` is unique within the persona and
- * surfaces to the handler as `event.name`. `cron` is a standard 5-field
- * expression. `tz` defaults to `UTC` at the runtime layer (the parser keeps
- * it optional so the spec stays close to what the author wrote).
+ * Clock listener configuration declared by an **agent** ({@link AgentSpec.schedules}).
+ * `name` is unique within the agent and surfaces to the handler as
+ * `event.name`. `cron` is a standard 5-field expression. `tz` defaults to
+ * `UTC` at the runtime layer (the parser keeps it optional so the spec stays
+ * close to what the author wrote).
  */
 export interface PersonaSchedule {
   name: string;
@@ -248,16 +257,42 @@ export interface PersonaSchedule {
 export type WatchEvent = 'created' | 'updated' | 'deleted';
 
 /**
- * Relayfile-change listener configuration. `paths` are absolute Relayfile
- * glob roots (for example `/integrations/github/repos/acme/web/issues/*.json`).
- * Runtime matching is owned by the cloud trigger router; persona-kit only
- * validates the portable declaration shape.
+ * Relayfile-change listener configuration declared by an **agent**
+ * ({@link AgentSpec.watch}). `paths` are absolute Relayfile glob roots (for
+ * example `/integrations/github/repos/acme/web/issues/*.json`). Runtime
+ * matching is owned by the cloud trigger router; persona-kit only validates
+ * the portable declaration shape.
  */
 export interface WatchRule {
   paths: string[];
   events: WatchEvent[];
   debounceMs?: number;
   match?: string;
+}
+
+/**
+ * Runtime-parsed shape of an **agent** (`agent.ts`) — the "when/how it fires"
+ * half of a deployed agent, authored via `defineAgent(...)` in the runtime
+ * package and extracted from the bundle by the deploy CLI. The persona owns
+ * "what the agent is" (model, harness, skills, mcp, integration *connections*);
+ * the agent owns the listeners.
+ *
+ * Three listener kinds:
+ *  - **radio** — {@link triggers}: a provider-keyed map of
+ *    {@link PersonaIntegrationTrigger} arrays. Keys mirror
+ *    `persona.integrations` so the deploy CLI can join events→connection.
+ *  - **clock** — {@link schedules}: cron {@link PersonaSchedule}s.
+ *  - **relayfile** — {@link watch}: {@link WatchRule}s.
+ *
+ * At least one listener is required for a cloud agent (enforced at deploy).
+ */
+export interface AgentSpec {
+  /** Radio listeners keyed by provider slug (`github`, `linear`, …). */
+  triggers?: Record<string, PersonaIntegrationTrigger[]>;
+  /** Cron-style clock listeners. Each `name` is unique within the agent. */
+  schedules?: PersonaSchedule[];
+  /** Relayfile-change listeners for proactive cloud agents. */
+  watch?: WatchRule[];
 }
 
 /**
@@ -307,11 +342,11 @@ export interface ProactiveCapabilities {
 }
 
 /**
- * A persona listens for events. Three listener kinds: clock (cron schedules
- * through `schedules[]`), radio (RelayFile integration events through
- * `integrations.<provider>.triggers[]`), and inbox (RelayCast targeted
- * messages, not yet modeled in v1). The current shape predates the
- * listeners framing; semantics are equivalent.
+ * A persona describes *what an agent is* — its identity, runtime (harness,
+ * model, system prompt), skills, MCP servers, inputs, and which providers it
+ * *connects* to ({@link integrations}). It does **not** describe when the
+ * agent fires: event triggers, cron schedules, and relayfile watch rules live
+ * on the agent ({@link AgentSpec}, authored via `defineAgent` in `agent.ts`).
  */
 export interface PersonaSpec {
   id: string;
@@ -434,16 +469,14 @@ export interface PersonaSpec {
    */
   useSubscription?: boolean;
   /**
-   * Per-provider integration declarations keyed by Relayfile provider slug
-   * (`github`, `linear`, `slack`, `notion`, `jira`). At deploy time the CLI
-   * runs `RelayfileSetup.connectIntegration({ allowedIntegrations: [key] })`
-   * for each provider not yet connected to the active workspace.
+   * Per-provider integration **connection** declarations keyed by Relayfile
+   * provider slug (`github`, `linear`, `slack`, `notion`, `jira`). At deploy
+   * time the CLI runs `RelayfileSetup.connectIntegration({ allowedIntegrations:
+   * [key] })` for each provider not yet connected to the active workspace.
+   * Event triggers are declared on the agent ({@link AgentSpec.triggers}), not
+   * here — every provider an agent triggers on must also appear in this map.
    */
   integrations?: Record<string, PersonaIntegrationConfig>;
-  /** Cron-style clock listeners. Each `name` is unique within the persona. */
-  schedules?: PersonaSchedule[];
-  /** Relayfile-change listeners for proactive cloud personas. */
-  watch?: WatchRule[];
   /**
    * Portable proactive capability declarations. A capability is enabled when
    * its value is `true` or an object whose `.enabled !== false` (`{}` is

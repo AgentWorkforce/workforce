@@ -19,7 +19,6 @@ function persona(overrides: Partial<PersonaSpec> = {}): PersonaSpec {
     systemPrompt: 'be helpful',
     harnessSettings: { reasoning: 'medium', timeoutSeconds: 300 },
     cloud: true,
-    schedules: [{ name: 'weekly', cron: '0 9 * * 6' }],
     onEvent: './agent.ts',
     ...overrides
   };
@@ -34,10 +33,13 @@ test('bundleStager produces an executable, importable bundle from a real onEvent
     await writeFile(
       path.join(dir, 'agent.ts'),
       [
-        "import { handler } from '@agentworkforce/runtime';",
+        "import { defineAgent } from '@agentworkforce/runtime';",
         '',
-        'export default handler(async (ctx, event) => {',
-        "  ctx.log('info', 'fixture.handler.fired', { eventId: event.id });",
+        'export default defineAgent({',
+        "  schedules: [{ name: 'weekly', cron: '0 9 * * 6' }],",
+        '  handler: async (ctx, event) => {',
+        "    ctx.log('info', 'fixture.handler.fired', { eventId: event.id });",
+        '  }',
         '});',
         ''
       ].join('\n'),
@@ -69,7 +71,7 @@ test('bundleStager produces an executable, importable bundle from a real onEvent
     assert.match(runnerSource, /import \* as userModule from '\.\/agent\.bundle\.mjs'/);
     assert.match(runnerSource, /WORKFORCE_AGENT_CONTEXT/);
     assert.match(runnerSource, /WORKFORCE_DEPLOYMENT_CONTEXT/);
-    assert.match(runnerSource, /await startRunner\({ persona, agent, deployment, handler }\)/);
+    assert.match(runnerSource, /await startRunner\({ persona, agent, deployment, handler/);
 
     // bundle output is ES module shape and references the runtime as external
     const bundleSource = await readFile(result.bundlePath, 'utf8');
@@ -143,15 +145,17 @@ test('runtimeContextEnv preserves precomputed row context JSON', () => {
 
 test('runtimeContextEnv infers radio for integration-triggered agents', () => {
   const env = runtimeContextEnv(
-    persona({
-      integrations: {
-        github: {
-          triggers: [{ on: 'pull_request.opened' }]
-        }
-      }
-    }),
-    undefined
+    persona({ integrations: { github: {} } }),
+    undefined,
+    { triggers: { github: [{ on: 'pull_request.opened' }] } }
   );
 
   assert.equal(JSON.parse(env.WORKFORCE_DEPLOYMENT_CONTEXT).triggerKind, 'radio');
+});
+
+test('runtimeContextEnv defaults to clock when the agent has no integration triggers', () => {
+  const env = runtimeContextEnv(persona(), undefined, {
+    schedules: [{ name: 'weekly', cron: '0 9 * * 6' }]
+  });
+  assert.equal(JSON.parse(env.WORKFORCE_DEPLOYMENT_CONTEXT).triggerKind, 'clock');
 });

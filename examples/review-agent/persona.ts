@@ -8,18 +8,11 @@ export default definePersona({
     'Reviews opened PRs, responds to @mentions in comments, attempts autofix on red CI.',
   cloud: true,
   useSubscription: true,
+  // Connection config only — which events fire this agent lives in agent.ts
+  // (defineAgent). The persona just declares which providers it connects to.
   integrations: {
-    github: {
-      triggers: [
-        { on: 'pull_request.opened' },
-        { on: 'issue_comment.created', match: '@mention' },
-        { on: 'pull_request_review_comment.created', match: '@mention' },
-        { on: 'check_run.completed', where: 'conclusion=failure' }
-      ]
-    },
-    slack: {
-      triggers: [{ on: 'app_mention' }]
-    }
+    github: {},
+    slack: {}
   },
   memory: {
     enabled: true,

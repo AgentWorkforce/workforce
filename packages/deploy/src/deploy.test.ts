@@ -28,15 +28,43 @@ function basePersonaJson(overrides: Record<string, unknown> = {}): Record<string
     systemPrompt: 'be helpful',
     harnessSettings: { reasoning: 'medium', timeoutSeconds: 300 },
     cloud: true,
-    schedules: [{ name: 'weekly', cron: '0 9 * * 6' }],
     onEvent: './agent.ts',
     ...overrides
   };
 }
 
+// Agent (`agent.ts`) sources. Triggers/schedules live here now, not on the
+// persona. extractAgentSpec stubs `@agentworkforce/runtime`, so these compile
+// without the runtime being installed in the temp dir.
+const SCHEDULE_AGENT_SRC = `import { defineAgent } from '@agentworkforce/runtime';
+export default defineAgent({
+  schedules: [{ name: 'weekly', cron: '0 9 * * 6' }],
+  handler: async () => {}
+});
+`;
+
+const NO_LISTENER_AGENT_SRC = `import { defineAgent } from '@agentworkforce/runtime';
+export default defineAgent({ handler: async () => {} });
+`;
+
+const MISSING_HANDLER_AGENT_SRC = `import { defineAgent } from '@agentworkforce/runtime';
+export default defineAgent({
+  schedules: [{ name: 'weekly', cron: '0 9 * * 6' }]
+});
+`;
+
+function githubAgentSrc(on = 'pull_request.opened'): string {
+  return `import { defineAgent } from '@agentworkforce/runtime';
+export default defineAgent({
+  triggers: { github: [{ on: '${on}' }] },
+  handler: async () => {}
+});
+`;
+}
+
 async function withTempPersona(
   persona: Record<string, unknown>,
-  agentSource = 'export default async () => {};'
+  agentSource = SCHEDULE_AGENT_SRC
 ): Promise<{ dir: string; personaPath: string; cleanup: () => Promise<void> }> {
   const dir = await mkdtemp(path.join(os.tmpdir(), 'wf-deploy-test-'));
   const personaPath = path.join(dir, 'persona.json');
@@ -56,7 +84,7 @@ async function withTempPersonaSource(
   const dir = await mkdtemp(path.join(os.tmpdir(), 'wf-deploy-source-test-'));
   const personaPath = path.join(dir, 'persona.ts');
   await writeFile(personaPath, source, 'utf8');
-  await writeFile(path.join(dir, 'agent.ts'), 'export default async () => {};', 'utf8');
+  await writeFile(path.join(dir, 'agent.ts'), SCHEDULE_AGENT_SRC, 'utf8');
   await Promise.all(
     Object.entries(extraFiles).map(async ([name, content]) => {
       const target = path.join(dir, name);
@@ -175,7 +203,6 @@ export default definePersona({
   tags: ['documentation'],
   description,
   cloud: true,
-  schedules: [{ name: 'weekly', cron: '0 9 * * 6' }],
   onEvent: './agent.ts',
   harnessSettings: { reasoning: 'medium', timeoutSeconds: 300 }
 });
@@ -212,12 +239,34 @@ test('preflightPersona refuses when cloud is not true', async () => {
   }
 });
 
-test('preflightPersona refuses when no triggers are declared', async () => {
+test('preflightPersona refuses when the agent declares no listeners', async () => {
   const { personaPath, cleanup } = await withTempPersona(
-    basePersonaJson({ schedules: undefined, integrations: undefined })
+    basePersonaJson({ integrations: undefined }),
+    NO_LISTENER_AGENT_SRC
   );
   try {
-    await assert.rejects(preflightPersona(personaPath), /has no triggers/);
+    await assert.rejects(preflightPersona(personaPath), /declares no listeners/);
+  } finally {
+    await cleanup();
+  }
+});
+
+test('preflightPersona refuses when defineAgent omits handler', async () => {
+  const { personaPath, cleanup } = await withTempPersona(basePersonaJson(), MISSING_HANDLER_AGENT_SRC);
+  try {
+    await assert.rejects(preflightPersona(personaPath), /must default-export defineAgent/);
+  } finally {
+    await cleanup();
+  }
+});
+
+test('preflightPersona refuses when the agent triggers a provider the persona does not connect', async () => {
+  const { personaPath, cleanup } = await withTempPersona(
+    basePersonaJson({ integrations: undefined }),
+    githubAgentSrc()
+  );
+  try {
+    await assert.rejects(preflightPersona(personaPath), /does not connect/);
   } finally {
     await cleanup();
   }
@@ -234,12 +283,8 @@ test('preflightPersona refuses when onEvent file is missing', async () => {
 
 test('preflightPersona warns on unknown triggers but does not fail', async () => {
   const { personaPath, cleanup } = await withTempPersona(
-    basePersonaJson({
-      schedules: undefined,
-      integrations: {
-        github: { triggers: [{ on: 'pull_request.imagined_event' }] }
-      }
-    })
+    basePersonaJson({ integrations: { github: {} } }),
+    githubAgentSrc('pull_request.imagined_event')
   );
   try {
     const pre = await preflightPersona(personaPath);
@@ -343,7 +388,7 @@ test('deploy prepares useSubscription BYOK credentials before integration side e
   const { personaPath, cleanup } = await withTempPersona(
     basePersonaJson({
       useSubscription: true,
-      integrations: { github: { triggers: [{ on: 'pull_request.opened' }] } }
+      integrations: { github: {} }
     })
   );
   const io = createBufferedIO();
@@ -427,7 +472,7 @@ test('deploy prepares useSubscription BYOK credentials before integration side e
 
 test('deploy fails clearly when integration is not connected and --no-connect is set', async () => {
   const { personaPath, cleanup } = await withTempPersona(
-    basePersonaJson({ integrations: { github: { triggers: [{ on: 'pull_request.opened' }] } } })
+    basePersonaJson({ integrations: { github: {} } })
   );
   const io = createBufferedIO();
   const workspaceAuth: WorkspaceAuth = {
@@ -508,9 +553,12 @@ test('deploy connects each missing persona integration before launch', async () 
 test('deploy dev mode injects runtime credentials for a detected writeback trigger without provider-token leakage', async () => {
   const providerTokenSentinel = 'WORKFORCE_PROVIDER_TOKEN_SHOULD_NOT_LEAK';
   const integrations = {
-    github: { triggers: [{ on: 'pull_request.opened' }] }
+    github: {}
   };
-  const { personaPath, cleanup } = await withTempPersona(basePersonaJson({ integrations }));
+  const { personaPath, cleanup } = await withTempPersona(
+    basePersonaJson({ integrations }),
+    githubAgentSrc()
+  );
   const io = createBufferedIO();
   const originalFetch = globalThis.fetch;
   const originalProviderToken = process.env.WORKFORCE_INTEGRATION_GITHUB_TOKEN;
@@ -694,7 +742,7 @@ test('deploy dev mode preserves env-only provider token fallback without runtime
   const { personaPath, cleanup } = await withTempPersona(
     basePersonaJson({
       integrations: {
-        github: { triggers: [{ on: 'pull_request.opened' }] }
+        github: {}
       }
     })
   );
@@ -770,7 +818,7 @@ test('deploy dev mode runtime credential eligibility preserves legacy workspace 
   const { personaPath, cleanup } = await withTempPersona(
     basePersonaJson({
       integrations: {
-        github: { triggers: [{ on: 'pull_request.opened' }] }
+        github: {}
       }
     })
   );
@@ -855,7 +903,7 @@ test('deploy dev mode runtime credential eligibility preserves expected provider
   const { personaPath, cleanup } = await withTempPersona(
     basePersonaJson({
       integrations: {
-        github: { triggers: [{ on: 'pull_request.opened' }] }
+        github: {}
       }
     })
   );
@@ -938,7 +986,7 @@ test('deploy dev mode rejects malformed runtime credential tokens before launch'
   const { personaPath, cleanup } = await withTempPersona(
     basePersonaJson({
       integrations: {
-        github: { triggers: [{ on: 'pull_request.opened' }] }
+        github: {}
       }
     })
   );
@@ -995,7 +1043,7 @@ test('deploy dev mode rejects runtime credential tokens without mount paths befo
   const { personaPath, cleanup } = await withTempPersona(
     basePersonaJson({
       integrations: {
-        github: { triggers: [{ on: 'pull_request.opened' }] }
+        github: {}
       }
     })
   );
@@ -1052,7 +1100,7 @@ test('deploy dev mode fails closed before runtime credentials when workspace tok
   const { personaPath, cleanup } = await withTempPersona(
     basePersonaJson({
       integrations: {
-        github: { triggers: [{ on: 'pull_request.opened' }] }
+        github: {}
       }
     })
   );
@@ -1099,7 +1147,7 @@ test('deploy dev mode still fails fast for genuinely unconnected workspace integ
   const { personaPath, cleanup } = await withTempPersona(
     basePersonaJson({
       integrations: {
-        github: { triggers: [{ on: 'pull_request.opened' }] }
+        github: {}
       }
     })
   );

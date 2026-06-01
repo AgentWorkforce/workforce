@@ -9,6 +9,7 @@ const { createGenerator } = require('ts-json-schema-generator');
 
 const packageRoot = resolve(dirname(fileURLToPath(import.meta.url)), '..');
 const schemaPath = resolve(packageRoot, 'schemas/persona.schema.json');
+const agentSchemaPath = resolve(packageRoot, 'schemas/agent.schema.json');
 const tsconfigPath = resolve(packageRoot, 'tsconfig.json');
 const typesPath = resolve(packageRoot, 'src/types.ts');
 
@@ -112,4 +113,35 @@ try {
 
 if (existing !== serialized) {
   await writeFile(schemaPath, serialized);
+}
+
+// Emit the agent (`defineAgent`) schema from AgentSpec — the listener half of
+// a deployed agent (triggers/schedules/watch) that travels to cloud as the
+// deploy `agent` block.
+const agentGenerator = createGenerator({
+  path: typesPath,
+  tsconfig: tsconfigPath,
+  type: 'AgentSpec',
+  expose: 'export',
+  topRef: true,
+  jsDoc: 'extended',
+  additionalProperties: true,
+  sortProps: true,
+  skipTypeCheck: true
+});
+
+const agentSchema = agentGenerator.createSchema('AgentSpec');
+agentSchema.$schema = 'https://json-schema.org/draft/2020-12/schema';
+agentSchema.$id = 'https://agentworkforce.dev/schemas/agent.schema.json';
+
+const agentSerialized = `${JSON.stringify(agentSchema, null, 2)}\n`;
+let existingAgent = '';
+try {
+  existingAgent = await readFile(agentSchemaPath, 'utf8');
+} catch {
+  // First emission.
+}
+
+if (existingAgent !== agentSerialized) {
+  await writeFile(agentSchemaPath, agentSerialized);
 }

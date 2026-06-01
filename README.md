@@ -3,10 +3,11 @@
 <center>Deployable AI agent personas, versioned and shared like code.</center>
 <br />
 
-A persona is a deployable agent. It is a JSON file, or a typed `persona.ts`
-source module, that names the harness, model, skills, permissions,
-integrations, schedules, sandbox policy, memory, and event handler for an agent
-that can run locally or in the cloud-facing runtime.
+A deployable agent is a **persona** plus an **agent** (`agent.ts`). The persona —
+a JSON file or a typed `persona.ts` source module — names the harness, model,
+skills, permissions, integration connections, sandbox policy, and memory. The
+agent declares the triggers, schedules, and watch rules that fire it, plus the
+handler. Together they run locally or in the cloud-facing runtime.
 
 ```bash
 workforce deploy ./review-agent.json
@@ -56,7 +57,14 @@ The example searches Brave on a weekly cron schedule, clusters findings, and
 upserts a GitHub issue. See
 [`examples/weekly-digest`](./examples/weekly-digest/).
 
-## What a persona looks like
+## Persona vs agent
+
+A deployable agent is two files. The **persona** says *what the agent is*
+(identity, runtime, skills, MCP, and which providers it **connects** to). The
+**agent** (`agent.ts`) says *when and how it fires* (triggers, schedules, watch
+rules) and *what it does* (the handler) — authored with `defineAgent`.
+
+`persona.json` (connection config only — no triggers):
 
 ```json
 {
@@ -67,34 +75,41 @@ upserts a GitHub issue. See
   "cloud": true,
   "useSubscription": true,
   "integrations": {
-    "github": {
-      "triggers": [
-        { "on": "pull_request.opened" },
-        { "on": "issue_comment.created", "match": "@mention" }
-      ]
-    },
-    "slack": {
-      "triggers": [{ "on": "message.created", "match": "@mention" }]
-    }
+    "github": {},
+    "slack": {}
   },
   "sandbox": true,
   "memory": { "enabled": true, "scopes": ["session", "workspace"] },
   "onEvent": "./agent.ts",
-  "tiers": {
-    "best-value": {
-      "harness": "codex",
-      "model": "gpt-5.4",
-      "systemPrompt": "Review PRs for correctness, risk, and missing tests.",
-      "harnessSettings": {
-        "reasoning": "medium",
-        "timeoutSeconds": 1200
-      }
-    }
-  }
+  "harness": "codex",
+  "model": "gpt-5.4",
+  "systemPrompt": "Review PRs for correctness, risk, and missing tests.",
+  "harnessSettings": { "reasoning": "medium", "timeoutSeconds": 1200 }
 }
 ```
 
-The `onEvent` file exports the handler that decides what to do when a cron tick,
+`agent.ts` (triggers/schedules/watch + handler):
+
+```ts
+import { defineAgent } from '@agentworkforce/runtime';
+
+export default defineAgent({
+  triggers: {
+    github: [
+      { on: 'pull_request.opened' },
+      { on: 'issue_comment.created', match: '@mention' },
+    ],
+    slack: [{ on: 'message.created', match: '@mention' }],
+  },
+  // schedules: [{ name: 'nightly', cron: '0 2 * * *' }],
+  handler: async (ctx, event) => {
+    // `event.type` narrows to the declared triggers.
+  },
+});
+```
+
+Every provider an agent triggers on must also appear in `persona.integrations`
+(so the connection is set up). The handler decides what to do when a cron tick,
 GitHub event, Linear issue, Slack mention, Notion update, or Jira event arrives.
 See [`examples/review-agent`](./examples/review-agent/) for a complete example.
 

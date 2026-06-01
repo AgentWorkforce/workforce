@@ -1,4 +1,4 @@
-import type { PersonaSpec } from '@agentworkforce/persona-kit';
+import type { AgentSpec, PersonaSpec } from '@agentworkforce/persona-kit';
 
 export type DeployMode = 'dev' | 'sandbox' | 'cloud';
 
@@ -119,6 +119,12 @@ export interface ModeLauncher {
 
 export interface ModeLaunchInput {
   persona: PersonaSpec;
+  /**
+   * Agent listener spec (triggers/schedules/watch) extracted from the
+   * `defineAgent(...)` default export. Cloud mode sends this as the top-level
+   * `agent` block in the deploy request so the cloud sets up subscriptions.
+   */
+  agent: AgentSpec;
   bundle: BundleResult;
   workspace: string;
   env?: Record<string, string>;
@@ -170,6 +176,12 @@ export interface IntegrationConnectOutcome {
 /** Surface a parsed persona only after we know it passed the deploy preflight. */
 export interface DeployPreflight {
   persona: PersonaSpec;
+  /**
+   * Listener spec (triggers/schedules/watch) extracted from the agent's
+   * `defineAgent(...)` default export. Travels to the cloud as the deploy
+   * `agent` block.
+   */
+  agent: AgentSpec;
   /** Persona path resolved to absolute. */
   personaPath: string;
   /** Absolute path to the directory containing the persona file. */

@@ -1,7 +1,10 @@
 {
   "id": "full-deploy",
   "intent": "review",
-  "tags": ["review", "implementation"],
+  "tags": [
+    "review",
+    "implementation"
+  ],
   "description": "A full deploy-v1 persona fixture with every deploy field populated.",
   "skills": [
     {
@@ -24,54 +27,73 @@
   "useSubscription": true,
   "integrations": {
     "github": {
-      "scope": { "repo": "AgentWorkforce/workforce" },
-      "triggers": [
-        { "on": "pull_request.opened" },
-        { "on": "pull_request_review_comment.created", "match": "@mention" },
-        { "on": "check_run.completed", "where": "conclusion=failure" }
-      ]
+      "scope": {
+        "repo": "AgentWorkforce/workforce"
+      }
     },
-    "linear": { "triggers": [{ "on": "issue.create" }] },
-    "slack": { "triggers": [{ "on": "message.created" }] },
+    "linear": {},
+    "slack": {},
     "notion": {
-      "scope": { "database": "db_123" }
+      "scope": {
+        "database": "db_123"
+      }
     },
     "jira": {
-      "scope": { "project": "ENG" },
-      "triggers": [{ "on": "issue.created" }]
+      "scope": {
+        "project": "ENG"
+      }
     }
   },
-  "schedules": [{ "name": "daily-review", "cron": "0 14 * * 1-5", "tz": "UTC" }],
   "capabilities": {
     "review": true,
     "issueClaim": {},
-    "conflictAutofix": { "enabled": false },
-    "pullRequest": { "enabled": true }
+    "conflictAutofix": {
+      "enabled": false
+    },
+    "pullRequest": {
+      "enabled": true
+    }
   },
   "memory": {
     "enabled": true,
-    "scopes": ["workspace", "user", "global"],
+    "scopes": [
+      "workspace",
+      "user",
+      "global"
+    ],
     "ttlDays": 30,
     "autoPromote": true,
     "dedupMs": 300000
   },
   "onEvent": "./agent.ts",
-  "env": { "BRAVE_API_KEY": "$BRAVE_API_KEY" },
+  "env": {
+    "BRAVE_API_KEY": "$BRAVE_API_KEY"
+  },
   "mcpServers": {
     "docs": {
       "type": "http",
       "url": "https://example.com/mcp",
-      "headers": { "Authorization": "Bearer $DOCS_TOKEN" }
+      "headers": {
+        "Authorization": "Bearer $DOCS_TOKEN"
+      }
     }
   },
   "permissions": {
-    "allow": ["Bash(git *)"],
-    "deny": ["Bash(rm -rf *)"],
+    "allow": [
+      "Bash(git *)"
+    ],
+    "deny": [
+      "Bash(rm -rf *)"
+    ],
     "mode": "default"
   },
   "mount": {
-    "ignoredPatterns": ["node_modules/**"],
-    "readonlyPatterns": ["vendor/**"]
+    "ignoredPatterns": [
+      "node_modules/**"
+    ],
+    "readonlyPatterns": [
+      "vendor/**"
+    ]
   },
   "claudeMd": "CLAUDE.md",
   "claudeMdMode": "extend",

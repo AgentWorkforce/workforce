@@ -30,17 +30,12 @@ export default definePersona({
     TARGET: 'repo'
   },
   integrations: {
-    github: {
-      triggers: [
-        { on: 'pull_request.opened' },
-        { on: 'off_registry.github_event' }
-      ]
-    },
-    linear: { triggers: [{ on: 'issue.updated' }] },
-    slack: { triggers: [{ on: 'message.channels' }] },
-    notion: { triggers: [{ on: 'page.created' }] },
-    jira: { triggers: [{ on: 'issue.created' }] },
-    unknown: { triggers: [{ on: 'whatever.happened' }] }
+    github: { scope: { repo: 'org/repo' } },
+    linear: {},
+    slack: {},
+    notion: {},
+    jira: {},
+    unknown: {}
   },
   onEvent: './agent.ts',
   harnessSettings: {
@@ -56,18 +51,16 @@ export default definePersona({
     const compiled = JSON.parse(readFileSync(outputPath, 'utf8')) as {
       id: string;
       inputs?: Record<string, unknown>;
-      integrations?: Record<string, { triggers?: Array<{ on: string }> }>;
+      integrations?: Record<string, { scope?: Record<string, string> }>;
     };
 
     assert.equal(result.personaId, 'compiled-persona');
     assert.equal(result.outputPath, outputPath);
     assert.equal(compiled.id, 'compiled-persona');
     assert.equal(compiled.inputs?.TARGET, 'repo');
-    assert.equal(
-      compiled.integrations?.github.triggers?.[1].on,
-      'off_registry.github_event'
-    );
-    assert.equal(compiled.integrations?.unknown.triggers?.[0].on, 'whatever.happened');
+    // Integration connections (source/scope) are preserved; triggers live in agent.ts.
+    assert.equal(compiled.integrations?.github.scope?.repo, 'org/repo');
+    assert.ok(compiled.integrations?.unknown);
   } finally {
     rmSync(root, { recursive: true, force: true });
   }

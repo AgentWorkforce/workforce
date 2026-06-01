@@ -98,7 +98,7 @@ test('proxy client mints, uploads, execs, and destroys against cloud sandboxes e
       label: 'wf-demo',
       env: { WORKFORCE_WORKSPACE_ID: 'ws' },
       integrations: {
-        github: { triggers: [{ on: 'pull_request.opened' }] }
+        github: {}
       }
     });
     assert.equal(handle.mode, 'proxy');
@@ -122,7 +122,7 @@ test('proxy client mints, uploads, execs, and destroys against cloud sandboxes e
     assert.equal((calls[0].body as { purpose: string }).purpose, 'workforce-deploy');
     assert.equal((calls[0].body as { personaId: string }).personaId, 'demo');
     assert.deepEqual((calls[0].body as { integrations: unknown }).integrations, {
-      github: { triggers: [{ on: 'pull_request.opened' }] }
+      github: {}
     });
 
     // Upload PUT carries base64 file entries.

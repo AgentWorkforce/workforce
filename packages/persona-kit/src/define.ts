@@ -8,10 +8,8 @@ import type {
   PersonaMemory,
   PersonaMount,
   PersonaPermissions,
-  PersonaSchedule,
   PersonaSkill,
-  SidecarMdMode,
-  WatchRule
+  SidecarMdMode
 } from './types.js';
 import type { KnownProviderName, KnownTriggerName } from './triggers.js';
 import type { KnownPersonaTag } from './constants.js';
@@ -26,10 +24,30 @@ export interface TypedTrigger<P extends string> {
   where?: string;
 }
 
-export interface TypedIntegrationConfig<P extends string> {
+/**
+ * Provider-keyed map of typed triggers — the authoring shape of an agent's
+ * `triggers` (see `defineAgent` in `@agentworkforce/runtime`). Keying by
+ * provider gives per-provider event autocomplete (`github` → `pull_request.*`)
+ * via {@link TypedTrigger}; arbitrary provider slugs fall back to `string`.
+ * Mirrors {@link TypedIntegrations} so agent triggers and persona integration
+ * connections line up on the same provider keys.
+ */
+export type TypedTriggerMap = {
+  [P in KnownProviderName]?: readonly TypedTrigger<P>[];
+} & {
+  [provider: string]: readonly TypedTrigger<string>[] | undefined;
+};
+
+/**
+ * Per-provider integration **connection** config in typed persona authoring.
+ * Connection-only (source + scope) — event triggers live on the agent
+ * ({@link TypedTriggerMap}), not here. The `P` param is retained for symmetry
+ * with {@link TypedIntegrations} and forward-compatibility.
+ */
+// eslint-disable-next-line @typescript-eslint/no-unused-vars
+export interface TypedIntegrationConfig<P extends string = string> {
   source?: IntegrationSource;
   scope?: Record<string, string>;
-  triggers?: readonly TypedTrigger<P>[];
 }
 
 export type TypedIntegrations = {
@@ -61,8 +79,6 @@ export interface PersonaDefinitionBase {
   cloud?: boolean;
   useSubscription?: boolean;
   integrations?: TypedIntegrations;
-  schedules?: readonly PersonaSchedule[];
-  watch?: readonly WatchRule[];
   capabilities?: ProactiveCapabilities;
   memory?: PersonaMemory;
 }

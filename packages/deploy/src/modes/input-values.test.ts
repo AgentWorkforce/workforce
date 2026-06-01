@@ -26,7 +26,6 @@ function personaJson(overrides: Record<string, unknown> = {}): Record<string, un
     systemPrompt: 'be helpful',
     harnessSettings: { reasoning: 'medium', timeoutSeconds: 300 },
     cloud: true,
-    schedules: [{ name: 'weekly', cron: '0 9 * * 6' }],
     onEvent: './agent.ts',
     inputs: {
       TOPIC: { default: 'AI' },
@@ -42,7 +41,18 @@ async function withTempPersona(
   const dir = await mkdtemp(path.join(os.tmpdir(), 'wf-deploy-inputs-'));
   const personaPath = path.join(dir, 'persona.json');
   await writeFile(personaPath, JSON.stringify(persona, null, 2), 'utf8');
-  await writeFile(path.join(dir, 'agent.ts'), 'export default async () => {};', 'utf8');
+  await writeFile(
+    path.join(dir, 'agent.ts'),
+    [
+      "import { defineAgent } from '@agentworkforce/runtime';",
+      'export default defineAgent({',
+      "  schedules: [{ name: 'weekly', cron: '0 9 * * 6' }],",
+      '  handler: async () => {}',
+      '});',
+      ''
+    ].join('\n'),
+    'utf8'
+  );
   return {
     dir,
     personaPath,
@@ -237,6 +247,7 @@ test('cloud launcher includes inputs in persona bundle POST body', async () => {
 
     const handle = await cloudLauncher.launch({
       persona: personaJson() as never,
+      agent: { schedules: [{ name: 'weekly', cron: '0 9 * * 6' }] },
       bundle,
       workspace: 'ws-test',
       cloudUrl: 'https://cloud.example.com',

@@ -1,7 +1,12 @@
 import path from 'node:path';
 import { mkdir } from 'node:fs/promises';
 import { defaultApiUrl } from '@agent-relay/cloud';
-import type { PersonaSpec } from '@agentworkforce/persona-kit';
+import type {
+  AgentSpec,
+  IntegrationSource,
+  PersonaIntegrationTrigger,
+  PersonaSpec
+} from '@agentworkforce/persona-kit';
 import { bundleStager } from './bundle.js';
 import { resolveCloudUrl } from './cloud-url.js';
 import {
@@ -302,6 +307,7 @@ export async function deploy(opts: DeployOptions, resolvers: DeployResolvers = {
   const runtimeEnv = await resolveRuntimeCredentialEnv({
     mode,
     persona: preflight.persona,
+    agent: preflight.agent,
     workspace,
     workspaceToken: activeToken,
     cloudUrl,
@@ -314,6 +320,7 @@ export async function deploy(opts: DeployOptions, resolvers: DeployResolvers = {
   const launcher = resolveLauncher(mode, resolvers);
   const handle = await launcher.launch({
     persona: preflight.persona,
+    agent: preflight.agent,
     bundle,
     workspace,
     io,
@@ -420,6 +427,7 @@ type RuntimeCredentials = {
 async function resolveRuntimeCredentialEnv(args: {
   mode: DeployMode;
   persona: PersonaSpec;
+  agent: AgentSpec;
   workspace: string;
   workspaceToken: string;
   cloudUrl?: string;
@@ -434,6 +442,10 @@ async function resolveRuntimeCredentialEnv(args: {
   if (Object.keys(integrations).length === 0) {
     return undefined;
   }
+  // The runtime-credentials endpoint scopes the relayfile writeback token by
+  // the events the agent listens for. Triggers now live on the agent, so merge
+  // them back onto the per-provider integration config the cloud expects.
+  const credentialIntegrations = buildCredentialIntegrations(integrations, args.agent.triggers);
   const relayfile = relayfileIntegrationResolver({
     apiUrl: normalizeCloudUrl(args.cloudUrl ?? defaultApiUrl()),
     workspaceId: args.workspace,
@@ -462,7 +474,7 @@ async function resolveRuntimeCredentialEnv(args: {
     workspace: args.workspace,
     workspaceToken: args.workspaceToken,
     personaId: args.persona.id,
-    integrations
+    integrations: credentialIntegrations
   });
   if (credentials.relayfileToken !== null && !credentials.relayfileToken.startsWith('relay_pa_')) {
     throw new Error('runtime-credentials returned a token without expected relay_pa_ prefix');
@@ -471,7 +483,38 @@ async function resolveRuntimeCredentialEnv(args: {
     throw new Error('runtime-credentials returned a token without relayfile mount paths');
   }
 
-  return runtimeCredentialEnv(credentials, integrations);
+  return runtimeCredentialEnv(credentials, credentialIntegrations);
+}
+
+/**
+ * Integration config shape sent to the runtime-credentials endpoint: the
+ * persona's per-provider connection config (source/scope) merged with the
+ * agent's triggers for that provider. Triggers no longer live on the persona,
+ * so this is the join point that preserves the endpoint's existing contract.
+ */
+type CredentialIntegrations = Record<
+  string,
+  {
+    source?: IntegrationSource;
+    scope?: Record<string, string>;
+    triggers?: readonly PersonaIntegrationTrigger[];
+  }
+>;
+
+function buildCredentialIntegrations(
+  integrations: NonNullable<PersonaSpec['integrations']>,
+  triggers: AgentSpec['triggers']
+): CredentialIntegrations {
+  const out: CredentialIntegrations = {};
+  for (const [provider, cfg] of Object.entries(integrations)) {
+    const providerTriggers = triggers?.[provider];
+    out[provider] = {
+      ...(cfg?.source ? { source: cfg.source } : {}),
+      ...(cfg?.scope ? { scope: cfg.scope } : {}),
+      ...(providerTriggers && providerTriggers.length > 0 ? { triggers: providerTriggers } : {})
+    };
+  }
+  return out;
 }
 
 function shouldRequestRuntimeCredentials(args: {
@@ -500,7 +543,7 @@ async function requestRuntimeCredentials(args: {
   workspace: string;
   workspaceToken: string;
   personaId: string;
-  integrations: PersonaSpec['integrations'];
+  integrations: CredentialIntegrations;
 }): Promise<RuntimeCredentials> {
   const response = await fetch(
     `${args.cloudUrl}/api/v1/workspaces/${encodeURIComponent(args.workspace)}/runtime-credentials`,
@@ -554,7 +597,7 @@ function parseRuntimeCredentials(body: RuntimeCredentialsResponse): RuntimeCrede
 
 function runtimeCredentialEnv(
   credentials: RuntimeCredentials,
-  integrations: NonNullable<PersonaSpec['integrations']>
+  integrations: CredentialIntegrations
 ): Record<string, string> {
   const env: Record<string, string> = {
     RELAYFILE_URL: credentials.relayfileUrl,

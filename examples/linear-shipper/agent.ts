@@ -1,7 +1,7 @@
 import {
+  defineAgent,
   draftFile,
   encodeSegment,
-  handler,
   readJsonFile,
   resolveMountRoot,
   writeJsonFile,
@@ -52,7 +52,9 @@ function safeRepoDirName(value: string): string {
   return value;
 }
 
-export default handler(async (ctx, event) => {
+export default defineAgent({
+  triggers: { linear: [{ on: 'issue.created' }] },
+  handler: async (ctx, event) => {
   if (event.source !== 'linear' || event.type !== 'issue.created') return;
 
   const payload =
@@ -118,4 +120,5 @@ export default handler(async (ctx, event) => {
       body: `Implementation attempt captured in GitHub issue: ${issueUrl}`
     }
   );
+  }
 });

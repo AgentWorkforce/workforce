@@ -8,6 +8,7 @@ import {
   SIDECAR_MD_MODES
 } from './constants.js';
 import type {
+  AgentSpec,
   CapabilityValue,
   CodexApprovalPolicy,
   CodexSandboxMode,
@@ -624,7 +625,17 @@ export function parseIntegrationConfig(
   if (!isObject(value)) {
     throw new Error(`${context} must be an object`);
   }
-  const { source, scope, triggers } = value;
+  const { source, scope } = value;
+
+  // Hard cut: triggers moved from the persona to the agent. A persona
+  // integration is connection-config only (source + scope). Fail loudly so
+  // un-migrated personas surface the move instead of silently dropping events.
+  if ('triggers' in value) {
+    throw new Error(
+      `${context}.triggers is no longer allowed — event triggers moved to the agent. ` +
+        `Declare them in agent.ts via defineAgent({ triggers: { ${context.split('.').pop()}: [...] } }).`
+    );
+  }
 
   const out: PersonaIntegrationConfig = {};
 
@@ -647,20 +658,6 @@ export function parseIntegrationConfig(
     if (parsedScope && Object.keys(parsedScope).length > 0) {
       out.scope = parsedScope;
     }
-  }
-
-  if (triggers !== undefined) {
-    if (!Array.isArray(triggers)) {
-      throw new Error(`${context}.triggers must be an array if provided`);
-    }
-    if (triggers.length === 0) {
-      throw new Error(
-        `${context}.triggers must contain at least one entry if provided (omit the field to declare an integration with no event triggers)`
-      );
-    }
-    out.triggers = triggers.map((entry, idx) =>
-      parseIntegrationTrigger(entry, `${context}.triggers[${idx}]`)
-    );
   }
 
   return out;
@@ -800,6 +797,54 @@ export function parseWatch(value: unknown, context: string): WatchRule[] | undef
   });
 }
 
+/**
+ * Validate an **agent** spec (the `defineAgent(...)` shape the deploy CLI
+ * extracts from `agent.ts`). The handler itself is not validated here — only
+ * the listener declarations that travel to the cloud as the deploy `agent`
+ * block: a provider-keyed `triggers` map, cron `schedules`, and relayfile
+ * `watch` rules. Reuses {@link parseIntegrationTrigger} / {@link parseSchedules}
+ * / {@link parseWatch} so trigger/schedule/watch validation stays identical to
+ * the pre-move persona path.
+ */
+export function parseAgentSpec(value: unknown, context = 'agent'): AgentSpec {
+  if (!isObject(value)) {
+    throw new Error(`${context} must be an object`);
+  }
+  const { triggers, schedules, watch } = value;
+  const out: AgentSpec = {};
+
+  if (triggers !== undefined) {
+    if (!isObject(triggers) || Array.isArray(triggers)) {
+      throw new Error(
+        `${context}.triggers must be an object keyed by provider slug (e.g. { github: [{ on: 'pull_request.opened' }] })`
+      );
+    }
+    const parsed: Record<string, PersonaIntegrationTrigger[]> = {};
+    for (const [provider, raw] of Object.entries(triggers)) {
+      if (!provider.trim()) {
+        throw new Error(`${context}.triggers keys must be non-empty provider slugs`);
+      }
+      if (!Array.isArray(raw) || raw.length === 0) {
+        throw new Error(
+          `${context}.triggers.${provider} must be a non-empty array of triggers`
+        );
+      }
+      parsed[provider] = raw.map((entry, idx) =>
+        parseIntegrationTrigger(entry, `${context}.triggers.${provider}[${idx}]`)
+      );
+    }
+    if (Object.keys(parsed).length > 0) out.triggers = parsed;
+  }
+
+  const parsedSchedules = parseSchedules(schedules, `${context}.schedules`);
+  if (parsedSchedules) out.schedules = parsedSchedules;
+
+  const parsedWatch = parseWatch(watch, `${context}.watch`);
+  if (parsedWatch) out.watch = parsedWatch;
+
+  return out;
+}
+
 export function parseMemory(value: unknown, context: string): PersonaMemory | undefined {
   if (value === undefined) return undefined;
   if (typeof value === 'boolean') return value;
@@ -905,6 +950,19 @@ export function parsePersonaSpec(value: unknown, expectedIntent: PersonaIntent):
       'traits was removed in v1; personality is handled by the persona-personality-builder tool (out of scope for v1). See docs/plans/deploy-v1.md'
     );
   }
+  // Hard cut: schedules and watch moved from the persona to the agent.
+  if ('schedules' in value) {
+    throw new Error(
+      `persona[${expectedIntent}].schedules is no longer allowed — cron schedules moved to the agent. ` +
+        'Declare them in agent.ts via defineAgent({ schedules: [...] }).'
+    );
+  }
+  if ('watch' in value) {
+    throw new Error(
+      `persona[${expectedIntent}].watch is no longer allowed — relayfile watch rules moved to the agent. ` +
+        'Declare them in agent.ts via defineAgent({ watch: [...] }).'
+    );
+  }
 
   const {
     id,
@@ -931,8 +989,6 @@ export function parsePersonaSpec(value: unknown, expectedIntent: PersonaIntent):
     cloud,
     useSubscription,
     integrations,
-    schedules,
-    watch,
     capabilities,
     memory,
     onEvent
@@ -1037,8 +1093,6 @@ export function parsePersonaSpec(value: unknown, expectedIntent: PersonaIntent):
     integrations,
     `persona[${expectedIntent}].integrations`
   );
-  const parsedSchedules = parseSchedules(schedules, `persona[${expectedIntent}].schedules`);
-  const parsedWatch = parseWatch(watch, `persona[${expectedIntent}].watch`);
   const parsedCapabilities = parseCapabilities(
     capabilities,
     `persona[${expectedIntent}].capabilities`
@@ -1072,8 +1126,6 @@ export function parsePersonaSpec(value: unknown, expectedIntent: PersonaIntent):
     ...(typeof cloud === 'boolean' ? { cloud } : {}),
     ...(typeof useSubscription === 'boolean' ? { useSubscription } : {}),
     ...(parsedIntegrations ? { integrations: parsedIntegrations } : {}),
-    ...(parsedSchedules ? { schedules: parsedSchedules } : {}),
-    ...(parsedWatch ? { watch: parsedWatch } : {}),
     ...(parsedCapabilities ? { capabilities: parsedCapabilities } : {}),
     ...(parsedMemory !== undefined ? { memory: parsedMemory } : {}),
     ...(parsedOnEvent !== undefined ? { onEvent: parsedOnEvent } : {})

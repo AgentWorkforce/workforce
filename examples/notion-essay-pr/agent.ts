@@ -1,7 +1,7 @@
 import {
+  defineAgent,
   draftFile,
   encodeSegment,
-  handler,
   resolveMountRoot,
   writeJsonFile,
   type IntegrationClientOptions,
@@ -29,15 +29,18 @@ function vfsClient(): IntegrationClientOptions {
   return { relayfileMountRoot: resolveMountRoot({}) };
 }
 
-export default handler(async (ctx, event) => {
+export default defineAgent({
+  triggers: { notion: [{ on: 'page.created' }] },
+  handler: async (ctx, event) => {
   if (event.source !== 'notion' || event.type !== 'page.created') {
     ctx.log('debug', 'notion-essay-pr.ignored', {
       source: event.source,
-      type: event.source === 'cron' ? 'cron.tick' : event.type
+      type: event.type
     });
     return;
   }
   await handleNotionPageCreated(ctx, event);
+  }
 });
 
 async function handleNotionPageCreated(ctx: WorkforceCtx, event: WorkforceProviderEvent): Promise<void> {

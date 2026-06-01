@@ -38,7 +38,7 @@ export const devLauncher: ModeLauncher = {
     const env: NodeJS.ProcessEnv = {
       ...process.env,
       ...(input.env ?? {}),
-      ...runtimeContextEnv(input.persona, input.env),
+      ...runtimeContextEnv(input.persona, input.env, input.agent),
       WORKFORCE_WORKSPACE_ID: input.workspace,
       WORKFORCE_PERSONA_ID: input.persona.id
     };

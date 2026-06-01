@@ -3,6 +3,17 @@
 
 export { handler, isWorkforceHandler } from './handler.js';
 
+// Typed agent authoring. `defineAgent` is the agent.ts default export — it
+// declares the agent's triggers/schedules/watch and handler, with the handler
+// `event` narrowed to the declared triggers.
+export {
+  defineAgent,
+  isWorkforceAgent,
+  type AgentDefinition,
+  type AgentEvent,
+  type WorkforceAgentExport
+} from './define-agent.js';
+
 export type {
   HarnessRunArgs,
   HarnessRunResult,
@@ -57,9 +68,12 @@ export {
 // surface, so users don't need a second import for the shapes the ctx
 // carries.
 export type {
+  AgentSpec,
   PersonaIntegrationConfig,
   PersonaIntegrationTrigger,
   PersonaMemoryScope,
   PersonaSchedule,
-  PersonaSpec
+  PersonaSpec,
+  TypedTriggerMap,
+  WatchRule
 } from '@agentworkforce/persona-kit';

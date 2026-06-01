@@ -46,7 +46,7 @@ export const sandboxLauncher: ModeLauncher = {
       label: `wf-${input.persona.id}`,
       env: {
         ...(input.env ?? {}),
-        ...runtimeContextEnv(input.persona, input.env),
+        ...runtimeContextEnv(input.persona, input.env, input.agent),
         WORKFORCE_WORKSPACE_ID: input.workspace,
         WORKFORCE_PERSONA_ID: input.persona.id
       },

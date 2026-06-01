@@ -28,7 +28,12 @@ const persona: PersonaSpec = {
   model: 'anthropic/claude-3-5-sonnet',
   systemPrompt: 'be helpful',
   harnessSettings: { reasoning: 'medium', timeoutSeconds: 300 },
-  cloud: true,
+  cloud: true
+};
+
+// Listeners live on the agent now, not the persona. Passed to startRunner as
+// `agentSpec` (used for startup logging only).
+const agentSpec = {
   schedules: [{ name: 'weekly', cron: '0 9 * * 6' }]
 };
 
@@ -66,6 +71,7 @@ test('startRunner dispatches a cron envelope to the handler', async () => {
   const logs: Array<{ level: string; message: string }> = [];
   await startRunner({
     persona,
+    agentSpec,
     agent: runtimeAgent,
     deployment: runtimeDeployment,
     workspaceId: 'ws-test',

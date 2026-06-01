@@ -10,18 +10,20 @@ import {
   isPersonaSourcePath,
   loadPersonaSourceFile
 } from './persona-source.js';
+import { extractAgentSpec } from './extract-agent.js';
 import type { DeployPreflight } from './types.js';
 
 /**
- * Load + parse + validate a persona for the deploy surface. Returns the
- * frozen-shape preflight on success, throws with a field-pointed error
- * on validation failure.
+ * Load + parse + validate a persona AND its agent for the deploy surface.
+ * Returns the frozen-shape preflight on success, throws with a field-pointed
+ * error on validation failure.
  *
  * Deploy preflight is stricter than the persona-kit parser: the parser
  * accepts any persona, valid or not for deploy; this function enforces
- * the deploy-specific cross-field rules (cloud:true, onEvent present when
- * triggers exist, onEvent file actually on disk, etc.) so the orchestrator
- * never gets a half-valid spec.
+ * the deploy-specific cross-field rules (cloud:true, onEvent on disk, the
+ * agent declares at least one listener, and every provider the agent triggers
+ * on is also declared as a persona integration connection) so the
+ * orchestrator never gets a half-valid spec.
  */
 export async function preflightPersona(personaPath: string): Promise<DeployPreflight> {
   const absPath = path.resolve(personaPath);
@@ -53,19 +55,9 @@ export async function preflightPersona(personaPath: string): Promise<DeployPrefl
     );
   }
 
-  const hasIntegrationTriggers = !!persona.integrations &&
-    Object.values(persona.integrations).some((cfg) => (cfg.triggers?.length ?? 0) > 0);
-  const hasSchedules = (persona.schedules?.length ?? 0) > 0;
-
-  if (!hasIntegrationTriggers && !hasSchedules) {
-    throw new Error(
-      `persona "${persona.id}" declares cloud:true but has no triggers (add at least one schedule or integration trigger)`
-    );
-  }
-
   if (!persona.onEvent) {
     throw new Error(
-      `persona "${persona.id}" declares cloud:true but is missing "onEvent" (path to the handler file)`
+      `persona "${persona.id}" declares cloud:true but is missing "onEvent" (path to the agent file)`
     );
   }
 
@@ -82,17 +74,44 @@ export async function preflightPersona(personaPath: string): Promise<DeployPrefl
     throw new Error(`onEvent path ${onEventPath} is not a regular file`);
   }
 
-  const triggerLint = lintTriggers(persona);
+  // Triggers/schedules/watch live on the agent now — extract them from the
+  // `defineAgent(...)` default export of the onEvent file.
+  const { agent } = await extractAgentSpec(onEventPath);
+
+  const hasTriggers = !!agent.triggers && Object.values(agent.triggers).some((t) => (t?.length ?? 0) > 0);
+  const hasSchedules = (agent.schedules?.length ?? 0) > 0;
+  const hasWatch = (agent.watch?.length ?? 0) > 0;
+  if (!hasTriggers && !hasSchedules && !hasWatch) {
+    throw new Error(
+      `agent "${persona.id}" (${persona.onEvent}) declares no listeners — add at least one trigger, schedule, or watch rule to defineAgent({...})`
+    );
+  }
+
+  // Every provider the agent triggers on must have a matching integration
+  // *connection* on the persona, so the deploy CLI can connect it.
+  if (agent.triggers) {
+    const declared = new Set(Object.keys(persona.integrations ?? {}));
+    const missing = Object.keys(agent.triggers).filter((provider) => !declared.has(provider));
+    if (missing.length > 0) {
+      throw new Error(
+        `agent "${persona.id}" triggers on provider(s) [${missing.join(', ')}] that the persona does not connect — ` +
+          `add ${missing.map((p) => `integrations.${p}`).join(', ')} to the persona (connection config: { source?, scope? }).`
+      );
+    }
+  }
+
+  const triggerLint = lintTriggers(agent);
   const warnings = triggerLint.map(
     (issue) => `${issue.path}: ${issue.message}`
   );
 
   return {
     persona,
+    agent,
     personaPath: absPath,
     personaDir,
     onEventPath,
-    schedules: (persona.schedules ?? []).map((s) => s.name),
+    schedules: (agent.schedules ?? []).map((s) => s.name),
     integrations: persona.integrations ? Object.keys(persona.integrations) : [],
     warnings
   };

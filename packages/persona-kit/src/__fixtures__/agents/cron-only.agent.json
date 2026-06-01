@@ -1,0 +1,14 @@
+{
+  "schedules": [
+    {
+      "name": "weekly-digest",
+      "cron": "0 9 * * 6",
+      "tz": "UTC"
+    },
+    {
+      "name": "weekday-check",
+      "cron": "0 9 * * 1-5",
+      "tz": "America/New_York"
+    }
+  ]
+}

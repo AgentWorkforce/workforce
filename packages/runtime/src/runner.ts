@@ -1,4 +1,4 @@
-import type { PersonaSpec } from '@agentworkforce/persona-kit';
+import type { AgentSpec, PersonaSpec } from '@agentworkforce/persona-kit';
 import { createCloudRuntimeDefaults } from './cloud-defaults.js';
 import { buildCtx, type CtxBuildOptions } from './ctx.js';
 import { isWorkforceHandler } from './handler.js';
@@ -30,6 +30,12 @@ export interface StartRunnerOptions {
    * existed).
    */
   handler: WorkforceHandlerExport | WorkforceHandler;
+  /**
+   * Parsed agent listener spec (triggers/schedules/watch) extracted from the
+   * `defineAgent` default export by the deploy CLI. Optional — used only for
+   * startup logging; the runtime does not subscribe (the cloud gateway does).
+   */
+  agentSpec?: AgentSpec;
   /**
    * Workspace identifier. Resolved from `WORKFORCE_WORKSPACE_ID` env when
    * not supplied. The runner refuses to start without one.
@@ -121,7 +127,8 @@ export async function startRunner(options: StartRunnerOptions): Promise<void> {
   ctx.log('info', 'runner.started', {
     persona: options.persona.id,
     workspaceId,
-    schedules: options.persona.schedules?.map((s) => s.name) ?? [],
+    schedules: options.agentSpec?.schedules?.map((s) => s.name) ?? [],
+    triggers: options.agentSpec?.triggers ? Object.keys(options.agentSpec.triggers) : [],
     integrations: options.persona.integrations ? Object.keys(options.persona.integrations) : []
   });
 
