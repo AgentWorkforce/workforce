@@ -24,7 +24,7 @@ import {
  * schedules / watch the author declared, but it must NOT run the real runtime
  * (sandbox/credentials/cloud wiring) or invoke the handler. So:
  *   - `defineAgent` returns the listener data verbatim,
- *   - `handler` is identity,
+ *   - `handler` is preserved only when the agent provided one,
  *   - every other named export (`writeJsonFile`, `resolveMountRoot`, …) is a
  *     harmless no-op — those are only referenced *inside* the handler closure,
  *     which extraction never calls.
@@ -40,7 +40,7 @@ function defineAgent(input) {
   if (input && input.watch) out.watch = input.watch;
   // Preserve the handler so extraction can confirm a real defineAgent shape
   // (it is never invoked during extraction).
-  out.handler = input && typeof input.handler === 'function' ? input.handler : function () {};
+  if (input && typeof input.handler === 'function') out.handler = input.handler;
   return out;
 }
 function handler(fn) { return fn; }
