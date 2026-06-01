@@ -56,12 +56,22 @@ export type {
 export {
   definePersona,
   type PersonaDefinition,
+  type ScopeKeysFor,
   type TriggerNameFor,
   type TypedIntegrationConfig,
   type TypedIntegrations,
+  type TypedScopeMap,
   type TypedTrigger,
   type TypedTriggerMap
 } from './define.js';
+
+// Per-provider connection scope-key catalog (from @relayfile/adapter-core/scope-keys)
+export {
+  KNOWN_SCOPE_KEY_CATALOG,
+  ADAPTERS_WITHOUT_KNOWN_SCOPE_KEYS,
+  type ScopeKey,
+  type ScopeKeyProvider
+} from './scope-keys.js';
 
 // Parsers + sidecar resolver
 export {

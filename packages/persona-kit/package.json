@@ -37,7 +37,7 @@
     "lint": "tsc -p tsconfig.json --noEmit"
   },
   "dependencies": {
-    "@relayfile/adapter-core": "^0.3.17",
+    "@relayfile/adapter-core": "^0.3.26",
     "@relayfile/local-mount": "^0.7.24"
   },
   "devDependencies": {
