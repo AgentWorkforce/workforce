@@ -55,19 +55,13 @@ jobs:
           echo "Verifying ${{ github.event.inputs.package }}@$RESOLVED"
 
       - name: CLI smoke test
-        if: ${{ github.event.inputs.package == '@agentworkforce/cli' || github.event.inputs.package == 'agentworkforce' }}
+        if: ${{ github.event.inputs.package == 'agentworkforce' }}
         run: |
           set -euo pipefail
-          # The two CLI packages install different bin names: the scoped
-          # @agentworkforce/cli ships `agent-workforce`; the top-level
-          # `agentworkforce` package ships `agentworkforce`. The CLI itself
-          # derives its USAGE bin name from process.argv[1], so we expect
-          # the help block to use whichever name is on PATH.
-          if [ "${{ github.event.inputs.package }}" = "agentworkforce" ]; then
-            BIN="agentworkforce"
-          else
-            BIN="agent-workforce"
-          fi
+          # The top-level `agentworkforce` package is the user-facing global
+          # CLI package. The scoped @agentworkforce/cli package is an
+          # implementation dependency and intentionally does not declare a bin.
+          BIN="agentworkforce"
           npm install -g "${{ github.event.inputs.package }}@${{ steps.resolve.outputs.version }}"
           # --help should exit 0 and print the usage block.
           output=$("$BIN" --help)
@@ -87,6 +81,29 @@ jobs:
             exit 1
           fi
           echo "CLI smoke test passed."
+
+      - name: Scoped CLI package smoke test
+        if: ${{ github.event.inputs.package == '@agentworkforce/cli' }}
+        run: |
+          set -euo pipefail
+          WORKDIR=$(mktemp -d)
+          cd "$WORKDIR"
+          npm init -y > /dev/null
+          npm install "${{ github.event.inputs.package }}@${{ steps.resolve.outputs.version }}"
+          node --input-type=module <<'EOF'
+          import { readFileSync } from 'node:fs';
+          import assert from 'node:assert/strict';
+
+          const pkg = JSON.parse(readFileSync('node_modules/@agentworkforce/cli/package.json', 'utf8'));
+          assert.equal(pkg.name, '@agentworkforce/cli');
+          assert.equal(pkg.version, '${{ steps.resolve.outputs.version }}');
+          assert.equal(pkg.bin, undefined);
+
+          const mod = await import('./node_modules/@agentworkforce/cli/dist/cli.js');
+          assert.equal(typeof mod.main, 'function');
+          assert.equal(typeof mod.CLI_VERSION, 'string');
+          console.log(`scoped CLI package smoke passed for ${pkg.name}@${pkg.version}`);
+          EOF
 
       - name: Library smoke test (ESM import + exports surface)
         if: ${{ github.event.inputs.package != '@agentworkforce/cli' && github.event.inputs.package != 'agentworkforce' }}
