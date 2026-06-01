@@ -65,7 +65,7 @@ export {
   type TypedTriggerMap
 } from './define.js';
 
-// Per-provider connection scope catalog (from @relayfile/adapter-core/scopes)
+// Per-provider connection scope catalog for typed persona authoring
 export {
   KNOWN_SCOPE_CATALOG,
   ADAPTERS_WITHOUT_KNOWN_SCOPES,

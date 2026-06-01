@@ -1,7 +1,14 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 
-import { definePersona, parsePersonaSpec, type TypedTriggerMap } from './index.js';
+import {
+  KNOWN_SCOPE_CATALOG,
+  definePersona,
+  parsePersonaSpec,
+  type ScopeKeysFor,
+  type TypedScopeMap,
+  type TypedTriggerMap
+} from './index.js';
 
 test('definePersona returns authored specs that parse successfully', () => {
   const persona = definePersona({
@@ -60,6 +67,27 @@ test('TypedTriggerMap gives per-provider event autocomplete; arbitrary providers
   };
   assert.equal(triggers.github?.[1]?.on, 'off_registry.github_event');
   assert.equal(triggers.customProvider?.[0]?.on, 'custom.event');
+});
+
+test('TypedScopeMap gives per-provider scope key autocomplete while allowing future keys', () => {
+  const githubScope: TypedScopeMap<'github'> = {
+    owner: 'AgentWorkforce',
+    repo: 'workforce',
+    installation: 'future-runtime-key'
+  };
+  const customScope: TypedScopeMap<'customProvider'> = {
+    anyKey: 'any-value'
+  };
+
+  const githubKey: ScopeKeysFor<'github'> = 'repo';
+  const slackKey: ScopeKeysFor<'slack'> = 'channel';
+  // @ts-expect-error github has no catalogued "channel" scope key
+  const badGithubKey: ScopeKeysFor<'github'> = 'channel';
+
+  assert.equal(githubScope[githubKey], 'workforce');
+  assert.equal(KNOWN_SCOPE_CATALOG.slack.includes(slackKey), true);
+  assert.equal(customScope.anyKey, 'any-value');
+  assert.equal(badGithubKey, 'channel');
 });
 
 test('definePersona types tags against the closed PersonaTag vocabulary', () => {
