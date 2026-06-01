@@ -3,6 +3,8 @@ import { Daytona, type Sandbox as DaytonaSandbox } from '@daytonaio/sdk';
 import type { PersonaSpec } from '@agentworkforce/persona-kit';
 import type { BundleResult } from '../types.js';
 
+type PersonaIntegrations = NonNullable<PersonaSpec['integrations']>;
+
 /**
  * Working directory the runner is invoked from inside the sandbox. Same
  * mount root cloud's DaytonaRuntime defaults to, so persona authors get
@@ -38,7 +40,7 @@ export interface SandboxClient {
 export interface MintArgs {
   label: string;
   env?: Record<string, string>;
-  integrations?: PersonaSpec['integrations'];
+  integrations?: PersonaIntegrations;
   /** Cap the create call itself; not the sandbox lifetime. */
   createTimeoutSeconds?: number;
 }
@@ -171,7 +173,7 @@ export function createProxySandboxClient(opts: ProxySandboxClientOptions): Sandb
           personaId: opts.personaId,
           label: args.label,
           env: args.env,
-          ...(args.integrations ? { integrations: args.integrations } : {}),
+          ...(hasIntegrations(args.integrations) ? { integrations: args.integrations } : {}),
           // `timeoutSeconds` on the mint contract caps the *create call*,
           // not the sandbox lifetime. Default to 120s which matches the
           // cloud-side MAX_CREATE_TIMEOUT_SECONDS clamp.
@@ -278,6 +280,10 @@ async function readBundleFiles(bundle: BundleResult): Promise<
 async function fileUpload(localPath: string, remotePath: string): Promise<{ source: Buffer; destination: string }> {
   const source = await readFile(localPath);
   return { source, destination: remotePath };
+}
+
+function hasIntegrations(integrations: PersonaIntegrations | undefined): integrations is PersonaIntegrations {
+  return integrations !== undefined && Object.keys(integrations).length > 0;
 }
 
 function absoluteUrl(cloudBase: string, maybeRelative: string): string {

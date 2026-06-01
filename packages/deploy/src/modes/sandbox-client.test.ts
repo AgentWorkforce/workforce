@@ -167,6 +167,32 @@ test('proxy client surfaces non-2xx mint responses with the cloud status + excer
   );
 });
 
+test('proxy client omits empty integrations from mint requests', async () => {
+  const { fetch: impl, calls } = fakeFetch([
+    () =>
+      new Response(
+        JSON.stringify({
+          sandboxId: 'sbx_test',
+          authMode: 'proxy',
+          execUrl: 'https://cloud.example.com/api/v1/workspaces/ws/sandboxes/sbx_test/exec',
+          filesUrl: 'https://cloud.example.com/api/v1/workspaces/ws/sandboxes/sbx_test/files'
+        }),
+        { status: 201 }
+      )
+  ]);
+  const client = createProxySandboxClient({
+    cloudUrl: 'https://cloud.example.com',
+    workspaceId: 'ws',
+    workspaceToken: 'tok',
+    personaId: 'demo',
+    fetchImpl: impl
+  });
+
+  await client.mint({ label: 'wf-demo', integrations: {} });
+
+  assert.equal('integrations' in (calls[0].body as Record<string, unknown>), false);
+});
+
 test('proxy client tolerates 404 on destroy (already deleted)', async () => {
   const { fetch: impl } = fakeFetch([
     () => new Response('not found', { status: 404, statusText: 'Not Found' })

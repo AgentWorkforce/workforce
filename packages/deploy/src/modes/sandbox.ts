@@ -49,7 +49,7 @@ export const sandboxLauncher: ModeLauncher = {
         WORKFORCE_WORKSPACE_ID: input.workspace,
         WORKFORCE_PERSONA_ID: input.persona.id
       },
-      integrations: input.persona.integrations
+      ...(input.persona.integrations ? { integrations: input.persona.integrations } : {})
     });
 
     try {
