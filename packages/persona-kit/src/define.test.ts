@@ -2,7 +2,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 
 import {
-  KNOWN_SCOPE_CATALOG,
+  KNOWN_SCOPE_KEY_CATALOG,
   definePersona,
   parsePersonaSpec,
   type ScopeKeysFor,
@@ -80,13 +80,17 @@ test('TypedScopeMap gives per-provider scope key autocomplete while allowing fut
   };
 
   const githubKey: ScopeKeysFor<'github'> = 'repo';
-  const slackKey: ScopeKeysFor<'slack'> = 'channel';
   // @ts-expect-error github has no catalogued "channel" scope key
   const badGithubKey: ScopeKeysFor<'github'> = 'channel';
 
+  // Providers with no catalogued scope keys (slack today) still accept
+  // arbitrary keys via TypedScopeMap's index signature — no typing regression.
+  const slackScope: TypedScopeMap<'slack'> = { channel: 'C123' };
+
   assert.equal(githubScope[githubKey], 'workforce');
-  assert.equal(KNOWN_SCOPE_CATALOG.slack.includes(slackKey), true);
+  assert.deepEqual([...KNOWN_SCOPE_KEY_CATALOG.github], ['owner', 'repo']);
   assert.equal(customScope.anyKey, 'any-value');
+  assert.equal(slackScope.channel, 'C123');
   assert.equal(badGithubKey, 'channel');
 });
 
