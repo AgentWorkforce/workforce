@@ -203,9 +203,20 @@ export async function deploy(opts: DeployOptions, resolvers: DeployResolvers = {
     );
   }
   io.info(`workspace: ${workspace}`);
-  let activeToken = resolvedAuth.token;
+  let activeToken = (resolvedAuth.token ?? '').trim();
+  if (!activeToken) {
+    throw new Error('workspace token is required for deploy: run `agentworkforce login` or set WORKFORCE_WORKSPACE_TOKEN');
+  }
   let subscription = resolvers.subscription;
   let credentialSelections: Record<string, string> | undefined;
+  const providerConfigKeys = resolvers.providerConfigKeys
+    ?? (mode === 'cloud'
+      ? relayfileCatalogConfigKeyResolver({
+          apiUrl: normalizeCloudUrl(cloudUrl ?? defaultApiUrl()),
+          workspaceToken: () => activeToken,
+          io
+        })
+      : undefined);
 
   if (preflight.persona.useSubscription && !subscription) {
     const result = await ensureCloudSubscriptionReady({
@@ -248,17 +259,7 @@ export async function deploy(opts: DeployOptions, resolvers: DeployResolvers = {
         }
       : {}),
     ...(subscription ? { subscription } : {}),
-    ...(resolvers.providerConfigKeys
-      ? { providerConfigKeys: resolvers.providerConfigKeys }
-      : mode === 'cloud'
-        ? {
-            providerConfigKeys: relayfileCatalogConfigKeyResolver({
-              apiUrl: normalizeCloudUrl(cloudUrl ?? defaultApiUrl()),
-              workspaceToken: () => activeToken,
-              io
-            })
-          }
-        : {})
+    ...(providerConfigKeys ? { providerConfigKeys } : {})
   });
 
   // Onboarding pickers: turn picker-annotated inputs the operator hasn't set
@@ -298,6 +299,17 @@ export async function deploy(opts: DeployOptions, resolvers: DeployResolvers = {
   });
   io.info(`bundle: staged to ${bundle.runnerPath} (${formatBytes(bundle.sizeBytes)})`);
 
+  const runtimeEnv = await resolveRuntimeCredentialEnv({
+    mode,
+    persona: preflight.persona,
+    workspace,
+    workspaceToken: activeToken,
+    cloudUrl,
+    byoSandbox: opts.byoSandbox === true,
+    enabled: resolvers.integrations === undefined,
+    ...(providerConfigKeys ? { providerConfigKeys } : {})
+  });
+
   io.info(`mode: ${mode}`);
   const launcher = resolveLauncher(mode, resolvers);
   const handle = await launcher.launch({
@@ -305,6 +317,7 @@ export async function deploy(opts: DeployOptions, resolvers: DeployResolvers = {
     bundle,
     workspace,
     io,
+    ...(runtimeEnv ? { env: runtimeEnv } : {}),
     ...(activeToken ? { workspaceToken: activeToken } : {}),
     ...(opts.detach ? { detach: true } : {}),
     ...(opts.byoSandbox ? { byoSandbox: true } : {}),
@@ -370,13 +383,190 @@ function defaultIntegrationResolver(args: {
   cloudUrl?: string;
   io: DeployIO;
 }): IntegrationConnectResolver {
-  if (args.mode !== 'cloud') return envIntegrationResolver();
-  return relayfileIntegrationResolver({
+  const relayfile = relayfileIntegrationResolver({
     apiUrl: normalizeCloudUrl(args.cloudUrl ?? defaultApiUrl()),
     workspaceId: args.workspace,
     workspaceToken: args.token,
     io: args.io
   });
+  if (args.mode === 'cloud') return relayfile;
+
+  const env = envIntegrationResolver();
+  return {
+    async isConnected(input) {
+      if (await relayfile.isConnected(input).catch(() => false)) return true;
+      return env.isConnected(input);
+    },
+    async connect(input) {
+      return relayfile.connect(input);
+    }
+  };
+}
+
+type RuntimeCredentialsResponse = {
+  relayfileUrl?: unknown;
+  relayfileWorkspaceId?: unknown;
+  relayfileToken?: unknown;
+  relayfileMountPaths?: unknown;
+};
+
+type RuntimeCredentials = {
+  relayfileUrl: string;
+  relayfileWorkspaceId: string;
+  relayfileToken: string | null;
+  relayfileMountPaths: string[];
+};
+
+async function resolveRuntimeCredentialEnv(args: {
+  mode: DeployMode;
+  persona: PersonaSpec;
+  workspace: string;
+  workspaceToken: string;
+  cloudUrl?: string;
+  byoSandbox: boolean;
+  enabled: boolean;
+  providerConfigKeys?: ProviderConfigKeyResolver;
+}): Promise<Record<string, string> | undefined> {
+  if (!args.enabled || !shouldRequestRuntimeCredentials(args)) {
+    return undefined;
+  }
+  const integrations = args.persona.integrations ?? {};
+  if (Object.keys(integrations).length === 0) {
+    return undefined;
+  }
+  const relayfile = relayfileIntegrationResolver({
+    apiUrl: normalizeCloudUrl(args.cloudUrl ?? defaultApiUrl()),
+    workspaceId: args.workspace,
+    workspaceToken: args.workspaceToken
+  });
+  for (const [provider, integration] of Object.entries(integrations)) {
+    const expectedConfigKey = args.providerConfigKeys
+      ? await args.providerConfigKeys.resolve(provider).catch(() => undefined)
+      : undefined;
+    const connected = await relayfile
+      .isConnected({
+        workspace: args.workspace,
+        provider,
+        source: integration?.source ?? { kind: 'deployer_user' },
+        allowWorkspaceFallback: integrationAllowsWorkspaceFallback(integration),
+        ...(expectedConfigKey ? { expectedConfigKey } : {})
+      })
+      .catch(() => false);
+    if (!connected) {
+      return undefined;
+    }
+  }
+
+  const credentials = await requestRuntimeCredentials({
+    cloudUrl: normalizeCloudUrl(args.cloudUrl ?? defaultApiUrl()),
+    workspace: args.workspace,
+    workspaceToken: args.workspaceToken,
+    personaId: args.persona.id,
+    integrations
+  });
+  if (credentials.relayfileToken !== null && !credentials.relayfileToken.startsWith('relay_pa_')) {
+    throw new Error('runtime-credentials returned a token without expected relay_pa_ prefix');
+  }
+  if (credentials.relayfileToken !== null && credentials.relayfileMountPaths.length === 0) {
+    throw new Error('runtime-credentials returned a token without relayfile mount paths');
+  }
+
+  return runtimeCredentialEnv(credentials, integrations);
+}
+
+function shouldRequestRuntimeCredentials(args: {
+  mode: DeployMode;
+  byoSandbox: boolean;
+}): boolean {
+  if (args.mode === 'cloud') return false;
+  if (args.mode === 'dev') return true;
+  return args.byoSandbox || hasByoSandboxEnv();
+}
+
+function integrationAllowsWorkspaceFallback(value: unknown): boolean {
+  return Boolean(
+    value &&
+    typeof value === 'object' &&
+    (value as { __agentworkforceImplicitSource?: unknown }).__agentworkforceImplicitSource === true
+  );
+}
+
+function hasByoSandboxEnv(): boolean {
+  return Boolean(process.env.DAYTONA_API_KEY?.trim() || process.env.DAYTONA_JWT_TOKEN?.trim());
+}
+
+async function requestRuntimeCredentials(args: {
+  cloudUrl: string;
+  workspace: string;
+  workspaceToken: string;
+  personaId: string;
+  integrations: PersonaSpec['integrations'];
+}): Promise<RuntimeCredentials> {
+  const response = await fetch(
+    `${args.cloudUrl}/api/v1/workspaces/${encodeURIComponent(args.workspace)}/runtime-credentials`,
+    {
+      method: 'POST',
+      headers: {
+        authorization: `Bearer ${args.workspaceToken}`,
+        'content-type': 'application/json',
+        'user-agent': 'workforce-deploy'
+      },
+      body: JSON.stringify({
+        personaId: args.personaId,
+        agentId: args.personaId,
+        integrations: args.integrations,
+        ttlSeconds: 3600
+      })
+    }
+  );
+  if (!response.ok) {
+    const text = await response.text().catch(() => '');
+    throw new Error(`runtime-credentials request failed: ${response.status} ${text}`.trim());
+  }
+  return parseRuntimeCredentials(await response.json());
+}
+
+function parseRuntimeCredentials(body: RuntimeCredentialsResponse): RuntimeCredentials {
+  const relayfileUrl = typeof body.relayfileUrl === 'string' ? body.relayfileUrl.trim() : '';
+  const relayfileWorkspaceId = typeof body.relayfileWorkspaceId === 'string'
+    ? body.relayfileWorkspaceId.trim()
+    : '';
+  const relayfileToken = body.relayfileToken === null
+    ? null
+    : typeof body.relayfileToken === 'string'
+      ? body.relayfileToken.trim()
+      : '';
+  const relayfileMountPaths = Array.isArray(body.relayfileMountPaths)
+    ? body.relayfileMountPaths.filter((entry): entry is string => typeof entry === 'string')
+    : [];
+  if (!relayfileUrl || !relayfileWorkspaceId || relayfileToken === '') {
+    throw new Error(
+      `runtime-credentials response missing relayfileUrl/relayfileWorkspaceId/relayfileToken: ${JSON.stringify(body)}`
+    );
+  }
+  return {
+    relayfileUrl,
+    relayfileWorkspaceId,
+    relayfileToken,
+    relayfileMountPaths
+  };
+}
+
+function runtimeCredentialEnv(
+  credentials: RuntimeCredentials,
+  integrations: NonNullable<PersonaSpec['integrations']>
+): Record<string, string> {
+  const env: Record<string, string> = {
+    RELAYFILE_URL: credentials.relayfileUrl,
+    RELAYFILE_WORKSPACE_ID: credentials.relayfileWorkspaceId,
+    RELAYFILE_TOKEN: credentials.relayfileToken ?? '',
+    RELAYFILE_MOUNT_PATHS: JSON.stringify(credentials.relayfileMountPaths)
+  };
+  for (const provider of Object.keys(integrations)) {
+    env[`WORKFORCE_INTEGRATION_${provider.toUpperCase()}_TOKEN`] = '';
+    env[`WORKFORCE_INTEGRATION_${provider.toUpperCase()}_CONNECTION_ID`] = '';
+  }
+  return env;
 }
 
 function validateSubscriptionSupport(
