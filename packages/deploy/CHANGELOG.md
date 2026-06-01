@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [3.0.36] - 2026-06-01
+
+### Added
+
+- **Wire runtime credentials into workforce deploy** (#171)
+
 ## [3.0.33] - 2026-05-29
 
 ### Fixed
