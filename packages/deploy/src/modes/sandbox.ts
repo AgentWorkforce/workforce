@@ -48,7 +48,8 @@ export const sandboxLauncher: ModeLauncher = {
         ...runtimeContextEnv(input.persona, input.env),
         WORKFORCE_WORKSPACE_ID: input.workspace,
         WORKFORCE_PERSONA_ID: input.persona.id
-      }
+      },
+      integrations: input.persona.integrations
     });
 
     try {

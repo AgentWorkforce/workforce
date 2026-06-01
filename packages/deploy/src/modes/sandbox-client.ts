@@ -1,5 +1,6 @@
 import { readFile } from 'node:fs/promises';
 import { Daytona, type Sandbox as DaytonaSandbox } from '@daytonaio/sdk';
+import type { PersonaSpec } from '@agentworkforce/persona-kit';
 import type { BundleResult } from '../types.js';
 
 /**
@@ -37,6 +38,7 @@ export interface SandboxClient {
 export interface MintArgs {
   label: string;
   env?: Record<string, string>;
+  integrations?: PersonaSpec['integrations'];
   /** Cap the create call itself; not the sandbox lifetime. */
   createTimeoutSeconds?: number;
 }
@@ -169,6 +171,7 @@ export function createProxySandboxClient(opts: ProxySandboxClientOptions): Sandb
           personaId: opts.personaId,
           label: args.label,
           env: args.env,
+          ...(args.integrations ? { integrations: args.integrations } : {}),
           // `timeoutSeconds` on the mint contract caps the *create call*,
           // not the sandbox lifetime. Default to 120s which matches the
           // cloud-side MAX_CREATE_TIMEOUT_SECONDS clamp.

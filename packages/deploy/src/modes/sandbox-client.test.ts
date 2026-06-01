@@ -96,7 +96,10 @@ test('proxy client mints, uploads, execs, and destroys against cloud sandboxes e
 
     const handle = await client.mint({
       label: 'wf-demo',
-      env: { WORKFORCE_WORKSPACE_ID: 'ws' }
+      env: { WORKFORCE_WORKSPACE_ID: 'ws' },
+      integrations: {
+        github: { triggers: [{ on: 'pull_request.opened' }] }
+      }
     });
     assert.equal(handle.mode, 'proxy');
     assert.equal(handle.sandboxId, 'sbx_test');
@@ -118,6 +121,9 @@ test('proxy client mints, uploads, execs, and destroys against cloud sandboxes e
     assert.equal(calls[0].headers.authorization, 'Bearer tok-secret');
     assert.equal((calls[0].body as { purpose: string }).purpose, 'workforce-deploy');
     assert.equal((calls[0].body as { personaId: string }).personaId, 'demo');
+    assert.deepEqual((calls[0].body as { integrations: unknown }).integrations, {
+      github: { triggers: [{ on: 'pull_request.opened' }] }
+    });
 
     // Upload PUT carries base64 file entries.
     assert.equal(calls[1].method, 'PUT');
