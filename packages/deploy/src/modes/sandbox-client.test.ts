@@ -96,7 +96,10 @@ test('proxy client mints, uploads, execs, and destroys against cloud sandboxes e
 
     const handle = await client.mint({
       label: 'wf-demo',
-      env: { WORKFORCE_WORKSPACE_ID: 'ws' }
+      env: { WORKFORCE_WORKSPACE_ID: 'ws' },
+      integrations: {
+        github: { triggers: [{ on: 'pull_request.opened' }] }
+      }
     });
     assert.equal(handle.mode, 'proxy');
     assert.equal(handle.sandboxId, 'sbx_test');
@@ -118,6 +121,9 @@ test('proxy client mints, uploads, execs, and destroys against cloud sandboxes e
     assert.equal(calls[0].headers.authorization, 'Bearer tok-secret');
     assert.equal((calls[0].body as { purpose: string }).purpose, 'workforce-deploy');
     assert.equal((calls[0].body as { personaId: string }).personaId, 'demo');
+    assert.deepEqual((calls[0].body as { integrations: unknown }).integrations, {
+      github: { triggers: [{ on: 'pull_request.opened' }] }
+    });
 
     // Upload PUT carries base64 file entries.
     assert.equal(calls[1].method, 'PUT');
@@ -159,6 +165,32 @@ test('proxy client surfaces non-2xx mint responses with the cloud status + excer
     () => client.mint({ label: 'wf-demo' }),
     /sandbox\(proxy\)\.mint: 429 Too Many Requests/
   );
+});
+
+test('proxy client omits empty integrations from mint requests', async () => {
+  const { fetch: impl, calls } = fakeFetch([
+    () =>
+      new Response(
+        JSON.stringify({
+          sandboxId: 'sbx_test',
+          authMode: 'proxy',
+          execUrl: 'https://cloud.example.com/api/v1/workspaces/ws/sandboxes/sbx_test/exec',
+          filesUrl: 'https://cloud.example.com/api/v1/workspaces/ws/sandboxes/sbx_test/files'
+        }),
+        { status: 201 }
+      )
+  ]);
+  const client = createProxySandboxClient({
+    cloudUrl: 'https://cloud.example.com',
+    workspaceId: 'ws',
+    workspaceToken: 'tok',
+    personaId: 'demo',
+    fetchImpl: impl
+  });
+
+  await client.mint({ label: 'wf-demo', integrations: {} });
+
+  assert.equal('integrations' in (calls[0].body as Record<string, unknown>), false);
 });
 
 test('proxy client tolerates 404 on destroy (already deleted)', async () => {
