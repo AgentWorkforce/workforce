@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [3.0.39] - 2026-06-01
+
+### Added
+
+- **Typed per-provider integration scope keys** (#176)
+
 ## [3.0.38] - 2026-06-01
 
 ### Added
