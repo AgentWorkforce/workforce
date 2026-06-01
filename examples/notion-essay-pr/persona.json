@@ -2,7 +2,11 @@
   "id": "notion-essay-pr",
   "version": "1.0.0",
   "intent": "documentation",
-  "tags": ["proactive", "notion", "github"],
+  "tags": [
+    "proactive",
+    "notion",
+    "github"
+  ],
   "description": "Listens for new Notion pages and drafts a GitHub pull request with a markdown essay.",
   "harness": "claude",
   "model": "claude-sonnet-4-6",
@@ -14,13 +18,21 @@
   "cloud": true,
   "integrations": {
     "notion": {
-      "source": { "kind": "deployer_user" },
-      "scope": { "database": "${NOTION_SOURCE_DATABASE}" },
-      "triggers": [{ "on": "page.created" }]
+      "source": {
+        "kind": "deployer_user"
+      },
+      "scope": {
+        "database": "${NOTION_SOURCE_DATABASE}"
+      }
     },
     "github": {
-      "source": { "kind": "workspace_service_account", "name": "release-bot" },
-      "scope": { "repo": "${GITHUB_TARGET_REPO}" }
+      "source": {
+        "kind": "workspace_service_account",
+        "name": "release-bot"
+      },
+      "scope": {
+        "repo": "${GITHUB_TARGET_REPO}"
+      }
     }
   },
   "inputs": {
@@ -35,7 +47,9 @@
   },
   "memory": {
     "enabled": true,
-    "scopes": ["workspace"]
+    "scopes": [
+      "workspace"
+    ]
   },
   "onEvent": "./agent.ts"
 }

@@ -1,0 +1,39 @@
+{
+  "triggers": {
+    "github": [
+      {
+        "on": "pull_request.opened"
+      },
+      {
+        "on": "pull_request_review_comment.created",
+        "match": "@mention"
+      },
+      {
+        "on": "check_run.completed",
+        "where": "conclusion=failure"
+      }
+    ],
+    "linear": [
+      {
+        "on": "issue.create"
+      }
+    ],
+    "slack": [
+      {
+        "on": "message.created"
+      }
+    ],
+    "jira": [
+      {
+        "on": "issue.created"
+      }
+    ]
+  },
+  "schedules": [
+    {
+      "name": "daily-review",
+      "cron": "0 14 * * 1-5",
+      "tz": "UTC"
+    }
+  ]
+}

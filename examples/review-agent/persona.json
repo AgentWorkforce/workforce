@@ -8,32 +8,8 @@
   "cloud": true,
   "useSubscription": true,
   "integrations": {
-    "github": {
-      "triggers": [
-        {
-          "on": "pull_request.opened"
-        },
-        {
-          "on": "issue_comment.created",
-          "match": "@mention"
-        },
-        {
-          "on": "pull_request_review_comment.created",
-          "match": "@mention"
-        },
-        {
-          "on": "check_run.completed",
-          "where": "conclusion=failure"
-        }
-      ]
-    },
-    "slack": {
-      "triggers": [
-        {
-          "on": "app_mention"
-        }
-      ]
-    }
+    "github": {},
+    "slack": {}
   },
   "memory": {
     "enabled": true,

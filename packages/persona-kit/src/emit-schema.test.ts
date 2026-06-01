@@ -5,14 +5,16 @@ import { dirname, resolve } from 'node:path';
 import test from 'node:test';
 import { fileURLToPath } from 'node:url';
 
-import { parsePersonaSpec } from './parse.js';
+import { parseAgentSpec, parsePersonaSpec } from './parse.js';
 import { lintTriggers } from './triggers.js';
 
 const packageRoot = resolve(dirname(fileURLToPath(import.meta.url)), '..');
 const fixturesDir = resolve(packageRoot, 'src/__fixtures__/personas');
+const agentFixturesDir = resolve(packageRoot, 'src/__fixtures__/agents');
 const schemaPath = resolve(packageRoot, 'schemas/persona.schema.json');
+const agentSchemaPath = resolve(packageRoot, 'schemas/agent.schema.json');
 
-test('persona fixtures validate against generated schema and parse', async () => {
+test('persona fixtures validate against generated schema and parse (connection-only)', async () => {
   const schema = JSON.parse(await readFile(schemaPath, 'utf8'));
   const fixtureNames = (await readdir(fixturesDir)).filter((name) => name.endsWith('.json')).sort();
 
@@ -30,10 +32,32 @@ test('persona fixtures validate against generated schema and parse', async () =>
   for (const fixtureName of fixtureNames) {
     const fixture = JSON.parse(await readFile(resolve(fixturesDir, fixtureName), 'utf8'));
     assertSchema(fixture, schema, schema, fixtureName);
+    // Personas no longer carry triggers/schedules/watch — parse must succeed.
+    parsePersonaSpec(fixture, fixture.intent);
+  }
+});
 
-    const parsed = parsePersonaSpec(fixture, fixture.intent);
+test('agent fixtures validate against agent schema, parse, and lint triggers', async () => {
+  const schema = JSON.parse(await readFile(agentSchemaPath, 'utf8'));
+  const fixtureNames = (await readdir(agentFixturesDir)).filter((name) => name.endsWith('.json')).sort();
+
+  assert.deepEqual(fixtureNames, [
+    'cron-only.agent.json',
+    'full.agent.json',
+    'integration-source-deployer.agent.json',
+    'integration-source-service-account.agent.json',
+    'integration-source-workspace.agent.json',
+    'invalid-unknown-trigger.agent.json',
+    'proactive-watch-persona.agent.json'
+  ]);
+
+  for (const fixtureName of fixtureNames) {
+    const fixture = JSON.parse(await readFile(resolve(agentFixturesDir, fixtureName), 'utf8'));
+    assertSchema(fixture, schema, schema, fixtureName);
+
+    const parsed = parseAgentSpec(fixture);
     const triggerIssues = lintTriggers(parsed);
-    if (fixtureName === 'invalid-unknown-trigger.json') {
+    if (fixtureName === 'invalid-unknown-trigger.agent.json') {
       assert.equal(triggerIssues.length, 1);
       assert.equal(triggerIssues[0].code, 'unknown_trigger');
     } else {
@@ -42,14 +66,15 @@ test('persona fixtures validate against generated schema and parse', async () =>
   }
 });
 
-test('emit-schema script is idempotent', async () => {
+test('emit-schema script is idempotent (persona + agent schemas)', async () => {
   const before = await readFile(schemaPath, 'utf8');
+  const agentBefore = await readFile(agentSchemaPath, 'utf8');
   execFileSync('node', [resolve(packageRoot, 'scripts/emit-schema.mjs')], {
     cwd: packageRoot,
     stdio: 'pipe'
   });
-  const after = await readFile(schemaPath, 'utf8');
-  assert.equal(after, before);
+  assert.equal(await readFile(schemaPath, 'utf8'), before);
+  assert.equal(await readFile(agentSchemaPath, 'utf8'), agentBefore);
 });
 
 test('generated schema requires onEvent for cloud personas', async () => {
@@ -76,26 +101,39 @@ test('generated schema reflects locked v1 persona fields', async () => {
   assert.equal('PersonaTraits' in definitions, false);
 });
 
-test('generated schema includes watch rules and mount.enabled', async () => {
+test('persona schema keeps mount.enabled but drops the moved listener fields', async () => {
   const schema = JSON.parse(await readFile(schemaPath, 'utf8')) as SchemaNode;
   const definitions = schema.definitions as Record<string, SchemaNode>;
   const personaSpec = definitions.PersonaSpec;
   const personaMount = definitions.PersonaMount;
-  const watchRule = definitions.WatchRule;
-  const watchSchema = personaSpec.properties?.watch;
 
-  assert.ok(watchSchema && typeof watchSchema === 'object');
-  assert.equal(watchSchema && typeof watchSchema === 'object'
-    ? watchSchema.type
-    : undefined, 'array');
+  // Listener fields moved to the agent schema.
+  assert.equal('watch' in (personaSpec.properties ?? {}), false);
+  assert.equal('schedules' in (personaSpec.properties ?? {}), false);
+  // Integration connection config no longer exposes triggers.
+  assert.equal('triggers' in (definitions.PersonaIntegrationConfig.properties ?? {}), false);
   assert.equal(personaMount.properties?.enabled && personaMount.properties.enabled !== true
     ? personaMount.properties.enabled.type
     : undefined, 'boolean');
+});
+
+test('agent schema exposes triggers/schedules/watch', async () => {
+  const schema = JSON.parse(await readFile(agentSchemaPath, 'utf8')) as SchemaNode;
+  const definitions = schema.definitions as Record<string, SchemaNode>;
+  const agentSpec = definitions.AgentSpec;
+  const watchRule = definitions.WatchRule;
+
+  assert.equal(agentSpec.properties?.triggers && agentSpec.properties.triggers !== true
+    ? agentSpec.properties.triggers.type
+    : undefined, 'object');
+  assert.equal(agentSpec.properties?.schedules && agentSpec.properties.schedules !== true
+    ? agentSpec.properties.schedules.type
+    : undefined, 'array');
+  assert.equal(agentSpec.properties?.watch && agentSpec.properties.watch !== true
+    ? agentSpec.properties.watch.type
+    : undefined, 'array');
   assert.equal(watchRule.properties?.paths && watchRule.properties.paths !== true
     ? watchRule.properties.paths.type
-    : undefined, 'array');
-  assert.equal(watchRule.properties?.events && watchRule.properties.events !== true
-    ? watchRule.properties.events.type
     : undefined, 'array');
 });
 

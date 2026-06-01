@@ -28,13 +28,6 @@
   "integrations": {
     "github": {}
   },
-  "schedules": [
-    {
-      "name": "weekly",
-      "cron": "0 9 * * 6",
-      "tz": "UTC"
-    }
-  ],
   "memory": {
     "enabled": true,
     "scopes": [

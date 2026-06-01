@@ -15,6 +15,7 @@ export type { KnownPersonaTag } from './constants.js';
 
 // Types
 export type {
+  AgentSpec,
   CapabilityValue,
   CodexApprovalPolicy,
   CodexSandboxMode,
@@ -58,7 +59,8 @@ export {
   type TriggerNameFor,
   type TypedIntegrationConfig,
   type TypedIntegrations,
-  type TypedTrigger
+  type TypedTrigger,
+  type TypedTriggerMap
 } from './define.js';
 
 // Parsers + sidecar resolver
@@ -73,6 +75,7 @@ export {
   isObject,
   isSidecarMode,
   isTag,
+  parseAgentSpec,
   parseCapabilities,
   parseHarnessSettings,
   parseInputs,

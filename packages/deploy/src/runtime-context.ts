@@ -1,4 +1,4 @@
-import type { PersonaSpec } from '@agentworkforce/persona-kit';
+import type { AgentSpec, PersonaSpec } from '@agentworkforce/persona-kit';
 
 const AGENT_CONTEXT_ENV = 'WORKFORCE_AGENT_CONTEXT';
 const DEPLOYMENT_CONTEXT_ENV = 'WORKFORCE_DEPLOYMENT_CONTEXT';
@@ -19,13 +19,14 @@ interface RuntimeDeploymentContext {
 
 export function runtimeContextEnv(
   persona: PersonaSpec,
-  env: Record<string, string> | undefined
+  env: Record<string, string> | undefined,
+  agent?: AgentSpec
 ): Record<string, string> {
   return {
     [AGENT_CONTEXT_ENV]:
       nonEmpty(env?.[AGENT_CONTEXT_ENV]) ?? JSON.stringify(resolveAgentContext(persona, env)),
     [DEPLOYMENT_CONTEXT_ENV]:
-      nonEmpty(env?.[DEPLOYMENT_CONTEXT_ENV]) ?? JSON.stringify(resolveDeploymentContext(persona, env))
+      nonEmpty(env?.[DEPLOYMENT_CONTEXT_ENV]) ?? JSON.stringify(resolveDeploymentContext(persona, env, agent))
   };
 }
 
@@ -47,11 +48,12 @@ function resolveAgentContext(
 
 function resolveDeploymentContext(
   persona: PersonaSpec,
-  env: Record<string, string> | undefined
+  env: Record<string, string> | undefined,
+  agent?: AgentSpec
 ): RuntimeDeploymentContext {
   return {
     id: nonEmpty(env?.WORKFORCE_DEPLOYMENT_ID) ?? persona.id,
-    triggerKind: parseTriggerKind(nonEmpty(env?.WORKFORCE_DEPLOYMENT_TRIGGER_KIND)) ?? inferTriggerKind(persona),
+    triggerKind: parseTriggerKind(nonEmpty(env?.WORKFORCE_DEPLOYMENT_TRIGGER_KIND)) ?? inferTriggerKind(agent),
     parentDeploymentId: nonEmpty(env?.WORKFORCE_PARENT_DEPLOYMENT_ID) ?? null
   };
 }
@@ -61,11 +63,11 @@ function parseTriggerKind(value: string | undefined): RuntimeTriggerKind | undef
   return undefined;
 }
 
-function inferTriggerKind(persona: PersonaSpec): RuntimeTriggerKind {
-  if (hasIntegrationTriggers(persona)) return 'radio';
+function inferTriggerKind(agent: AgentSpec | undefined): RuntimeTriggerKind {
+  if (hasIntegrationTriggers(agent)) return 'radio';
   return 'clock';
 }
 
-function hasIntegrationTriggers(persona: PersonaSpec): boolean {
-  return Object.values(persona.integrations ?? {}).some((integration) => (integration.triggers?.length ?? 0) > 0);
+function hasIntegrationTriggers(agent: AgentSpec | undefined): boolean {
+  return Object.values(agent?.triggers ?? {}).some((triggers) => (triggers?.length ?? 0) > 0);
 }

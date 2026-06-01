@@ -1,7 +1,7 @@
 import {
+  defineAgent,
   draftFile,
   encodeSegment,
-  handler,
   readJsonFile,
   resolveMountRoot,
   writeJsonFile,
@@ -135,24 +135,35 @@ async function replyInSlack(ctx: WorkforceCtx, event: Record<string, unknown>) {
   });
 }
 
-export default handler(async (ctx, event) => {
-  if (event.source === 'github') {
-    const payload = payloadOf(event.payload);
-    if (event.type === 'pull_request.opened') {
-      await reviewPullRequest(ctx, payload);
-      return;
+export default defineAgent({
+  triggers: {
+    github: [
+      { on: 'pull_request.opened' },
+      { on: 'issue_comment.created', match: '@mention' },
+      { on: 'pull_request_review_comment.created', match: '@mention' },
+      { on: 'check_run.completed', where: 'conclusion=failure' }
+    ],
+    slack: [{ on: 'app_mention' }]
+  },
+  handler: async (ctx, event) => {
+    if (event.source === 'github') {
+      const payload = payloadOf(event.payload);
+      if (event.type === 'pull_request.opened') {
+        await reviewPullRequest(ctx, payload);
+        return;
+      }
+      if (event.type === 'issue_comment.created' || event.type === 'pull_request_review_comment.created') {
+        await replyToGithubMention(ctx, payload);
+        return;
+      }
+      if (event.type === 'check_run.completed') {
+        await handleFailedCheck(ctx, payload);
+        return;
+      }
     }
-    if (event.type === 'issue_comment.created' || event.type === 'pull_request_review_comment.created') {
-      await replyToGithubMention(ctx, payload);
-      return;
-    }
-    if (event.type === 'check_run.completed') {
-      await handleFailedCheck(ctx, payload);
-      return;
-    }
-  }
 
-  if (event.source === 'slack' && event.type === 'app_mention') {
-    await replyInSlack(ctx, payloadOf(event.payload));
+    if (event.source === 'slack' && event.type === 'app_mention') {
+      await replyInSlack(ctx, payloadOf(event.payload));
+    }
   }
 });

@@ -1,21 +1,21 @@
 {
   "id": "invalid-unknown-trigger",
   "intent": "review",
-  "tags": ["review"],
+  "tags": [
+    "review"
+  ],
   "description": "A schema-valid persona fixture with one trigger lint warning.",
   "skills": [],
   "cloud": true,
   "integrations": {
-    "github": {
-      "triggers": [
-        { "on": "pull_request.opened" },
-        { "on": "pull_request.evaporated" }
-      ]
-    }
+    "github": {}
   },
   "onEvent": "./agent.ts",
   "harness": "codex",
   "model": "gpt-5",
   "systemPrompt": "Review code.",
-  "harnessSettings": { "reasoning": "medium", "timeoutSeconds": 300 }
+  "harnessSettings": {
+    "reasoning": "medium",
+    "timeoutSeconds": 300
+  }
 }

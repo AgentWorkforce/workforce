@@ -1,23 +1,10 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { KNOWN_TRIGGERS, lintTriggers } from './triggers.js';
-import type { PersonaSpec } from './types.js';
+import type { AgentSpec } from './types.js';
 
-function specWithIntegrations(
-  integrations: PersonaSpec['integrations']
-): PersonaSpec {
-  return {
-    id: 'p',
-    intent: 'documentation',
-    tags: ['documentation'],
-    description: 'd',
-    skills: [],
-    harness: 'claude',
-    model: 'anthropic/claude-3-5-sonnet',
-    systemPrompt: 'be helpful',
-    harnessSettings: { reasoning: 'medium', timeoutSeconds: 300 },
-    ...(integrations ? { integrations } : {})
-  };
+function agentWithTriggers(triggers: AgentSpec['triggers']): AgentSpec {
+  return { ...(triggers ? { triggers } : {}) };
 }
 
 test('KNOWN_TRIGGERS ships a non-empty list per shipped provider', () => {
@@ -33,21 +20,19 @@ test('KNOWN_TRIGGERS ships a non-empty list per shipped provider', () => {
   }
 });
 
-test('lintTriggers returns no issues for a persona with no integrations', () => {
-  assert.deepEqual(lintTriggers(specWithIntegrations(undefined)), []);
+test('lintTriggers returns no issues for an agent with no triggers', () => {
+  assert.deepEqual(lintTriggers(agentWithTriggers(undefined)), []);
 });
 
 test('lintTriggers returns no issues for known providers and known triggers', () => {
   const issues = lintTriggers(
-    specWithIntegrations({
-      github: {
-        triggers: [
-          { on: 'pull_request.opened' },
-          { on: 'pull_request_review_comment.created' }
-        ]
-      },
-      linear: { triggers: [{ on: 'issue.create' }] },
-      slack: { triggers: [{ on: 'message.created' }] }
+    agentWithTriggers({
+      github: [
+        { on: 'pull_request.opened' },
+        { on: 'pull_request_review_comment.created' }
+      ],
+      linear: [{ on: 'issue.create' }],
+      slack: [{ on: 'message.created' }]
     })
   );
   assert.deepEqual(issues, []);
@@ -55,8 +40,8 @@ test('lintTriggers returns no issues for known providers and known triggers', ()
 
 test('lintTriggers accepts cloud provider aliases backed by adapter trigger catalogs', () => {
   const issues = lintTriggers(
-    specWithIntegrations({
-      'google-mail': { triggers: [{ on: 'file.created' }] }
+    agentWithTriggers({
+      'google-mail': [{ on: 'file.created' }]
     })
   );
   assert.deepEqual(issues, []);
@@ -64,8 +49,8 @@ test('lintTriggers accepts cloud provider aliases backed by adapter trigger cata
 
 test('lintTriggers warns per unknown trigger for aliased cloud providers', () => {
   const issues = lintTriggers(
-    specWithIntegrations({
-      'google-mail': { triggers: [{ on: 'made.up' }] }
+    agentWithTriggers({
+      'google-mail': [{ on: 'made.up' }]
     })
   );
   assert.equal(issues.length, 1);
@@ -73,32 +58,30 @@ test('lintTriggers warns per unknown trigger for aliased cloud providers', () =>
   assert.equal(issues[0].code, 'unknown_trigger');
   assert.equal(issues[0].provider, 'google-mail');
   assert.equal(issues[0].trigger, 'made.up');
-  assert.equal(issues[0].path, 'integrations.google-mail.triggers[0].on');
+  assert.equal(issues[0].path, 'triggers.google-mail[0].on');
 });
 
 test('lintTriggers warns once per unknown provider', () => {
   const issues = lintTriggers(
-    specWithIntegrations({
-      mysteryapp: { triggers: [{ on: 'thing.opened' }, { on: 'thing.closed' }] }
+    agentWithTriggers({
+      mysteryapp: [{ on: 'thing.opened' }, { on: 'thing.closed' }]
     })
   );
   assert.equal(issues.length, 1);
   assert.equal(issues[0].level, 'warning');
   assert.equal(issues[0].code, 'unknown_provider');
   assert.equal(issues[0].provider, 'mysteryapp');
-  assert.equal(issues[0].path, 'integrations.mysteryapp');
+  assert.equal(issues[0].path, 'triggers.mysteryapp');
 });
 
 test('lintTriggers warns per unknown trigger for a known provider', () => {
   const issues = lintTriggers(
-    specWithIntegrations({
-      github: {
-        triggers: [
-          { on: 'pull_request.opened' },
-          { on: 'pull_request.really_truly_new_event' },
-          { on: 'made.up' }
-        ]
-      }
+    agentWithTriggers({
+      github: [
+        { on: 'pull_request.opened' },
+        { on: 'pull_request.really_truly_new_event' },
+        { on: 'made.up' }
+      ]
     })
   );
   const triggers = issues.map((i) => i.trigger).sort();
@@ -107,13 +90,12 @@ test('lintTriggers warns per unknown trigger for a known provider', () => {
     assert.equal(issue.level, 'warning');
     assert.equal(issue.code, 'unknown_trigger');
     assert.equal(issue.provider, 'github');
-    assert.match(issue.path, /integrations\.github\.triggers\[\d+\]\.on/);
+    assert.match(issue.path, /triggers\.github\[\d+\]\.on/);
   }
 });
 
 test('lintTriggers returns no issues for valid relayfile watch rules', () => {
   const issues = lintTriggers({
-    ...specWithIntegrations(undefined),
     watch: [
       {
         paths: ['/integrations/github/repos/acme/web/issues/**/*.json'],
@@ -127,7 +109,6 @@ test('lintTriggers returns no issues for valid relayfile watch rules', () => {
 
 test('lintTriggers warns for non-absolute relayfile watch paths', () => {
   const issues = lintTriggers({
-    ...specWithIntegrations(undefined),
     watch: [{ paths: ['integrations/github/**'], events: ['updated'] }]
   });
   assert.equal(issues.length, 1);
@@ -139,7 +120,6 @@ test('lintTriggers warns for non-absolute relayfile watch paths', () => {
 
 test('lintTriggers warns for relayfile watch rules with empty events', () => {
   const issues = lintTriggers({
-    ...specWithIntegrations(undefined),
     watch: [{ paths: ['/integrations/github/**'], events: [] }]
   });
   assert.equal(issues.length, 1);

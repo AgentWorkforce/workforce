@@ -1,7 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 
-import { definePersona, parsePersonaSpec } from './index.js';
+import { definePersona, parsePersonaSpec, type TypedTriggerMap } from './index.js';
 
 test('definePersona returns authored specs that parse successfully', () => {
   const persona = definePersona({
@@ -15,18 +15,15 @@ test('definePersona returns authored specs that parse successfully', () => {
         default: 'AgentWorkforce/workforce'
       }
     },
+    // Personas declare integration *connections* only — event triggers moved
+    // to the agent (defineAgent). Connection config = source + scope.
     integrations: {
-      github: {
-        triggers: [
-          { on: 'pull_request.opened' },
-          { on: 'off_registry.github_event' }
-        ]
-      },
-      linear: { triggers: [{ on: 'issue.create' }] },
-      slack: { triggers: [{ on: 'message.created' }] },
-      confluence: { triggers: [{ on: 'page.updated' }] },
-      jira: { triggers: [{ on: 'comment.created' }] },
-      customProvider: { triggers: [{ on: 'custom.event' }] }
+      github: { scope: { repo: 'AgentWorkforce/workforce' } },
+      linear: {},
+      slack: {},
+      confluence: {},
+      jira: {},
+      customProvider: {}
     },
     capabilities: {
       review: true,
@@ -41,15 +38,28 @@ test('definePersona returns authored specs that parse successfully', () => {
   assert.equal(parsed.id, 'typed-author');
   assert.equal(parsed.skills.length, 0);
   assert.equal(parsed.inputs?.TOPIC.default, 'pull requests');
-  assert.equal(
-    parsed.integrations?.github.triggers?.[1].on,
-    'off_registry.github_event'
-  );
-  assert.equal(parsed.integrations?.customProvider.triggers?.[0].on, 'custom.event');
+  assert.equal(parsed.integrations?.github.scope?.repo, 'AgentWorkforce/workforce');
+  assert.equal(parsed.integrations?.customProvider.source?.kind, 'deployer_user');
   assert.deepEqual(parsed.capabilities, {
     review: true,
     conflictAutofix: { enabled: false }
   });
+});
+
+test('TypedTriggerMap gives per-provider event autocomplete; arbitrary providers fall back to string', () => {
+  // Known providers type `on` against their catalog (off-registry strings are
+  // still allowed via `string & {}`); unknown providers accept any string.
+  const triggers: TypedTriggerMap = {
+    github: [
+      { on: 'pull_request.opened' },
+      { on: 'off_registry.github_event' }
+    ],
+    linear: [{ on: 'issue.create' }],
+    slack: [{ on: 'message.created' }],
+    customProvider: [{ on: 'custom.event' }]
+  };
+  assert.equal(triggers.github?.[1]?.on, 'off_registry.github_event');
+  assert.equal(triggers.customProvider?.[0]?.on, 'custom.event');
 });
 
 test('definePersona types tags against the closed PersonaTag vocabulary', () => {

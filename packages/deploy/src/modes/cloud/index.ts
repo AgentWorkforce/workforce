@@ -171,6 +171,10 @@ export const cloudLauncher: ModeLauncher = {
 
     const body = JSON.stringify({
       persona: input.persona,
+      // Top-level agent listener spec (triggers/schedules/watch). The cloud
+      // reads subscriptions from here now that they no longer live on the
+      // persona. Distinct from `bundle.agent`, which is the esbuilt handler.
+      agent: input.agent,
       bundle: {
         runner: await readFile(input.bundle.runnerPath, 'utf8'),
         agent: await readFile(input.bundle.bundlePath, 'utf8'),

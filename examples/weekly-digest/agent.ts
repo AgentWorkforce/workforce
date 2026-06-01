@@ -1,7 +1,7 @@
 import {
+  defineAgent,
   draftFile,
   encodeSegment,
-  handler,
   resolveMountRoot,
   WorkforceIntegrationError,
   writeJsonFile,
@@ -22,7 +22,9 @@ interface DigestCluster {
   items: DigestItem[];
 }
 
-export default handler(async (ctx, event) => {
+export default defineAgent({
+  schedules: [{ name: 'weekly', cron: '0 9 * * 6', tz: 'UTC' }],
+  handler: async (ctx, event) => {
   if (event.source !== 'cron' || event.name !== 'weekly') {
     ctx.log('warn', 'weekly-digest.ignored', { source: event.source });
     return;
@@ -97,6 +99,7 @@ export default handler(async (ctx, event) => {
     tags: ['weekly-digest', `week:${isoWeek}`],
     scope: 'workspace'
   });
+  }
 });
 
 function readConfig(): { topics: string; repo: string; braveApiKey: string } {

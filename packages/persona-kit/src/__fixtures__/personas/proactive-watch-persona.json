@@ -1,21 +1,16 @@
 {
   "id": "proactive-watch-persona",
   "intent": "documentation",
-  "tags": ["proactive", "relayfile"],
+  "tags": [
+    "proactive",
+    "relayfile"
+  ],
   "description": "A proactive cloud persona that fires when relayfile content changes.",
   "skills": [],
   "cloud": true,
   "mount": {
     "enabled": false
   },
-  "watch": [
-    {
-      "paths": ["/integrations/github/repos/acme/web/issues/**/*.json"],
-      "events": ["created", "updated", "deleted"],
-      "debounceMs": 5000,
-      "match": ".state == \"open\""
-    }
-  ],
   "onEvent": "./agent.ts",
   "harness": "claude",
   "model": "anthropic/claude-3-5-sonnet",

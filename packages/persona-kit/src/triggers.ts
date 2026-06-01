@@ -1,4 +1,4 @@
-import type { PersonaSpec } from './types.js';
+import type { AgentSpec } from './types.js';
 import { KNOWN_TRIGGER_CATALOG } from '@relayfile/adapter-core/triggers';
 
 /**
@@ -53,53 +53,52 @@ export interface TriggerLintIssue {
   provider: string;
   /** The trigger name that was flagged. */
   trigger: string;
-  /** Field-pointed location, e.g. `integrations.github.triggers[2].on`. */
+  /** Field-pointed location, e.g. `triggers.github[2].on`. */
   path: string;
   message: string;
 }
 
 /**
- * Walk a persona's integration triggers and flag any that don't appear in
+ * Walk an agent's triggers and flag any that don't appear in
  * {@link KNOWN_TRIGGERS}. Always returns; never throws. Empty array when
- * the persona has no integrations or every trigger is recognized.
+ * the agent has no triggers or every trigger is recognized.
  *
  * The deploy CLI surfaces these as yellow warnings before deploy and
  * continues regardless. The runtime applies the trigger regardless of
  * what this registry knows.
  */
-export function lintTriggers(persona: PersonaSpec): TriggerLintIssue[] {
+export function lintTriggers(agent: AgentSpec): TriggerLintIssue[] {
   const issues: TriggerLintIssue[] = [];
-  const integrations = persona.integrations;
+  const triggers = agent.triggers;
 
-  if (integrations) {
-    for (const [provider, config] of Object.entries(integrations)) {
-      const triggers = config.triggers;
-      if (!triggers) continue;
+  if (triggers) {
+    for (const [provider, providerTriggers] of Object.entries(triggers)) {
+      if (!providerTriggers) continue;
       const known = knownTriggersForProvider(provider);
 
       if (!known) {
-        // Unknown provider: warn once on the integration as a whole so we
-        // don't spam per-trigger warnings for a provider workforce hasn't
+        // Unknown provider: warn once on the provider as a whole so we don't
+        // spam per-trigger warnings for a provider workforce hasn't
         // catalogued yet.
         issues.push({
           level: 'warning',
           code: 'unknown_provider',
           provider,
           trigger: '*',
-          path: `integrations.${provider}`,
+          path: `triggers.${provider}`,
           message: `provider "${provider}" is not in the known-trigger registry; trigger names will not be linted`
         });
         continue;
       }
 
-      for (const [idx, trigger] of triggers.entries()) {
+      for (const [idx, trigger] of providerTriggers.entries()) {
         if (!known.includes(trigger.on)) {
           issues.push({
             level: 'warning',
             code: 'unknown_trigger',
             provider,
             trigger: trigger.on,
-            path: `integrations.${provider}.triggers[${idx}].on`,
+            path: `triggers.${provider}[${idx}].on`,
             message: `trigger "${trigger.on}" is not in the known-trigger registry for ${provider} (known: ${known.join(', ')})`
           });
         }
@@ -107,7 +106,7 @@ export function lintTriggers(persona: PersonaSpec): TriggerLintIssue[] {
     }
   }
 
-  for (const [idx, rule] of (persona.watch ?? []).entries()) {
+  for (const [idx, rule] of (agent.watch ?? []).entries()) {
     if (!rule.events || rule.events.length === 0) {
       issues.push({
         level: 'warning',

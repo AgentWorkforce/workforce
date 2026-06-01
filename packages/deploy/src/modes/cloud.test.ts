@@ -43,11 +43,14 @@ function persona(overrides: Partial<PersonaSpec> = {}): PersonaSpec {
     systemPrompt: 'help',
     harnessSettings: { reasoning: 'medium', timeoutSeconds: 300 },
     cloud: true,
-    schedules: [{ name: 'daily', cron: '0 9 * * *' }],
     onEvent: './agent.ts',
     ...overrides
   };
 }
+
+const agentSpec: import('@agentworkforce/persona-kit').AgentSpec = {
+  schedules: [{ name: 'daily', cron: '0 9 * * *' }]
+};
 
 async function withBundle(): Promise<{ bundle: BundleResult; cleanup: () => Promise<void> }> {
   const dir = await mkdtemp(path.join(os.tmpdir(), 'wf-cloud-test-'));
@@ -150,6 +153,7 @@ async function launch(overrides: {
       ...overrides.env
     }, () => cloudLauncher.launch({
       persona: overrides.persona ?? persona(),
+      agent: agentSpec,
       bundle,
       workspace: 'ws-test',
       io,
@@ -176,6 +180,9 @@ test('cloud launcher POSTs a deploy bundle and returns the cloud handle', async 
       assert.equal(init?.method, 'POST');
       const body = JSON.parse(String(init?.body)) as Record<string, unknown>;
       assert.equal((body.persona as { id: string }).id, 'demo');
+      // Listeners travel as the top-level `agent` block, not on the persona.
+      assert.deepEqual(body.agent, agentSpec);
+      assert.equal((body.persona as { schedules?: unknown }).schedules, undefined);
       assert.deepEqual(body.inputs, { topic: 'AI' });
       assert.deepEqual((body.bundle as { packageJson: unknown }).packageJson, { type: 'module' });
       return okJson({ agentId: 'agent-1', deploymentId: 'dep-1', status: 'active' }, 201);
@@ -230,7 +237,8 @@ test('cloud launcher sends proactive personas (top-level watch) through the depl
 
 test('cloud launcher keeps non-proactive personas on the deployments endpoint', async () => {
   const { handle, calls } = await launch({
-    persona: persona({ schedules: [] }),
+    persona: persona(),
+    input: { agent: {} },
     env: {
       WORKFORCE_DEPLOY_CLOUD_URL: 'https://cloud.example.test'
     },
@@ -569,6 +577,7 @@ test('cloud harness OAuth starts auth and polls /cloud-agents until the harness 
       WORKFORCE_DEPLOY_RETRY_BACKOFF_MS: '0'
     }, () => cloudLauncher.launch({
       persona: persona(),
+      agent: agentSpec,
       bundle,
       workspace: 'ws-test',
       io
@@ -647,6 +656,7 @@ test('cloud polling resolves done with code 0 on active and 1 on failed', async 
         WORKFORCE_DEPLOY_RETRY_BACKOFF_MS: '0'
       }, () => cloudLauncher.launch({
         persona: persona(),
+        agent: agentSpec,
         bundle,
         workspace: 'ws-test',
         io,
@@ -684,6 +694,7 @@ test('cloud stop calls the destroy agent endpoint', async () => {
       WORKFORCE_DEPLOY_POLL_TIMEOUT_MS: '50'
     }, () => cloudLauncher.launch({
       persona: persona(),
+      agent: agentSpec,
       bundle,
       workspace: 'ws-test',
       io
@@ -716,7 +727,8 @@ test('cloud launcher leaves integration preflight to the deploy orchestrator', a
       WORKFORCE_DEPLOY_POLL_INTERVAL_MS: '0',
       WORKFORCE_DEPLOY_POLL_TIMEOUT_MS: '50'
     }, () => cloudLauncher.launch({
-      persona: persona({ integrations: { github: { triggers: [{ on: 'pull_request.opened' }] } } }),
+      persona: persona({ integrations: { github: {} } }),
+      agent: { triggers: { github: [{ on: 'pull_request.opened' }] } },
       bundle,
       workspace: 'ws-test',
       io

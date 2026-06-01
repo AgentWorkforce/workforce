@@ -1,4 +1,4 @@
-import { handler } from '@agentworkforce/runtime';
+import { defineAgent } from '@agentworkforce/runtime';
 import type { WorkforceCtx } from '@agentworkforce/runtime';
 import { createRickySdk } from '@agentworkforce/ricky';
 import type {
@@ -361,7 +361,9 @@ function summarizeFailure(result: unknown): string {
   return parts.join('\n');
 }
 
-export default handler(async (ctx, event) => {
+export default defineAgent({
+  triggers: { github: [{ on: 'issues.opened' }] },
+  handler: async (ctx, event) => {
   // Only react to newly opened GitHub issues.
   if (event.source !== 'github') return;
   if (event.type !== 'issues.opened') return;
@@ -427,5 +429,6 @@ export default handler(async (ctx, event) => {
     const msg = `:x: Issue #${target.number} (${target.owner}/${target.repo}): Ricky run did not produce a PR.\n${outcome.failureDetail}\nIssue: ${issueUrl}`;
     await ctx.github.comment(target, `:x: Ricky did not produce a PR for #${target.number}.\n\n\`\`\`\n${outcome.failureDetail}\n\`\`\``);
     await notifySlack(ctx, msg);
+  }
   }
 });

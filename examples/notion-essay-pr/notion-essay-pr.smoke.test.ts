@@ -110,10 +110,10 @@ class MockNotionEssayRuntime {
     }
   }
 
-  async spawnAndDispatch(handler: (ctx: WorkforceCtx, event: WorkforceProviderEvent) => Promise<void> | void): Promise<void> {
+  async spawnAndDispatch(agent: { handler: (ctx: WorkforceCtx, event: WorkforceProviderEvent) => Promise<void> | void }): Promise<void> {
     this.sandboxSpawned = true;
     this.files.set('/workspace/AGENTS.md', '# Agent: notion-essay-pr\n');
-    await handler(this.ctx(), {
+    await agent.handler(this.ctx(), {
       id: 'evt-page-123',
       source: 'notion',
       type: 'page.created',
