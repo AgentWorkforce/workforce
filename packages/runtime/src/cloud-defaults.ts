@@ -18,6 +18,11 @@ import type {
   HarnessRunResult,
   HarnessUsage,
   SandboxContext,
+  TeamContext,
+  TeamHandle,
+  TeamResult,
+  TeamSpawnArgs,
+  TeamStatus,
   WorkforceAgentContext,
   WorkforceCtx,
   WorkforceDeploymentContext,
@@ -25,12 +30,22 @@ import type {
 } from './types.js';
 
 type AgentInputValue = string | number | boolean | null | undefined;
+type TeamMemberStatusPayload = Record<string, unknown>;
+type TeamMemberResultPayload = {
+  status: string;
+  output: string;
+  resultId?: string;
+};
 const USAGE_REPORT_TIMEOUT_MS = 5_000;
 const WORKFLOW_COMPLETION_POLL_MS = 1_000;
 const WORKFLOW_COMPLETION_TIMEOUT_MS = 90 * 60_000;
 const WORKFLOW_FETCH_TIMEOUT_MS = 15_000;
 const WORKFLOW_COMPLETION_MAX_TRANSIENT_ERRORS = 3;
 const WORKFLOW_INVOCATION_HEADER = 'x-agentworkforce-workspace-workflow-invocation';
+const TEAM_COMPLETION_POLL_MS = 1_000;
+const TEAM_COMPLETION_TIMEOUT_MS = 21_600 * 1_000;
+const TEAM_FETCH_TIMEOUT_MS = 15_000;
+const TEAM_COMPLETION_MAX_TRANSIENT_ERRORS = 3;
 
 interface AgentRowContext extends WorkforceAgentContext {
   input_values?: Record<string, AgentInputValue>;
@@ -57,6 +72,7 @@ export interface CloudRuntimeDefaults {
   sandbox: SandboxContext;
   files: FilesContext;
   workflow?: WorkflowContext;
+  team?: TeamContext;
   harnessRunner: (args: HarnessRunArgs) => Promise<HarnessRunResult>;
 }
 
@@ -73,10 +89,16 @@ export function createCloudRuntimeDefaults(options: CloudDefaultOptions): CloudR
     workspaceRoot: root,
     env
   });
+  const team = createDefaultTeam({
+    workspaceId: options.workspaceId,
+    parentAgentId: firstNonEmpty(options.agent.id, env.WORKFORCE_AGENT_ID),
+    env
+  });
   return {
     sandbox,
     files,
     ...(workflow ? { workflow } : {}),
+    ...(team ? { team } : {}),
     harnessRunner: createProcessHarnessRunner({
       ...options,
       workspaceRoot: root,
@@ -210,6 +232,260 @@ function createDefaultWorkflow(args: {
       return fetchWorkflowStatus({ base, token, runId });
     }
   };
+}
+
+function createDefaultTeam(args: {
+  workspaceId: string;
+  parentAgentId?: string;
+  env: NodeJS.ProcessEnv;
+}): TeamContext | undefined {
+  const token = firstNonEmpty(args.env.WORKFORCE_WORKSPACE_TOKEN);
+  const baseUrl = firstNonEmpty(args.env.WORKFORCE_CLOUD_BASE_URL);
+  const workspaceId = firstNonEmpty(args.workspaceId);
+  const parentAgentId = firstNonEmpty(args.parentAgentId);
+  if (!token || !baseUrl || !workspaceId || !parentAgentId) return undefined;
+  const base = normalizeBaseUrl(baseUrl);
+  return {
+    async spawn(spawnArgs: TeamSpawnArgs) {
+      const response = await fetchTeam(`${base}/api/v1/workspaces/${encodeURIComponent(workspaceId)}/agents/${encodeURIComponent(parentAgentId)}/team`, {
+        method: 'POST',
+        headers: teamHeaders(token),
+        body: JSON.stringify(spawnArgs)
+      });
+      if (!response.ok) {
+        throw await teamError(response, 'ctx.team.spawn()');
+      }
+      const payload = await response.json().catch(() => ({})) as Record<string, unknown>;
+      if (typeof payload.teamId !== 'string' || payload.teamId.trim().length === 0) {
+        throw new Error('ctx.team.spawn(): cloud response missing teamId');
+      }
+      const teamId = payload.teamId.trim();
+      return buildTeamHandle({
+        base,
+        token,
+        workspaceId,
+        teamId,
+        channel: typeof payload.channel === 'string' && payload.channel.trim() ? payload.channel : `team-${teamId}`,
+        sharedMountRoot: typeof payload.sharedMountRoot === 'string' && payload.sharedMountRoot.trim()
+          ? payload.sharedMountRoot
+          : `/teams/${teamId}`
+      });
+    },
+    async attach(teamId: string) {
+      const normalizedTeamId = normalizeTeamId(teamId, 'ctx.team.attach()');
+      const handle = buildTeamHandle({
+        base,
+        token,
+        workspaceId,
+        teamId: normalizedTeamId,
+        channel: `team-${normalizedTeamId}`,
+        sharedMountRoot: `/teams/${normalizedTeamId}`
+      });
+      await handle.status();
+      return handle;
+    }
+  };
+}
+
+function buildTeamHandle(args: {
+  base: string;
+  token: string;
+  workspaceId: string;
+  teamId: string;
+  channel: string;
+  sharedMountRoot: string;
+}): TeamHandle {
+  return {
+    teamId: args.teamId,
+    channel: args.channel,
+    sharedMountRoot: args.sharedMountRoot,
+    status() {
+      return fetchTeamStatus(args);
+    },
+    completion() {
+      return pollTeamCompletion(args);
+    },
+    async cancel() {
+      const response = await fetchTeam(teamUrl(args, 'cancel'), {
+        method: 'POST',
+        headers: teamHeaders(args.token)
+      });
+      if (!response.ok) {
+        throw await teamError(response, `ctx.team.attach("${args.teamId}").cancel()`);
+      }
+    }
+  };
+}
+
+async function pollTeamCompletion(args: {
+  base: string;
+  token: string;
+  workspaceId: string;
+  teamId: string;
+}): Promise<TeamResult> {
+  const deadline = Date.now() + TEAM_COMPLETION_TIMEOUT_MS;
+  let transientErrors = 0;
+  let lastTransientError: unknown;
+  while (Date.now() < deadline) {
+    let status: TeamStatus;
+    try {
+      status = await fetchTeamStatus(args);
+      transientErrors = 0;
+      lastTransientError = undefined;
+    } catch (err) {
+      if (err instanceof WorkflowRequestError && err.retryable && transientErrors < TEAM_COMPLETION_MAX_TRANSIENT_ERRORS) {
+        transientErrors += 1;
+        lastTransientError = err;
+        await delay(TEAM_COMPLETION_POLL_MS);
+        continue;
+      }
+      throw err;
+    }
+    if (isTerminalTeamStatus(status.status)) {
+      return {
+        status: status.status,
+        members: status.results ?? {},
+        summary: status.summary ?? ''
+      };
+    }
+    await delay(TEAM_COMPLETION_POLL_MS);
+  }
+  if (lastTransientError instanceof Error) {
+    throw new Error(
+      `ctx.team.attach("${args.teamId}").completion(): timed out after ${TEAM_COMPLETION_TIMEOUT_MS}ms; last status poll error: ${lastTransientError.message}`
+    );
+  }
+  throw new Error(`ctx.team.attach("${args.teamId}").completion(): timed out after ${TEAM_COMPLETION_TIMEOUT_MS}ms`);
+}
+
+async function fetchTeamStatus(args: {
+  base: string;
+  token: string;
+  workspaceId: string;
+  teamId: string;
+}): Promise<TeamStatus> {
+  const teamId = normalizeTeamId(args.teamId, 'ctx.team.status()');
+  const response = await fetchTeam(teamUrl({ ...args, teamId }), {
+    method: 'GET',
+    headers: teamHeaders(args.token)
+  });
+  if (!response.ok) {
+    throw await teamError(response, `ctx.team.attach("${teamId}").status()`);
+  }
+  const body = await response.json().catch(() => ({})) as Record<string, unknown>;
+  return normalizeTeamStatus({ ...body, teamId: typeof body.teamId === 'string' ? body.teamId : teamId });
+}
+
+function normalizeTeamStatus(body: Record<string, unknown>): TeamStatus {
+  const teamId = typeof body.teamId === 'string' ? body.teamId : '';
+  const status = canonicalTeamStatus(body.status);
+  return {
+    teamId,
+    status,
+    members: normalizeTeamMembers(body.members),
+    results: normalizeTeamResults(body.results),
+    summary: typeof body.summary === 'string' ? body.summary : ''
+  };
+}
+
+function normalizeTeamMembers(value: unknown): TeamMemberStatusPayload[] {
+  return Array.isArray(value) ? value.filter(isRecord) : [];
+}
+
+function normalizeTeamResults(value: unknown): Record<string, TeamMemberResultPayload> {
+  if (!isRecord(value)) return {};
+  const results: Record<string, TeamMemberResultPayload> = {};
+  for (const [name, result] of Object.entries(value)) {
+    if (!isRecord(result)) continue;
+    const status = typeof result.status === 'string' ? result.status : '';
+    const output = typeof result.output === 'string' ? result.output : '';
+    results[name] = {
+      status,
+      output,
+      ...(typeof result.resultId === 'string' ? { resultId: result.resultId } : {})
+    };
+  }
+  return results;
+}
+
+function canonicalTeamStatus(value: unknown): TeamStatus['status'] {
+  switch (value) {
+    case 'running':
+      return 'running';
+    case 'succeeded':
+    case 'success':
+    case 'completed':
+    case 'complete':
+      return 'succeeded';
+    case 'failed':
+    case 'failure':
+      return 'failed';
+    case 'timed_out':
+    case 'timeout':
+    case 'timed-out':
+      return 'timed_out';
+    case 'cancelled':
+    case 'canceled':
+      return 'cancelled';
+    case 'starting':
+    case 'pending':
+    case 'queued':
+    default:
+      return 'starting';
+  }
+}
+
+function isTerminalTeamStatus(status: TeamStatus['status']): status is TeamResult['status'] {
+  return status === 'succeeded' || status === 'failed' || status === 'timed_out' || status === 'cancelled';
+}
+
+function normalizeTeamId(teamId: string, label: string): string {
+  const trimmed = teamId.trim();
+  if (!trimmed) {
+    throw new Error(`${label} requires a non-empty teamId`);
+  }
+  return trimmed;
+}
+
+function teamUrl(args: {
+  base: string;
+  workspaceId: string;
+  teamId: string;
+}, suffix?: string): string {
+  const url = `${args.base}/api/v1/workspaces/${encodeURIComponent(args.workspaceId)}/teams/${encodeURIComponent(args.teamId)}`;
+  return suffix ? `${url}/${suffix}` : url;
+}
+
+function teamHeaders(token: string): Record<string, string> {
+  return {
+    accept: 'application/json',
+    'content-type': 'application/json',
+    authorization: `Bearer ${token}`
+  };
+}
+
+async function teamError(response: Response, label: string): Promise<Error> {
+  const body = await response.text().catch(() => '');
+  const excerpt = body.length > 400 ? `${body.slice(0, 400)}...` : body;
+  return new WorkflowRequestError(
+    `${label}: ${response.status} ${response.statusText}${excerpt ? ` - ${excerpt}` : ''}`,
+    response.status === 401 || response.status === 429 || response.status >= 500
+  );
+}
+
+async function fetchTeam(input: string, init: RequestInit): Promise<Response> {
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), TEAM_FETCH_TIMEOUT_MS);
+  try {
+    return await fetch(input, { ...init, signal: controller.signal });
+  } catch (err) {
+    const message = err instanceof Error && err.name === 'AbortError'
+      ? `timeout after ${TEAM_FETCH_TIMEOUT_MS}ms`
+      : err instanceof Error ? err.message : String(err);
+    throw new WorkflowRequestError(`team request failed: ${message}`, true);
+  } finally {
+    clearTimeout(timer);
+  }
 }
 
 async function readBundledWorkflowSource(workspaceRoot: string, name: string): Promise<string> {
