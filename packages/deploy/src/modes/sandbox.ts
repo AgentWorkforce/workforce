@@ -41,6 +41,7 @@ const DEFAULT_CLOUD_URL = 'https://cloud.agentworkforce.com';
 export const sandboxLauncher: ModeLauncher = {
   async launch(input: ModeLaunchInput): Promise<ModeLaunchHandle> {
     const client = resolveSandboxClient(input, input.byoSandbox ? { forceByo: true } : {});
+    const integrations = input.persona.integrations;
     const handle = await client.mint({
       label: `wf-${input.persona.id}`,
       env: {
@@ -48,7 +49,8 @@ export const sandboxLauncher: ModeLauncher = {
         ...runtimeContextEnv(input.persona, input.env),
         WORKFORCE_WORKSPACE_ID: input.workspace,
         WORKFORCE_PERSONA_ID: input.persona.id
-      }
+      },
+      ...(integrations && Object.keys(integrations).length > 0 ? { integrations } : {})
     });
 
     try {
