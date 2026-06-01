@@ -486,7 +486,7 @@ export interface NonInteractiveSpec {
  * Layers harness-specific non-interactive flags on top of {@link buildInteractiveSpec},
  * then appends the user task. Pure — no I/O.
  *
- * - `claude`: appends `--print --output-format text [--name <n>] <task>`.
+ * - `claude`: appends `--print --output-format text <task>`.
  * - `codex`:  prefixes `exec`, appends `--skip-git-repo-check`, then a prompt
  *   built from any `initialPrompt` joined with the user task.
  * - `opencode`: prefixes `run`, appends `--model <m> --format default
@@ -503,7 +503,6 @@ export function buildNonInteractiveSpec(
   switch (input.harness) {
     case 'claude': {
       const args = [...interactive.args, '--print', '--output-format', 'text'];
-      if (input.name) args.push('--name', input.name);
       args.push(input.task);
       return {
         bin: interactive.bin,
