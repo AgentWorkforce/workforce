@@ -181,7 +181,8 @@ export {
   type BuildInteractiveSpecInput,
   type InteractiveConfigFile,
   type InteractiveSpec,
-  type NonInteractiveSpec
+  type NonInteractiveSpec,
+  type RelayMcpConfig
 } from './interactive-spec.js';
 
 // Harness detection

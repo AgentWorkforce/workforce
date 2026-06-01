@@ -55,6 +55,7 @@ import {
   type PersonaSelection,
   type PersonaSpec,
   type PersonaTag,
+  type RelayMcpConfig,
   type SidecarMdMode,
   type SkillMaterializationPlan
 } from '@agentworkforce/persona-kit';
@@ -490,6 +491,33 @@ function emitDropWarnings(lines: string[]): void {
   process.stderr.write(
     `        (referenced env vars were not set — proceeding without those values; if the agent relies on them it may need to authenticate interactively, e.g. via OAuth.)\n`
   );
+}
+
+/**
+ * Detect that we're launching under an Agent Relay broker and, if so, build the
+ * relaycast wiring to inject into the harness's MCP config so the persona can
+ * message the team — the same capability a non-persona broker spawn gets.
+ *
+ * The broker sets `RELAY_API_KEY` (+ optional `RELAY_BASE_URL` /
+ * `RELAY_DEFAULT_WORKSPACE`) on every worker child, and the broker-assigned
+ * worker name on `RELAY_AGENT_NAME`. Both the key and the name are required:
+ * the name must match what the broker routes to so the relaycast identity and
+ * the PTY worker are the same agent. Absent either, we're not under a broker
+ * (or it's too old to expose the name) and return undefined — a plain
+ * `agentworkforce agent` run is unaffected.
+ */
+function resolveRelayMcpFromEnv(env: NodeJS.ProcessEnv): RelayMcpConfig | undefined {
+  const apiKey = env.RELAY_API_KEY?.trim();
+  const agentName = env.RELAY_AGENT_NAME?.trim();
+  if (!apiKey || !agentName) return undefined;
+  const baseUrl = env.RELAY_BASE_URL?.trim();
+  const defaultWorkspace = env.RELAY_DEFAULT_WORKSPACE?.trim();
+  return {
+    apiKey,
+    agentName,
+    ...(baseUrl ? { baseUrl } : {}),
+    ...(defaultWorkspace ? { defaultWorkspace } : {})
+  };
 }
 
 function signalExitCode(signal: NodeJS.Signals | null): number {
@@ -1267,6 +1295,32 @@ export function formatSandboxMountReadyMessage(
   return `Sandbox mount ready${mountStats} → ${mountDir}`;
 }
 
+export function buildSpawnSummary(input: {
+  harness: Harness;
+  model: string;
+  spec: Pick<InteractiveSpec, 'initialPrompt' | 'mcpServers'>;
+  permissions?: PersonaSelection['permissions'];
+  useClean?: boolean;
+}): string[] {
+  const summary: string[] = [`model=${input.model}`];
+  if (input.harness === 'claude') {
+    const servers = Object.keys(input.spec.mcpServers ?? {});
+    summary.push(`mcp-strict=${servers.length ? servers.join(',') : '(none)'}`);
+    if (input.permissions?.allow?.length) {
+      summary.push(`allow=${input.permissions.allow.length} rule(s)`);
+    }
+    if (input.permissions?.deny?.length) {
+      summary.push(`deny=${input.permissions.deny.length} rule(s)`);
+    }
+    if (input.permissions?.mode) {
+      summary.push(`mode=${input.permissions.mode}`);
+    }
+  }
+  if (input.spec.initialPrompt) summary.push('initial-prompt=<systemPrompt>');
+  if (input.useClean) summary.push('mount=on');
+  return summary;
+}
+
 /**
  * Persona authoring dry-run. Used by persona authors to verify a persona
  * actually launches before it ships, without spawning the harness or
@@ -1343,6 +1397,7 @@ function runDryRun(selection: PersonaSelection): number {
   );
   let spec: InteractiveSpec;
   try {
+    const relayMcp = resolveRelayMcpFromEnv(process.env);
     spec = buildInteractiveSpec({
       harness,
       personaId,
@@ -1350,6 +1405,7 @@ function runDryRun(selection: PersonaSelection): number {
       systemPrompt,
       harnessSettings,
       mcpServers: mcpResolution.servers,
+      ...(relayMcp ? { relayMcp } : {}),
       permissions: effectiveSelection.permissions
     });
   } catch (err) {
@@ -1718,6 +1774,7 @@ async function runInteractive(
     }
   }
 
+  const relayMcp = resolveRelayMcpFromEnv(process.env);
   const spec = buildInteractiveSpec({
     harness,
     personaId,
@@ -1725,6 +1782,7 @@ async function runInteractive(
     systemPrompt,
     harnessSettings,
     mcpServers: resolvedMcp,
+    ...(relayMcp ? { relayMcp } : {}),
     permissions: effectiveSelection.permissions,
     ...(installRoot !== undefined ? { pluginDirs: [installRoot] } : {})
   });
@@ -1759,22 +1817,13 @@ async function runInteractive(
   // env refs are interpolated. We show the bin, model, and the *names* of
   // the servers / permission fields so the user can verify the shape without
   // leaking credentials to stderr or CI logs.
-  const summary: string[] = [`model=${model}`];
-  if (harness === 'claude') {
-    const servers = Object.keys(resolvedMcp ?? {});
-    summary.push(`mcp-strict=${servers.length ? servers.join(',') : '(none)'}`);
-    if (effectiveSelection.permissions?.allow?.length) {
-      summary.push(`allow=${effectiveSelection.permissions.allow.length} rule(s)`);
-    }
-    if (effectiveSelection.permissions?.deny?.length) {
-      summary.push(`deny=${effectiveSelection.permissions.deny.length} rule(s)`);
-    }
-    if (effectiveSelection.permissions?.mode) {
-      summary.push(`mode=${effectiveSelection.permissions.mode}`);
-    }
-  }
-  if (spec.initialPrompt) summary.push('initial-prompt=<systemPrompt>');
-  if (useClean) summary.push('mount=on');
+  const summary = buildSpawnSummary({
+    harness,
+    model,
+    spec,
+    permissions: effectiveSelection.permissions,
+    useClean
+  });
   process.stderr.write(`• spawning ${spec.bin} (${summary.join(', ')})\n`);
 
   // Mount branch: delegate process lifecycle (spawn, signal forwarding,

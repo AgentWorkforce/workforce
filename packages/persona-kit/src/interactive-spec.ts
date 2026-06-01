@@ -44,6 +44,41 @@ export interface InteractiveSpec {
    * resolve it; claude and codex return an empty array.
    */
   configFiles: InteractiveConfigFile[];
+  /**
+   * Final MCP server map after broker relaycast injection and persona overrides.
+   * Consumers should use this for sanitized summaries instead of the raw argv.
+   */
+  mcpServers?: Record<string, McpServerSpec>;
+}
+
+/**
+ * Relaycast wiring for a persona launched under an Agent Relay broker. When
+ * present, {@link buildInteractiveSpec} injects a `relaycast` MCP server into
+ * the harness's MCP config so the persona can message the team — the same
+ * capability a non-persona broker spawn gets automatically.
+ *
+ * Personas otherwise can't reach relaycast: the broker wires its MCP by
+ * recognizing the harness CLI it spawns, but a persona's PTY command is the
+ * `agentworkforce` launcher (not the harness), and the claude branch emits
+ * `--strict-mcp-config`, so a project `.mcp.json` is ignored. Injecting here —
+ * into the same `--mcp-config` payload the harness already receives — is the
+ * only path that survives strict mode. Callers populate this from the
+ * `RELAY_*` env the broker sets on the launcher process (see
+ * {@link buildRelaycastMcpServer}).
+ */
+export interface RelayMcpConfig {
+  /** Relaycast API key (`RELAY_API_KEY`). */
+  apiKey: string;
+  /**
+   * Broker-assigned worker name (`RELAY_AGENT_NAME`). Must match the name the
+   * broker routes messages to, so the relaycast identity and the PTY worker
+   * are the same agent. Registered strictly (`RELAY_STRICT_AGENT_NAME=1`).
+   */
+  agentName: string;
+  /** Relaycast base URL (`RELAY_BASE_URL`); omitted ⇒ MCP server's default. */
+  baseUrl?: string;
+  /** Default workspace id/name (`RELAY_DEFAULT_WORKSPACE`). */
+  defaultWorkspace?: string;
 }
 
 export interface BuildInteractiveSpecInput {
@@ -58,6 +93,14 @@ export interface BuildInteractiveSpecInput {
   systemPrompt: string;
   /** Env-resolved MCP servers (pass the output of `resolveMcpServersLenient().servers`). */
   mcpServers?: Record<string, McpServerSpec>;
+  /**
+   * When set, a `relaycast` MCP server is merged into {@link mcpServers} so a
+   * persona running under an Agent Relay broker can talk to the team. A
+   * persona-declared server literally named `relaycast` takes precedence (it
+   * is not overwritten). Wired for claude and codex; opencode still warns that
+   * MCP injection is unsupported.
+   */
+  relayMcp?: RelayMcpConfig;
   permissions?: PersonaPermissions;
   harnessSettings?: HarnessSettings;
   /**
@@ -186,17 +229,48 @@ function appendCodexMcpServerArgs(
  * The opencode branch emits a warning if the persona declares `mcpServers`
  * or `permissions` — those features aren't wired for opencode yet.
  */
+/**
+ * Build the stdio MCP server spec for relaycast, mirroring the env block the
+ * broker injects for a recognized harness (`npx -y @relaycast/mcp` + `RELAY_*`).
+ * The agent token is intentionally omitted: the relaycast MCP auto-mints one
+ * from `RELAY_API_KEY` + the strict agent name, which is the recommended path.
+ */
+function buildRelaycastMcpServer(relay: RelayMcpConfig): McpServerSpec {
+  const env: Record<string, string> = {
+    RELAY_API_KEY: relay.apiKey,
+    RELAY_AGENT_NAME: relay.agentName,
+    RELAY_AGENT_TYPE: 'agent',
+    RELAY_STRICT_AGENT_NAME: '1'
+  };
+  if (relay.baseUrl) env.RELAY_BASE_URL = relay.baseUrl;
+  if (relay.defaultWorkspace) env.RELAY_DEFAULT_WORKSPACE = relay.defaultWorkspace;
+  return { type: 'stdio', command: 'npx', args: ['-y', '@relaycast/mcp'], env };
+}
+
 export function buildInteractiveSpec(input: BuildInteractiveSpecInput): InteractiveSpec {
   const {
     harness,
     personaId,
     model,
     systemPrompt,
-    mcpServers,
     permissions,
     harnessSettings,
     pluginDirs
   } = input;
+  // Merge the relaycast server into the persona's declared servers when running
+  // under a broker. A persona-declared `relaycast` wins, so authors can still
+  // override it. Kept pure: callers pass relayMcp explicitly (resolved from
+  // env), so this function reads no environment itself.
+  const personaMcpServers = input.mcpServers;
+  const hasPersonaMcpServers =
+    personaMcpServers !== undefined && Object.keys(personaMcpServers).length > 0;
+  const relayMcpServer = input.relayMcp
+    ? buildRelaycastMcpServer(input.relayMcp)
+    : undefined;
+  const injectsRelaycast = relayMcpServer !== undefined && personaMcpServers?.relaycast === undefined;
+  const mcpServers = relayMcpServer
+    ? { relaycast: relayMcpServer, ...(personaMcpServers ?? {}) }
+    : personaMcpServers;
   const warnings: string[] = [];
   const hasPluginDirs = pluginDirs !== undefined && pluginDirs.length > 0;
 
@@ -236,7 +310,7 @@ export function buildInteractiveSpec(input: BuildInteractiveSpecInput): Interact
           CODEX_ONLY_WARNING.replace('{harness}', 'claude')
         );
       }
-      return { bin: 'claude', args, initialPrompt: null, warnings, configFiles: [] };
+      return { bin: 'claude', args, initialPrompt: null, warnings, configFiles: [], mcpServers };
     }
     case 'codex': {
       if (hasAnyPermission(permissions)) {
@@ -290,13 +364,22 @@ export function buildInteractiveSpec(input: BuildInteractiveSpecInput): Interact
         args,
         initialPrompt: systemPrompt,
         warnings,
-        configFiles: []
+        configFiles: [],
+        mcpServers
       };
     }
     case 'opencode': {
-      if (mcpServers && Object.keys(mcpServers).length > 0) {
+      if (hasPersonaMcpServers && injectsRelaycast) {
+        warnings.push(
+          'persona declares mcpServers and broker requested relaycast MCP injection, but the opencode harness is not yet wired for runtime MCP injection; proceeding without MCP.'
+        );
+      } else if (hasPersonaMcpServers) {
         warnings.push(
           'persona declares mcpServers but the opencode harness is not yet wired for runtime MCP injection; proceeding without MCP.'
+        );
+      } else if (injectsRelaycast) {
+        warnings.push(
+          'broker requested relaycast MCP injection but the opencode harness is not yet wired for runtime MCP injection; proceeding without MCP.'
         );
       }
       if (hasAnyPermission(permissions)) {
@@ -374,7 +457,8 @@ export function buildInteractiveSpec(input: BuildInteractiveSpecInput): Interact
             path: 'opencode.json',
             contents: JSON.stringify(agentConfig, null, 2) + '\n'
           }
-        ]
+        ],
+        mcpServers
       };
     }
     default: {
