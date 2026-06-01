@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [3.0.38] - 2026-06-01
+
+### Added
+
+- **Move triggers/schedules/watch to agent.ts (defineAgent)** (#175)
+
 ## [3.0.37] - 2026-06-01
 
 ### Added
