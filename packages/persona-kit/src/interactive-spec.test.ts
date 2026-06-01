@@ -479,6 +479,7 @@ test('relayMcp injects a relaycast server into the claude --mcp-config payload',
   });
   // --strict-mcp-config still present: relaycast rides inside the strict payload.
   assert.ok(result.args.includes('--strict-mcp-config'));
+  assert.equal(result.mcpServers?.relaycast?.type, 'stdio');
 });
 
 test('relayMcp omits RELAY_BASE_URL / RELAY_DEFAULT_WORKSPACE when not provided', () => {
@@ -520,6 +521,10 @@ test('relayMcp merges alongside persona-declared servers; a persona relaycast wi
     type: 'stdio',
     command: 'custom-relaycast'
   });
+  assert.deepEqual(result.mcpServers?.relaycast, {
+    type: 'stdio',
+    command: 'custom-relaycast'
+  });
 });
 
 test('without relayMcp the claude payload carries no relaycast server', () => {
@@ -555,7 +560,24 @@ test('relayMcp under opencode warns that MCP injection is unsupported', () => {
     systemPrompt: 'x',
     relayMcp: { apiKey: 'wk_live_abc', agentName: 'Op1' }
   });
-  assert.ok(
-    result.warnings.some((w) => w.includes('opencode harness is not yet wired for runtime MCP injection'))
-  );
+  assert.deepEqual(result.warnings, [
+    'broker requested relaycast MCP injection but the opencode harness is not yet wired for runtime MCP injection; proceeding without MCP.'
+  ]);
+  assert.equal(result.mcpServers?.relaycast?.type, 'stdio');
+});
+
+test('opencode warning names both persona and broker MCP sources when both are present', () => {
+  const result = buildInteractiveSpec({
+    harness: 'opencode',
+    personaId: 'p',
+    model: 'opencode/gpt-5',
+    systemPrompt: 'x',
+    mcpServers: {
+      posthog: { type: 'http', url: 'https://mcp.posthog.com/mcp' }
+    },
+    relayMcp: { apiKey: 'wk_live_abc', agentName: 'Op1' }
+  });
+  assert.deepEqual(result.warnings, [
+    'persona declares mcpServers and broker requested relaycast MCP injection, but the opencode harness is not yet wired for runtime MCP injection; proceeding without MCP.'
+  ]);
 });

@@ -1295,6 +1295,32 @@ export function formatSandboxMountReadyMessage(
   return `Sandbox mount ready${mountStats} → ${mountDir}`;
 }
 
+export function buildSpawnSummary(input: {
+  harness: Harness;
+  model: string;
+  spec: Pick<InteractiveSpec, 'initialPrompt' | 'mcpServers'>;
+  permissions?: PersonaSelection['permissions'];
+  useClean?: boolean;
+}): string[] {
+  const summary: string[] = [`model=${input.model}`];
+  if (input.harness === 'claude') {
+    const servers = Object.keys(input.spec.mcpServers ?? {});
+    summary.push(`mcp-strict=${servers.length ? servers.join(',') : '(none)'}`);
+    if (input.permissions?.allow?.length) {
+      summary.push(`allow=${input.permissions.allow.length} rule(s)`);
+    }
+    if (input.permissions?.deny?.length) {
+      summary.push(`deny=${input.permissions.deny.length} rule(s)`);
+    }
+    if (input.permissions?.mode) {
+      summary.push(`mode=${input.permissions.mode}`);
+    }
+  }
+  if (input.spec.initialPrompt) summary.push('initial-prompt=<systemPrompt>');
+  if (input.useClean) summary.push('mount=on');
+  return summary;
+}
+
 /**
  * Persona authoring dry-run. Used by persona authors to verify a persona
  * actually launches before it ships, without spawning the harness or
@@ -1791,22 +1817,13 @@ async function runInteractive(
   // env refs are interpolated. We show the bin, model, and the *names* of
   // the servers / permission fields so the user can verify the shape without
   // leaking credentials to stderr or CI logs.
-  const summary: string[] = [`model=${model}`];
-  if (harness === 'claude') {
-    const servers = Object.keys(resolvedMcp ?? {});
-    summary.push(`mcp-strict=${servers.length ? servers.join(',') : '(none)'}`);
-    if (effectiveSelection.permissions?.allow?.length) {
-      summary.push(`allow=${effectiveSelection.permissions.allow.length} rule(s)`);
-    }
-    if (effectiveSelection.permissions?.deny?.length) {
-      summary.push(`deny=${effectiveSelection.permissions.deny.length} rule(s)`);
-    }
-    if (effectiveSelection.permissions?.mode) {
-      summary.push(`mode=${effectiveSelection.permissions.mode}`);
-    }
-  }
-  if (spec.initialPrompt) summary.push('initial-prompt=<systemPrompt>');
-  if (useClean) summary.push('mount=on');
+  const summary = buildSpawnSummary({
+    harness,
+    model,
+    spec,
+    permissions: effectiveSelection.permissions,
+    useClean
+  });
   process.stderr.write(`• spawning ${spec.bin} (${summary.join(', ')})\n`);
 
   // Mount branch: delegate process lifecycle (spawn, signal forwarding,

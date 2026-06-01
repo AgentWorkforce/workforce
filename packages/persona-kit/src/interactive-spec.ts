@@ -44,6 +44,11 @@ export interface InteractiveSpec {
    * resolve it; claude and codex return an empty array.
    */
   configFiles: InteractiveConfigFile[];
+  /**
+   * Final MCP server map after broker relaycast injection and persona overrides.
+   * Consumers should use this for sanitized summaries instead of the raw argv.
+   */
+  mcpServers?: Record<string, McpServerSpec>;
 }
 
 /**
@@ -256,9 +261,16 @@ export function buildInteractiveSpec(input: BuildInteractiveSpecInput): Interact
   // under a broker. A persona-declared `relaycast` wins, so authors can still
   // override it. Kept pure: callers pass relayMcp explicitly (resolved from
   // env), so this function reads no environment itself.
-  const mcpServers = input.relayMcp
-    ? { relaycast: buildRelaycastMcpServer(input.relayMcp), ...(input.mcpServers ?? {}) }
-    : input.mcpServers;
+  const personaMcpServers = input.mcpServers;
+  const hasPersonaMcpServers =
+    personaMcpServers !== undefined && Object.keys(personaMcpServers).length > 0;
+  const relayMcpServer = input.relayMcp
+    ? buildRelaycastMcpServer(input.relayMcp)
+    : undefined;
+  const injectsRelaycast = relayMcpServer !== undefined && personaMcpServers?.relaycast === undefined;
+  const mcpServers = relayMcpServer
+    ? { relaycast: relayMcpServer, ...(personaMcpServers ?? {}) }
+    : personaMcpServers;
   const warnings: string[] = [];
   const hasPluginDirs = pluginDirs !== undefined && pluginDirs.length > 0;
 
@@ -298,7 +310,7 @@ export function buildInteractiveSpec(input: BuildInteractiveSpecInput): Interact
           CODEX_ONLY_WARNING.replace('{harness}', 'claude')
         );
       }
-      return { bin: 'claude', args, initialPrompt: null, warnings, configFiles: [] };
+      return { bin: 'claude', args, initialPrompt: null, warnings, configFiles: [], mcpServers };
     }
     case 'codex': {
       if (hasAnyPermission(permissions)) {
@@ -352,13 +364,22 @@ export function buildInteractiveSpec(input: BuildInteractiveSpecInput): Interact
         args,
         initialPrompt: systemPrompt,
         warnings,
-        configFiles: []
+        configFiles: [],
+        mcpServers
       };
     }
     case 'opencode': {
-      if (mcpServers && Object.keys(mcpServers).length > 0) {
+      if (hasPersonaMcpServers && injectsRelaycast) {
+        warnings.push(
+          'persona declares mcpServers and broker requested relaycast MCP injection, but the opencode harness is not yet wired for runtime MCP injection; proceeding without MCP.'
+        );
+      } else if (hasPersonaMcpServers) {
         warnings.push(
           'persona declares mcpServers but the opencode harness is not yet wired for runtime MCP injection; proceeding without MCP.'
+        );
+      } else if (injectsRelaycast) {
+        warnings.push(
+          'broker requested relaycast MCP injection but the opencode harness is not yet wired for runtime MCP injection; proceeding without MCP.'
         );
       }
       if (hasAnyPermission(permissions)) {
@@ -436,7 +457,8 @@ export function buildInteractiveSpec(input: BuildInteractiveSpecInput): Interact
             path: 'opencode.json',
             contents: JSON.stringify(agentConfig, null, 2) + '\n'
           }
-        ]
+        ],
+        mcpServers
       };
     }
     default: {

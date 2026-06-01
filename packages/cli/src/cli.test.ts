@@ -15,6 +15,7 @@ import {
   buildPickCandidates,
   buildRelayfileMountPatterns,
   buildMountGitExcludeBlock,
+  buildSpawnSummary,
   buildSidecarBody,
   configureGitForMount,
   decideCleanMode,
@@ -879,6 +880,26 @@ test('buildMountGitExcludeBlock: emits a header comment and one line per pattern
   assert.match(out, /^# agentworkforce:/m);
   assert.match(out, /^CLAUDE\.md$/m);
   assert.match(out, /^\.claude$/m);
+});
+
+test('buildSpawnSummary uses final spec MCP servers, including broker-injected relaycast', () => {
+  const summary = buildSpawnSummary({
+    harness: 'claude',
+    model: 'claude-sonnet-4-6',
+    spec: {
+      initialPrompt: null,
+      mcpServers: {
+        relaycast: { type: 'stdio', command: 'npx', args: ['-y', '@relaycast/mcp'] }
+      }
+    },
+    useClean: true
+  });
+
+  assert.deepEqual(summary, [
+    'model=claude-sonnet-4-6',
+    'mcp-strict=relaycast',
+    'mount=on'
+  ]);
 });
 
 test('configureGitForMount: marks tracked hidden paths as skip-worktree and appends to .git/info/exclude', async () => {
