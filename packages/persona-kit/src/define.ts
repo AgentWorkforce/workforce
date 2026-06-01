@@ -12,6 +12,7 @@ import type {
   SidecarMdMode
 } from './types.js';
 import type { KnownProviderName, KnownTriggerName } from './triggers.js';
+import type { KnownScopeKey, KnownScopeProviderName } from './scopes.js';
 import type { KnownPersonaTag } from './constants.js';
 
 export type TriggerNameFor<P extends string> = P extends KnownProviderName
@@ -39,15 +40,36 @@ export type TypedTriggerMap = {
 };
 
 /**
+ * Per-provider scope keys for typed persona authoring. Resolves to the
+ * provider's catalogued scope keys (e.g. `github` → `'owner' | 'repo'`) for
+ * known providers; `never` for unknown ones (the index signature on
+ * {@link TypedScopeMap} still allows arbitrary keys there).
+ */
+export type ScopeKeysFor<P extends string> = P extends KnownScopeProviderName
+  ? KnownScopeKey<P>
+  : never;
+
+/**
+ * Typed shape of `integrations.<provider>.scope`. Catalogued keys autocomplete
+ * and are typed; arbitrary string keys remain allowed (forward-compat — the
+ * cloud adapter is the runtime source of truth, and new scope keys shouldn't
+ * require a persona-kit release).
+ */
+export type TypedScopeMap<P extends string> = {
+  [K in ScopeKeysFor<P>]?: string;
+} & {
+  [key: string]: string;
+};
+
+/**
  * Per-provider integration **connection** config in typed persona authoring.
  * Connection-only (source + scope) — event triggers live on the agent
- * ({@link TypedTriggerMap}), not here. The `P` param is retained for symmetry
- * with {@link TypedIntegrations} and forward-compatibility.
+ * ({@link TypedTriggerMap}), not here. `scope` keys are typed per provider via
+ * {@link TypedScopeMap}.
  */
-// eslint-disable-next-line @typescript-eslint/no-unused-vars
 export interface TypedIntegrationConfig<P extends string = string> {
   source?: IntegrationSource;
-  scope?: Record<string, string>;
+  scope?: TypedScopeMap<P>;
 }
 
 export type TypedIntegrations = {
