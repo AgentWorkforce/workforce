@@ -738,7 +738,16 @@ test('main: deploy dry-run accepts an authored persona.ts path', async () => {
   const workforceHome = join(root, 'home', '.agentworkforce', 'workforce');
   mkdirSync(join(workforceHome, 'personas'), { recursive: true });
   const personaPath = join(root, 'persona.ts');
-  writeFileSync(join(root, 'agent.ts'), 'export default async () => {};', 'utf8');
+  writeFileSync(
+    join(root, 'agent.ts'),
+    `import { defineAgent } from '@agentworkforce/runtime';
+export default defineAgent({
+  schedules: [{ name: 'daily', cron: '0 9 * * *' }],
+  handler: async () => {}
+});
+`,
+    'utf8'
+  );
   writeFileSync(
     personaPath,
     `export default {
@@ -746,7 +755,6 @@ test('main: deploy dry-run accepts an authored persona.ts path', async () => {
   intent: 'review',
   description: 'Deploy through the CLI dispatcher.',
   cloud: true,
-  schedules: [{ name: 'daily', cron: '0 9 * * *' }],
   onEvent: './agent.ts',
   harnessSettings: { reasoning: 'medium', timeoutSeconds: 60 }
 };
