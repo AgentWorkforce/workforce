@@ -4,7 +4,11 @@ import assert from 'node:assert/strict';
 const LIVE_RUNTIME_CREDENTIALS_URL =
   'https://agentrelay.com/cloud/api/v1/workspaces/rw_probe/runtime-credentials';
 
-test('live runtime-credentials route rejects unauthenticated POST with 401 and GET with 405', async () => {
+test('live runtime-credentials route rejects unauthenticated POST with 401 and GET with 405', {
+  skip: process.env.WORKFORCE_LIVE_RUNTIME_CREDENTIALS_TESTS === '1'
+    ? false
+    : 'set WORKFORCE_LIVE_RUNTIME_CREDENTIALS_TESTS=1 to run live route probes'
+}, async () => {
   const post = await fetch(LIVE_RUNTIME_CREDENTIALS_URL, {
     method: 'POST',
     headers: { 'content-type': 'application/json' },
