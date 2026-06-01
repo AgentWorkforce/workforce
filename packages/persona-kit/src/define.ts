@@ -12,7 +12,7 @@ import type {
   SidecarMdMode
 } from './types.js';
 import type { KnownProviderName, KnownTriggerName } from './triggers.js';
-import type { KnownScopeKey, KnownScopeProviderName } from './scopes.js';
+import type { ScopeKey, ScopeKeyProvider } from './scope-keys.js';
 import type { KnownPersonaTag } from './constants.js';
 
 export type TriggerNameFor<P extends string> = P extends KnownProviderName
@@ -45,8 +45,8 @@ export type TypedTriggerMap = {
  * known providers; `never` for unknown ones (the index signature on
  * {@link TypedScopeMap} still allows arbitrary keys there).
  */
-export type ScopeKeysFor<P extends string> = P extends KnownScopeProviderName
-  ? KnownScopeKey<P>
+export type ScopeKeysFor<P extends string> = P extends ScopeKeyProvider
+  ? ScopeKey<P>
   : never;
 
 /**

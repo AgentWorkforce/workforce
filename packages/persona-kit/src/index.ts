@@ -65,13 +65,13 @@ export {
   type TypedTriggerMap
 } from './define.js';
 
-// Per-provider connection scope catalog for typed persona authoring
+// Per-provider connection scope-key catalog (from @relayfile/adapter-core/scope-keys)
 export {
-  KNOWN_SCOPE_CATALOG,
-  ADAPTERS_WITHOUT_KNOWN_SCOPES,
-  type KnownScopeKey,
-  type KnownScopeProviderName
-} from './scopes.js';
+  KNOWN_SCOPE_KEY_CATALOG,
+  ADAPTERS_WITHOUT_KNOWN_SCOPE_KEYS,
+  type ScopeKey,
+  type ScopeKeyProvider
+} from './scope-keys.js';
 
 // Parsers + sidecar resolver
 export {
