@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import { mkdtemp, rm, writeFile } from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
-import type { PersonaSpec } from '@agentworkforce/persona-kit';
+import type { PersonaSpec, WatchRule } from '@agentworkforce/persona-kit';
 import { createBufferedIO } from '../io.js';
 import type { BundleResult, ModeLaunchInput } from '../types.js';
 import {
@@ -195,20 +195,19 @@ test('cloud launcher POSTs a deploy bundle and returns the cloud handle', async 
   assert.equal(calls.filter((call) => call.url.includes('/provider-credentials/managed')).length, 1);
 });
 
-test('cloud launcher sends proactive personas (top-level watch) through the deployments endpoint', async () => {
-  // Consolidation: proactive personas now flow through the same
-  // /deployments POST as regular personas. The persona's top-level
-  // watch[] travels inside the persona object; cloud-side
-  // preparePersonaDeploy extracts it and persists into agents.watch_rules
-  // (cloud PR #919). No separate /proactive-personas surface.
-  const watch = [{ paths: ['/i/x/**'], events: ['created'], debounceMs: 1000 }];
+test('cloud launcher sends proactive agent watch rules through the deployments endpoint', async () => {
+  // Consolidation: proactive agents now flow through the same /deployments
+  // POST as regular agents. Listener declarations, including watch[], travel
+  // inside the top-level agent block; the persona stays connection/runtime
+  // config only. No separate /proactive-personas surface.
+  const watch: WatchRule[] = [{ paths: ['/i/x/**'], events: ['created'], debounceMs: 1000 }];
   const proactivePersona = persona({
-    mount: { enabled: false },
-    watch
-  } as Partial<PersonaSpec>);
+    mount: { enabled: false }
+  });
 
   const { handle, calls } = await launch({
     persona: proactivePersona,
+    input: { agent: { watch } },
     env: {
       WORKFORCE_DEPLOY_CLOUD_URL: 'https://cloud.example.test'
     },
@@ -219,8 +218,8 @@ test('cloud launcher sends proactive personas (top-level watch) through the depl
       assert.equal(url, 'https://cloud.example.test/api/v1/workspaces/ws-test/deployments');
       assert.equal(init?.method, 'POST');
       const body = JSON.parse(String(init?.body)) as Record<string, unknown>;
-      // watch[] travels inside persona, not as a sibling field.
-      assert.deepEqual(((body.persona as Record<string, unknown>).watch), watch);
+      assert.equal((body.persona as Record<string, unknown>).watch, undefined);
+      assert.deepEqual((body.agent as Record<string, unknown>).watch, watch);
       assert.equal(body.watch, undefined);
       assert.equal(body.mount, undefined);
       return okJson({ agentId: 'agent-1', deploymentId: 'dep-1', status: 'ready' }, 201);
@@ -258,12 +257,11 @@ test('cloud launcher keeps non-proactive personas on the deployments endpoint', 
 });
 
 test('cloud launcher maps proactive failed deployment responses to a failed handle', async () => {
-  const proactivePersona = persona({
-    watch: [{ paths: ['/i/x/**'], events: ['updated'], debounceMs: 1000 }]
-  } as Partial<PersonaSpec>);
+  const watch: WatchRule[] = [{ paths: ['/i/x/**'], events: ['updated'], debounceMs: 1000 }];
 
   const { handle } = await launch({
-    persona: proactivePersona,
+    persona: persona(),
+    input: { agent: { watch } },
     env: {
       WORKFORCE_DEPLOY_CLOUD_URL: 'https://cloud.example.test'
     },

@@ -11,7 +11,8 @@
       "default": "./dist/index.js"
     },
     "./package.json": "./package.json",
-    "./schemas/persona.schema.json": "./schemas/persona.schema.json"
+    "./schemas/persona.schema.json": "./schemas/persona.schema.json",
+    "./schemas/agent.schema.json": "./schemas/agent.schema.json"
   },
   "files": [
     "dist",
