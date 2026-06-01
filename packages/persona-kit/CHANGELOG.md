@@ -7,6 +7,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [3.0.37] - 2026-06-01
+
+### Added
+
+- **Wire relaycast MCP into broker-launched personas** (#170)
+
+### Fixed
+
+- Omit unsupported claude name flag (#174)
+
 ## [3.0.35] - 2026-05-31
 
 ### Added
