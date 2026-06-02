@@ -10,6 +10,7 @@ import type {
   WorkforceEvent,
   WorkforceHandler,
   WorkforceHandlerExport,
+  LinearAgentSessionEvent,
   WorkforceProviderEvent
 } from './types.js';
 
@@ -35,9 +36,27 @@ type OnLiteralsOf<A> = A extends readonly (infer E)[]
 
 type TriggerOnUnion<Tr> = OnLiteralsOf<NonNullable<Tr[keyof Tr]>>;
 
+type LinearSpecialEvent<O extends string> = Extract<LinearAgentSessionEvent, { type: O }>;
+
+type ProviderEventFor<P extends string, O extends string> = P extends 'linear'
+  ? [LinearSpecialEvent<O>] extends [never]
+    ? Omit<WorkforceProviderEvent, 'type'> & { type: O }
+    : LinearSpecialEvent<O>
+  : Omit<WorkforceProviderEvent, 'type'> & { type: O };
+
+type TriggerProviderEvents<Tr> = {
+  [P in keyof Tr]: P extends string
+    ? OnLiteralsOf<NonNullable<Tr[P]>> extends infer O
+      ? O extends string
+        ? ProviderEventFor<P, O>
+        : never
+      : never
+    : never;
+}[keyof Tr];
+
 type NarrowedProviderEvent<Tr> = [TriggerOnUnion<Tr>] extends [never]
   ? never
-  : Omit<WorkforceProviderEvent, 'type'> & { type: TriggerOnUnion<Tr> };
+  : TriggerProviderEvents<Tr>;
 
 /** Distributive union of every schedule `name` literal. */
 type ScheduleNameUnion<S> = S extends readonly (infer E)[]

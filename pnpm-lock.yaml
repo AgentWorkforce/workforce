@@ -92,6 +92,9 @@ importers:
       '@relayfile/adapter-core':
         specifier: ^0.3.26
         version: 0.3.26(@relayfile/sdk@0.7.40)
+      '@relayfile/adapter-linear':
+        specifier: ^0.3.8
+        version: 0.3.9(@relayfile/sdk@0.7.40)
       '@relayfile/local-mount':
         specifier: ^0.7.24
         version: 0.7.24
@@ -857,6 +860,19 @@ packages:
     resolution: {integrity: sha512-rOTKgTofH5NUB9Q47GKJHv54dRJNS8rQS1FO0qON4MQpdKJ9RK69uJlQ52YJ/O73AGuj0qfnfZP1xcnA+3X4yw==}
     engines: {node: '>=18'}
     hasBin: true
+    peerDependencies:
+      '@relayfile/sdk': '>=0.6.0 <1'
+
+  '@relayfile/adapter-core@0.3.30':
+    resolution: {integrity: sha512-TW03JUsrb8D0lHFfsoP/H4YiglgRev+E+vZg7m2K7khDOtA5rfpU6LIcl9Wl9WrC22oKUrThzbh195yG2XAfyQ==}
+    engines: {node: '>=18'}
+    hasBin: true
+    peerDependencies:
+      '@relayfile/sdk': '>=0.6.0 <1'
+
+  '@relayfile/adapter-linear@0.3.9':
+    resolution: {integrity: sha512-O3oTPieQNLdhE4nAnbj+WbUO0iMDlCEVO7OKJAzvrZruNjp1MDfmJ8s+ABR5AAEU7LhUzfMtGCnM2rCcP65kcA==}
+    engines: {node: '>=18'}
     peerDependencies:
       '@relayfile/sdk': '>=0.6.0 <1'
 
@@ -3116,6 +3132,19 @@ snapshots:
       cheerio: 1.2.0
       minimatch: 10.2.5
       yaml: 2.9.0
+
+  '@relayfile/adapter-core@0.3.30(@relayfile/sdk@0.7.40)':
+    dependencies:
+      '@relayfile/sdk': 0.7.40
+      '@scalar/postman-to-openapi': 0.6.3
+      cheerio: 1.2.0
+      minimatch: 10.2.5
+      yaml: 2.9.0
+
+  '@relayfile/adapter-linear@0.3.9(@relayfile/sdk@0.7.40)':
+    dependencies:
+      '@relayfile/adapter-core': 0.3.30(@relayfile/sdk@0.7.40)
+      '@relayfile/sdk': 0.7.40
 
   '@relayfile/core@0.7.40': {}
 

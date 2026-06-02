@@ -56,7 +56,112 @@ export interface WorkforceProviderEvent extends WorkforceEventBase {
   };
 }
 
-export type WorkforceEvent = WorkforceCronEvent | WorkforceProviderEvent;
+export function unwrapResourceRecord<T = unknown>(payload: unknown): T | unknown {
+  const resource = isRecord(payload) && 'resource' in payload ? payload.resource : payload;
+  return isRecord(resource) && 'payload' in resource ? resource.payload : resource;
+}
+
+export interface LinearIssueReference {
+  id: string;
+  identifier?: string;
+  title?: string;
+  url?: string;
+}
+
+export interface LinearAgentSession {
+  id: string;
+  issue?: LinearIssueReference;
+  [key: string]: unknown;
+}
+
+export type LinearAgentActivityType =
+  | 'action'
+  | 'elicitation'
+  | 'error'
+  | 'response'
+  | 'thought';
+
+export interface LinearAgentActivity {
+  type?: LinearAgentActivityType | string;
+  body?: string;
+  action?: string;
+  parameter?: string;
+  result?: string;
+}
+
+export interface LinearAgentSessionPayload {
+  type: 'AgentSessionEvent';
+  action: 'created' | 'prompted' | string;
+  agentSession: LinearAgentSession;
+  agentActivity?: LinearAgentActivity & {
+    id?: string;
+    agentSessionId?: string;
+    content?: LinearAgentActivity;
+    [key: string]: unknown;
+  };
+  issue?: LinearIssueReference;
+  promptContext?: string;
+  notification?: {
+    issue?: LinearIssueReference;
+    comment?: { id?: string; body?: string; [key: string]: unknown };
+    [key: string]: unknown;
+  };
+  [key: string]: unknown;
+}
+
+export interface LinearAppUserNotificationPayload {
+  type: 'AppUserNotification';
+  action: 'issueCommentMention' | string;
+  issue?: LinearIssueReference;
+  comment?: { id?: string; body?: string; [key: string]: unknown };
+  notification?: {
+    issue?: LinearIssueReference;
+    comment?: { id?: string; body?: string; [key: string]: unknown };
+    [key: string]: unknown;
+  };
+  [key: string]: unknown;
+}
+
+export interface LinearWrappedPayload<TRecord> {
+  resource: {
+    payload: TRecord;
+    [key: string]: unknown;
+  };
+  [key: string]: unknown;
+}
+
+export type LinearAgentSessionEventPayload =
+  LinearWrappedPayload<LinearAgentSessionPayload> & {
+    agentSession?: LinearAgentSession;
+    agentActivity?: LinearAgentSessionPayload['agentActivity'];
+    issue?: LinearIssueReference;
+    promptContext?: string;
+  };
+
+export type LinearAppUserNotificationEventPayload =
+  LinearWrappedPayload<LinearAppUserNotificationPayload> & {
+    issue?: LinearIssueReference;
+    comment?: { id?: string; body?: string; [key: string]: unknown };
+    notification?: LinearAppUserNotificationPayload['notification'];
+  };
+
+export type LinearAgentSessionEvent =
+  | (Omit<WorkforceProviderEvent, 'payload' | 'source' | 'type'> & {
+      source: 'linear';
+      type: 'AgentSessionEvent.created' | 'AgentSessionEvent.prompted';
+      payload: LinearAgentSessionEventPayload;
+    })
+  | (Omit<WorkforceProviderEvent, 'payload' | 'source' | 'type'> & {
+      source: 'linear';
+      type: 'AppUserNotification.issueCommentMention';
+      payload: LinearAppUserNotificationEventPayload;
+    });
+
+export type WorkforceEvent = WorkforceCronEvent | LinearAgentSessionEvent | WorkforceProviderEvent;
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === 'object' && value !== null;
+}
 
 /**
  * Result of a harness invocation. The runtime translates whatever the

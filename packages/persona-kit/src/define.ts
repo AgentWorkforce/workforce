@@ -14,9 +14,10 @@ import type {
 import type { KnownProviderName, KnownTriggerName } from './triggers.js';
 import type { ScopeKey, ScopeKeyProvider } from './scope-keys.js';
 import type { KnownPersonaTag } from './constants.js';
+import type { LinearAgentWebhookEvent } from '@relayfile/adapter-linear/types';
 
 export type TriggerNameFor<P extends string> = P extends KnownProviderName
-  ? KnownTriggerName<P> | (string & {})
+  ? (P extends 'linear' ? KnownTriggerName<P> | LinearAgentWebhookEvent : KnownTriggerName<P>) | (string & {})
   : string;
 
 export interface TypedTrigger<P extends string> {
