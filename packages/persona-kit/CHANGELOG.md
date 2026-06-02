@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [3.0.41] - 2026-06-02
+
+### Added
+
+- **Type Linear agent session events** (#180)
+
 ## [3.0.39] - 2026-06-01
 
 ### Added
