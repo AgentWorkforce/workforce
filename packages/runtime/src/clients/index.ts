@@ -17,9 +17,14 @@ export {
   resolveMountRoot,
   writeJsonFile,
   RelayfileWritebackError,
+  type RelayfileWritebackErrorOptions,
   type IntegrationClientOptions,
   type WritebackReceipt,
   type WritebackResult
 } from '@relayfile/adapter-core/vfs-client';
 
-export { WorkforceIntegrationError, SandboxNotAvailableError } from '../errors.js';
+export {
+  WorkforceIntegrationError,
+  type WorkforceIntegrationErrorOptions,
+  SandboxNotAvailableError
+} from '../errors.js';
