@@ -110,6 +110,9 @@ importers:
       '@agentworkforce/persona-kit':
         specifier: workspace:*
         version: link:../persona-kit
+      '@relayfile/adapter-core':
+        specifier: ^0.3.29
+        version: 0.3.29(@relayfile/sdk@0.7.40)
 
   packages/workload-router:
     dependencies:
@@ -845,6 +848,13 @@ packages:
 
   '@relayfile/adapter-core@0.3.26':
     resolution: {integrity: sha512-hppTJmlgiW7HMhcCvXDEzXjuygTJMTOqQvqFMVbSTJBi41rp4TBiOjsHb7kNv1iiL661V287jSsY+4oW39nIiQ==}
+    engines: {node: '>=18'}
+    hasBin: true
+    peerDependencies:
+      '@relayfile/sdk': '>=0.6.0 <1'
+
+  '@relayfile/adapter-core@0.3.29':
+    resolution: {integrity: sha512-rOTKgTofH5NUB9Q47GKJHv54dRJNS8rQS1FO0qON4MQpdKJ9RK69uJlQ52YJ/O73AGuj0qfnfZP1xcnA+3X4yw==}
     engines: {node: '>=18'}
     hasBin: true
     peerDependencies:
@@ -3092,6 +3102,14 @@ snapshots:
       '@relayburn/sdk-linux-x64-gnu': 2.5.2
 
   '@relayfile/adapter-core@0.3.26(@relayfile/sdk@0.7.40)':
+    dependencies:
+      '@relayfile/sdk': 0.7.40
+      '@scalar/postman-to-openapi': 0.6.3
+      cheerio: 1.2.0
+      minimatch: 10.2.5
+      yaml: 2.9.0
+
+  '@relayfile/adapter-core@0.3.29(@relayfile/sdk@0.7.40)':
     dependencies:
       '@relayfile/sdk': 0.7.40
       '@scalar/postman-to-openapi': 0.6.3

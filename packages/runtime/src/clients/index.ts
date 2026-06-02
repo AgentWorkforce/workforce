@@ -1,7 +1,12 @@
 // Shared VFS-backed transport surface. All provider interactions go through
-// these helpers — no per-provider client code lives in the runtime. Handlers
-// and custom clients import these directly instead of recreating the
-// path-validation + receipt-polling logic.
+// these helpers — no per-provider client code lives in the runtime.
+//
+// The transport itself now lives in the relayfile layer
+// (`@relayfile/adapter-core/vfs-client`) — it's the generic Relayfile
+// draft-write protocol, not anything workforce-specific. The runtime re-exports
+// it so existing handlers that `import … from '@agentworkforce/runtime/clients'`
+// keep working unchanged. The ergonomic per-provider clients live in
+// `@relayfile/relay-helpers`.
 export {
   draftFile,
   encodeSegment,
@@ -11,9 +16,15 @@ export {
   readTextFile,
   resolveMountRoot,
   writeJsonFile,
+  RelayfileWritebackError,
+  type RelayfileWritebackErrorOptions,
   type IntegrationClientOptions,
   type WritebackReceipt,
   type WritebackResult
-} from './request.js';
+} from '@relayfile/adapter-core/vfs-client';
 
-export { WorkforceIntegrationError, SandboxNotAvailableError } from '../errors.js';
+export {
+  WorkforceIntegrationError,
+  type WorkforceIntegrationErrorOptions,
+  SandboxNotAvailableError
+} from '../errors.js';
