@@ -3,6 +3,7 @@ import { mkdtemp, mkdir, readFile, readdir, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import test from 'node:test';
+import { fileURLToPath, pathToFileURL } from 'node:url';
 import { WRITEBACK_PATH_CATALOG } from '@relayfile/adapter-core/writeback-paths';
 import * as helpers from './index.js';
 import { githubClient, linearClient, notionClient, relayClient, slackClient } from './index.js';
@@ -88,6 +89,20 @@ test('every catalog provider has a named client export', () => {
     (provider) => typeof (helpers as Record<string, unknown>)[clientExportName(provider)] !== 'function'
   );
   assert.deepEqual(missing, [], `providers without a named client export: ${missing.join(', ')}`);
+});
+
+test('src/generated/clients.ts is in sync with the catalog', async () => {
+  // dist/<this>.test.js → package root is one level up.
+  const pkgRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
+  const { renderClients } = await import(
+    pathToFileURL(path.join(pkgRoot, 'scripts/generate-clients.mjs')).href
+  );
+  const committed = await readFile(path.join(pkgRoot, 'src/generated/clients.ts'), 'utf8');
+  assert.equal(
+    committed,
+    renderClients(),
+    'generated clients are stale — run `pnpm --filter @agentworkforce/relay-helpers gen`'
+  );
 });
 
 test('a named resource-keyed client resolves and writes catalog paths', async () => {

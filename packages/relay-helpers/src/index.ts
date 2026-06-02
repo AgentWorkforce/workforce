@@ -29,34 +29,9 @@ export { linearClient, type LinearClient, type LinearCreateIssueArgs } from './l
 export { githubClient, type GithubClient, type GithubTarget } from './github.js';
 export { slackClient, type SlackClient } from './slack.js';
 
-// Named resource-keyed clients for the remaining catalog providers.
-export {
-  asanaClient,
-  azureBlobClient,
-  boxClient,
-  clickupClient,
-  confluenceClient,
-  dropboxClient,
-  gcsClient,
-  gitlabClient,
-  gmailClient,
-  googleCalendarClient,
-  googleDriveClient,
-  granolaClient,
-  hubspotClient,
-  intercomClient,
-  jiraClient,
-  notionClient,
-  onedriveClient,
-  pipedriveClient,
-  postgresClient,
-  redditClient,
-  redisClient,
-  s3Client,
-  salesforceClient,
-  sharepointClient,
-  teamsClient,
-  zendeskClient
-} from './clients.js';
+// Named resource-keyed clients for the remaining catalog providers
+// (generated from the catalog — see scripts/generate-clients.mjs).
+// `export *` so a newly-added provider needs only a re-`gen`, no edit here.
+export * from './generated/clients.js';
 
 export type { IntegrationClientOptions, WritebackResult } from '@agentworkforce/runtime/clients';

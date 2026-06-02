@@ -26,6 +26,7 @@
     "access": "public"
   },
   "scripts": {
+    "gen": "node scripts/generate-clients.mjs",
     "build": "tsc -p tsconfig.json",
     "dev": "tsc -p tsconfig.json --watch --preserveWatchOutput",
     "typecheck": "tsc -p tsconfig.json --noEmit",

@@ -7,23 +7,26 @@ This package MUST expose a named `<provider>Client` for **every** provider in
 **"every catalog provider has a named client export"** (`src/relay-helpers.test.ts`)
 fails CI until it does — so this can't silently drift.
 
-When `@relayfile/adapter-core` is bumped and a new provider appears (a new
-writeback-capable adapter shipped upstream in `relayfile-adapters`), the build
-goes red. To fix it:
+The named clients for the plain providers are **generated** — `src/generated/clients.ts`
+is emitted by `scripts/generate-clients.mjs` from the catalog. Do not hand-edit
+it. When `@relayfile/adapter-core` is bumped and a new provider appears (a new
+writeback-capable adapter shipped upstream in `relayfile-adapters`), the in-sync
+test goes red. To fix it:
 
-1. Add a named export to `src/clients.ts`:
-   ```ts
-   export const fooClient = (opts?: IntegrationClientOptions): ProviderClient<'foo'> =>
-     providerClient('foo', opts);
+1. Regenerate:
+   ```bash
+   pnpm --filter @agentworkforce/relay-helpers gen
    ```
-   camelCase any hyphens in the provider slug (`azure-blob` → `azureBlobClient`).
-2. Re-export it from `src/index.ts`.
-3. If the provider deserves ergonomic named methods (like `linear`/`github`/`slack`
-   with `comment`/`post`/`mergePullRequest`), add a bespoke module that
-   *enriches* `providerClient(...)` via `Object.assign` instead of the plain
-   one-liner — but watch for a method name that collides with a catalog resource
-   key (that's why github's merge helper is `mergePullRequest`, not `merge`).
-4. `pnpm --filter @agentworkforce/relay-helpers test` must pass.
+   This adds the new `<provider>Client` (camelCased slug — `azure-blob` →
+   `azureBlobClient`) to `src/generated/clients.ts`. `index.ts` does
+   `export *` from it, so no re-export edit is needed.
+2. If the provider deserves ergonomic named methods (like `linear`/`github`/`slack`
+   with `comment`/`post`/`mergePullRequest`), add it to `BESPOKE_PROVIDERS` in
+   the generator and write a bespoke module that *enriches* `providerClient(...)`
+   via `Object.assign` — but watch for a method name that collides with a catalog
+   resource key (that's why github's merge helper is `mergePullRequest`, not
+   `merge`).
+3. `pnpm --filter @agentworkforce/relay-helpers test` must pass.
 
 ## Paths are never hardcoded here
 
