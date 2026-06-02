@@ -50,6 +50,7 @@
   },
   "dependencies": {
     "@agent-assistant/proactive": "^0.4.32",
-    "@agentworkforce/persona-kit": "workspace:*"
+    "@agentworkforce/persona-kit": "workspace:*",
+    "@relayfile/adapter-core": "^0.3.29"
   }
 }

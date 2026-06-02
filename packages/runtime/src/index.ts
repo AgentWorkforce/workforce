@@ -60,6 +60,7 @@ export {
   type IntegrationClientOptions,
   type WritebackReceipt,
   type WritebackResult,
+  RelayfileWritebackError,
   WorkforceIntegrationError,
   SandboxNotAvailableError
 } from './clients/index.js';
