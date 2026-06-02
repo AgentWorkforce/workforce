@@ -44,6 +44,23 @@ export type {
   WorkforceProviderEvent
 } from './types.js';
 
+// Runtime envelope helpers shared by provider-triggered agents.
+export {
+  unwrapResourceRecord
+} from './types.js';
+
+export type {
+  LinearAgentActivity,
+  LinearAgentActivityType,
+  LinearAgentSession,
+  LinearAgentSessionEvent,
+  LinearAgentSessionEventPayload,
+  LinearAgentSessionPayload,
+  LinearAppUserNotificationEventPayload,
+  LinearAppUserNotificationPayload,
+  LinearIssueReference
+} from './types.js';
+
 // VFS-backed transport helpers. All provider interactions go through these
 // — no per-provider client code in the runtime. Handlers use listJsonFiles /
 // readJsonFile / writeJsonFile directly against the provider path conventions

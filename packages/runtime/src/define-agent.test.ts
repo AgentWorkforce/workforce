@@ -1,7 +1,11 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 
-import { defineAgent, isWorkforceAgent, isWorkforceHandler } from './index.js';
+import { defineAgent, isWorkforceAgent, isWorkforceHandler, unwrapResourceRecord } from './index.js';
+import type {
+  LinearAgentSessionPayload,
+  LinearAppUserNotificationPayload
+} from './types.js';
 
 test('defineAgent brands the object and wraps the handler', () => {
   const agent = defineAgent({
@@ -62,3 +66,80 @@ test('defineAgent narrows the handler event type to declared triggers/schedules'
     }
   });
 });
+
+test('defineAgent narrows Linear agent-session payloads for declared triggers', () => {
+  defineAgent({
+    triggers: {
+      linear: [
+        { on: 'AgentSessionEvent.created' },
+        { on: 'AgentSessionEvent.prompted' },
+        { on: 'AppUserNotification.issueCommentMention' }
+      ]
+    },
+    handler: async (_ctx, event) => {
+      if (event.source !== 'linear') return;
+      if (event.type === 'AgentSessionEvent.created') {
+        const record = unwrapResourceRecord<LinearAgentSessionPayload>(event.payload);
+        if (!isLinearAgentSessionPayload(record)) return;
+        const sessionId: string = record.agentSession.id;
+        const promptContext: string | undefined = record.promptContext;
+        void sessionId;
+        void promptContext;
+        return;
+      }
+      if (event.type === 'AgentSessionEvent.prompted') {
+        const record = unwrapResourceRecord<LinearAgentSessionPayload>(event.payload);
+        if (!isLinearAgentSessionPayload(record)) return;
+        const body: string | undefined = record.agentActivity?.body;
+        void body;
+        return;
+      }
+      const record = unwrapResourceRecord<LinearAppUserNotificationPayload>(event.payload);
+      if (!isLinearAppUserNotificationPayload(record)) return;
+      const issueId: string | undefined =
+        record.notification?.issue?.id ??
+        record.issue?.id;
+      const commentBody: string | undefined =
+        record.notification?.comment?.body ??
+        record.comment?.body;
+      void issueId;
+      void commentBody;
+    }
+  });
+});
+
+test('unwrapResourceRecord unwraps the real relayfile resource payload container', () => {
+  const record = unwrapResourceRecord<{
+    body?: string;
+    issue_id?: string;
+    issue_identifier?: string;
+  }>({
+    resource: {
+      provider: 'linear',
+      objectType: 'comment',
+      payload: {
+        body: '@agentrelay please implement this.',
+        issue_id: '5d6f2e15-0000-4000-8000-000000000000',
+        issue_identifier: 'AR-70'
+      }
+    }
+  });
+
+  assert.equal(isRecord(record), true);
+  if (!isRecord(record)) return;
+  assert.equal(record.body, '@agentrelay please implement this.');
+  assert.equal(record.issue_id, '5d6f2e15-0000-4000-8000-000000000000');
+  assert.equal(record.issue_identifier, 'AR-70');
+});
+
+function isLinearAgentSessionPayload(value: unknown): value is LinearAgentSessionPayload {
+  return isRecord(value) && isRecord(value.agentSession) && typeof value.agentSession.id === 'string';
+}
+
+function isLinearAppUserNotificationPayload(value: unknown): value is LinearAppUserNotificationPayload {
+  return isRecord(value);
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === 'object' && value !== null;
+}

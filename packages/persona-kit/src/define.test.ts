@@ -61,7 +61,12 @@ test('TypedTriggerMap gives per-provider event autocomplete; arbitrary providers
       { on: 'pull_request.opened' },
       { on: 'off_registry.github_event' }
     ],
-    linear: [{ on: 'issue.create' }],
+    linear: [
+      { on: 'issue.create' },
+      { on: 'AgentSessionEvent.created' },
+      { on: 'AgentSessionEvent.prompted' },
+      { on: 'AppUserNotification.issueCommentMention' }
+    ],
     slack: [{ on: 'message.created' }],
     customProvider: [{ on: 'custom.event' }]
   };

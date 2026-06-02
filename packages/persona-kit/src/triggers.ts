@@ -1,5 +1,6 @@
 import type { AgentSpec } from './types.js';
 import { KNOWN_TRIGGER_CATALOG } from '@relayfile/adapter-core/triggers';
+import { LINEAR_AGENT_WEBHOOK_EVENTS } from '@relayfile/adapter-linear/types';
 
 /**
  * Known event names per Relayfile provider, used by the deploy CLI to lint
@@ -24,6 +25,7 @@ const KNOWN_TRIGGER_ALIAS_CATALOG = Object.fromEntries(
 
 export const KNOWN_TRIGGERS = {
   ...KNOWN_TRIGGER_CATALOG,
+  linear: mergeKnownTriggers(KNOWN_TRIGGER_CATALOG.linear, LINEAR_AGENT_WEBHOOK_EVENTS),
   ...KNOWN_TRIGGER_ALIAS_CATALOG
 };
 
@@ -136,4 +138,11 @@ export function lintTriggers(agent: AgentSpec): TriggerLintIssue[] {
 
 function knownTriggersForProvider(provider: string): readonly string[] | undefined {
   return (KNOWN_TRIGGERS as Record<string, readonly string[] | undefined>)[provider];
+}
+
+function mergeKnownTriggers(
+  base: readonly string[] | undefined,
+  extra: readonly string[]
+): readonly string[] {
+  return [...new Set([...(base ?? []), ...extra])];
 }

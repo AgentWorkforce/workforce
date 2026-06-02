@@ -31,7 +31,12 @@ test('lintTriggers returns no issues for known providers and known triggers', ()
         { on: 'pull_request.opened' },
         { on: 'pull_request_review_comment.created' }
       ],
-      linear: [{ on: 'issue.create' }],
+      linear: [
+        { on: 'issue.create' },
+        { on: 'AgentSessionEvent.created' },
+        { on: 'AgentSessionEvent.prompted' },
+        { on: 'AppUserNotification.issueCommentMention' }
+      ],
       slack: [{ on: 'message.created' }]
     })
   );
