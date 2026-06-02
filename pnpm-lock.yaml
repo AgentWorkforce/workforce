@@ -102,6 +102,15 @@ importers:
 
   packages/personas-core: {}
 
+  packages/relay-helpers:
+    dependencies:
+      '@agentworkforce/runtime':
+        specifier: workspace:*
+        version: link:../runtime
+      '@relayfile/adapter-core':
+        specifier: ^0.3.27
+        version: 0.3.27(@relayfile/sdk@0.7.40)
+
   packages/runtime:
     dependencies:
       '@agent-assistant/proactive':
@@ -845,6 +854,13 @@ packages:
 
   '@relayfile/adapter-core@0.3.26':
     resolution: {integrity: sha512-hppTJmlgiW7HMhcCvXDEzXjuygTJMTOqQvqFMVbSTJBi41rp4TBiOjsHb7kNv1iiL661V287jSsY+4oW39nIiQ==}
+    engines: {node: '>=18'}
+    hasBin: true
+    peerDependencies:
+      '@relayfile/sdk': '>=0.6.0 <1'
+
+  '@relayfile/adapter-core@0.3.27':
+    resolution: {integrity: sha512-4fpNWc7+8jDkOs6vUQ3VHi4cltW1I9uoCbngCs2maWLXnHvJ/he0Zrw69FoLVYG9ujzX5Hwx3jhj3g09Grpx9w==}
     engines: {node: '>=18'}
     hasBin: true
     peerDependencies:
@@ -3092,6 +3108,14 @@ snapshots:
       '@relayburn/sdk-linux-x64-gnu': 2.5.2
 
   '@relayfile/adapter-core@0.3.26(@relayfile/sdk@0.7.40)':
+    dependencies:
+      '@relayfile/sdk': 0.7.40
+      '@scalar/postman-to-openapi': 0.6.3
+      cheerio: 1.2.0
+      minimatch: 10.2.5
+      yaml: 2.9.0
+
+  '@relayfile/adapter-core@0.3.27(@relayfile/sdk@0.7.40)':
     dependencies:
       '@relayfile/sdk': 0.7.40
       '@scalar/postman-to-openapi': 0.6.3
