@@ -20,26 +20,29 @@ await githubClient().merge({ owner, repo, number });
 await slackClient().post('#eng', 'shipped');
 ```
 
-## Generic client (all providers)
+## A named client for every provider
 
-Every provider in the catalog (29+) is reachable through `relayClient`, with
-generic methods over the catalog paths:
+Every provider in the catalog has a named client (`asanaClient`, `notionClient`,
+`jiraClient`, … — all 29), exposing its resources as
+`.{resource}.{path,write,read,list}`:
 
 ```ts
-import { relayClient } from '@agentworkforce/relay-helpers';
+import { notionClient } from '@agentworkforce/relay-helpers';
 
-const notion = relayClient('notion');
-notion.path('pages', { databaseId });                 // resolve a path (no IO)
-await notion.write('pages', { databaseId }, { /* … */ }); // collection create or item write
-await notion.list('pages', { databaseId });               // list a collection
+const notion = notionClient();
+notion.pages.path({ databaseId });                  // resolve a path (no IO)
+await notion.pages.write({ databaseId }, { /* … */ }); // collection create or item write
+await notion.pages.list({ databaseId });               // list a collection
 ```
 
-- `write(resource, params, body)` drops a uniquely-named draft for a collection
-  resource, or writes directly to an item resource (a path ending in `.json`).
-  The Relayfile writeback worker turns the draft into the real provider call.
+- `write(params, body)` drops a uniquely-named draft for a collection resource,
+  or writes directly to an item resource (a path ending in `.json`). The
+  Relayfile writeback worker turns the draft into the real provider call.
 - `read` / `list` operate over the catalog paths.
 - Unknown providers/resources or missing path params throw loudly — never a
   guessed path.
 
-The `linearClient` / `githubClient` / `slackClient` factories wrap `relayClient`
-with named, ergonomic methods for the most common operations.
+`linearClient` / `githubClient` / `slackClient` are the same resource-keyed
+clients **plus** named ergonomic methods (`comment`, `post`, `mergePullRequest`,
+…). `relayClient(provider)` is the dynamic, string-keyed escape hatch when the
+provider isn't known at author time.

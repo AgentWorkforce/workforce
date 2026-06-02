@@ -14,12 +14,49 @@
  *   const issue = await linear.getIssue(issueId);
  *   await linear.comment(issueId, ':rocket: done');
  *
- * `relayClient(provider)` gives the same transport for any of the 29 providers
- * in the catalog, with generic `write` / `read` / `list` methods.
+ * Every provider in the catalog has a named client (`asanaClient`,
+ * `notionClient`, … through all 29), exposing its resources as
+ * `.{resource}.{path,write,read,list}`. `linear` / `github` / `slack` add
+ * named ergonomic methods on top. `relayClient(provider)` is the dynamic,
+ * string-keyed escape hatch when the provider isn't known at author time.
  */
 export { relayClient, encodeSegment, type RelayClient, type RelayParams } from './generic.js';
-export { linearClient, type LinearClient } from './linear.js';
+export { providerClient, type ProviderClient, type ResourceClient } from './provider-client.js';
+export { created } from './receipt.js';
+
+// Ergonomic clients (resource-keyed access + named methods).
+export { linearClient, type LinearClient, type LinearCreateIssueArgs } from './linear.js';
 export { githubClient, type GithubClient, type GithubTarget } from './github.js';
 export { slackClient, type SlackClient } from './slack.js';
-export { created } from './receipt.js';
+
+// Named resource-keyed clients for the remaining catalog providers.
+export {
+  asanaClient,
+  azureBlobClient,
+  boxClient,
+  clickupClient,
+  confluenceClient,
+  dropboxClient,
+  gcsClient,
+  gitlabClient,
+  gmailClient,
+  googleCalendarClient,
+  googleDriveClient,
+  granolaClient,
+  hubspotClient,
+  intercomClient,
+  jiraClient,
+  notionClient,
+  onedriveClient,
+  pipedriveClient,
+  postgresClient,
+  redditClient,
+  redisClient,
+  s3Client,
+  salesforceClient,
+  sharepointClient,
+  teamsClient,
+  zendeskClient
+} from './clients.js';
+
 export type { IntegrationClientOptions, WritebackResult } from '@agentworkforce/runtime/clients';

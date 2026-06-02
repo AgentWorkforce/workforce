@@ -1,5 +1,5 @@
 import type { IntegrationClientOptions } from '@agentworkforce/runtime/clients';
-import { relayClient } from './generic.js';
+import { providerClient, type ProviderClient } from './provider-client.js';
 import { created } from './receipt.js';
 
 export interface GithubTarget {
@@ -8,7 +8,7 @@ export interface GithubTarget {
   number: number;
 }
 
-export interface GithubClient {
+export interface GithubClient extends ProviderClient<'github'> {
   /** Comment on an issue or pull request. */
   comment(target: GithubTarget, body: string): Promise<{ id: string; url: string }>;
   /** Create an issue. */
@@ -19,8 +19,11 @@ export interface GithubClient {
     body: string;
     labels?: string[];
   }): Promise<{ id: string; url: string }>;
-  /** Merge a pull request. */
-  merge(args: {
+  /**
+   * Merge a pull request. (Named `mergePullRequest`, not `merge`, because
+   * `merge` is the catalog resource key exposed as `.merge`.)
+   */
+  mergePullRequest(args: {
     owner: string;
     repo: string;
     number: number;
@@ -41,33 +44,38 @@ export interface GithubClient {
 }
 
 /**
- * Ergonomic GitHub client over the writeback-path catalog. Recovers the
- * `ctx.github.comment(...)` shape removed from the runtime.
+ * Ergonomic GitHub client over the writeback-path catalog, plus the uniform
+ * resource-keyed access (`.issues`, `.["issue-comments"]`, `.merge`, `.reviews`).
  */
 export function githubClient(opts: IntegrationClientOptions = {}): GithubClient {
-  const relay = relayClient('github', opts);
-  return {
-    async comment(target, body) {
+  const base = providerClient('github', opts);
+  return Object.assign(base, {
+    async comment(target: GithubTarget, body: string) {
       return created(
-        await relay.write(
-          'issue-comments',
+        await base['issue-comments'].write(
           { owner: target.owner, repo: target.repo, issueNumber: target.number },
           { body }
         )
       );
     },
-    async createIssue(args) {
+    async createIssue(args: { owner: string; repo: string; title: string; body: string; labels?: string[] }) {
       return created(
-        await relay.write(
-          'issues',
+        await base.issues.write(
           { owner: args.owner, repo: args.repo },
           { title: args.title, body: args.body, ...(args.labels ? { labels: args.labels } : {}) }
         )
       );
     },
-    async merge(args) {
-      const result = await relay.write(
-        'merge',
+    async mergePullRequest(args: {
+      owner: string;
+      repo: string;
+      number: number;
+      method?: 'merge' | 'squash' | 'rebase';
+      commitTitle?: string;
+      commitMessage?: string;
+      sha?: string;
+    }) {
+      const result = await base.merge.write(
         { owner: args.owner, repo: args.repo, pullNumber: args.number },
         {
           ...(args.method !== undefined ? { merge_method: args.method } : {}),
@@ -88,12 +96,18 @@ export function githubClient(opts: IntegrationClientOptions = {}): GithubClient 
         ...(sha ? { sha } : {})
       };
     },
-    async review(target, args) {
-      await relay.write(
-        'reviews',
+    async review(
+      target: GithubTarget,
+      args: {
+        body: string;
+        event: 'COMMENT' | 'APPROVE' | 'REQUEST_CHANGES';
+        comments?: Array<{ path: string; line: number; body: string }>;
+      }
+    ) {
+      await base.reviews.write(
         { owner: target.owner, repo: target.repo, pullNumber: target.number },
         { ...args, comments: args.comments ?? [] }
       );
     }
-  };
+  }) as GithubClient;
 }

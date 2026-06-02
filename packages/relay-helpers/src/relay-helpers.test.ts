@@ -4,7 +4,11 @@ import { tmpdir } from 'node:os';
 import path from 'node:path';
 import test from 'node:test';
 import { WRITEBACK_PATH_CATALOG } from '@relayfile/adapter-core/writeback-paths';
-import { githubClient, linearClient, relayClient, slackClient } from './index.js';
+import * as helpers from './index.js';
+import { githubClient, linearClient, notionClient, relayClient, slackClient } from './index.js';
+
+const clientExportName = (provider: string): string =>
+  `${provider.replace(/-([a-z])/g, (_m, c: string) => c.toUpperCase())}Client`;
 
 /** Fire-and-forget client bound to a throwaway mount; no writeback worker runs. */
 async function mount(): Promise<{ root: string; opts: { relayfileMountRoot: string; writebackTimeoutMs: number } }> {
@@ -77,13 +81,28 @@ test('githubClient.comment and slackClient.post target the canonical paths', asy
   assert.deepEqual(msg.body, { text: 'shipped' });
 });
 
-test('relayClient covers every provider in the catalog', () => {
+test('every catalog provider has a named client export', () => {
   const providers = Object.keys(WRITEBACK_PATH_CATALOG);
   assert.ok(providers.length >= 29, `expected >=29 providers, saw ${providers.length}`);
-  for (const provider of providers) {
+  const missing = providers.filter(
+    (provider) => typeof (helpers as Record<string, unknown>)[clientExportName(provider)] !== 'function'
+  );
+  assert.deepEqual(missing, [], `providers without a named client export: ${missing.join(', ')}`);
+});
+
+test('a named resource-keyed client resolves and writes catalog paths', async () => {
+  const { root, opts } = await mount();
+  const notion = notionClient(opts);
+  assert.equal(notion.pages.path({ databaseId: 'db1' }), '/notion/databases/db1/pages');
+  await notion.pages.write({ databaseId: 'db1' }, { title: 'P' });
+  const draft = await onlyJsonIn(path.join(root, 'notion/databases/db1/pages'));
+  assert.deepEqual(draft.body, { title: 'P' });
+});
+
+test('relayClient (dynamic) still resolves paths for every provider', () => {
+  for (const provider of Object.keys(WRITEBACK_PATH_CATALOG)) {
     const client = relayClient(provider as keyof typeof WRITEBACK_PATH_CATALOG);
     const [resource, variants] = Object.entries(WRITEBACK_PATH_CATALOG[provider as keyof typeof WRITEBACK_PATH_CATALOG])[0];
-    // Build params from the first variant's placeholders so path() resolves.
     const params = Object.fromEntries((variants[0].params as readonly string[]).map((name) => [name, 'x']));
     assert.ok(client.path(resource as never, params).startsWith(`/${provider}`));
   }

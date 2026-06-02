@@ -3,22 +3,25 @@ import {
   writeJsonFile,
   type IntegrationClientOptions
 } from '@agentworkforce/runtime/clients';
-import { encodeSegment, relayClient } from './generic.js';
+import { encodeSegment } from './generic.js';
+import { providerClient, type ProviderClient } from './provider-client.js';
 import { created } from './receipt.js';
 
-export interface LinearClient {
+export interface LinearCreateIssueArgs {
+  teamId: string;
+  title: string;
+  description?: string;
+  assigneeId?: string;
+  labelIds?: string[];
+  projectId?: string;
+  stateId?: string;
+}
+
+export interface LinearClient extends ProviderClient<'linear'> {
   /** Comment on an issue. */
   comment(issueId: string, body: string): Promise<{ id: string; url: string }>;
   /** Create an issue. */
-  createIssue(args: {
-    teamId: string;
-    title: string;
-    description?: string;
-    assigneeId?: string;
-    labelIds?: string[];
-    projectId?: string;
-    stateId?: string;
-  }): Promise<{ id: string; url: string }>;
+  createIssue(args: LinearCreateIssueArgs): Promise<{ id: string; url: string }>;
   /** Patch an existing issue. */
   updateIssue(
     issueId: string,
@@ -32,32 +35,27 @@ export interface LinearClient {
 
 /**
  * Ergonomic Linear client over the writeback-path catalog. Recovers the
- * `ctx.linear.comment(...)` shape removed from the runtime, with paths sourced
- * from `@relayfile/adapter-core` rather than hardcoded.
+ * `ctx.linear.comment(...)` shape removed from the runtime, plus the uniform
+ * resource-keyed access (`.issues`, `.comments`) every provider client has.
  */
 export function linearClient(opts: IntegrationClientOptions = {}): LinearClient {
-  const relay = relayClient('linear', opts);
-  const issuePath = (issueId: string) => `${relay.path('issues')}/${encodeSegment(issueId)}.json`;
-  return {
-    async comment(issueId, body) {
-      return created(await relay.write('comments', { issueId }, { body }));
+  const base = providerClient('linear', opts);
+  const issuePath = (issueId: string) => `${base.issues.path()}/${encodeSegment(issueId)}.json`;
+  return Object.assign(base, {
+    async comment(issueId: string, body: string) {
+      return created(await base.comments.write({ issueId }, { body }));
     },
-    async createIssue(args) {
-      const result = await relay.write('issues', {}, args);
-      const id = result.receipt?.created ?? result.receipt?.id ?? result.path;
-      return {
-        id,
-        url: result.receipt?.url ?? result.path
-      };
+    async createIssue(args: LinearCreateIssueArgs) {
+      return created(await base.issues.write({}, args));
     },
-    async updateIssue(issueId, args) {
+    async updateIssue(issueId: string, args: Record<string, unknown>) {
       await writeJsonFile(opts, 'linear', 'updateIssue', issuePath(issueId), args);
     },
     getIssue<T = Record<string, unknown>>(issueId: string): Promise<T> {
       return readJsonFile<T>(opts, 'linear', 'getIssue', issuePath(issueId));
     },
     listIssues<T = Record<string, unknown>>(): Promise<T[]> {
-      return relay.list<T>('issues');
+      return base.issues.list<T>();
     }
-  };
+  }) as LinearClient;
 }
