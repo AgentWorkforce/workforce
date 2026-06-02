@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [3.0.40] - 2026-06-02
+
+### Changed
+
+- Source the VFS transport from @relayfile/adapter-core (#179)
+
 ## [3.0.38] - 2026-06-01
 
 ### Added
