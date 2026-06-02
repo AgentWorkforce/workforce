@@ -90,11 +90,8 @@ importers:
   packages/persona-kit:
     dependencies:
       '@relayfile/adapter-core':
-        specifier: ^0.3.26
-        version: 0.3.26(@relayfile/sdk@0.7.40)
-      '@relayfile/adapter-linear':
-        specifier: ^0.3.8
-        version: 0.3.9(@relayfile/sdk@0.7.40)
+        specifier: ^0.3.31
+        version: 0.3.31(@relayfile/sdk@0.7.40)
       '@relayfile/local-mount':
         specifier: ^0.7.24
         version: 0.7.24
@@ -849,13 +846,6 @@ packages:
     resolution: {integrity: sha512-C5eVSepGrlQY5b1yg+LfROLYhDW/w1WFVsuitRzvbXMr+qpFYFHLoMNxa9R0Q6ZiP02r6EXSazii2VNo2LZ0Vg==}
     engines: {node: '>=22'}
 
-  '@relayfile/adapter-core@0.3.26':
-    resolution: {integrity: sha512-hppTJmlgiW7HMhcCvXDEzXjuygTJMTOqQvqFMVbSTJBi41rp4TBiOjsHb7kNv1iiL661V287jSsY+4oW39nIiQ==}
-    engines: {node: '>=18'}
-    hasBin: true
-    peerDependencies:
-      '@relayfile/sdk': '>=0.6.0 <1'
-
   '@relayfile/adapter-core@0.3.29':
     resolution: {integrity: sha512-rOTKgTofH5NUB9Q47GKJHv54dRJNS8rQS1FO0qON4MQpdKJ9RK69uJlQ52YJ/O73AGuj0qfnfZP1xcnA+3X4yw==}
     engines: {node: '>=18'}
@@ -863,16 +853,10 @@ packages:
     peerDependencies:
       '@relayfile/sdk': '>=0.6.0 <1'
 
-  '@relayfile/adapter-core@0.3.30':
-    resolution: {integrity: sha512-TW03JUsrb8D0lHFfsoP/H4YiglgRev+E+vZg7m2K7khDOtA5rfpU6LIcl9Wl9WrC22oKUrThzbh195yG2XAfyQ==}
+  '@relayfile/adapter-core@0.3.31':
+    resolution: {integrity: sha512-wcZXc4CkX5YqItZl4BLczioO7LZ1DG0F7GeBis1uQ1CYfdqyEm2zSRenz1fPMzEbhy0vldX+ytVOFxybzDzz/Q==}
     engines: {node: '>=18'}
     hasBin: true
-    peerDependencies:
-      '@relayfile/sdk': '>=0.6.0 <1'
-
-  '@relayfile/adapter-linear@0.3.9':
-    resolution: {integrity: sha512-O3oTPieQNLdhE4nAnbj+WbUO0iMDlCEVO7OKJAzvrZruNjp1MDfmJ8s+ABR5AAEU7LhUzfMtGCnM2rCcP65kcA==}
-    engines: {node: '>=18'}
     peerDependencies:
       '@relayfile/sdk': '>=0.6.0 <1'
 
@@ -3117,14 +3101,6 @@ snapshots:
       '@relayburn/sdk-linux-arm64-gnu': 2.5.2
       '@relayburn/sdk-linux-x64-gnu': 2.5.2
 
-  '@relayfile/adapter-core@0.3.26(@relayfile/sdk@0.7.40)':
-    dependencies:
-      '@relayfile/sdk': 0.7.40
-      '@scalar/postman-to-openapi': 0.6.3
-      cheerio: 1.2.0
-      minimatch: 10.2.5
-      yaml: 2.9.0
-
   '@relayfile/adapter-core@0.3.29(@relayfile/sdk@0.7.40)':
     dependencies:
       '@relayfile/sdk': 0.7.40
@@ -3133,18 +3109,13 @@ snapshots:
       minimatch: 10.2.5
       yaml: 2.9.0
 
-  '@relayfile/adapter-core@0.3.30(@relayfile/sdk@0.7.40)':
+  '@relayfile/adapter-core@0.3.31(@relayfile/sdk@0.7.40)':
     dependencies:
       '@relayfile/sdk': 0.7.40
       '@scalar/postman-to-openapi': 0.6.3
       cheerio: 1.2.0
       minimatch: 10.2.5
       yaml: 2.9.0
-
-  '@relayfile/adapter-linear@0.3.9(@relayfile/sdk@0.7.40)':
-    dependencies:
-      '@relayfile/adapter-core': 0.3.30(@relayfile/sdk@0.7.40)
-      '@relayfile/sdk': 0.7.40
 
   '@relayfile/core@0.7.40': {}
 
