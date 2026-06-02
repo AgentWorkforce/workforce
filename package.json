@@ -13,10 +13,10 @@
     "build": "corepack pnpm -r build",
     "dev": "corepack pnpm -r build && corepack pnpm -r --parallel --stream run dev",
     "dev:cli": "node packages/cli/dist/cli.js",
-    "typecheck": "corepack pnpm -r typecheck && corepack pnpm run typecheck:examples",
+    "typecheck": "corepack pnpm -r build && corepack pnpm -r typecheck && corepack pnpm run typecheck:examples",
     "typecheck:examples": "tsc -p examples/tsconfig.json --noEmit",
     "test": "corepack pnpm -r test",
-    "lint": "corepack pnpm -r lint",
-    "check": "corepack pnpm run lint && corepack pnpm run typecheck && corepack pnpm run test"
+    "lint": "corepack pnpm -r build && corepack pnpm -r lint",
+    "check": "corepack pnpm -r build && corepack pnpm -r lint && corepack pnpm -r typecheck && corepack pnpm run typecheck:examples && corepack pnpm -r test"
   }
 }
