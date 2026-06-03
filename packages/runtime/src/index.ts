@@ -61,6 +61,25 @@ export type {
   LinearIssueReference
 } from './types.js';
 
+// Invocation dry-run / simulation (workforce#186): execute a handler against
+// fixture envelopes with side effects recorded-not-executed, emitting
+// Cloud-compatible run records (`origin: "local_dry_run"`).
+export {
+  simulateInvocation,
+  createSimulationSubsystems,
+  deriveSimulatedRunFailureClass,
+  type CapturedLogLine,
+  type RecordedSideEffect,
+  type SimulateInvocationOptions,
+  type SimulatedRunFailureClass,
+  type SimulatedRunFailureInput,
+  type SimulatedRunRecord,
+  type SimulationResult,
+  type SimulationSink,
+  type SimulationSubsystems,
+  type UnsupportedEnvelope
+} from './simulate/index.js';
+
 // VFS-backed transport helpers. All provider interactions go through these
 // — no per-provider client code in the runtime. Handlers use listJsonFiles /
 // readJsonFile / writeJsonFile directly against the provider path conventions
