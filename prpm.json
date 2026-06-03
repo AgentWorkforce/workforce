@@ -1,0 +1,175 @@
+{
+  "name": "workforce-skills",
+  "version": "1.0.0",
+  "description": "AgentWorkforce skill packages and curated collections (published under @agent-relay). The autonomous-run cutover stack is grouped as the private autonomous-run-private collection.",
+  "author": "khaliqgant",
+  "organization": "agent-relay",
+  "private": true,
+  "license": "Proprietary",
+  "repository": "https://github.com/AgentWorkforce/workforce",
+  "packages": [
+    {
+      "name": "autonomous-run-contract",
+      "version": "1.0.1",
+      "description": "Use at the start of every autonomous, multi-PR, cutover-class delegated run. Authors the binding contract between operator and agent: gates, flip mechanism, rollback triggers, standing constraints, cross-repo authority, and explicit escalate-to-human conditions.",
+      "format": "claude",
+      "subtype": "skill",
+      "private": true,
+      "tags": [
+        "autonomous-run",
+        "contract",
+        "cutover",
+        "authority",
+        "cross-repo",
+        "never-stop"
+      ],
+      "files": [
+        ".agentworkforce/workforce/skills/autonomous-run-contract/SKILL.md"
+      ]
+    },
+    {
+      "name": "auto-merge-and-composition-safety",
+      "version": "1.0.0",
+      "description": "Use before auto-merging any PR in an autonomous run, and between consecutive merges that touch overlapping code. Covers live CI verification, substantive review, stale-vs-actionable bot triage, and cross-PR composition discipline.",
+      "format": "claude",
+      "subtype": "skill",
+      "private": true,
+      "tags": [
+        "autonomous-run",
+        "merge-safety",
+        "composition",
+        "ci",
+        "review"
+      ],
+      "files": [
+        ".agentworkforce/workforce/skills/auto-merge-and-composition-safety/SKILL.md"
+      ]
+    },
+    {
+      "name": "dormant-flip-and-rollback",
+      "version": "1.0.0",
+      "description": "Use when designing or executing a cutover-class change. Encodes dark-launch, single-switch flip, refusal to flip on amber, and pre-authorized rollback procedure.",
+      "format": "claude",
+      "subtype": "skill",
+      "private": true,
+      "tags": [
+        "autonomous-run",
+        "cutover",
+        "dark-launch",
+        "rollback",
+        "feature-flag"
+      ],
+      "files": [
+        ".agentworkforce/workforce/skills/dormant-flip-and-rollback/SKILL.md"
+      ]
+    },
+    {
+      "name": "swarm-blockers-and-gate-scoreboard",
+      "version": "1.0.0",
+      "description": "Use during an autonomous run to dispatch supporting codex-impl plus claude-review agent pairs against hard blockers, and maintain the live RED/GREEN gate scoreboard.",
+      "format": "claude",
+      "subtype": "skill",
+      "private": true,
+      "tags": [
+        "autonomous-run",
+        "swarm",
+        "blockers",
+        "scoreboard",
+        "multi-agent"
+      ],
+      "files": [
+        ".agentworkforce/workforce/skills/swarm-blockers-and-gate-scoreboard/SKILL.md"
+      ]
+    },
+    {
+      "name": "tiered-acceptance",
+      "version": "1.0.0",
+      "description": "Use when a single gate would require deep proof across a large set. Splits acceptance into tier-1 deep proof and tier-2 smoke proof while preserving dormant-default, per-item enablement, and rollback.",
+      "format": "claude",
+      "subtype": "skill",
+      "private": true,
+      "tags": [
+        "autonomous-run",
+        "acceptance",
+        "validation",
+        "tiering",
+        "rollback"
+      ],
+      "files": [
+        ".agentworkforce/workforce/skills/tiered-acceptance/SKILL.md"
+      ]
+    },
+    {
+      "name": "instrument-dont-guess",
+      "version": "1.0.0",
+      "description": "Use when a fix has failed two consecutive times for the same symptom. Requires the third action to be a temporary diagnostic rather than another guess, and covers removing diagnostics after root cause.",
+      "format": "claude",
+      "subtype": "skill",
+      "private": true,
+      "tags": [
+        "autonomous-run",
+        "diagnostics",
+        "observability",
+        "root-cause",
+        "debugging"
+      ],
+      "files": [
+        ".agentworkforce/workforce/skills/instrument-dont-guess/SKILL.md"
+      ]
+    }
+  ],
+  "collections": [
+    {
+      "id": "autonomous-run-private",
+      "name": "Autonomous Run Private",
+      "description": "Private autonomous-run operating stack for Agent Relay cutovers: contract authority, merge safety, dormant flips, diagnostics, blocker swarms, and tiered acceptance.",
+      "version": "1.0.0",
+      "category": "development",
+      "tags": [
+        "autonomous-run",
+        "cutover",
+        "agent-relay",
+        "merge-safety",
+        "rollback"
+      ],
+      "packages": [
+        {
+          "packageId": "@agent-relay/autonomous-run-contract",
+          "version": "1.0.1",
+          "required": true,
+          "reason": "Binding authority contract for gates, merge/flip grants, rollback triggers, and escalation rules."
+        },
+        {
+          "packageId": "@agent-relay/auto-merge-and-composition-safety",
+          "version": "1.0.0",
+          "required": true,
+          "reason": "Per-PR live CI, review, bot-triage, and cross-PR composition safety before autonomous merges."
+        },
+        {
+          "packageId": "@agent-relay/dormant-flip-and-rollback",
+          "version": "1.0.0",
+          "required": true,
+          "reason": "Dark-launch and single-switch flip discipline with a pre-authorized rollback path."
+        },
+        {
+          "packageId": "@agent-relay/swarm-blockers-and-gate-scoreboard",
+          "version": "1.0.0",
+          "required": true,
+          "reason": "Support-agent dispatch and live RED/GREEN gate scoreboard for hard blockers."
+        },
+        {
+          "packageId": "@agent-relay/tiered-acceptance",
+          "version": "1.0.0",
+          "required": true,
+          "reason": "Tier-1 deep proof and tier-2 smoke proof for broad acceptance gates."
+        },
+        {
+          "packageId": "@agent-relay/instrument-dont-guess",
+          "version": "1.0.0",
+          "required": true,
+          "reason": "Diagnostic-first discipline after repeated failed fixes for the same symptom."
+        }
+      ]
+    }
+  ]
+}

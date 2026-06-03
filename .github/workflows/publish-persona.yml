@@ -1,0 +1,228 @@
+name: Publish Persona Package
+
+# Publishes the @agentworkforce/persona-* persona packs (the per-persona packages
+# under packages/persona-*). Separate from publish.yml (the lockstep code
+# packages) and publish-personas.yml (the personas-core bundle).
+#
+# Uses npm trusted publishing (`--provenance` via id-token: write), so no
+# NPM_TOKEN is needed. Register this workflow as a trusted publisher for each
+# @agentworkforce/persona-* package before its first real publish.
+
+on:
+  workflow_dispatch:
+    inputs:
+      package:
+        description: |
+          Persona package(s) to publish. Accepts:
+            • all (default) — every packages/persona-* package
+            • one or more package dir names under packages/, comma- or
+              space-separated (e.g. "persona-autonomous-actor" or
+              "persona-autonomous-actor,persona-nango-integrations")
+        required: true
+        type: string
+        default: "all"
+      version:
+        description: |
+          Version bump or exact version:
+            • patch / minor / major / prerelease (npm version semantics)
+            • none (publish current package.json version as-is)
+            • an exact semver like 0.2.0 or 0.2.0-beta.1
+        required: true
+        type: string
+        default: "patch"
+      prerelease_id:
+        description: 'Prerelease identifier for pre* bumps (e.g. "next", "beta")'
+        required: false
+        default: next
+      tag:
+        description: "npm dist-tag"
+        required: true
+        type: choice
+        options:
+          - latest
+          - next
+          - beta
+        default: "latest"
+      dry_run:
+        description: "Dry run (no actual publish, no version commit, no git tag)"
+        required: true
+        type: boolean
+        default: false
+
+permissions:
+  contents: write
+  id-token: write
+
+concurrency:
+  group: publish-persona-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  publish:
+    name: Publish persona packs
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+        with:
+          fetch-depth: 0
+
+      - name: Setup pnpm
+        uses: pnpm/action-setup@v5
+
+      - name: Setup Node
+        uses: actions/setup-node@v6
+        with:
+          node-version: "22.14.0"
+          registry-url: "https://registry.npmjs.org"
+          cache: "pnpm"
+
+      - name: Install deps
+        run: pnpm install --frozen-lockfile
+
+      # npm >= 11.5.1 is required for the OIDC trusted-publisher flow.
+      - name: Install latest npm
+        run: npm install -g npm@latest
+
+      - name: Resolve target packs
+        id: targets
+        env:
+          INPUT_PACKAGE: ${{ github.event.inputs.package }}
+        run: |
+          set -euo pipefail
+          node --input-type=module <<'NODE' > /tmp/persona-targets.json
+          import { readFileSync, readdirSync } from 'node:fs';
+
+          const input = (process.env.INPUT_PACKAGE || 'all').trim();
+
+          // Every packages/persona-* package whose npm name is @agentworkforce/persona-*.
+          const all = [];
+          for (const name of readdirSync('packages', { withFileTypes: true })) {
+            if (!name.isDirectory() || !name.name.startsWith('persona-')) continue;
+            const dir = `packages/${name.name}`;
+            let pkg;
+            try {
+              pkg = JSON.parse(readFileSync(`${dir}/package.json`, 'utf8'));
+            } catch {
+              continue;
+            }
+            if (!pkg?.name?.startsWith('@agentworkforce/persona-')) continue;
+            all.push({ slug: name.name, dir, name: pkg.name });
+          }
+
+          let selected;
+          if (input === 'all') {
+            selected = all;
+          } else {
+            const wanted = input.split(/[\s,]+/).filter(Boolean);
+            const seen = new Set();
+            selected = [];
+            for (const w of wanted) {
+              const match = all.find((p) => p.slug === w || p.name === w);
+              if (!match) {
+                console.error(`No @agentworkforce/persona-* package matched "${w}". Known: ${all.map((p) => p.slug).join(', ')}`);
+                process.exit(1);
+              }
+              if (seen.has(match.name)) continue;
+              seen.add(match.name);
+              selected.push(match);
+            }
+          }
+          if (selected.length === 0) {
+            console.error('No persona packs resolved.');
+            process.exit(1);
+          }
+          process.stdout.write(JSON.stringify(selected));
+          NODE
+          echo "matrix=$(cat /tmp/persona-targets.json)" >> "$GITHUB_OUTPUT"
+          echo "Resolved: $(cat /tmp/persona-targets.json)"
+
+      - name: Bump, verify, pack + publish
+        env:
+          INPUT_VERSION: ${{ github.event.inputs.version }}
+          INPUT_PREID: ${{ github.event.inputs.prerelease_id }}
+          INPUT_TAG: ${{ github.event.inputs.tag }}
+          INPUT_DRY_RUN: ${{ github.event.inputs.dry_run }}
+          TARGETS: ${{ steps.targets.outputs.matrix }}
+        run: |
+          set -euo pipefail
+          PACK_DIR="$RUNNER_TEMP/packs"
+          mkdir -p "$PACK_DIR"
+
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+
+          : > /tmp/persona-publish-targets.tsv
+          COUNT=$(node -e "process.stdout.write(String(JSON.parse(process.env.TARGETS).length))")
+          for i in $(seq 0 $((COUNT - 1))); do
+            DIR=$(node -e "process.stdout.write(JSON.parse(process.env.TARGETS)[$i].dir)")
+            NAME=$(node -e "process.stdout.write(JSON.parse(process.env.TARGETS)[$i].name)")
+            echo "::group::Preparing $NAME ($DIR)"
+
+            pushd "$DIR" >/dev/null
+            if [ "$INPUT_VERSION" = "none" ]; then
+              :
+            elif [[ "$INPUT_VERSION" == pre* ]]; then
+              npm version "$INPUT_VERSION" --no-git-tag-version --preid="$INPUT_PREID"
+            else
+              npm version "$INPUT_VERSION" --no-git-tag-version --allow-same-version
+            fi
+            VERSION=$(node -p 'require("./package.json").version')
+            popd >/dev/null
+
+            printf '%s\t%s\t%s\n' "$NAME" "$DIR" "$VERSION" >> /tmp/persona-publish-targets.tsv
+
+            EXISTS=$(npm view "$NAME@$VERSION" version 2>/dev/null || true)
+            if [ -n "$EXISTS" ]; then
+              echo "::error title=Version already published::$NAME@$VERSION is already on npm. Pick a different bump."
+              exit 1
+            fi
+
+            echo "$NAME@$VERSION: unpublished - OK"
+
+            echo "==> Testing $NAME@$VERSION"
+            pnpm --filter "$NAME" test
+
+            echo "::endgroup::"
+          done
+
+          while IFS=$'\t' read -r NAME DIR VERSION; do
+            echo "::group::Publishing $NAME ($DIR)"
+
+            COMMON_FLAGS="--access public --tag $INPUT_TAG"
+            if [ "$INPUT_DRY_RUN" = "true" ]; then
+              COMMON_FLAGS="$COMMON_FLAGS --dry-run"
+            else
+              COMMON_FLAGS="$COMMON_FLAGS --provenance"
+            fi
+
+            echo "==> Packing $NAME@$VERSION"
+            TARBALL="$(pnpm --filter "$NAME" pack --pack-destination "$PACK_DIR" | tail -n 1)"
+            if [[ "$TARBALL" != /* ]]; then
+              TARBALL="$PACK_DIR/$TARBALL"
+            fi
+            if [ ! -f "$TARBALL" ]; then
+              echo "::error::could not find packed tarball $TARBALL in $PACK_DIR" >&2
+              ls -la "$PACK_DIR" >&2 || true
+              exit 1
+            fi
+
+            echo "==> Publishing $TARBALL $COMMON_FLAGS"
+            npm publish "$TARBALL" $COMMON_FLAGS
+
+            if [ "$INPUT_DRY_RUN" != "true" ] && [ "$INPUT_VERSION" != "none" ]; then
+              git add "$DIR/package.json"
+              if ! git diff --cached --quiet; then
+                git commit -m "chore(release): $NAME@$VERSION"
+              fi
+              SLUG="$(echo "${NAME#@}" | tr '/' '-')"
+              git tag -a "${SLUG}-v${VERSION}" -m "$NAME@$VERSION"
+            fi
+
+            echo "$NAME@$VERSION published (dry_run=$INPUT_DRY_RUN)" >> "$GITHUB_STEP_SUMMARY"
+            echo "::endgroup::"
+          done < /tmp/persona-publish-targets.tsv
+
+      - name: Push commits + tags
+        if: ${{ github.event.inputs.dry_run != 'true' && github.event.inputs.version != 'none' }}
+        run: git push origin HEAD --follow-tags

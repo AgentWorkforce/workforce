@@ -87,6 +87,8 @@ importers:
         specifier: ^3.23.8
         version: 3.25.76
 
+  packages/persona-autonomous-actor: {}
+
   packages/persona-kit:
     dependencies:
       '@relayfile/adapter-core':
@@ -99,6 +101,8 @@ importers:
       ts-json-schema-generator:
         specifier: ^2.3.0
         version: 2.9.0
+
+  packages/persona-nango-integrations: {}
 
   packages/personas-core: {}
 
