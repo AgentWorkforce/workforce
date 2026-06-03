@@ -179,6 +179,10 @@ jobs:
             fi
 
             echo "$NAME@$VERSION: unpublished - OK"
+
+            echo "==> Testing $NAME@$VERSION"
+            pnpm --filter "$NAME" test
+
             echo "::endgroup::"
           done
 
@@ -193,11 +197,12 @@ jobs:
             fi
 
             echo "==> Packing $NAME@$VERSION"
-            pnpm --filter "$NAME" pack --pack-destination "$PACK_DIR"
-            TARBALL_BASENAME="$(echo "${NAME#@}" | tr '/' '-')-${VERSION}.tgz"
-            TARBALL="$PACK_DIR/$TARBALL_BASENAME"
+            TARBALL="$(pnpm --filter "$NAME" pack --pack-destination "$PACK_DIR" | tail -n 1)"
+            if [[ "$TARBALL" != /* ]]; then
+              TARBALL="$PACK_DIR/$TARBALL"
+            fi
             if [ ! -f "$TARBALL" ]; then
-              echo "::error::could not find packed tarball $TARBALL_BASENAME in $PACK_DIR" >&2
+              echo "::error::could not find packed tarball $TARBALL in $PACK_DIR" >&2
               ls -la "$PACK_DIR" >&2 || true
               exit 1
             fi
