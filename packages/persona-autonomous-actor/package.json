@@ -1,0 +1,48 @@
+{
+  "name": "@agentworkforce/persona-autonomous-actor",
+  "version": "0.1.0",
+  "description": "AgentWorkforce autonomous-actor persona pack — autonomous orchestrator for delegated, multi-PR, cutover-class infra/feature delivery under an explicit written contract. Install with `agentworkforce install`.",
+  "type": "module",
+  "main": "index.js",
+  "types": "index.d.ts",
+  "agentworkforce": {
+    "personas": "personas"
+  },
+  "exports": {
+    ".": {
+      "types": "./index.d.ts",
+      "import": "./index.js",
+      "default": "./index.js"
+    },
+    "./persona.json": "./personas/autonomous-actor.json",
+    "./personas/autonomous-actor.json": "./personas/autonomous-actor.json",
+    "./package.json": "./package.json"
+  },
+  "files": [
+    "index.js",
+    "index.d.ts",
+    "personas"
+  ],
+  "scripts": {
+    "test": "node --test test/persona.test.mjs"
+  },
+  "keywords": [
+    "agentworkforce",
+    "persona",
+    "autonomous-run",
+    "cutover",
+    "orchestration"
+  ],
+  "license": "MIT",
+  "engines": {
+    "node": ">=18"
+  },
+  "publishConfig": {
+    "access": "public"
+  },
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/AgentWorkforce/workforce",
+    "directory": "packages/persona-autonomous-actor"
+  }
+}
