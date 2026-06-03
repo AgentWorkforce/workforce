@@ -1,4 +1,4 @@
-name: Publish Personas
+name: Publish Core Personas
 
 on:
   workflow_dispatch:

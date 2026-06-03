@@ -1,4 +1,4 @@
-name: Publish Core Persona Package
+name: Publish Internal Persona Package
 
 # Publishes the @agentworkforce/persona-* persona packs (the per-persona packages
 # under packages/persona-*). Separate from publish.yml (the lockstep code
