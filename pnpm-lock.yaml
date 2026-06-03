@@ -35,6 +35,9 @@ importers:
       '@agentworkforce/persona-kit':
         specifier: workspace:*
         version: link:../persona-kit
+      '@agentworkforce/runtime':
+        specifier: workspace:*
+        version: link:../runtime
       '@agentworkforce/workload-router':
         specifier: workspace:*
         version: link:../workload-router

@@ -49,6 +49,10 @@ export {
   unwrapResourceRecord
 } from './types.js';
 
+// Raw gateway envelope contract (the runner's stdin NDJSON line shape, and
+// the fixture format for invocation simulation).
+export { shimEnvelope, type RawGatewayEnvelope } from './shim.js';
+
 export type {
   LinearAgentActivity,
   LinearAgentActivityType,
