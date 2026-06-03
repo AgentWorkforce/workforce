@@ -1,66 +1,65 @@
-name: Publish Internal Persona Package
+name: Publish Core Personas
 
-# Publishes the @agentworkforce/persona-* persona packs (the per-persona packages
-# under packages/persona-*). Separate from publish.yml (the lockstep code
-# packages) and publish-personas.yml (the personas-core bundle).
-#
-# Uses npm trusted publishing (`--provenance` via id-token: write), so no
-# NPM_TOKEN is needed. Register this workflow as a trusted publisher for each
-# @agentworkforce/persona-* package before its first real publish.
+# Publishes the @agentworkforce/personas-core bundle. Separate from publish.yml
+# (the lockstep code packages) and publish-internal-personas.yml (the per-persona
+# @agentworkforce/persona-* packs).
 
 on:
   workflow_dispatch:
     inputs:
-      package:
-        description: |
-          Persona package(s) to publish. Accepts:
-            • all (default) — every packages/persona-* package
-            • one or more package dir names under packages/, comma- or
-              space-separated (e.g. "persona-autonomous-actor" or
-              "persona-autonomous-actor,persona-nango-integrations")
-        required: true
-        type: string
-        default: "all"
       version:
-        description: |
-          Version bump or exact version:
-            • patch / minor / major / prerelease (npm version semantics)
-            • none (publish current package.json version as-is)
-            • an exact semver like 0.2.0 or 0.2.0-beta.1
+        description: 'Version bump type (ignored if custom_version is set)'
         required: true
-        type: string
-        default: "patch"
+        default: patch
+        type: choice
+        options:
+          - patch
+          - minor
+          - major
+          - prepatch
+          - preminor
+          - premajor
+          - prerelease
+          - none
+      custom_version:
+        description: 'Exact version (e.g. 0.8.0). Overrides version type when set.'
+        required: false
       prerelease_id:
         description: 'Prerelease identifier for pre* bumps (e.g. "next", "beta")'
         required: false
         default: next
       tag:
-        description: "npm dist-tag"
+        description: 'npm dist-tag'
         required: true
+        default: latest
         type: choice
         options:
           - latest
           - next
           - beta
-        default: "latest"
+          - alpha
       dry_run:
-        description: "Dry run (no actual publish, no version commit, no git tag)"
+        description: 'Dry run (no actual publish, no version commit, no git tag)'
         required: true
-        type: boolean
         default: false
+        type: boolean
 
 permissions:
   contents: write
   id-token: write
 
 concurrency:
-  group: publish-persona-${{ github.ref }}
+  group: publish-personas-${{ github.ref }}
   cancel-in-progress: false
 
 jobs:
   publish:
-    name: Publish persona packs
+    name: Publish @agentworkforce/personas-core
     runs-on: ubuntu-latest
+    outputs:
+      version: ${{ steps.bump.outputs.version }}
+      npm_name: ${{ steps.package.outputs.npm_name }}
+      tag_name: personas-core-v${{ steps.bump.outputs.version }}
     steps:
       - name: Checkout
         uses: actions/checkout@v6
@@ -73,160 +72,172 @@ jobs:
       - name: Setup Node
         uses: actions/setup-node@v6
         with:
-          node-version: "22.14.0"
-          registry-url: "https://registry.npmjs.org"
-          cache: "pnpm"
+          node-version: '22.14.0'
+          registry-url: 'https://registry.npmjs.org'
+          cache: 'pnpm'
 
       - name: Install deps
         run: pnpm install --frozen-lockfile
+
+      - name: Resolve package
+        id: package
+        run: |
+          echo "pkg=personas-core" >> "$GITHUB_OUTPUT"
+          echo "path=packages/personas-core" >> "$GITHUB_OUTPUT"
+          NPM_NAME=$(node -p 'require("./packages/personas-core/package.json").name')
+          echo "npm_name=$NPM_NAME" >> "$GITHUB_OUTPUT"
+
+      - name: Validate personas
+        run: pnpm --filter "${{ steps.package.outputs.npm_name }}" run lint
+
+      - name: Bump version
+        id: bump
+        working-directory: packages/personas-core
+        run: |
+          CUSTOM='${{ github.event.inputs.custom_version }}'
+          BUMP='${{ github.event.inputs.version }}'
+          PREID='${{ github.event.inputs.prerelease_id }}'
+
+          if [ -n "$CUSTOM" ]; then
+            npm version "$CUSTOM" --no-git-tag-version --allow-same-version
+          elif [ "$BUMP" = "none" ]; then
+            : # keep existing version
+          elif [[ "$BUMP" == pre* ]]; then
+            npm version "$BUMP" --no-git-tag-version --preid="$PREID"
+          else
+            npm version "$BUMP" --no-git-tag-version
+          fi
+
+          VERSION=$(node -p 'require("./package.json").version')
+          echo "version=$VERSION" >> "$GITHUB_OUTPUT"
+
+      - name: Verify version is not yet published
+        run: |
+          set -euo pipefail
+          NPM_NAME='${{ steps.package.outputs.npm_name }}'
+          VERSION='${{ steps.bump.outputs.version }}'
+          EXISTS=$(npm view "$NPM_NAME@$VERSION" version 2>/dev/null || true)
+          if [ -n "$EXISTS" ]; then
+            echo "::error title=Version already published::$NPM_NAME@$VERSION is already on npm. Pick a different bump type or set custom_version to a higher version."
+            exit 1
+          fi
+          echo "$NPM_NAME@$VERSION: unpublished - OK"
+
+      - name: Commit version bump
+        if: ${{ github.event.inputs.dry_run != 'true' && (github.event.inputs.version != 'none' || github.event.inputs.custom_version != '') }}
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git add packages/personas-core/package.json
+          if git diff --cached --quiet; then
+            echo "No version changes to commit."
+          else
+            git commit -m "chore(release): ${{ steps.package.outputs.npm_name }}@${{ steps.bump.outputs.version }}"
+          fi
 
       # npm >= 11.5.1 is required for the OIDC trusted-publisher flow.
       - name: Install latest npm
         run: npm install -g npm@latest
 
-      - name: Resolve target packs
-        id: targets
-        env:
-          INPUT_PACKAGE: ${{ github.event.inputs.package }}
-        run: |
-          set -euo pipefail
-          node --input-type=module <<'NODE' > /tmp/persona-targets.json
-          import { readFileSync, readdirSync } from 'node:fs';
-
-          const input = (process.env.INPUT_PACKAGE || 'all').trim();
-
-          // A persona pack is any package that declares `agentworkforce.personas`
-          // (NOT a name/dir prefix — that would wrongly match the persona-kit
-          // library). personas-core is excluded; it has its own publish-personas.yml.
-          const EXCLUDE = new Set(['@agentworkforce/personas-core']);
-          const all = [];
-          for (const name of readdirSync('packages', { withFileTypes: true })) {
-            if (!name.isDirectory()) continue;
-            const dir = `packages/${name.name}`;
-            let pkg;
-            try {
-              pkg = JSON.parse(readFileSync(`${dir}/package.json`, 'utf8'));
-            } catch {
-              continue;
-            }
-            if (!pkg?.agentworkforce?.personas) continue;
-            if (EXCLUDE.has(pkg.name)) continue;
-            all.push({ slug: name.name, dir, name: pkg.name });
-          }
-
-          let selected;
-          if (input === 'all') {
-            selected = all;
-          } else {
-            const wanted = input.split(/[\s,]+/).filter(Boolean);
-            const seen = new Set();
-            selected = [];
-            for (const w of wanted) {
-              const match = all.find((p) => p.slug === w || p.name === w);
-              if (!match) {
-                console.error(`No @agentworkforce/persona-* package matched "${w}". Known: ${all.map((p) => p.slug).join(', ')}`);
-                process.exit(1);
-              }
-              if (seen.has(match.name)) continue;
-              seen.add(match.name);
-              selected.push(match);
-            }
-          }
-          if (selected.length === 0) {
-            console.error('No persona packs resolved.');
-            process.exit(1);
-          }
-          process.stdout.write(JSON.stringify(selected));
-          NODE
-          echo "matrix=$(cat /tmp/persona-targets.json)" >> "$GITHUB_OUTPUT"
-          echo "Resolved: $(cat /tmp/persona-targets.json)"
-
-      - name: Bump, verify, pack + publish
-        env:
-          INPUT_VERSION: ${{ github.event.inputs.version }}
-          INPUT_PREID: ${{ github.event.inputs.prerelease_id }}
-          INPUT_TAG: ${{ github.event.inputs.tag }}
-          INPUT_DRY_RUN: ${{ github.event.inputs.dry_run }}
-          TARGETS: ${{ steps.targets.outputs.matrix }}
+      # This workflow uses npm trusted publishing, not NPM_TOKEN. Register
+      # `.github/workflows/publish-persona.yml` as a trusted publisher for
+      # @agentworkforce/personas-core before the first real publish.
+      - name: Pack + publish
         run: |
           set -euo pipefail
           PACK_DIR="$RUNNER_TEMP/packs"
           mkdir -p "$PACK_DIR"
 
-          git config user.name "github-actions[bot]"
-          git config user.email "github-actions[bot]@users.noreply.github.com"
+          NPM_NAME='${{ steps.package.outputs.npm_name }}'
+          VERSION='${{ steps.bump.outputs.version }}'
+          TARBALL_BASENAME="$(echo "${NPM_NAME#@}" | tr '/' '-')-${VERSION}.tgz"
 
-          : > /tmp/persona-publish-targets.tsv
-          COUNT=$(node -e "process.stdout.write(String(JSON.parse(process.env.TARGETS).length))")
-          for i in $(seq 0 $((COUNT - 1))); do
-            DIR=$(node -e "process.stdout.write(JSON.parse(process.env.TARGETS)[$i].dir)")
-            NAME=$(node -e "process.stdout.write(JSON.parse(process.env.TARGETS)[$i].name)")
-            echo "::group::Preparing $NAME ($DIR)"
+          COMMON_FLAGS="--access public --tag ${{ github.event.inputs.tag }}"
+          if [ "${{ github.event.inputs.dry_run }}" = "true" ]; then
+            COMMON_FLAGS+=" --dry-run"
+          else
+            COMMON_FLAGS+=" --provenance"
+          fi
 
-            pushd "$DIR" >/dev/null
-            if [ "$INPUT_VERSION" = "none" ]; then
-              :
-            elif [[ "$INPUT_VERSION" == pre* ]]; then
-              npm version "$INPUT_VERSION" --no-git-tag-version --preid="$INPUT_PREID"
-            else
-              npm version "$INPUT_VERSION" --no-git-tag-version --allow-same-version
-            fi
-            VERSION=$(node -p 'require("./package.json").version')
-            popd >/dev/null
+          echo "==> Packing $NPM_NAME"
+          pnpm --filter "$NPM_NAME" pack --pack-destination "$PACK_DIR"
 
-            printf '%s\t%s\t%s\n' "$NAME" "$DIR" "$VERSION" >> /tmp/persona-publish-targets.tsv
+          TARBALL="$PACK_DIR/$TARBALL_BASENAME"
+          if [ ! -f "$TARBALL" ]; then
+            echo "::error::could not find packed tarball $TARBALL_BASENAME in $PACK_DIR" >&2
+            ls -la "$PACK_DIR" >&2 || true
+            exit 1
+          fi
 
-            EXISTS=$(npm view "$NAME@$VERSION" version 2>/dev/null || true)
-            if [ -n "$EXISTS" ]; then
-              echo "::error title=Version already published::$NAME@$VERSION is already on npm. Pick a different bump."
-              exit 1
-            fi
+          echo "==> Publishing $TARBALL $COMMON_FLAGS"
+          npm publish "$TARBALL" $COMMON_FLAGS
 
-            echo "$NAME@$VERSION: unpublished - OK"
+      - name: Tag + push
+        if: ${{ github.event.inputs.dry_run != 'true' && (github.event.inputs.version != 'none' || github.event.inputs.custom_version != '') }}
+        run: |
+          git tag -a "personas-core-v${{ steps.bump.outputs.version }}" -m "${{ steps.package.outputs.npm_name }}@${{ steps.bump.outputs.version }}"
+          git push origin HEAD --follow-tags
 
-            echo "==> Testing $NAME@$VERSION"
-            pnpm --filter "$NAME" test
+      - name: Summary
+        run: |
+          {
+            echo "### Published personas"
+            echo ""
+            echo "- **package**: \`${{ steps.package.outputs.npm_name }}@${{ steps.bump.outputs.version }}\`"
+            echo "- **dist-tag**: \`${{ github.event.inputs.tag }}\`"
+            echo "- **dry run**: \`${{ github.event.inputs.dry_run }}\`"
+          } >> "$GITHUB_STEP_SUMMARY"
 
-            echo "::endgroup::"
-          done
+  create-release:
+    name: Create GitHub Release
+    needs: publish
+    if: ${{ github.event.inputs.dry_run != 'true' && (github.event.inputs.version != 'none' || github.event.inputs.custom_version != '') }}
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - name: Checkout release tag
+        uses: actions/checkout@v6
+        with:
+          ref: ${{ needs.publish.outputs.tag_name }}
 
-          while IFS=$'\t' read -r NAME DIR VERSION; do
-            echo "::group::Publishing $NAME ($DIR)"
+      - name: Build release notes
+        id: notes
+        run: |
+          cat > /tmp/build-persona-release-notes.mjs << 'GENEOF'
+          import { appendFileSync, readdirSync, readFileSync, writeFileSync } from 'node:fs';
+          import { join } from 'node:path';
 
-            COMMON_FLAGS="--access public --tag $INPUT_TAG"
-            if [ "$INPUT_DRY_RUN" = "true" ]; then
-              COMMON_FLAGS="$COMMON_FLAGS --dry-run"
-            else
-              COMMON_FLAGS="$COMMON_FLAGS --provenance"
-            fi
+          const packageRoot = 'packages/personas-core';
+          const pkg = JSON.parse(readFileSync(join(packageRoot, 'package.json'), 'utf8'));
+          const personasDir = join(packageRoot, 'personas');
+          const files = readdirSync(personasDir).filter((name) => name.endsWith('.json')).sort();
 
-            echo "==> Packing $NAME@$VERSION"
-            TARBALL="$(pnpm --filter "$NAME" pack --pack-destination "$PACK_DIR" | tail -n 1)"
-            if [[ "$TARBALL" != /* ]]; then
-              TARBALL="$PACK_DIR/$TARBALL"
-            fi
-            if [ ! -f "$TARBALL" ]; then
-              echo "::error::could not find packed tarball $TARBALL in $PACK_DIR" >&2
-              ls -la "$PACK_DIR" >&2 || true
-              exit 1
-            fi
+          const lines = [
+            '## Package',
+            '',
+            `- \`${pkg.name}@${pkg.version}\``,
+            `- npm dist-tag: \`${process.env.NPM_TAG}\``,
+            '',
+            '## Personas',
+            ''
+          ];
 
-            echo "==> Publishing $TARBALL $COMMON_FLAGS"
-            npm publish "$TARBALL" $COMMON_FLAGS
+          for (const file of files) {
+            const persona = JSON.parse(readFileSync(join(personasDir, file), 'utf8'));
+            lines.push(`- \`${persona.id}\` - ${persona.description}`);
+          }
 
-            if [ "$INPUT_DRY_RUN" != "true" ] && [ "$INPUT_VERSION" != "none" ]; then
-              git add "$DIR/package.json"
-              if ! git diff --cached --quiet; then
-                git commit -m "chore(release): $NAME@$VERSION"
-              fi
-              SLUG="$(echo "${NAME#@}" | tr '/' '-')"
-              git tag -a "${SLUG}-v${VERSION}" -m "$NAME@$VERSION"
-            fi
+          writeFileSync('/tmp/persona-release-notes.md', `${lines.join('\n').trimEnd()}\n`);
+          appendFileSync(process.env.GITHUB_OUTPUT, `release_name=${pkg.name}@${pkg.version}\n`);
+          GENEOF
 
-            echo "$NAME@$VERSION published (dry_run=$INPUT_DRY_RUN)" >> "$GITHUB_STEP_SUMMARY"
-            echo "::endgroup::"
-          done < /tmp/persona-publish-targets.tsv
+          NPM_TAG='${{ github.event.inputs.tag }}' node /tmp/build-persona-release-notes.mjs
 
-      - name: Push commits + tags
-        if: ${{ github.event.inputs.dry_run != 'true' && github.event.inputs.version != 'none' }}
-        run: git push origin HEAD --follow-tags
+      - name: Create GitHub Release
+        uses: softprops/action-gh-release@v3
+        with:
+          tag_name: ${{ needs.publish.outputs.tag_name }}
+          name: ${{ steps.notes.outputs.release_name }}
+          body_path: /tmp/persona-release-notes.md
+          prerelease: ${{ contains(needs.publish.outputs.version, '-') }}
