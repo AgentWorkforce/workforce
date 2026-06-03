@@ -1,6 +1,6 @@
 {
   "name": "@agentworkforce/persona-autonomous-actor",
-  "version": "0.1.0",
+  "version": "0.1.7",
   "description": "AgentWorkforce autonomous-actor persona pack — autonomous orchestrator for delegated, multi-PR, cutover-class infra/feature delivery under an explicit written contract. Install with `agentworkforce install`.",
   "type": "module",
   "main": "index.js",
