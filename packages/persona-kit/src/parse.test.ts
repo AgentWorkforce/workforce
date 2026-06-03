@@ -9,6 +9,7 @@ import {
   INPUT_NAME_RE,
   isIntent,
   parseAgentSpec,
+  parseCapabilities,
   parseHarnessSettings,
   parseIntegrations,
   parseInputs,
@@ -926,4 +927,61 @@ test('parsePersonaSpec keeps boolean shorthand memory through round-trip', () =>
     'documentation'
   );
   assert.equal(spec.memory, false);
+});
+
+// Regression: persona-kit must not silently drop consumer-defined capabilities
+// it does not model directly (e.g. the cloud-only `teamSolve`). The CLI runs
+// this parse client-side before upload, so a dropped key never reaches the
+// cloud and `cloud-team-issue` team-launch stays dormant
+// (workforce#182 / cloud#1732).
+test('parseCapabilities preserves unknown consumer-defined capabilities (teamSolve)', () => {
+  const caps = parseCapabilities(
+    {
+      review: true,
+      teamSolve: {
+        enabled: true,
+        maxMembers: 1,
+        roles: ['implementer'],
+        tokenBudget: 400000,
+        timeBudgetSeconds: 1800
+      }
+    },
+    'persona.capabilities'
+  );
+  assert.ok(caps, 'capabilities should be defined');
+  assert.equal(caps?.review, true);
+  // The load-bearing assertion: the unknown key survives the parse with its
+  // full object value intact (RED before the pass-through fix).
+  assert.deepEqual(caps?.teamSolve, {
+    enabled: true,
+    maxMembers: 1,
+    roles: ['implementer'],
+    tokenBudget: 400000,
+    timeBudgetSeconds: 1800
+  });
+});
+
+test('parseCapabilities rejects arrays for the capabilities map and values', () => {
+  assert.throws(
+    () => parseCapabilities([true], 'persona.capabilities'),
+    /persona\.capabilities must be an object if provided/
+  );
+  assert.throws(
+    () => parseCapabilities({ teamSolve: [] }, 'persona.capabilities'),
+    /persona\.capabilities\.teamSolve must be a boolean or object if provided/
+  );
+});
+
+test('parsePersonaSpec round-trip preserves a declared teamSolve capability', () => {
+  const spec = parsePersonaSpec(
+    validSpec({
+      cloud: true,
+      capabilities: { teamSolve: { enabled: true, maxMembers: 1 } }
+    }),
+    'documentation'
+  );
+  assert.deepEqual(spec.capabilities?.teamSolve, {
+    enabled: true,
+    maxMembers: 1
+  });
 });

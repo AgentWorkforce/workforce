@@ -900,7 +900,7 @@ export function parseMemory(value: unknown, context: string): PersonaMemory | un
 
 function parseCapabilityValue(value: unknown, context: string): CapabilityValue {
   if (typeof value === 'boolean') return value;
-  if (!isObject(value)) {
+  if (!isObject(value) || Array.isArray(value)) {
     throw new Error(`${context} must be a boolean or object if provided`);
   }
   if (value.enabled !== undefined && typeof value.enabled !== 'boolean') {
@@ -914,23 +914,22 @@ export function parseCapabilities(
   context: string
 ): ProactiveCapabilities | undefined {
   if (value === undefined) return undefined;
-  if (!isObject(value)) {
+  if (!isObject(value) || Array.isArray(value)) {
     throw new Error(`${context} must be an object if provided`);
   }
 
   const out: ProactiveCapabilities = {};
-  const { review, issueClaim, conflictAutofix, pullRequest } = value;
-  if (review !== undefined) {
-    out.review = parseCapabilityValue(review, `${context}.review`);
-  }
-  if (issueClaim !== undefined) {
-    out.issueClaim = parseCapabilityValue(issueClaim, `${context}.issueClaim`);
-  }
-  if (conflictAutofix !== undefined) {
-    out.conflictAutofix = parseCapabilityValue(conflictAutofix, `${context}.conflictAutofix`);
-  }
-  if (pullRequest !== undefined) {
-    out.pullRequest = parseCapabilityValue(pullRequest, `${context}.pullRequest`);
+  // Preserve every declared capability, including consumer-defined cloud-only
+  // capabilities (e.g. `teamSolve`) that persona-kit does not model directly.
+  // Dropping unknown keys here silently strips them from the deployed persona
+  // spec - the cause of the cloud team-launch regression where the CLI
+  // preflight parse ran client-side before upload, so the cloud never received
+  // `teamSolve` and its `isTeamLaunchN1` gate stayed false
+  // (workforce#182 / cloud#1732). persona-kit is platform-agnostic; it must not
+  // drop capability keys it happens not to recognize.
+  for (const [key, raw] of Object.entries(value)) {
+    if (raw === undefined) continue;
+    out[key] = parseCapabilityValue(raw, `${context}.${key}`);
   }
 
   return Object.keys(out).length > 0 ? out : undefined;

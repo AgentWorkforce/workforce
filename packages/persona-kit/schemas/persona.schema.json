@@ -492,6 +492,17 @@
           "description": "Legacy alias of `review`."
         }
       },
+      "additionalProperties": {
+        "anyOf": [
+          {
+            "$ref": "#/definitions/CapabilityValue"
+          },
+          {
+            "not": {}
+          }
+        ],
+        "description": "Consumer-defined capabilities pass through the parser unchanged. persona-kit is platform-agnostic and must not drop capability keys it does not model directly - e.g. the cloud-only `teamSolve` capability that drives `cloud-team-issue` team-launch (workforce#182 / cloud#1732)."
+      },
       "description": "Portable proactive capability declarations.\n\nA capability is enabled when its value is `true` or an object whose `.enabled !== false` (`{}` is enabled; `{ enabled: false }` is disabled). `pullRequest` is the legacy alias of `review`; both map to the review capability."
     },
     "CapabilityValue": {
