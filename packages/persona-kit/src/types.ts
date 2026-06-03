@@ -339,6 +339,13 @@ export interface ProactiveCapabilities {
   conflictAutofix?: CapabilityValue;
   /** Legacy alias of `review`. */
   pullRequest?: CapabilityValue;
+  /**
+   * Consumer-defined capabilities pass through the parser unchanged. persona-kit
+   * is platform-agnostic and must not drop capability keys it does not model
+   * directly - e.g. the cloud-only `teamSolve` capability that drives
+   * `cloud-team-issue` team-launch (workforce#182 / cloud#1732).
+   */
+  [capability: string]: CapabilityValue | undefined;
 }
 
 /**
