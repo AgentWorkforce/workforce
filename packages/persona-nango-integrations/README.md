@@ -52,5 +52,5 @@ persona, edit that file and republish; consumers re-run
 ## Publishing
 
 Published under the `@agentworkforce` scope via the dedicated
-`.github/workflows/publish-persona.yml` workflow (separate from the
-`@relayfile/*` `publish.yml`), using npm `--provenance`.
+`.github/workflows/publish-internal-personas.yml` workflow (separate from the
+lockstep package `publish.yml`), using npm `--provenance`.

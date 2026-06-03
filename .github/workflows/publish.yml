@@ -94,7 +94,7 @@ jobs:
           #   daytona-runner  (no workspace deps)
           #   cli             (→ persona-kit + workload-router + deploy)
           #   agentworkforce  (→ cli — umbrella wrapper, must publish last)
-          # personas-core publishes via the separate publish-personas.yml workflow.
+          # personas-core publishes via the separate publish-persona.yml workflow.
           echo "packages=persona-kit runtime workload-router deploy mcp-workforce daytona-runner cli agentworkforce" >> "$GITHUB_OUTPUT"
 
       # Lockstep baseline heal. The workspace publishes every package at the

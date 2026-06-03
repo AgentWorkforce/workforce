@@ -95,10 +95,9 @@ jobs:
 
           const input = (process.env.INPUT_PACKAGE || 'all').trim();
 
-          // A persona pack is any package that declares `agentworkforce.personas`
-          // (NOT a name/dir prefix — that would wrongly match the persona-kit
-          // library). personas-core is excluded; it has its own publish-persona.yml.
-          const EXCLUDE = new Set(['@agentworkforce/personas-core']);
+          // Internal persona packs are the per-persona packages published under
+          // @agentworkforce/persona-*. personas-core is intentionally plural and
+          // has its own publish-persona.yml workflow.
           const all = [];
           for (const name of readdirSync('packages', { withFileTypes: true })) {
             if (!name.isDirectory()) continue;
@@ -110,9 +109,10 @@ jobs:
               continue;
             }
             if (!pkg?.agentworkforce?.personas) continue;
-            if (EXCLUDE.has(pkg.name)) continue;
+            if (!pkg.name?.startsWith('@agentworkforce/persona-')) continue;
             all.push({ slug: name.name, dir, name: pkg.name });
           }
+          all.sort((a, b) => a.name.localeCompare(b.name));
 
           let selected;
           if (input === 'all') {
@@ -157,6 +157,13 @@ jobs:
           git config user.email "github-actions[bot]@users.noreply.github.com"
 
           : > /tmp/persona-publish-targets.tsv
+          {
+            echo "### Persona pack publish"
+            echo ""
+            echo "| Package | Version | Dry run |"
+            echo "| --- | --- | --- |"
+          } >> "$GITHUB_STEP_SUMMARY"
+
           COUNT=$(node -e "process.stdout.write(String(JSON.parse(process.env.TARGETS).length))")
           for i in $(seq 0 $((COUNT - 1))); do
             DIR=$(node -e "process.stdout.write(JSON.parse(process.env.TARGETS)[$i].dir)")
@@ -186,6 +193,7 @@ jobs:
 
             echo "==> Testing $NAME@$VERSION"
             pnpm --filter "$NAME" test
+            echo "| \`$NAME\` | \`$VERSION\` | \`$INPUT_DRY_RUN\` |" >> "$GITHUB_STEP_SUMMARY"
 
             echo "::endgroup::"
           done
@@ -223,7 +231,6 @@ jobs:
               git tag -a "${SLUG}-v${VERSION}" -m "$NAME@$VERSION"
             fi
 
-            echo "$NAME@$VERSION published (dry_run=$INPUT_DRY_RUN)" >> "$GITHUB_STEP_SUMMARY"
             echo "::endgroup::"
           done < /tmp/persona-publish-targets.tsv
 
