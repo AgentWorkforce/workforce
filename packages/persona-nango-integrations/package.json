@@ -1,6 +1,6 @@
 {
   "name": "@agentworkforce/persona-nango-integrations",
-  "version": "0.1.6",
+  "version": "0.1.7",
   "description": "AgentWorkforce nango-integrations persona pack — builds & maintains Nango TypeScript integrations and their Cloud-side Relayfile wiring. Install with `agentworkforce install`.",
   "type": "module",
   "main": "index.js",
