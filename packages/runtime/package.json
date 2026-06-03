@@ -22,6 +22,10 @@
       "types": "./dist/raw.d.ts",
       "default": "./dist/raw.js"
     },
+    "./simulate": {
+      "types": "./dist/simulate/index.d.ts",
+      "default": "./dist/simulate/index.js"
+    },
     "./proactive": {
       "types": "./dist/proactive.d.ts",
       "default": "./dist/proactive.js"
