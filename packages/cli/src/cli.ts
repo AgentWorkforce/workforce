@@ -71,6 +71,7 @@ import {
 } from '@relayfile/local-mount';
 import ora, { type Ora } from 'ora';
 import { runDeploy, runLogin, runLogout } from './deploy-command.js';
+import { runInvoke } from './invoke-command.js';
 import { runDestroy } from './destroy-command.js';
 import { runDeploymentList, runDeploymentLogs } from './list-command.js';
 import {
@@ -243,6 +244,20 @@ Commands:
                         --cloud-url <url>   override the workforce cloud URL
                         --input KEY=value   override a declared persona input
                                             (repeat for multiple)
+  invoke <persona-path> --fixture <file> [flags]
+                      Simulate an invocation: run the persona's handler
+                      against fixture event envelope(s) with every external
+                      side effect recorded, NOT executed. Emits a
+                      Cloud-compatible run record (origin "local_dry_run")
+                      to stdout. Distinct from \`deploy --dry-run\`, which
+                      validates without invoking the handler.
+                      Flags:
+                        --fixture <file>    JSON envelope, JSON array, or
+                                            NDJSON of raw gateway envelopes
+                        --output <file>     write the run record to a file
+                        --input KEY=value   override a declared persona input
+                        --seed PATH=file    seed the simulated filesystem
+                        --workspace <id>    workspace id for the simulated ctx
   deployments list    List deployed cloud agents in the active workspace.
   deployments logs    Show structured logs for a deployed cloud agent.
   destroy <persona-or-agent-id> [flags]
@@ -4365,6 +4380,11 @@ export async function main(): Promise<void> {
 
   if (subcommand === 'deploy') {
     await runDeploy(rest);
+    return;
+  }
+
+  if (subcommand === 'invoke') {
+    await runInvoke(rest);
     return;
   }
 

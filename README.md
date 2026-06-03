@@ -57,6 +57,44 @@ The example searches Brave on a weekly cron schedule, clusters findings, and
 upserts a GitHub issue. See
 [`examples/weekly-digest`](./examples/weekly-digest/).
 
+## Simulate an invocation (dry-run the handler)
+
+`deploy --dry-run` validates the persona and exits **without invoking the
+handler**. To answer "if this agent received this event, what would happen?",
+use `invoke`: it executes the handler against fixture event envelope(s) with
+**every external side effect recorded, not executed** — no harness spawn, no
+shell, no cloud writes, no scheduling.
+
+```bash
+agentworkforce invoke ./persona.json --fixture ./event.json
+```
+
+The fixture is a raw gateway envelope (the runner's stdin line shape): a
+single JSON object, a JSON array, or NDJSON — one envelope per line:
+
+```json
+{ "id": "e1", "workspace": "ws-dev", "type": "cron.tick",
+  "occurredAt": "2026-06-03T09:00:00Z", "name": "weekly", "cron": "0 9 * * 6" }
+```
+
+Provider events use `"type": "<provider>.<event>"` (e.g.
+`github.pull_request.opened`) with the payload under `"resource"`.
+
+`invoke` prints a human summary to stderr and a machine-readable run record
+to stdout (or `--output run.json`). One record is emitted per envelope, in
+the same compact shape Cloud's hosted run API serves (`runId`, `status`,
+`exitCode`, `summary`, `error`, timings, `trigger`, `failureClass`, `logs`)
+with `origin: "local_dry_run"`, so simulated runs can later be ingested and
+displayed alongside hosted ones. Captured `ctx.log(...)` output lands in
+`logs.stdout`/`logs.stderr`; every intercepted call (`harness.run`,
+`sandbox.exec`, `memory.save`, `workflow.run`, `schedule.at`, …) is listed
+under `simulation.sideEffects` with the inert result the handler received.
+
+Useful flags: `--input KEY=value` overrides declared persona inputs;
+`--seed /slack/channels/_index.json=./channels.json` seeds the simulated
+filesystem with provider data the handler reads. Exit code is 0 when every
+envelope succeeded, 1 when any handler invocation failed.
+
 ## Persona vs agent
 
 A deployable agent is two files. The **persona** says *what the agent is*
