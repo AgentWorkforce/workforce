@@ -7,6 +7,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [3.0.42] - 2026-06-03
+
+### Fixed
+
+- Preserve declared capabilities (#183)
+- Consume Linear triggers from adapter catalog (#181)
+
 ## [3.0.41] - 2026-06-02
 
 ### Added
