@@ -961,6 +961,17 @@ test('parseCapabilities preserves unknown consumer-defined capabilities (teamSol
   });
 });
 
+test('parseCapabilities rejects arrays for the capabilities map and values', () => {
+  assert.throws(
+    () => parseCapabilities([true], 'persona.capabilities'),
+    /persona\.capabilities must be an object if provided/
+  );
+  assert.throws(
+    () => parseCapabilities({ teamSolve: [] }, 'persona.capabilities'),
+    /persona\.capabilities\.teamSolve must be a boolean or object if provided/
+  );
+});
+
 test('parsePersonaSpec round-trip preserves a declared teamSolve capability', () => {
   const spec = parsePersonaSpec(
     validSpec({

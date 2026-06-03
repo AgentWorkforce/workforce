@@ -900,7 +900,7 @@ export function parseMemory(value: unknown, context: string): PersonaMemory | un
 
 function parseCapabilityValue(value: unknown, context: string): CapabilityValue {
   if (typeof value === 'boolean') return value;
-  if (!isObject(value)) {
+  if (!isObject(value) || Array.isArray(value)) {
     throw new Error(`${context} must be a boolean or object if provided`);
   }
   if (value.enabled !== undefined && typeof value.enabled !== 'boolean') {
@@ -914,7 +914,7 @@ export function parseCapabilities(
   context: string
 ): ProactiveCapabilities | undefined {
   if (value === undefined) return undefined;
-  if (!isObject(value)) {
+  if (!isObject(value) || Array.isArray(value)) {
     throw new Error(`${context} must be an object if provided`);
   }
 
