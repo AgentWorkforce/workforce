@@ -115,6 +115,7 @@ jobs:
             selected = all;
           } else {
             const wanted = input.split(/[\s,]+/).filter(Boolean);
+            const seen = new Set();
             selected = [];
             for (const w of wanted) {
               const match = all.find((p) => p.slug === w || p.name === w);
@@ -122,6 +123,8 @@ jobs:
                 console.error(`No @agentworkforce/persona-* package matched "${w}". Known: ${all.map((p) => p.slug).join(', ')}`);
                 process.exit(1);
               }
+              if (seen.has(match.name)) continue;
+              seen.add(match.name);
               selected.push(match);
             }
           }
@@ -149,11 +152,12 @@ jobs:
           git config user.name "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
 
+          : > /tmp/persona-publish-targets.tsv
           COUNT=$(node -e "process.stdout.write(String(JSON.parse(process.env.TARGETS).length))")
           for i in $(seq 0 $((COUNT - 1))); do
             DIR=$(node -e "process.stdout.write(JSON.parse(process.env.TARGETS)[$i].dir)")
             NAME=$(node -e "process.stdout.write(JSON.parse(process.env.TARGETS)[$i].name)")
-            echo "::group::Publishing $NAME ($DIR)"
+            echo "::group::Preparing $NAME ($DIR)"
 
             pushd "$DIR" >/dev/null
             if [ "$INPUT_VERSION" = "none" ]; then
@@ -166,11 +170,20 @@ jobs:
             VERSION=$(node -p 'require("./package.json").version')
             popd >/dev/null
 
+            printf '%s\t%s\t%s\n' "$NAME" "$DIR" "$VERSION" >> /tmp/persona-publish-targets.tsv
+
             EXISTS=$(npm view "$NAME@$VERSION" version 2>/dev/null || true)
             if [ -n "$EXISTS" ]; then
               echo "::error title=Version already published::$NAME@$VERSION is already on npm. Pick a different bump."
               exit 1
             fi
+
+            echo "$NAME@$VERSION: unpublished - OK"
+            echo "::endgroup::"
+          done
+
+          while IFS=$'\t' read -r NAME DIR VERSION; do
+            echo "::group::Publishing $NAME ($DIR)"
 
             COMMON_FLAGS="--access public --tag $INPUT_TAG"
             if [ "$INPUT_DRY_RUN" = "true" ]; then
@@ -203,7 +216,7 @@ jobs:
 
             echo "$NAME@$VERSION published (dry_run=$INPUT_DRY_RUN)" >> "$GITHUB_STEP_SUMMARY"
             echo "::endgroup::"
-          done
+          done < /tmp/persona-publish-targets.tsv
 
       - name: Push commits + tags
         if: ${{ github.event.inputs.dry_run != 'true' && github.event.inputs.version != 'none' }}
