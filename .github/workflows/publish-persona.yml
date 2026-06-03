@@ -1,4 +1,4 @@
-name: Publish Persona Package
+name: Publish Core Persona Package
 
 # Publishes the @agentworkforce/persona-* persona packs (the per-persona packages
 # under packages/persona-*). Separate from publish.yml (the lockstep code
@@ -95,10 +95,13 @@ jobs:
 
           const input = (process.env.INPUT_PACKAGE || 'all').trim();
 
-          // Every packages/persona-* package whose npm name is @agentworkforce/persona-*.
+          // A persona pack is any package that declares `agentworkforce.personas`
+          // (NOT a name/dir prefix — that would wrongly match the persona-kit
+          // library). personas-core is excluded; it has its own publish-personas.yml.
+          const EXCLUDE = new Set(['@agentworkforce/personas-core']);
           const all = [];
           for (const name of readdirSync('packages', { withFileTypes: true })) {
-            if (!name.isDirectory() || !name.name.startsWith('persona-')) continue;
+            if (!name.isDirectory()) continue;
             const dir = `packages/${name.name}`;
             let pkg;
             try {
@@ -106,7 +109,8 @@ jobs:
             } catch {
               continue;
             }
-            if (!pkg?.name?.startsWith('@agentworkforce/persona-')) continue;
+            if (!pkg?.agentworkforce?.personas) continue;
+            if (EXCLUDE.has(pkg.name)) continue;
             all.push({ slug: name.name, dir, name: pkg.name });
           }
 
