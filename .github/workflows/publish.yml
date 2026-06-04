@@ -171,7 +171,10 @@ jobs:
           }
 
           for (const e of heals) {
-            execSync(`npm version ${baseline} --no-git-tag-version --allow-same-version`, {
+            // --workspaces-update=false: with any npm `workspaces` config in scope,
+            // `npm version` otherwise tries to reify the root lockfile and dies on
+            // pnpm's workspace:* protocol (EUNSUPPORTEDPROTOCOL).
+            execSync(`npm version ${baseline} --no-git-tag-version --allow-same-version --workspaces-update=false`, {
               cwd: `packages/${e.pkg}`,
               stdio: 'inherit',
             });
@@ -196,14 +199,17 @@ jobs:
           PREID='${{ github.event.inputs.prerelease_id }}'
           for pkg in ${{ steps.targets.outputs.packages }}; do
             pushd "packages/$pkg" > /dev/null
+            # --workspaces-update=false keeps `npm version` from reifying the root
+            # lockfile, which fails on pnpm's workspace:* protocol if an npm
+            # `workspaces` field ever appears in the root package.json.
             if [ -n "$CUSTOM" ]; then
-              npm version "$CUSTOM" --no-git-tag-version --allow-same-version
+              npm version "$CUSTOM" --no-git-tag-version --allow-same-version --workspaces-update=false
             elif [ "$BUMP" = "none" ]; then
               : # keep existing version (useful for first publish or re-publish)
             elif [[ "$BUMP" == pre* ]]; then
-              npm version "$BUMP" --no-git-tag-version --preid="$PREID"
+              npm version "$BUMP" --no-git-tag-version --preid="$PREID" --workspaces-update=false
             else
-              npm version "$BUMP" --no-git-tag-version
+              npm version "$BUMP" --no-git-tag-version --workspaces-update=false
             fi
             NEW=$(node -p "require('./package.json').version")
             VERSIONS+=" $pkg:$NEW"

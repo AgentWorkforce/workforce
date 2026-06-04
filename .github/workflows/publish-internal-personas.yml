@@ -164,12 +164,15 @@ jobs:
             echo "::group::Preparing $NAME ($DIR)"
 
             pushd "$DIR" >/dev/null
+            # --workspaces-update=false keeps `npm version` from reifying the root
+            # lockfile, which fails on pnpm's workspace:* protocol if an npm
+            # `workspaces` field ever appears in the root package.json.
             if [ "$INPUT_VERSION" = "none" ]; then
               :
             elif [[ "$INPUT_VERSION" == pre* ]]; then
-              npm version "$INPUT_VERSION" --no-git-tag-version --preid="$INPUT_PREID"
+              npm version "$INPUT_VERSION" --no-git-tag-version --preid="$INPUT_PREID" --workspaces-update=false
             else
-              npm version "$INPUT_VERSION" --no-git-tag-version --allow-same-version
+              npm version "$INPUT_VERSION" --no-git-tag-version --allow-same-version --workspaces-update=false
             fi
             VERSION=$(node -p 'require("./package.json").version')
             popd >/dev/null
