@@ -1184,3 +1184,54 @@ test('cloud oauth deploy falls back to unstamped when the connected row has no i
     restoreDeps();
   }
 });
+
+test('cloud oauth deploy stamps the ACTIVE anthropic row over a newer inactive one', async () => {
+  // The web wizard selects on is_active (cloud keeps one active row per
+  // provider), not recency — cloud lists rows most-recently-updated first,
+  // so a newer-but-inactive row precedes the active one in the response.
+  // The stamp must prefer the flagged row and only fall back to list order
+  // when no row carries the flag.
+  const restoreDeps = configureCloudCredentialDepsForTest({
+    readStoredAuth: async () => ({
+      apiUrl: 'https://cloud.example.test',
+      accessToken: 'access',
+      refreshToken: 'refresh',
+      accessTokenExpiresAt: '2999-01-01T00:00:00.000Z'
+    }),
+    createCloudApiClient() {
+      return {
+        async fetch(pathname: string) {
+          assert.equal(pathname, '/api/v1/cloud-agents');
+          return okJson({
+            agents: [
+              { id: 'pc-newer-inactive', harness: 'claude', status: 'connected', isActive: false },
+              { id: 'pc-older-active', harness: 'claude', status: 'connected', isActive: true }
+            ]
+          });
+        }
+      };
+    }
+  });
+  try {
+    await launch({
+      persona: persona({ harness: 'claude', model: 'claude-sonnet-4-6' }),
+      defaultPlanCredential: false,
+      env: {
+        WORKFORCE_DEPLOY_CLOUD_URL: 'https://cloud.example.test',
+        WORKFORCE_DEPLOY_HARNESS_SOURCE: 'oauth',
+        WORKFORCE_DEPLOY_NO_PROMPT: '1'
+      },
+      fetch(url, init) {
+        if (init?.method === 'GET' && url.endsWith('/deployments')) return okJson({ agents: [] });
+        if (url.endsWith('/deployments')) {
+          const body = JSON.parse(String(init?.body)) as Record<string, unknown>;
+          assert.deepEqual(body.credentialSelections, { anthropic: 'pc-older-active' });
+          return okJson({ agentId: 'agent-oauth-active', deploymentId: 'dep-1', status: 'active' }, 201);
+        }
+        throw new Error(`unexpected URL ${url}`);
+      }
+    });
+  } finally {
+    restoreDeps();
+  }
+});

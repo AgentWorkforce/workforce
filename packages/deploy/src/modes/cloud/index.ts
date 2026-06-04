@@ -69,6 +69,7 @@ interface CloudAgentEntry {
   status?: unknown;
   credentialStoredAt?: unknown;
   id?: unknown;
+  isActive?: unknown;
 }
 
 interface ExistingAgentResponse {
@@ -934,8 +935,7 @@ function readCredentialId(body: Record<string, unknown>): string {
  * table, where `harness` may hold either the model-provider string
  * ("anthropic") or the harness alias cloud's OAuth completion route stamps
  * ("claude"), depending on which write path created the row — so match
- * against both. Cloud lists rows most-recently-updated first, making the
- * first match the active-credential heuristic the web wizard uses.
+ * against both. Cloud lists rows most-recently-updated first.
  */
 function connectedHarnessEntries(
   body: CloudAgentsListResponse,
@@ -965,7 +965,16 @@ function findConnectedHarnessCredentialId(
   body: CloudAgentsListResponse,
   expectedProvider: string
 ): string | null {
-  for (const entry of connectedHarnessEntries(body, expectedProvider)) {
+  const entries = connectedHarnessEntries(body, expectedProvider);
+  // The web wizard selects on is_active (one active row per provider —
+  // cloud's partial unique index), not recency, so prefer the flagged row.
+  // Older clouds / pre-backfill rows may not carry the flag; fall back to
+  // the list order (cloud returns most-recently-updated first).
+  const candidates = [
+    ...entries.filter((entry) => entry.isActive === true),
+    ...entries.filter((entry) => entry.isActive !== true)
+  ];
+  for (const entry of candidates) {
     if (typeof entry.id === 'string' && entry.id.trim()) return entry.id.trim();
   }
   return null;
