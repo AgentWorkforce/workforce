@@ -3,6 +3,7 @@ import { randomUUID } from 'node:crypto';
 import path from 'node:path';
 import { pathToFileURL } from 'node:url';
 import { bundleStager, preflightPersona } from '@agentworkforce/deploy';
+import { KNOWN_TRIGGER_CATALOG } from '@agentworkforce/persona-kit';
 import {
   simulateInvocation,
   type RawGatewayEnvelope,
@@ -11,6 +12,7 @@ import {
 } from '@agentworkforce/runtime';
 
 export const INVOKE_USAGE = `usage: agentworkforce invoke <persona-path> --fixture <file> [flags]
+       agentworkforce invoke --scaffold <type> [--output <file>]
 
 Simulate an invocation: execute the persona's handler against fixture event
 envelope(s) with every external side effect recorded, NOT executed, and emit
@@ -35,6 +37,10 @@ Flags:
                            /slack/channels/_index.json).
   --workspace <id>         Workspace id for the simulated ctx; defaults to
                            the first envelope's workspace.
+  --scaffold <type>        Emit a fixture skeleton for an event type instead
+                           of running a persona. Provider payloads are left
+                           as explicit TODO holes; prefer runs export after
+                           a real fire exists.
   -h, --help               Print this message.
 
 Exit code: 0 when every dispatched envelope succeeded, 1 when any handler
@@ -51,7 +57,10 @@ export interface InvokeOptions {
   workspaceId?: string;
 }
 
-export type ParsedInvokeArgs = InvokeOptions | { help: true };
+export type ParsedInvokeArgs =
+  | InvokeOptions
+  | { help: true }
+  | { scaffold: string; outputPath?: string };
 
 /** Parse `invoke` args. Throws on usage errors (caller maps to exit 1). */
 export function parseInvokeArgs(args: readonly string[]): ParsedInvokeArgs {
@@ -59,6 +68,8 @@ export function parseInvokeArgs(args: readonly string[]): ParsedInvokeArgs {
   let fixturePath: string | undefined;
   let outputPath: string | undefined;
   let workspaceId: string | undefined;
+  let scaffoldType: string | undefined;
+  let sawFixture = false;
   const inputs: Record<string, string> = {};
   const seeds: Record<string, string> = {};
 
@@ -67,13 +78,19 @@ export function parseInvokeArgs(args: readonly string[]): ParsedInvokeArgs {
     if (a === '-h' || a === '--help') {
       return { help: true };
     } else if (a === '--fixture') {
+      sawFixture = true;
       fixturePath = expectValue('--fixture', args[++i]);
     } else if (a.startsWith('--fixture=')) {
+      sawFixture = true;
       fixturePath = expectInline('--fixture', a.slice('--fixture='.length));
     } else if (a === '--output') {
       outputPath = expectValue('--output', args[++i]);
     } else if (a.startsWith('--output=')) {
       outputPath = expectInline('--output', a.slice('--output='.length));
+    } else if (a === '--scaffold') {
+      scaffoldType = expectValue('--scaffold', args[++i]);
+    } else if (a.startsWith('--scaffold=')) {
+      scaffoldType = expectInline('--scaffold', a.slice('--scaffold='.length));
     } else if (a === '--workspace') {
       workspaceId = expectValue('--workspace', args[++i]);
     } else if (a.startsWith('--workspace=')) {
@@ -95,6 +112,22 @@ export function parseInvokeArgs(args: readonly string[]): ParsedInvokeArgs {
     }
   }
 
+  if (scaffoldType) {
+    const invalidScaffoldFlags = [
+      sawFixture ? '--fixture' : '',
+      workspaceId ? '--workspace' : '',
+      Object.keys(inputs).length > 0 ? '--input' : '',
+      Object.keys(seeds).length > 0 ? '--seed' : '',
+      personaPath ? '<persona-path>' : ''
+    ].filter(Boolean);
+    if (invalidScaffoldFlags.length > 0) {
+      throw new Error(
+        `invoke: --scaffold only accepts --output; remove ${invalidScaffoldFlags.join(', ')}`
+      );
+    }
+    // Scaffold mode authors a fixture skeleton; no persona/fixture needed.
+    return { scaffold: scaffoldType, ...(outputPath ? { outputPath: path.resolve(outputPath) } : {}) };
+  }
   if (!personaPath) {
     throw new Error('invoke: missing persona path. Usage: agentworkforce invoke <persona-path> --fixture <file>');
   }
@@ -261,6 +294,18 @@ export async function runInvoke(
     io.stdout(INVOKE_USAGE);
     return undefined;
   }
+  if ('scaffold' in opts) {
+    const { fixture, warnings } = scaffoldFixture(opts.scaffold);
+    for (const warning of warnings) io.stderr(`warn: ${warning}\n`);
+    const text = `${JSON.stringify(fixture, null, 2)}\n`;
+    if (opts.outputPath) {
+      await writeFile(opts.outputPath, text, 'utf8');
+      io.stderr(`fixture skeleton written to ${opts.outputPath}\n`);
+    } else {
+      io.stdout(text);
+    }
+    return undefined;
+  }
 
   try {
     return await runInvokeWithOptions(opts, io);
@@ -368,4 +413,87 @@ export function renderHumanSummary(result: SimulationResult): string {
     lines.push(`  [skip] unsupported envelope ${skipped.id} (${skipped.type})`);
   }
   return `${lines.join('\n')}\n`;
+}
+
+/**
+ * Cold-start fixture authoring (workforce#189): emit a RawGatewayEnvelope
+ * skeleton for an event type before any real fire exists. The frame is
+ * filled in; for provider events the `resource` payload shape is decided by
+ * adapter normalization + cloud's buildEnvelope and CANNOT be guessed here,
+ * so it is left as an explicit TODO hole — prefer
+ * `agentworkforce runs export <runId> --fixture …` once a real fire exists.
+ *
+ * `<type>` is validated against KNOWN_TRIGGER_CATALOG with the same
+ * warn-don't-block stance as lintTriggers.
+ */
+export function scaffoldFixture(type: string): {
+  fixture: Record<string, unknown>;
+  warnings: string[];
+} {
+  const warnings: string[] = [];
+  const occurredAt = new Date().toISOString();
+
+  if (type === 'cron.tick' || type.startsWith('cron.')) {
+    if (type !== 'cron.tick') {
+      // Preserve what was asked for (a silent rewrite would scaffold a
+      // DIFFERENT event type than requested) but warn: the gateway
+      // delivers schedule fires as `cron.tick`, and the runner shim
+      // treats any `cron.*` as a cron event.
+      warnings.push(
+        `the gateway delivers schedule fires as "cron.tick"; preserving requested type "${type}" (the runner shim still dispatches any cron.* as a cron event)`
+      );
+    }
+    return {
+      fixture: {
+        id: 'evt_local_1',
+        workspace: 'ws-local',
+        type,
+        occurredAt,
+        name: 'TODO: your schedule name (persona schedules[].name)',
+        cron: '0 9 * * 1'
+      },
+      warnings
+    };
+  }
+
+  const firstDot = type.indexOf('.');
+  const provider = firstDot > 0 ? type.slice(0, firstDot) : '';
+  const eventName = firstDot > 0 ? type.slice(firstDot + 1) : '';
+  if (!provider || !eventName) {
+    warnings.push(
+      `"${type}" is not a recognized envelope type shape (expected "cron.tick" or "<provider>.<event>"); emitting a provider-style skeleton anyway`
+    );
+  } else {
+    const catalog = KNOWN_TRIGGER_CATALOG as Record<string, unknown>;
+    const events = catalog[provider];
+    if (events === undefined) {
+      warnings.push(
+        `provider "${provider}" is not in KNOWN_TRIGGER_CATALOG (known: ${Object.keys(catalog).join(', ')}); scaffolding anyway`
+      );
+    } else {
+      const known = Array.isArray(events)
+        ? events.includes(eventName)
+        : typeof events === 'object' && events !== null && eventName in (events as Record<string, unknown>);
+      if (!known) {
+        warnings.push(
+          `event "${eventName}" is not a known ${provider} trigger in KNOWN_TRIGGER_CATALOG; scaffolding anyway`
+        );
+      }
+    }
+  }
+
+  return {
+    fixture: {
+      id: 'evt_local_1',
+      workspace: 'ws-local',
+      type,
+      occurredAt,
+      resource: {
+        TODO:
+          'the provider payload shape is decided by adapter normalization + cloud buildEnvelope; ' +
+          'export a real fire with `agentworkforce runs export <runId> --fixture event.json` to get the exact shape'
+      }
+    },
+    warnings
+  };
 }

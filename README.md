@@ -95,6 +95,33 @@ Useful flags: `--input KEY=value` overrides declared persona inputs;
 filesystem with provider data the handler reads. Exit code is 0 when every
 envelope succeeded, 1 when any handler invocation failed.
 
+### Where fixtures come from
+
+The primary path is exporting a **real fire** — the fixture is then cloud's
+exact normalized output, so replay cannot drift from production:
+
+```bash
+agentworkforce runs export <runId> --fixture event.json
+agentworkforce invoke ./persona.json --fixture event.json
+```
+
+(`runs export` reads the captured envelope from the run's
+`/runs/:runId/envelope` endpoint; pass `--agent <deployedName>` to skip the
+workspace-wide run lookup. Runs that predate envelope capture, or whose
+envelope was too large to store, are reported with next steps — oversized
+envelopes are omitted, never truncated.)
+
+Before any real fire exists, scaffold a skeleton:
+
+```bash
+agentworkforce invoke --scaffold github.pull_request.opened --output event.json
+```
+
+The frame is filled in; for provider events the `resource` payload is an
+explicit TODO hole (its shape is decided by adapter normalization + cloud's
+buildEnvelope and shouldn't be guessed). `<type>` is validated against the
+trigger catalog with a warn-don't-block stance.
+
 ## Persona vs agent
 
 A deployable agent is two files. The **persona** says *what the agent is*

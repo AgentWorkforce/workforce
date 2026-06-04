@@ -29,7 +29,47 @@ export interface RawGatewayEnvelope {
   name?: string;
   /** Cron-only: the schedule's cron expression. */
   cron?: string;
+  /** Provider id cloud derived for the event (e.g. "github"). */
+  provider?: string;
+  /** Provider-qualified event name as cloud received it. */
+  eventType?: string;
+  /** Upstream webhook delivery id, when the provider supplied one. */
+  deliveryId?: string;
+  /** Relayfile paths the event touched (drives event-scoped mount sync). */
+  paths?: string[];
+  /** Opaque resume token for multi-phase deliveries (pr-reviewer resume). */
+  resumeContext?: unknown;
 }
+
+/**
+ * Every field cloud's `buildEnvelope` can emit on a delivered envelope.
+ * MUST stay in lockstep with the checked-in contract copy in
+ * `envelope-fields.cloud.ts` (source: cloud
+ * `packages/web/lib/proactive-runtime/deployment-trigger-delivery.ts`
+ * `ENVELOPE_FIELDS`, cloud#1841) — `shim.contract.test.ts` fails on drift,
+ * and a `satisfies` check below fails compilation if a listed field is not
+ * actually declared on `RawGatewayEnvelope`.
+ */
+export const RAW_GATEWAY_ENVELOPE_FIELDS = [
+  'id',
+  'workspace',
+  'type',
+  'occurredAt',
+  'attempt',
+  'name',
+  'cron',
+  'resource',
+  'provider',
+  'eventType',
+  'deliveryId',
+  'paths',
+  'summary',
+  'resumeContext',
+  // Declared on the frame but never emitted by cloud's buildEnvelope —
+  // kept for older gateway shapes; not part of the cloud contract.
+  'expand',
+  'digest',
+] as const satisfies readonly (keyof RawGatewayEnvelope)[];
 
 type ProviderSource = Exclude<WorkforceEventSource, 'cron'>;
 
