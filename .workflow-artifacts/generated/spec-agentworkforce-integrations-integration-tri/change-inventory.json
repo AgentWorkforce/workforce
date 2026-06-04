@@ -1,0 +1,51 @@
+{
+  "required_changed_paths": [
+    "packages/deploy/src/integrations-list.ts",
+    "packages/deploy/src/integrations-list.test.ts",
+    "packages/deploy/src/index.ts",
+    "packages/cli/src/cli.ts",
+    "packages/cli/src/integrations-command.ts",
+    "packages/cli/src/integrations-command.test.ts",
+    "packages/cli/README.md",
+    "packages/mcp-workforce/src/tools/list-integrations.ts",
+    "packages/mcp-workforce/src/tools/list-integrations.test.ts",
+    "packages/mcp-workforce/src/server.ts",
+    "packages/mcp-workforce/src/server.test.ts",
+    "packages/mcp-workforce/src/index.ts",
+    "packages/mcp-workforce/README.md",
+    "packages/mcp-workforce/package.json"
+  ],
+  "allowed_changed_paths": [
+    "packages/deploy/src/integrations-list.ts",
+    "packages/deploy/src/integrations-list.test.ts",
+    "packages/deploy/src/index.ts",
+    "packages/cli/src/cli.ts",
+    "packages/cli/src/integrations-command.ts",
+    "packages/cli/src/integrations-command.test.ts",
+    "packages/cli/README.md",
+    "packages/mcp-workforce/src/tools/list-integrations.ts",
+    "packages/mcp-workforce/src/tools/list-integrations.test.ts",
+    "packages/mcp-workforce/src/server.ts",
+    "packages/mcp-workforce/src/server.test.ts",
+    "packages/mcp-workforce/src/index.ts",
+    "packages/mcp-workforce/README.md",
+    "packages/mcp-workforce/package.json",
+    "docs/plans/integrations-discoverability-spec.md",
+    "package-lock.json",
+    "pnpm-lock.yaml",
+    ".workflow-artifacts/generated/spec-agentworkforce-integrations-integration-tri/change-inventory.json",
+    ".workflow-artifacts/generated/spec-agentworkforce-integrations-integration-tri/codex-diff-gate-output.txt",
+    ".workflow-artifacts/generated/spec-agentworkforce-integrations-integration-tri/codex-fix-loop-report.md",
+    ".workflow-artifacts/generated/spec-agentworkforce-integrations-integration-tri/lead-plan.md",
+    ".workflow-artifacts/generated/spec-agentworkforce-integrations-integration-tri/normalized-spec.md",
+    ".workflow-artifacts/generated/spec-agentworkforce-integrations-integration-tri/normalized-spec.txt",
+    ".workflow-artifacts/generated/spec-agentworkforce-integrations-integration-tri/acceptance-contract.json"
+  ],
+  "read_only_reference_paths": [
+    "@relayfile/adapter-core/triggers",
+    "packages/deploy/src/connect.ts",
+    "/me/integrations",
+    "packages/deploy",
+    "packages/mcp-workforce"
+  ]
+}

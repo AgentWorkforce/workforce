@@ -74,6 +74,7 @@ import { runDeploy, runLogin, runLogout } from './deploy-command.js';
 import { runInvoke } from './invoke-command.js';
 import { runRuns } from './runs-command.js';
 import { runDestroy } from './destroy-command.js';
+import { runIntegrationsCommand } from './integrations-command.js';
 import { runDeploymentList, runDeploymentLogs } from './list-command.js';
 import {
   startLaunchMetadataRecording,
@@ -213,6 +214,9 @@ Commands:
   sources remove <dir|n>
                       Remove a configurable persona source directory by path or
                       1-based configurable position.
+  integrations [provider] [--all] [--json]
+                      Discover workspace integrations, connection status, and
+                      known trigger events.
   harness check       Probe which harnesses (claude, codex, opencode) are
                       installed and runnable on this machine.
   pick "<task>"       Pick the best-fit persona for a free-text task description
@@ -309,6 +313,7 @@ Examples:
   agentworkforce install ./local-personas --overwrite
   agentworkforce sources list
   agentworkforce sources add ../my-personas --position 1
+  agentworkforce integrations --all
   agentworkforce harness check
   agentworkforce pick "review this PR for security issues"
   agentworkforce agent "$(agentworkforce pick "fix the flaky test in foo.test.ts")"
@@ -4400,6 +4405,11 @@ export async function main(): Promise<void> {
 
   if (subcommand === 'runs') {
     await runRuns(rest);
+    return;
+  }
+
+  if (subcommand === 'integrations') {
+    await runIntegrationsCommand(rest);
     return;
   }
 

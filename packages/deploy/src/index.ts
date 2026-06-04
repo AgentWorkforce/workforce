@@ -56,6 +56,19 @@ export { formatHttpErrorBody } from './error-format.js';
 export { createTerminalIO, createBufferedIO, type BufferedIO } from './io.js';
 export { bundleStager } from './bundle.js';
 export {
+  IntegrationsListError,
+  UnknownIntegrationProviderError,
+  listIntegrations,
+  resolveIntegrationProvider,
+  type AuthState,
+  type CloudApiClientLike,
+  type IntegrationConnection,
+  type IntegrationRow,
+  type IntegrationsDocument,
+  type ListIntegrationsOptions,
+  type TriggerSource
+} from './integrations-list.js';
+export {
   assertReadableFile,
   isPersonaSourcePath,
   loadPersonaSourceFile,

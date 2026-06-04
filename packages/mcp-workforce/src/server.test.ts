@@ -49,6 +49,7 @@ test('createWorkforceMcpServer registers the documented tool set', () => {
     'integration.github.getPr',
     'integration.github.postReview',
     'integration.github.upsertIssue',
+    'list_integrations',
     'memory.recall',
     'memory.save',
     'workflow.run',

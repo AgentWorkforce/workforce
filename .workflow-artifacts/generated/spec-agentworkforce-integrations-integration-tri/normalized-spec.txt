@@ -30,7 +30,7 @@ One catalog module, four faces:
 
 ```bash
 agentworkforce integrations              # connection status for the active workspace (requires login)
-agentworkforce integrations --all        # full catalog: every integration + trigger events (works offline/logged-out)
+agentworkforce integrations --all        # full catalog when the cloud catalog is reachable; logged-out offline fallback is trigger-catalog partial with a warning
 agentworkforce integrations github       # one provider: full trigger list + connection detail
 agentworkforce integrations --json       # machine-readable; composes with all of the above
 ```
@@ -64,7 +64,7 @@ triggers: { "google-mail": [{ "on": "message.received" }] }
 
 ### 3.3 `--all` view
 
-Same table as the status view but rows are the full union catalog (see §5) and, when logged out, the CONNECTED column renders `?` (unknown ≠ disconnected).
+Same table as the status view. When the cloud catalog is reachable, rows are the full union catalog (see §5). When logged out and the cloud catalog is unreachable, the command still succeeds but emits a warning and shows a trigger-catalog-only partial catalog; cloud-only/connect-only providers are omitted because no cache or bundled cloud catalog exists in v1. In logged-out output, the CONNECTED column renders `?` (unknown ≠ disconnected).
 
 ## 4. Data sources
 
@@ -81,7 +81,7 @@ All existing — this command is composition, not new platform surface:
 
 ## 5. Row construction
 
-Rows are the **union** of cloud-catalog entries and trigger-catalog providers (after alias mapping via `KNOWN_TRIGGER_PROVIDER_ALIASES` in persona-kit). Provenance is kept per row:
+When the cloud catalog is reachable, rows are the **union** of cloud-catalog entries and trigger-catalog providers (after alias mapping via `KNOWN_TRIGGER_PROVIDER_ALIASES` in persona-kit). If an unauthenticated caller cannot reach the cloud catalog, rows are the trigger catalog only and the document must include a warning that the catalog is partial and cloud-only/connect-only providers are omitted. Provenance is kept per row:
 
 - In cloud catalog, no known triggers → `no known triggers (connect-only)` (via `ADAPTERS_WITHOUT_KNOWN_TRIGGERS` or absence from the trigger catalog).
 - In trigger catalog, missing from cloud catalog → row shown with warning marker `not in cloud catalog`. This is a drift *signal*, not an error — the two catalogs evolving independently is expected; surfacing the seam is the point.
@@ -129,7 +129,7 @@ Contract rules:
 Every item below is a final decision for v1.
 
 1. **Flat subcommand** `integrations` with optional positional provider — matches `deployments`/`sources` style; no nested `integrations list|status` split.
-2. **Default mode requires login**; logged-out it exits 1 with a two-line hint: run `agentworkforce login`, or use `--all` for the offline catalog. `--all` and a positional provider work logged-out (CONNECTED rendered as `?`).
+2. **Default mode requires login**; logged-out it exits 1 with a two-line hint: run `agentworkforce login`, or use `--all` for the catalog. `--all` and a positional provider work logged-out (CONNECTED rendered as `?`). If logged out and the cloud catalog is unreachable, they emit a partial-catalog warning and show trigger-catalog rows only.
 3. **No `--scope` filter in v1.** All scopes are listed; scope is a display column. The merge order mirrors deploy's existing fallback (workspace listing, then `/me/integrations`).
 4. **No caching in v1.** Every invocation hits the live endpoints; the trigger catalog is a static import.
 5. **Sorting**: alphabetical by cloud provider id; stable; connected rows are not floated.
@@ -147,7 +147,7 @@ Every item below is a final decision for v1.
 
 - **Input**: `{ "provider?": string, "includeTriggers?": boolean }` (default `includeTriggers: true`).
 - **Output**: the §6 JSON contract, filtered to `provider` when given.
-- **Unauthenticated**: returns the catalog-only document with `auth: "unauthenticated"` — never throws for missing login. An authoring agent can still enumerate triggers and tell the user what to connect.
+- **Unauthenticated**: returns the catalog document with `auth: "unauthenticated"` — never throws for missing login. If the cloud catalog is unreachable, the document is trigger-catalog-only and includes the partial-catalog warning. An authoring agent can still enumerate triggers and tell the user what to connect.
 - The persona-maker guidance (personas/skills) gets one line pointing at the tool as the authoritative way to enumerate providers/triggers before writing `agent.triggers`.
 
 ## 9. Implementation plan
@@ -161,7 +161,7 @@ Three PRs, P1 → P2 → P3; P3 depends only on P1.
 ## 10. Acceptance criteria
 
 - [ ] `agentworkforce integrations` shows per-provider connected state for the active workspace, with scope, matching what deploy preflight would conclude.
-- [ ] `agentworkforce integrations --all` works with no login and lists every provider with its trigger events.
+- [ ] `agentworkforce integrations --all` works with no login; it lists the full union when the cloud catalog is reachable, or succeeds with an explicit partial-catalog warning and trigger-catalog-only rows when the cloud catalog is unreachable.
 - [ ] `agentworkforce integrations <provider>` prints the full trigger list and a copy-pasteable persona snippet; misspelled/aliased ids get a suggestion.
 - [ ] `--json` emits the documented contract; CLI and MCP tool outputs are byte-identical for the same inputs.
 - [ ] `list_integrations` is callable from mcp-workforce and never throws on missing auth.

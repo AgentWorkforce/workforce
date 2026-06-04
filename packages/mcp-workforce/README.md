@@ -13,6 +13,7 @@ then has tool access to:
 | `workflow.status` | Poll a previously-started workflow run for status/output. |
 | `memory.save` | Persist a memory entry to the workspace memory bag. |
 | `memory.recall` | Semantic search over the workspace memory bag. |
+| `list_integrations` | Enumerate integration providers, connection status, and trigger events before writing `agent.triggers`. |
 | `integration.github.comment` | Post a comment on a GitHub issue/PR. |
 | `integration.github.createIssue` | Create a GitHub issue. |
 | `integration.github.upsertIssue` | Update an open issue matching `matchTitle`, or create one. |
