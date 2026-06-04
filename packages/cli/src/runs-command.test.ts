@@ -1,7 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import path from 'node:path';
-import { interpretEnvelopeResponse, parseRunsArgs } from './runs-command.js';
+import { interpretEnvelopeResponse, isProbeNotFound, parseRunsArgs } from './runs-command.js';
 
 // ---------------------------------------------------------------------------
 // parseRunsArgs
@@ -86,4 +86,29 @@ test('interpretEnvelopeResponse: captured:true with null envelope is NOT treated
     'hn-monitor'
   );
   assert.ok(!result.ok);
+});
+
+// ---------------------------------------------------------------------------
+// isProbeNotFound — only a probe 404 continues the scan; everything else
+// (esp. 401 with its actionable login hint) must fail loud.
+
+test('isProbeNotFound: 404 probe errors continue the scan', () => {
+  assert.equal(isProbeNotFound(new Error('runs export failed: 404 {"error":"Deployment run not found"}')), true);
+  assert.equal(isProbeNotFound(new Error('runs export failed: 404')), true);
+});
+
+test('isProbeNotFound: auth/transient errors are NOT swallowed', () => {
+  assert.equal(isProbeNotFound(new Error('unauthorized. Run `agentworkforce login` and retry.')), false);
+  assert.equal(isProbeNotFound(new Error('runs export failed: 403 forbidden')), false);
+  assert.equal(isProbeNotFound(new Error('runs export failed: 500')), false);
+  assert.equal(isProbeNotFound(new Error('fetch failed')), false);
+  assert.equal(isProbeNotFound('not-an-error'), false);
+});
+
+test('parseRunsArgs: =-inline forms for workspace and cloud-url', () => {
+  const parsed = parseRunsArgs(['export', 'r1', '--workspace=ws-9', '--cloud-url=https://example.com']);
+  assert.ok(!('help' in parsed));
+  if ('help' in parsed) return;
+  assert.equal(parsed.options.workspace, 'ws-9');
+  assert.equal(parsed.options.cloudUrl, 'https://example.com');
 });

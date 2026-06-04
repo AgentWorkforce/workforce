@@ -70,8 +70,12 @@ export function parseRunsArgs(args: readonly string[]): ParsedRunsArgs {
       fixturePath = expectInline('--fixture', a.slice('--fixture='.length));
     } else if (a === '--workspace') {
       workspace = expectValue('--workspace', rest[++i]);
+    } else if (a.startsWith('--workspace=')) {
+      workspace = expectInline('--workspace', a.slice('--workspace='.length));
     } else if (a === '--cloud-url') {
       cloudUrl = expectValue('--cloud-url', rest[++i]);
+    } else if (a.startsWith('--cloud-url=')) {
+      cloudUrl = expectInline('--cloud-url', a.slice('--cloud-url='.length));
     } else if (a === '--no-prompt') {
       noPrompt = true;
     } else if (a.startsWith('--')) {
@@ -188,9 +192,15 @@ async function runRunsExport(opts: RunsExportOptions, io: RunsIO): Promise<void>
       payload = await requestJson<EnvelopeResponse>(url, ctx.token, 'runs export');
       matchedAgent = agent;
       break;
-    } catch {
-      // 404 = not this agent's run (or auth/transient on this probe);
-      // keep scanning the remaining candidates.
+    } catch (err) {
+      // ONLY a 404 means "not this agent's run" — keep scanning. Anything
+      // else (401 unauthorized with its actionable login hint, 403, 5xx)
+      // must fail LOUD instead of being laundered into a misleading
+      // "run not found": with --agent there is exactly one candidate, and
+      // in scan mode an auth/transient failure poisons every probe anyway.
+      if (!isProbeNotFound(err)) {
+        throw err;
+      }
       continue;
     }
   }
@@ -248,4 +258,14 @@ export function interpretEnvelopeResponse(
       '(runs before cloud#1841 deployed predate capture). ' +
       'Re-fire the agent or use `agentworkforce invoke --scaffold <type>`.'
   };
+}
+
+/**
+ * True only for the probe's "this agent does not own that run" outcome:
+ * requestJson formats non-ok statuses as "<action> failed: <status> …" and
+ * throws a distinct "unauthorized. Run `agentworkforce login` …" for 401.
+ * Exported for unit tests.
+ */
+export function isProbeNotFound(err: unknown): boolean {
+  return err instanceof Error && / failed: 404\b/.test(err.message);
 }
