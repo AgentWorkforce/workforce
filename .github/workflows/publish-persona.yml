@@ -98,14 +98,17 @@ jobs:
           BUMP='${{ github.event.inputs.version }}'
           PREID='${{ github.event.inputs.prerelease_id }}'
 
+          # --workspaces-update=false keeps `npm version` from reifying the root
+          # lockfile, which fails on pnpm's workspace:* protocol if an npm
+          # `workspaces` field ever appears in the root package.json.
           if [ -n "$CUSTOM" ]; then
-            npm version "$CUSTOM" --no-git-tag-version --allow-same-version
+            npm version "$CUSTOM" --no-git-tag-version --allow-same-version --workspaces-update=false
           elif [ "$BUMP" = "none" ]; then
             : # keep existing version
           elif [[ "$BUMP" == pre* ]]; then
-            npm version "$BUMP" --no-git-tag-version --preid="$PREID"
+            npm version "$BUMP" --no-git-tag-version --preid="$PREID" --workspaces-update=false
           else
-            npm version "$BUMP" --no-git-tag-version
+            npm version "$BUMP" --no-git-tag-version --workspaces-update=false
           fi
 
           VERSION=$(node -p 'require("./package.json").version')
