@@ -33,8 +33,10 @@ import {
  * named imports without a static "no matching export" error.
  */
 const RUNTIME_STUB = `
+const hasOwn = Object.prototype.hasOwnProperty;
 function defineAgent(input) {
   const out = {};
+  if (input && hasOwn.call(input, 'launchedBy')) out.launchedBy = input.launchedBy;
   if (input && input.triggers) out.triggers = input.triggers;
   if (input && input.schedules) out.schedules = input.schedules;
   if (input && input.watch) out.watch = input.watch;
@@ -122,8 +124,14 @@ export async function extractAgentSpec(onEventPath: string): Promise<ExtractedAg
       );
     }
 
-    const source = def as { triggers?: unknown; schedules?: unknown; watch?: unknown };
+    const source = def as {
+      launchedBy?: unknown;
+      triggers?: unknown;
+      schedules?: unknown;
+      watch?: unknown;
+    };
     const raw = {
+      ...(source.launchedBy !== undefined ? { launchedBy: source.launchedBy } : {}),
       ...(source.triggers !== undefined ? { triggers: source.triggers } : {}),
       ...(source.schedules !== undefined ? { schedules: source.schedules } : {}),
       ...(source.watch !== undefined ? { watch: source.watch } : {})

@@ -663,8 +663,9 @@ test('parseIntegrations preserves scope (connection-only); rejects persona-level
   );
 });
 
-test('parseAgentSpec validates a provider-keyed triggers map + schedules + watch', () => {
+test('parseAgentSpec validates launchedBy plus provider-keyed triggers, schedules, and watch', () => {
   const agent = parseAgentSpec({
+    launchedBy: 'team-dispatcher',
     triggers: {
       github: [
         { on: 'pull_request.opened' },
@@ -680,9 +681,14 @@ test('parseAgentSpec validates a provider-keyed triggers map + schedules + watch
   assert.equal(agent.triggers?.slack[0].on, 'app_mention');
   assert.equal(agent.schedules?.[0].name, 'nightly');
   assert.equal(agent.watch?.[0].paths[0], '/github/x.json');
+  assert.equal(agent.launchedBy, 'team-dispatcher');
 });
 
 test('parseAgentSpec rejects malformed triggers maps with precise field paths', () => {
+  assert.throws(
+    () => parseAgentSpec({ launchedBy: 'cron' }),
+    /launchedBy must be one of: team-dispatcher/
+  );
   assert.throws(() => parseAgentSpec({ triggers: [] }), /triggers must be an object keyed by provider/);
   assert.throws(() => parseAgentSpec({ triggers: { github: [] } }), /triggers\.github must be a non-empty array/);
   assert.throws(

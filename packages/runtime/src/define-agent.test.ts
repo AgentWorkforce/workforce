@@ -9,6 +9,7 @@ import type {
 
 test('defineAgent brands the object and wraps the handler', () => {
   const agent = defineAgent({
+    launchedBy: 'team-dispatcher',
     triggers: {
       github: [{ on: 'pull_request.opened' }, { on: 'issue_comment.created', match: '@mention' }],
       slack: [{ on: 'app_mention' }]
@@ -24,8 +25,9 @@ test('defineAgent brands the object and wraps the handler', () => {
   assert.equal(agent.triggers?.github?.length, 2);
   assert.equal(agent.triggers?.slack?.[0]?.on, 'app_mention');
   assert.equal(agent.schedules?.[0]?.name, 'nightly');
+  assert.equal(agent.launchedBy, 'team-dispatcher');
   // __workforceAgent is non-enumerable so the listener declarations serialize clean.
-  assert.deepEqual(Object.keys(agent).sort(), ['handler', 'schedules', 'triggers']);
+  assert.deepEqual(Object.keys(agent).sort(), ['handler', 'launchedBy', 'schedules', 'triggers']);
 });
 
 test('defineAgent omits absent listener fields and requires a function handler', () => {

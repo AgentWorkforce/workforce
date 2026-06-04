@@ -71,6 +71,7 @@ test('bundleStager produces an executable, importable bundle from a real onEvent
     assert.match(runnerSource, /import \* as userModule from '\.\/agent\.bundle\.mjs'/);
     assert.match(runnerSource, /WORKFORCE_AGENT_CONTEXT/);
     assert.match(runnerSource, /WORKFORCE_DEPLOYMENT_CONTEXT/);
+    assert.match(runnerSource, /exported\.launchedBy/);
     assert.match(runnerSource, /await startRunner\({ persona, agent, deployment, handler/);
 
     // bundle output is ES module shape and references the runtime as external

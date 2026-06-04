@@ -277,6 +277,10 @@ export interface WatchRule {
  * "what the agent is" (model, harness, skills, mcp, integration *connections*);
  * the agent owns the listeners.
  *
+ * `launchedBy: "team-dispatcher"` is the one listener-free exception: team
+ * member agents are not event-listeners themselves; they are launched by a
+ * dispatcher agent as part of a team run.
+ *
  * Three listener kinds:
  *  - **radio** — {@link triggers}: a provider-keyed map of
  *    {@link PersonaIntegrationTrigger} arrays. Keys mirror
@@ -284,9 +288,12 @@ export interface WatchRule {
  *  - **clock** — {@link schedules}: cron {@link PersonaSchedule}s.
  *  - **relayfile** — {@link watch}: {@link WatchRule}s.
  *
- * At least one listener is required for a cloud agent (enforced at deploy).
+ * At least one listener is required for a cloud agent unless `launchedBy`
+ * names a supported dispatcher launch mode (enforced at deploy).
  */
 export interface AgentSpec {
+  /** Declares that this agent is launched by another runtime path, not direct listeners. */
+  launchedBy?: 'team-dispatcher';
   /** Radio listeners keyed by provider slug (`github`, `linear`, …). */
   triggers?: Record<string, PersonaIntegrationTrigger[]>;
   /** Cron-style clock listeners. Each `name` is unique within the agent. */

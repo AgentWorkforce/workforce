@@ -810,8 +810,15 @@ export function parseAgentSpec(value: unknown, context = 'agent'): AgentSpec {
   if (!isObject(value)) {
     throw new Error(`${context} must be an object`);
   }
-  const { triggers, schedules, watch } = value;
+  const { launchedBy, triggers, schedules, watch } = value;
   const out: AgentSpec = {};
+
+  if (launchedBy !== undefined) {
+    if (launchedBy !== 'team-dispatcher') {
+      throw new Error(`${context}.launchedBy must be one of: team-dispatcher`);
+    }
+    out.launchedBy = launchedBy;
+  }
 
   if (triggers !== undefined) {
     if (!isObject(triggers) || Array.isArray(triggers)) {

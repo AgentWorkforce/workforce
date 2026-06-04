@@ -5,6 +5,11 @@
     "AgentSpec": {
       "type": "object",
       "properties": {
+        "launchedBy": {
+          "type": "string",
+          "const": "team-dispatcher",
+          "description": "Declares that this agent is launched by another runtime path, not direct listeners."
+        },
         "triggers": {
           "type": "object",
           "additionalProperties": {
@@ -30,7 +35,7 @@
           "description": "Relayfile-change listeners for proactive cloud agents."
         }
       },
-      "description": "Runtime-parsed shape of an **agent** (`agent.ts`) — the \"when/how it fires\" half of a deployed agent, authored via `defineAgent(...)` in the runtime package and extracted from the bundle by the deploy CLI. The persona owns \"what the agent is\" (model, harness, skills, mcp, integration *connections*); the agent owns the listeners.\n\nThree listener kinds:  - **radio** —  {@link  triggers } : a provider-keyed map of     {@link  PersonaIntegrationTrigger }  arrays. Keys mirror    `persona.integrations` so the deploy CLI can join events→connection.  - **clock** —  {@link  schedules } : cron  {@link  PersonaSchedule } s.  - **relayfile** —  {@link  watch } :  {@link  WatchRule } s.\n\nAt least one listener is required for a cloud agent (enforced at deploy)."
+      "description": "Runtime-parsed shape of an **agent** (`agent.ts`) — the \"when/how it fires\" half of a deployed agent, authored via `defineAgent(...)` in the runtime package and extracted from the bundle by the deploy CLI. The persona owns \"what the agent is\" (model, harness, skills, mcp, integration *connections*); the agent owns the listeners.\n\n`launchedBy: \"team-dispatcher\"` is the one listener-free exception: team member agents are not event-listeners themselves; they are launched by a dispatcher agent as part of a team run.\n\nThree listener kinds:  - **radio** —  {@link  triggers } : a provider-keyed map of     {@link  PersonaIntegrationTrigger }  arrays. Keys mirror    `persona.integrations` so the deploy CLI can join events→connection.  - **clock** —  {@link  schedules } : cron  {@link  PersonaSchedule } s.  - **relayfile** —  {@link  watch } :  {@link  WatchRule } s.\n\nAt least one listener is required for a cloud agent unless `launchedBy` names a supported dispatcher launch mode (enforced at deploy)."
     },
     "PersonaIntegrationTrigger": {
       "type": "object",

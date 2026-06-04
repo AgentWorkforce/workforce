@@ -7,6 +7,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- Allow listener-free agents only when marked `launchedBy: "team-dispatcher"`.
+
 ## [3.0.46] - 2026-06-04
 
 ### Fixed
