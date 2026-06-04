@@ -1238,6 +1238,56 @@ test('cloud oauth deploy stamps the ACTIVE anthropic row over a newer inactive o
   }
 });
 
+test('cloud oauth deploy does not fall through from an id-less active anthropic row to an inactive row', async () => {
+  const restoreDeps = configureCloudCredentialDepsForTest({
+    readStoredAuth: async () => ({
+      apiUrl: 'https://cloud.example.test',
+      accessToken: 'access',
+      refreshToken: 'refresh',
+      accessTokenExpiresAt: '2999-01-01T00:00:00.000Z'
+    }),
+    createCloudApiClient() {
+      return {
+        async fetch(pathname: string) {
+          assert.equal(pathname, '/api/v1/cloud-agents');
+          return okJson({
+            agents: [
+              { harness: 'claude', status: 'connected', is_active: true },
+              { id: 'pc-inactive', harness: 'claude', status: 'connected', is_active: false }
+            ]
+          });
+        }
+      };
+    }
+  });
+  try {
+    const { io } = await launch({
+      persona: persona({ harness: 'claude', model: 'claude-sonnet-4-6' }),
+      defaultPlanCredential: false,
+      env: {
+        WORKFORCE_DEPLOY_CLOUD_URL: 'https://cloud.example.test',
+        WORKFORCE_DEPLOY_HARNESS_SOURCE: 'oauth',
+        WORKFORCE_DEPLOY_NO_PROMPT: '1'
+      },
+      fetch(url, init) {
+        if (init?.method === 'GET' && url.endsWith('/deployments')) return okJson({ agents: [] });
+        if (url.endsWith('/deployments')) {
+          const body = JSON.parse(String(init?.body)) as Record<string, unknown>;
+          assert.deepEqual(body.credentialSelections, {});
+          return okJson({ agentId: 'agent-oauth-active-noid', deploymentId: 'dep-1', status: 'active' }, 201);
+        }
+        throw new Error(`unexpected URL ${url}`);
+      }
+    });
+    assert.ok(
+      io.messages.some((entry) => entry.message.includes('no connected anthropic credential row')),
+      'expected the unstamped-fallback info line'
+    );
+  } finally {
+    restoreDeps();
+  }
+});
+
 test('cloud oauth deploy cross-stamps a connected anthropic credential for an openai-family persona', async () => {
   // The codex/ChatGPT OAuth credential cannot back ctx.llm, but the runtime
   // already falls back to whichever provider env IS present and swaps in

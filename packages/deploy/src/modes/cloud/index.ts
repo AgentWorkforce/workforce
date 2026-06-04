@@ -986,12 +986,10 @@ function findConnectedHarnessCredentialId(
   const entries = connectedHarnessEntries(body, expectedProvider);
   // The web wizard selects on is_active (one active row per provider —
   // cloud's partial unique index), not recency, so prefer the flagged row.
-  // Older clouds / pre-backfill rows may not carry the flag; fall back to
-  // the list order (cloud returns most-recently-updated first).
-  const candidates = [
-    ...entries.filter(isActiveCloudAgentEntry),
-    ...entries.filter((entry) => !isActiveCloudAgentEntry(entry))
-  ];
+  // Older clouds / pre-backfill rows may not carry the flag; only then fall
+  // back to list order (cloud returns most-recently-updated first).
+  const activeEntries = entries.filter(isActiveCloudAgentEntry);
+  const candidates = activeEntries.length > 0 ? activeEntries : entries;
   for (const entry of candidates) {
     if (typeof entry.id === 'string' && entry.id.trim()) return entry.id.trim();
   }
