@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [3.0.47] - 2026-06-04
+
 ### Added
 
 - Add `launchedBy: "team-dispatcher"` to `AgentSpec` for dispatcher-launched team members.
