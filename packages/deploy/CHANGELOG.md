@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [3.0.46] - 2026-06-04
+
+### Fixed
+
+- Stamp credentialSelections on oauth harness legs (#196) (#196)
+
 ## [3.0.45] - 2026-06-04
 
 ### Documentation
