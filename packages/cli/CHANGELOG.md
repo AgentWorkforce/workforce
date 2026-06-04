@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [3.0.45] - 2026-06-04
+
+### Documentation
+
+- Spec — `agentworkforce integrations` integration & trigger discoverability (CLI + mcp-workforce tool) (#191)
+
 ## [3.0.44] - 2026-06-04
 
 ### Added
