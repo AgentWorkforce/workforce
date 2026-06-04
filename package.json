@@ -4,6 +4,9 @@
   "private": true,
   "version": "0.1.0",
   "packageManager": "pnpm@10.17.1",
+  "workspaces": [
+    "packages/*"
+  ],
   "devDependencies": {
     "@types/node": "^22.18.0",
     "agent-trajectories": "^0.5.3",
