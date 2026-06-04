@@ -114,7 +114,9 @@ export async function startRunner(options: StartRunnerOptions): Promise<void> {
     sandbox: options.subsystems?.sandbox ?? cloudDefaults.sandbox,
     files: options.subsystems?.files ?? cloudDefaults.files,
     harnessRunner: options.harnessRunner ?? cloudDefaults.harnessRunner,
-    ...(options.subsystems?.llm ? { llm: options.subsystems.llm } : {}),
+    ...(options.subsystems?.llm ?? cloudDefaults.llm
+      ? { llm: options.subsystems?.llm ?? cloudDefaults.llm }
+      : {}),
     ...(options.subsystems?.memory ? { memory: options.subsystems.memory } : {}),
     ...(options.subsystems?.workflow ?? cloudDefaults.workflow
       ? { workflow: options.subsystems?.workflow ?? cloudDefaults.workflow }
