@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [3.0.43] - 2026-06-04
+
+### Added
+
+- **Workforce invoke — fixture-replay simulation CLI (#186 P2)** (#186)
+
 ## [3.0.38] - 2026-06-01
 
 ### Added
