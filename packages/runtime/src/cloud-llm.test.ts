@@ -77,6 +77,7 @@ test('ANTHROPIC_API_KEY produces an x-api-key Messages API client', async (t) =>
   assert.equal(request.headers['x-api-key'], 'sk-ant-test');
   assert.equal(request.headers['anthropic-version'], '2023-06-01');
   assert.equal(request.headers['authorization'], undefined);
+  assert.equal(request.headers['anthropic-beta'], undefined); // beta header is OAuth-leg-only
   assert.equal(request.body.model, 'claude-sonnet-4-6'); // anthropic/ prefix stripped
   assert.equal(request.body.max_tokens, 64);
   assert.deepEqual(request.body.messages, [{ role: 'user', content: 'hi' }]);
@@ -96,6 +97,23 @@ test('CLAUDE_CODE_OAUTH_TOKEN authenticates via Authorization: Bearer only', asy
   const request = requests[0]!;
   assert.equal(request.headers['authorization'], 'Bearer oat-token');
   assert.equal(request.headers['x-api-key'], undefined);
+  // Setup-tokens are rejected by /v1/messages without the OAuth beta header.
+  assert.equal(request.headers['anthropic-beta'], 'oauth-2025-04-20');
+});
+
+test('codex-only persona models fall back to the default chat model', async (t) => {
+  const requests = stubFetch(t, {
+    payload: { choices: [{ message: { content: 'ok' } }] }
+  });
+  const llm = createDefaultLlm({
+    persona: { ...basePersona, harness: 'codex', model: 'openai-codex/gpt-5.5-codex' },
+    env: { OPENAI_API_KEY: 'sk-openai-test' },
+    log: noopLog
+  });
+  assert.ok(llm);
+  await llm.complete('hi');
+  // gpt-*-codex is a Codex CLI model, not served by /v1/chat/completions.
+  assert.equal(requests[0]!.body.model, 'gpt-5.5');
 });
 
 test('OPENAI_API_KEY routes gpt-family personas to chat completions', async (t) => {
@@ -103,7 +121,7 @@ test('OPENAI_API_KEY routes gpt-family personas to chat completions', async (t) 
     payload: { choices: [{ message: { content: 'hello from gpt' } }] }
   });
   const llm = createDefaultLlm({
-    persona: { ...basePersona, harness: 'codex', model: 'openai-codex/gpt-5.3-codex' },
+    persona: { ...basePersona, harness: 'codex', model: 'openai/gpt-5.4' },
     env: { OPENAI_API_KEY: 'sk-openai-test' },
     log: noopLog
   });
@@ -113,7 +131,7 @@ test('OPENAI_API_KEY routes gpt-family personas to chat completions', async (t) 
   const request = requests[0]!;
   assert.equal(request.url, 'https://api.openai.com/v1/chat/completions');
   assert.equal(request.headers['authorization'], 'Bearer sk-openai-test');
-  assert.equal(request.body.model, 'gpt-5.3-codex'); // openai-codex/ prefix stripped
+  assert.equal(request.body.model, 'gpt-5.4'); // openai/ prefix stripped
   assert.equal(request.body.max_completion_tokens, 32);
 });
 

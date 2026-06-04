@@ -29,7 +29,7 @@ import type { LlmContext, WorkforceCtx } from './types.js';
  */
 
 const DEFAULT_ANTHROPIC_MODEL = 'claude-opus-4-8';
-const DEFAULT_OPENAI_MODEL = 'gpt-5.1';
+const DEFAULT_OPENAI_MODEL = 'gpt-5.5';
 const DEFAULT_MAX_TOKENS = 16_000;
 const COMPLETE_TIMEOUT_MS = 120_000;
 const ANTHROPIC_BASE_URL = 'https://api.anthropic.com';
@@ -86,7 +86,12 @@ function selectCredential(
   } else if (claudeOauth) {
     candidates.push({
       family: 'anthropic',
-      headers: { authorization: `Bearer ${claudeOauth}` },
+      headers: {
+        authorization: `Bearer ${claudeOauth}`,
+        // Claude Code setup-tokens are accepted by the Messages API only
+        // with the OAuth beta header; a bare Bearer is rejected.
+        'anthropic-beta': 'oauth-2025-04-20'
+      },
       source: 'CLAUDE_CODE_OAUTH_TOKEN'
     });
   }
@@ -128,7 +133,14 @@ function resolveModel(persona: PersonaSpec, family: LlmProviderFamily): string {
   if (personaModel && personaFamily === family) {
     // Strip provider prefixes like `anthropic/` / `openai/` / `openai-codex/`.
     const slash = personaModel.indexOf('/');
-    return slash >= 0 ? personaModel.slice(slash + 1) : personaModel;
+    const stripped = slash >= 0 ? personaModel.slice(slash + 1) : personaModel;
+    // Codex CLI models (gpt-*-codex) are not served by /v1/chat/completions —
+    // they steer family selection above, but the completion call falls back
+    // to the default chat model.
+    if (family === 'openai' && stripped.toLowerCase().includes('codex')) {
+      return DEFAULT_OPENAI_MODEL;
+    }
+    return stripped;
   }
   return family === 'anthropic' ? DEFAULT_ANTHROPIC_MODEL : DEFAULT_OPENAI_MODEL;
 }
