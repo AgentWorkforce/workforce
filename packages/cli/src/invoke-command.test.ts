@@ -347,6 +347,9 @@ test('scaffoldFixture: cron.tick emits a complete frame with name/cron and no wa
   assert.ok(String(fixture.name).includes('TODO'));
   assert.ok(typeof fixture.cron === 'string');
   assert.ok(!('resource' in fixture));
+
+  const named = scaffoldFixture('cron.daily-report');
+  assert.equal(named.fixture.type, 'cron.daily-report');
 });
 
 test('scaffoldFixture: known provider event emits frame + explicit resource TODO hole', () => {

@@ -12,6 +12,7 @@ import {
 } from '@agentworkforce/runtime';
 
 export const INVOKE_USAGE = `usage: agentworkforce invoke <persona-path> --fixture <file> [flags]
+       agentworkforce invoke --scaffold <type> [--output <file>]
 
 Simulate an invocation: execute the persona's handler against fixture event
 envelope(s) with every external side effect recorded, NOT executed, and emit
@@ -36,6 +37,10 @@ Flags:
                            /slack/channels/_index.json).
   --workspace <id>         Workspace id for the simulated ctx; defaults to
                            the first envelope's workspace.
+  --scaffold <type>        Emit a fixture skeleton for an event type instead
+                           of running a persona. Provider payloads are left
+                           as explicit TODO holes; prefer runs export after
+                           a real fire exists.
   -h, --help               Print this message.
 
 Exit code: 0 when every dispatched envelope succeeded, 1 when any handler
