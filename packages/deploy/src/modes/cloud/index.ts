@@ -70,6 +70,7 @@ interface CloudAgentEntry {
   credentialStoredAt?: unknown;
   id?: unknown;
   isActive?: unknown;
+  is_active?: unknown;
 }
 
 interface ExistingAgentResponse {
@@ -988,13 +989,17 @@ function findConnectedHarnessCredentialId(
   // Older clouds / pre-backfill rows may not carry the flag; fall back to
   // the list order (cloud returns most-recently-updated first).
   const candidates = [
-    ...entries.filter((entry) => entry.isActive === true),
-    ...entries.filter((entry) => entry.isActive !== true)
+    ...entries.filter(isActiveCloudAgentEntry),
+    ...entries.filter((entry) => !isActiveCloudAgentEntry(entry))
   ];
   for (const entry of candidates) {
     if (typeof entry.id === 'string' && entry.id.trim()) return entry.id.trim();
   }
   return null;
+}
+
+function isActiveCloudAgentEntry(entry: CloudAgentEntry): boolean {
+  return entry.isActive === true || entry.is_active === true;
 }
 
 /**

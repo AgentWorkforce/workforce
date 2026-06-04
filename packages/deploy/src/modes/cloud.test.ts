@@ -1207,7 +1207,7 @@ test('cloud oauth deploy stamps the ACTIVE anthropic row over a newer inactive o
           return okJson({
             agents: [
               { id: 'pc-newer-inactive', harness: 'claude', status: 'connected', isActive: false },
-              { id: 'pc-older-active', harness: 'claude', status: 'connected', isActive: true }
+              { id: 'pc-older-active', harness: 'claude', status: 'connected', is_active: true }
             ]
           });
         }
