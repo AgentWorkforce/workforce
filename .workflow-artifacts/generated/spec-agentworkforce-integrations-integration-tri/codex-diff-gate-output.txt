@@ -1,0 +1,32 @@
+codex deterministic diff gate: PASS
+inventory: .workflow-artifacts/generated/spec-agentworkforce-integrations-integration-tri/change-inventory.json
+command: git diff --name-status main...HEAD
+changed_paths:
+  .workflow-artifacts/generated/spec-agentworkforce-integrations-integration-tri/acceptance-contract.json
+  .workflow-artifacts/generated/spec-agentworkforce-integrations-integration-tri/change-inventory.json
+  .workflow-artifacts/generated/spec-agentworkforce-integrations-integration-tri/codex-diff-gate-output.txt
+  .workflow-artifacts/generated/spec-agentworkforce-integrations-integration-tri/codex-fix-loop-report.md
+  .workflow-artifacts/generated/spec-agentworkforce-integrations-integration-tri/lead-plan.md
+  .workflow-artifacts/generated/spec-agentworkforce-integrations-integration-tri/normalized-spec.md
+  .workflow-artifacts/generated/spec-agentworkforce-integrations-integration-tri/normalized-spec.txt
+  docs/plans/integrations-discoverability-spec.md
+  package-lock.json
+  packages/cli/README.md
+  packages/cli/src/cli.ts
+  packages/cli/src/integrations-command.test.ts
+  packages/cli/src/integrations-command.ts
+  packages/deploy/src/index.ts
+  packages/deploy/src/integrations-list.test.ts
+  packages/deploy/src/integrations-list.ts
+  packages/mcp-workforce/README.md
+  packages/mcp-workforce/package.json
+  packages/mcp-workforce/src/index.ts
+  packages/mcp-workforce/src/server.test.ts
+  packages/mcp-workforce/src/server.ts
+  packages/mcp-workforce/src/tools/list-integrations.test.ts
+  packages/mcp-workforce/src/tools/list-integrations.ts
+  pnpm-lock.yaml
+missing_required_paths:
+  (none)
+unexpected_changed_paths:
+  (none)

@@ -77,6 +77,9 @@ importers:
 
   packages/mcp-workforce:
     dependencies:
+      '@agentworkforce/deploy':
+        specifier: workspace:*
+        version: link:../deploy
       '@agentworkforce/persona-kit':
         specifier: workspace:*
         version: link:../persona-kit

@@ -9,6 +9,7 @@ import {
   INTEGRATION_TOOL_NAMES,
   type IntegrationToolName
 } from './tools/integrations.js';
+import { listIntegrationsTool } from './tools/list-integrations.js';
 
 const MEMORY_SCOPE_ENUM = z.enum(['workspace', 'user', 'global']);
 
@@ -97,6 +98,20 @@ export function createWorkforceMcpServer(config: WorkforceMcpConfig): McpServer 
   // generic dispatcher so the MCP client gets useful tool descriptions
   // and parameter hints. The runtime delegate is a thin wrapper that
   // dispatches to the per-provider client.
+  server.registerTool(
+    'list_integrations',
+    {
+      title: 'List workforce integrations and trigger events',
+      description:
+        'Returns the same integration catalog/status JSON document as `agentworkforce integrations --json`. Use before authoring agent.triggers.',
+      inputSchema: {
+        provider: z.string().min(1).optional(),
+        includeTriggers: z.boolean().optional()
+      }
+    },
+    async (args) => jsonResult(await listIntegrationsTool(args, { config }))
+  );
+
   registerGithubTools(server, config);
 
   return server;

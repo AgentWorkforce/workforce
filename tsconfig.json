@@ -1,0 +1,19 @@
+{
+  "extends": "./tsconfig.base.json",
+  "compilerOptions": {
+    "noEmit": true
+  },
+  "include": [
+    "packages/cli/src/**/*.ts",
+    "packages/deploy/src/**/*.ts",
+    "packages/mcp-workforce/src/**/*.ts",
+    "packages/runtime/src/**/*.ts",
+    "packages/persona-kit/src/**/*.ts",
+    "packages/workload-router/src/**/*.ts",
+    "packages/daytona-runner/src/**/*.ts"
+  ],
+  "exclude": [
+    "**/node_modules/**",
+    "**/dist/**"
+  ]
+}

@@ -22,3 +22,8 @@ export {
   type IntegrationToolDeps,
   type IntegrationToolName
 } from './tools/integrations.js';
+export {
+  listIntegrationsTool,
+  type ListIntegrationsArgs,
+  type ListIntegrationsDeps
+} from './tools/list-integrations.js';

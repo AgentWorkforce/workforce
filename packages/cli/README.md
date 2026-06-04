@@ -13,6 +13,7 @@ agentworkforce show <persona>[@<tier>]
 agentworkforce persona compile <path/to/persona.ts|persona.js>
 agentworkforce install [flags] <pkg|path>
 agentworkforce deploy <path/to/persona.json|persona.ts|persona.js> [flags]
+agentworkforce integrations [provider] [--all] [--json]
 agentworkforce sources <list|add|remove>
 agentworkforce harness check
 agentworkforce destroy <persona-or-agent-id> [--workspace <id>] [--cloud-url <url>] [--no-prompt]
@@ -33,6 +34,8 @@ agentworkforce --version
   the current project's fixed cwd source directory.
 - `deploy` — deploy a cloud-enabled persona. The path may be prebuilt JSON or
   an authored source module such as `persona.ts` or `persona.js`.
+- `integrations` — discover available integrations, known trigger events, and
+  connection status for the active workspace.
 - `sources` — list, add, or remove persona source directories.
 - `harness check` — probe which harnesses (`claude`, `codex`, `opencode`)
   are installed. See [`## Harness check`](#harness-check) below.
@@ -60,6 +63,21 @@ From the repo checkout:
 corepack pnpm -r build
 corepack pnpm --filter agentworkforce link --global
 ```
+
+## Discover integrations and triggers
+
+```sh
+agentworkforce integrations
+agentworkforce integrations --all
+agentworkforce integrations google-mail
+agentworkforce integrations --json
+```
+
+The default command shows connection status for the active workspace and
+requires `agentworkforce login`. `--all` also works logged out and lists the
+offline trigger catalog, rendering connection state as unknown. A provider
+argument prints the full trigger list, connection details, and a persona/agent
+snippet using the cloud provider id.
 
 ## Selectors
 

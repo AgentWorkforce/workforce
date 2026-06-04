@@ -4,19 +4,22 @@
   "private": true,
   "version": "0.1.0",
   "packageManager": "pnpm@10.17.1",
+  "workspaces": [
+    "packages/*"
+  ],
   "devDependencies": {
     "@types/node": "^22.18.0",
     "agent-trajectories": "^0.5.3",
     "typescript": "^5.9.2"
   },
   "scripts": {
-    "build": "corepack pnpm -r build",
-    "dev": "corepack pnpm -r build && corepack pnpm -r --parallel --stream run dev",
+    "build": "pnpm -r build",
+    "dev": "pnpm -r build && pnpm -r --parallel --stream run dev",
     "dev:cli": "node packages/cli/dist/cli.js",
-    "typecheck": "corepack pnpm -r typecheck && corepack pnpm run typecheck:examples",
+    "typecheck": "pnpm -r typecheck && pnpm run typecheck:examples",
     "typecheck:examples": "tsc -p examples/tsconfig.json --noEmit",
-    "test": "corepack pnpm -r test",
-    "lint": "corepack pnpm -r lint",
-    "check": "corepack pnpm run lint && corepack pnpm run typecheck && corepack pnpm run test"
+    "test": "pnpm -r test",
+    "lint": "pnpm -r lint",
+    "check": "pnpm run lint && pnpm run typecheck && pnpm run test"
   }
 }
