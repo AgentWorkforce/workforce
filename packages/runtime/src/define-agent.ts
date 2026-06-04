@@ -1,4 +1,5 @@
 import type {
+  AgentSpec,
   PersonaSchedule,
   TypedTriggerMap,
   WatchRule
@@ -93,6 +94,12 @@ export interface AgentDefinition<
   Tr extends TypedTriggerMap = TypedTriggerMap,
   S extends readonly PersonaSchedule[] = readonly PersonaSchedule[]
 > {
+  /**
+   * Alternate launch path for agents without direct listeners. Team members are
+   * spawned by a dispatcher agent, so they intentionally declare no triggers,
+   * schedules, or watch rules.
+   */
+  launchedBy?: AgentSpec['launchedBy'];
   /** Radio listeners: provider-keyed map of typed event triggers. */
   triggers?: Tr;
   /** Clock listeners: cron schedules. */
@@ -110,6 +117,7 @@ export interface AgentDefinition<
  */
 export interface WorkforceAgentExport {
   readonly __workforceAgent: true;
+  readonly launchedBy?: AgentSpec['launchedBy'];
   readonly triggers?: TypedTriggerMap;
   readonly schedules?: readonly PersonaSchedule[];
   readonly watch?: readonly WatchRule[];
@@ -149,11 +157,13 @@ export function defineAgent<
     throw new TypeError('defineAgent({ handler }) — handler must be a function');
   }
   const agent: {
+    launchedBy?: AgentSpec['launchedBy'];
     triggers?: TypedTriggerMap;
     schedules?: readonly PersonaSchedule[];
     watch?: readonly WatchRule[];
     handler: WorkforceHandlerExport;
   } = {
+    ...(input.launchedBy ? { launchedBy: input.launchedBy } : {}),
     ...(input.triggers ? { triggers: input.triggers as TypedTriggerMap } : {}),
     ...(input.schedules ? { schedules: input.schedules } : {}),
     ...(input.watch ? { watch: input.watch } : {}),

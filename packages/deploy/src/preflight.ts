@@ -81,9 +81,11 @@ export async function preflightPersona(personaPath: string): Promise<DeployPrefl
   const hasTriggers = !!agent.triggers && Object.values(agent.triggers).some((t) => (t?.length ?? 0) > 0);
   const hasSchedules = (agent.schedules?.length ?? 0) > 0;
   const hasWatch = (agent.watch?.length ?? 0) > 0;
-  if (!hasTriggers && !hasSchedules && !hasWatch) {
+  const hasDispatcherLaunch = agent.launchedBy === 'team-dispatcher';
+  if (!hasTriggers && !hasSchedules && !hasWatch && !hasDispatcherLaunch) {
     throw new Error(
-      `agent "${persona.id}" (${persona.onEvent}) declares no listeners — add at least one trigger, schedule, or watch rule to defineAgent({...})`
+      `agent "${persona.id}" (${persona.onEvent}) declares no listeners — add at least one trigger, schedule, or watch rule, ` +
+        `or set launchedBy: "team-dispatcher" for dispatcher-launched team members`
     );
   }
 

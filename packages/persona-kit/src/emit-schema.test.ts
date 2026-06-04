@@ -117,12 +117,15 @@ test('persona schema keeps mount.enabled but drops the moved listener fields', a
     : undefined, 'boolean');
 });
 
-test('agent schema exposes triggers/schedules/watch', async () => {
+test('agent schema exposes launchedBy/triggers/schedules/watch', async () => {
   const schema = JSON.parse(await readFile(agentSchemaPath, 'utf8')) as SchemaNode;
   const definitions = schema.definitions as Record<string, SchemaNode>;
   const agentSpec = definitions.AgentSpec;
   const watchRule = definitions.WatchRule;
 
+  assert.equal(agentSpec.properties?.launchedBy && agentSpec.properties.launchedBy !== true
+    ? agentSpec.properties.launchedBy.const
+    : undefined, 'team-dispatcher');
   assert.equal(agentSpec.properties?.triggers && agentSpec.properties.triggers !== true
     ? agentSpec.properties.triggers.type
     : undefined, 'object');

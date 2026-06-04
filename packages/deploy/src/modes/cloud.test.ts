@@ -167,11 +167,15 @@ async function launch(overrides: {
 }
 
 test('cloud launcher POSTs a deploy bundle and returns the cloud handle', async () => {
+  const dispatcherAgentSpec: import('@agentworkforce/persona-kit').AgentSpec = {
+    ...agentSpec,
+    launchedBy: 'team-dispatcher'
+  };
   const { handle, calls } = await launch({
     env: {
       WORKFORCE_DEPLOY_CLOUD_URL: 'https://cloud.example.test'
     },
-    input: { inputs: { topic: 'AI' } },
+    input: { inputs: { topic: 'AI' }, agent: dispatcherAgentSpec },
     fetch(url, init) {
       if (init?.method === 'GET' && url.endsWith('/deployments')) {
         return okJson({ agents: [] });
@@ -181,7 +185,7 @@ test('cloud launcher POSTs a deploy bundle and returns the cloud handle', async 
       const body = JSON.parse(String(init?.body)) as Record<string, unknown>;
       assert.equal((body.persona as { id: string }).id, 'demo');
       // Listeners travel as the top-level `agent` block, not on the persona.
-      assert.deepEqual(body.agent, agentSpec);
+      assert.deepEqual(body.agent, dispatcherAgentSpec);
       assert.equal((body.persona as { schedules?: unknown }).schedules, undefined);
       assert.deepEqual(body.inputs, { topic: 'AI' });
       assert.deepEqual((body.bundle as { packageJson: unknown }).packageJson, { type: 'module' });
