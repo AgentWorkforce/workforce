@@ -1,0 +1,1 @@
+pattern=pipeline; reason=Selected pipeline using choosing-swarm-patterns because the request is high risk and can proceed through a linear reliability ladder.; reviewDepth=deep; reviewDepthReason=Selected deep review depth for high risk with signals: many target files, evidence requirements present, critical or production constraint, choosing-swarm-patterns skill loaded.
