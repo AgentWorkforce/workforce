@@ -8,6 +8,7 @@ import {
   parseInvokeArgs,
   renderHumanSummary,
   runInvoke,
+  scaffoldFixture,
   type RunInvokeIO
 } from './invoke-command.js';
 import type { SimulationResult } from '@agentworkforce/runtime';
@@ -30,8 +31,8 @@ test('parseInvokeArgs: persona + fixture + repeatable flags', () => {
     '--output',
     './run.json'
   ]);
-  assert.ok(!('help' in parsed));
-  if ('help' in parsed) return;
+  assert.ok(!('help' in parsed) && !('scaffold' in parsed));
+  if ('help' in parsed || 'scaffold' in parsed) return;
   assert.equal(path.basename(parsed.personaPath), 'persona.json');
   assert.equal(path.basename(parsed.fixturePath), 'event.json');
   assert.equal(path.basename(parsed.outputPath ?? ''), 'run.json');
@@ -325,4 +326,57 @@ test('renderHumanSummary: lists runs with status, side-effect count, skips', () 
   assert.match(summary, /\[FAIL\] cron\/clock sim_run_1/);
   assert.match(summary, /error: kaboom/);
   assert.match(summary, /\[skip\] unsupported envelope e9 \(mystery\.event\)/);
+});
+
+// ---------------------------------------------------------------------------
+// --scaffold (workforce#189)
+
+test('parseInvokeArgs: --scaffold needs no persona or fixture', () => {
+  const parsed = parseInvokeArgs(['--scaffold', 'cron.tick', '--output', './event.json']);
+  assert.ok('scaffold' in parsed);
+  if (!('scaffold' in parsed)) return;
+  assert.equal(parsed.scaffold, 'cron.tick');
+  assert.equal(path.basename(parsed.outputPath ?? ''), 'event.json');
+});
+
+test('scaffoldFixture: cron.tick emits a complete frame with name/cron and no warnings', () => {
+  const { fixture, warnings } = scaffoldFixture('cron.tick');
+  assert.deepEqual(warnings, []);
+  assert.equal(fixture.type, 'cron.tick');
+  assert.ok(typeof fixture.occurredAt === 'string');
+  assert.ok(String(fixture.name).includes('TODO'));
+  assert.ok(typeof fixture.cron === 'string');
+  assert.ok(!('resource' in fixture));
+});
+
+test('scaffoldFixture: known provider event emits frame + explicit resource TODO hole', () => {
+  const { fixture, warnings } = scaffoldFixture('github.pull_request.opened');
+  assert.deepEqual(warnings, []);
+  assert.equal(fixture.type, 'github.pull_request.opened');
+  const resource = fixture.resource as Record<string, unknown>;
+  assert.ok(String(resource.TODO).includes('runs export'));
+});
+
+test('scaffoldFixture: unknown provider/event warns but never blocks (lintTriggers stance)', () => {
+  const unknownProvider = scaffoldFixture('notaprovider.something');
+  assert.equal(unknownProvider.warnings.length, 1);
+  assert.match(unknownProvider.warnings[0], /not in KNOWN_TRIGGER_CATALOG/);
+  assert.equal(unknownProvider.fixture.type, 'notaprovider.something');
+
+  const unknownEvent = scaffoldFixture('github.not_a_real_event');
+  assert.equal(unknownEvent.warnings.length, 1);
+  assert.match(unknownEvent.warnings[0], /not a known github trigger/);
+});
+
+test('runInvoke --scaffold writes the skeleton and exits clean', async () => {
+  const io = collectingIO();
+  const previousExitCode = process.exitCode;
+  const result = await runInvoke(['--scaffold', 'cron.tick'], io);
+  const exitCode = process.exitCode;
+  process.exitCode = previousExitCode;
+
+  assert.equal(result, undefined);
+  assert.notEqual(exitCode, 1);
+  const skeleton = JSON.parse(io.out.join(''));
+  assert.equal(skeleton.type, 'cron.tick');
 });

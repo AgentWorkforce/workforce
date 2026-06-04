@@ -72,6 +72,7 @@ import {
 import ora, { type Ora } from 'ora';
 import { runDeploy, runLogin, runLogout } from './deploy-command.js';
 import { runInvoke } from './invoke-command.js';
+import { runRuns } from './runs-command.js';
 import { runDestroy } from './destroy-command.js';
 import { runDeploymentList, runDeploymentLogs } from './list-command.js';
 import {
@@ -258,6 +259,15 @@ Commands:
                         --input KEY=value   override a declared persona input
                         --seed PATH=file    seed the simulated filesystem
                         --workspace <id>    workspace id for the simulated ctx
+                        --scaffold <type>   emit a fixture skeleton for an
+                                            event type instead of running
+                                            (no persona needed)
+  runs export <runId> [flags]
+                      Export the gateway envelope cloud delivered to a run
+                      as a replayable invoke fixture. Flags:
+                        --agent <selector>  agentId/deployedName owning the
+                                            run (otherwise all are checked)
+                        --fixture <file>    write the fixture to a file
   deployments list    List deployed cloud agents in the active workspace.
   deployments logs    Show structured logs for a deployed cloud agent.
   destroy <persona-or-agent-id> [flags]
@@ -4385,6 +4395,11 @@ export async function main(): Promise<void> {
 
   if (subcommand === 'invoke') {
     await runInvoke(rest);
+    return;
+  }
+
+  if (subcommand === 'runs') {
+    await runRuns(rest);
     return;
   }
 

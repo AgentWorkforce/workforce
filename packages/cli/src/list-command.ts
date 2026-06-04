@@ -25,7 +25,7 @@ type DeploymentLogsOptions = {
   noPrompt?: boolean;
 };
 
-type DeploymentAgent = {
+export type DeploymentAgent = {
   agentId: string;
   personaId: string;
   personaSlug: string;
@@ -344,7 +344,7 @@ function parseAgents(body: ListResponse): DeploymentAgent[] {
   }).filter((agent) => agent.agentId);
 }
 
-async function resolveDeploymentRequestContext(opts: {
+export async function resolveDeploymentRequestContext(opts: {
   workspace?: string;
   cloudUrl?: string;
   noPrompt?: boolean;
@@ -368,7 +368,7 @@ async function resolveDeploymentRequestContext(opts: {
   return { cloudUrl, workspace, token: auth.token };
 }
 
-async function fetchDeployments(args: {
+export async function fetchDeployments(args: {
   cloudUrl: string;
   workspace: string;
   token: string;
@@ -406,7 +406,7 @@ async function fetchLogEntries(args: {
   return entries.filter((entry): entry is LogEntry => Boolean(entry) && typeof entry === 'object' && !Array.isArray(entry));
 }
 
-async function requestJson<T>(url: URL, token: string, action: string): Promise<T> {
+export async function requestJson<T>(url: URL, token: string, action: string): Promise<T> {
   const res = await fetch(url, {
     method: 'GET',
     headers: {
@@ -425,7 +425,7 @@ async function requestJson<T>(url: URL, token: string, action: string): Promise<
   return (await res.json()) as T;
 }
 
-function resolveAgentSelector(agents: readonly DeploymentAgent[], selector: string): DeploymentAgent {
+export function resolveAgentSelector(agents: readonly DeploymentAgent[], selector: string): DeploymentAgent {
   const matches = agents.filter((agent) => {
     const candidates = [
       agent.agentId,
