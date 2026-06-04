@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [3.0.44] - 2026-06-04
+
+### Added
+
+- **Runs export + invoke --scaffold + envelope contract test vs cloud (#189)** (#189)
+
 ## [3.0.43] - 2026-06-04
 
 ### Added
