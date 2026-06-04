@@ -7,6 +7,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- **Codex backend LlmContext credential leg for ChatGPT subscription OAuth tokens** (#198)
+
 ## [3.0.44] - 2026-06-04
 
 ### Added
@@ -86,4 +90,3 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Changed
 
 - Deploy v1 CLI runtime credentials and customer example (#109)
-

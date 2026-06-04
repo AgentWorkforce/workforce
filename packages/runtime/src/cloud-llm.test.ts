@@ -116,6 +116,91 @@ test('codex-only persona models fall back to the default chat model', async (t) 
   assert.equal(requests[0]!.body.model, 'gpt-5.5');
 });
 
+test('CODEX_OAUTH_TOKEN routes codex personas to the ChatGPT codex backend', async (t) => {
+  const requests = stubFetch(t, {
+    rawBody: [
+      'event: response.created',
+      'data: {"type":"response.created","response":{"id":"resp-1"}}',
+      '',
+      'event: response.output_text.delta',
+      'data: {"type":"response.output_text.delta","delta":"hello "}',
+      '',
+      'event: response.output_text.delta',
+      'data: {"type":"response.output_text.delta","delta":"from codex"}',
+      '',
+      'event: response.completed',
+      'data: {"type":"response.completed","response":{"id":"resp-1"}}',
+      '',
+      ''
+    ].join('\n')
+  });
+  const llm = createDefaultLlm({
+    persona: { ...basePersona, harness: 'codex', model: 'openai-codex/gpt-5.5-codex' },
+    env: { CODEX_OAUTH_TOKEN: 'chatgpt-access', CODEX_ACCOUNT_ID: 'acct-123' },
+    log: noopLog
+  });
+  assert.ok(llm);
+  const result = await llm.complete('hi', { maxTokens: 48 });
+  assert.equal(result, 'hello from codex');
+  const request = requests[0]!;
+  assert.equal(request.url, 'https://chatgpt.com/backend-api/codex/responses');
+  assert.equal(request.headers['authorization'], 'Bearer chatgpt-access');
+  assert.equal(request.headers['chatgpt-account-id'], 'acct-123');
+  assert.equal(request.headers.originator, 'codex_cli_rs');
+  assert.ok(request.headers['session-id']);
+  assert.ok(request.headers['thread-id']);
+  assert.equal(request.headers.accept, 'text/event-stream');
+  assert.equal(request.headers['x-api-key'], undefined);
+  assert.equal(request.body.model, 'gpt-5.5-codex');
+  assert.equal(request.body.stream, true);
+  assert.equal(request.body.max_output_tokens, 48);
+  assert.deepEqual(request.body.include, ['reasoning.encrypted_content']);
+  assert.deepEqual(request.body.input, [
+    {
+      type: 'message',
+      role: 'user',
+      content: [{ type: 'input_text', text: 'hi' }]
+    }
+  ]);
+});
+
+test('CODEX_OAUTH_CREDENTIAL accepts refreshed auth blob shape with account_id', async (t) => {
+  const requests = stubFetch(t, {
+    rawBody: [
+      'event: response.output_item.done',
+      'data: {"type":"response.output_item.done","item":{"type":"message","role":"assistant","content":[{"type":"output_text","text":"blob ok"}]}}',
+      '',
+      'event: response.completed',
+      'data: {"type":"response.completed","response":{"id":"resp-1"}}',
+      '',
+      ''
+    ].join('\n')
+  });
+  const llm = createDefaultLlm({
+    persona: { ...basePersona, harness: 'codex', model: 'openai/gpt-5.5' },
+    env: {
+      CODEX_OAUTH_CREDENTIAL: JSON.stringify({
+        tokens: {
+          access_token: 'fresh-access',
+          refresh_token: 'refresh',
+          account_id: 'acct-blob'
+        },
+        last_refresh: '2026-06-04T20:00:00.000Z',
+        base_url: 'https://example.test/backend-api/codex'
+      })
+    },
+    log: noopLog
+  });
+  assert.ok(llm);
+  const result = await llm.complete('hi');
+  assert.equal(result, 'blob ok');
+  const request = requests[0]!;
+  assert.equal(request.url, 'https://example.test/backend-api/codex/responses');
+  assert.equal(request.headers['authorization'], 'Bearer fresh-access');
+  assert.equal(request.headers['chatgpt-account-id'], 'acct-blob');
+  assert.equal(request.body.model, 'gpt-5.5-codex'); // platform slug mapped to backend codex slug
+});
+
 test('OPENAI_API_KEY routes gpt-family personas to chat completions', async (t) => {
   const requests = stubFetch(t, {
     payload: { choices: [{ message: { content: 'hello from gpt' } }] }
@@ -135,6 +220,25 @@ test('OPENAI_API_KEY routes gpt-family personas to chat completions', async (t) 
   assert.equal(request.body.max_completion_tokens, 32);
 });
 
+test('OPENAI_API_KEY remains preferred over codex backend for plain gpt personas', async (t) => {
+  const requests = stubFetch(t, {
+    payload: { choices: [{ message: { content: 'platform answer' } }] }
+  });
+  const llm = createDefaultLlm({
+    persona: { ...basePersona, harness: 'codex', model: 'openai/gpt-5.4' },
+    env: {
+      OPENAI_API_KEY: 'sk-openai-test',
+      CODEX_OAUTH_TOKEN: 'chatgpt-access',
+      CODEX_ACCOUNT_ID: 'acct-123'
+    },
+    log: noopLog
+  });
+  assert.ok(llm);
+  const result = await llm.complete('hi');
+  assert.equal(result, 'platform answer');
+  assert.equal(requests[0]!.url, 'https://api.openai.com/v1/chat/completions');
+});
+
 test('persona model family wins when multiple credentials exist', async (t) => {
   const requests = stubFetch(t, {
     payload: { choices: [{ message: { content: 'gpt answer' } }] }
@@ -147,6 +251,24 @@ test('persona model family wins when multiple credentials exist', async (t) => {
   assert.ok(llm);
   await llm.complete('hi');
   assert.equal(requests[0]!.url, 'https://api.openai.com/v1/chat/completions');
+});
+
+test('codex backend stream must reach response.completed', async (t) => {
+  stubFetch(t, {
+    rawBody: [
+      'event: response.output_text.delta',
+      'data: {"type":"response.output_text.delta","delta":"partial"}',
+      '',
+      ''
+    ].join('\n')
+  });
+  const llm = createDefaultLlm({
+    persona: { ...basePersona, harness: 'codex', model: 'openai-codex/gpt-5.5-codex' },
+    env: { CODEX_OAUTH_TOKEN: 'chatgpt-access', CODEX_ACCOUNT_ID: 'acct-123' },
+    log: noopLog
+  });
+  assert.ok(llm);
+  await assert.rejects(llm.complete('hi'), /response\.completed/);
 });
 
 test('anthropic credential is the default when the persona model names no family', async (t) => {
