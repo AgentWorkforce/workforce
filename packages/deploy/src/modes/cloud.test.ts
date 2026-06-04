@@ -587,7 +587,9 @@ test('cloud harness OAuth starts auth and polls /cloud-agents until the harness 
     await cleanup();
   }
 
-  assert.equal(credentialChecks, 3);
+  // 3 connection polls + 1 post-connect selections lookup (the oauth leg
+  // re-reads /cloud-agents to stamp credentialSelections — workforce#196).
+  assert.equal(credentialChecks, 4);
   assert.deepEqual(connected, ['openai']);
 });
 
@@ -1231,6 +1233,62 @@ test('cloud oauth deploy stamps the ACTIVE anthropic row over a newer inactive o
         throw new Error(`unexpected URL ${url}`);
       }
     });
+  } finally {
+    restoreDeps();
+  }
+});
+
+test('cloud oauth deploy cross-stamps a connected anthropic credential for an openai-family persona', async () => {
+  // The codex/ChatGPT OAuth credential cannot back ctx.llm, but the runtime
+  // already falls back to whichever provider env IS present and swaps in
+  // that family's default model — so the deploy stamps the connected
+  // anthropic credential instead of leaving the deployment selection-less.
+  const restoreDeps = configureCloudCredentialDepsForTest({
+    readStoredAuth: async () => ({
+      apiUrl: 'https://cloud.example.test',
+      accessToken: 'access',
+      refreshToken: 'refresh',
+      accessTokenExpiresAt: '2999-01-01T00:00:00.000Z'
+    }),
+    createCloudApiClient() {
+      return {
+        async fetch(pathname: string) {
+          assert.equal(pathname, '/api/v1/cloud-agents');
+          return okJson({
+            agents: [
+              { id: 'pc-openai-oauth', harness: 'openai', status: 'connected' },
+              { id: 'pc-anthropic-1', harness: 'claude', status: 'connected', isActive: true }
+            ]
+          });
+        }
+      };
+    }
+  });
+  try {
+    const { io } = await launch({
+      defaultPlanCredential: false,
+      env: {
+        WORKFORCE_DEPLOY_CLOUD_URL: 'https://cloud.example.test',
+        WORKFORCE_DEPLOY_HARNESS_SOURCE: 'oauth',
+        WORKFORCE_DEPLOY_NO_PROMPT: '1'
+      },
+      fetch(url, init) {
+        if (init?.method === 'GET' && url.endsWith('/deployments')) return okJson({ agents: [] });
+        if (url.endsWith('/deployments')) {
+          const body = JSON.parse(String(init?.body)) as Record<string, unknown>;
+          assert.deepEqual(body.credentialSelections, { anthropic: 'pc-anthropic-1' });
+          assert.deepEqual(body.credential_selections, { anthropic: 'pc-anthropic-1' });
+          return okJson({ agentId: 'agent-cross-stamp', deploymentId: 'dep-1', status: 'active' }, 201);
+        }
+        throw new Error(`unexpected URL ${url}`);
+      }
+    });
+    assert.ok(
+      io.messages.some((entry) =>
+        entry.message.includes('stamping your connected anthropic credential instead')
+      ),
+      'expected the cross-stamp info line'
+    );
   } finally {
     restoreDeps();
   }

@@ -414,8 +414,10 @@ async function fetchCloudAgents(cloudUrl: string): Promise<CloudAgentsListRespon
  * - anthropic: the OAuth completion route upserts a `provider_credentials`
  *   row, and cloud resolves it to a runtime env credential — stamp it.
  * - openai (and anything else): ChatGPT/codex OAuth tokens are harness-only;
- *   cloud rejects them for runtime env, so stamping would turn the ctx.llm
- *   stub into a failed delivery. Print the actionable alternative instead.
+ *   cloud rejects them for runtime env, so stamping the persona-family
+ *   credential would turn the ctx.llm stub into a failed delivery. Stamp a
+ *   connected anthropic credential instead when one exists (the runtime
+ *   adapts the model family), else print the actionable alternative.
  */
 async function resolveOauthCredentialSelections(args: {
   cloudUrl: string;
@@ -423,14 +425,29 @@ async function resolveOauthCredentialSelections(args: {
   io: ModeLaunchInput['io'];
 }): Promise<Record<string, string>> {
   const provider = deriveModelProvider(args.persona);
+  const body = await fetchCloudAgents(args.cloudUrl);
   if (provider !== 'anthropic') {
+    // Cross-provider fallback: the runtime's credential pick already
+    // prefers the persona's model family but falls back to whatever
+    // provider env IS present, swapping in that family's default model
+    // (cloud-llm selectCredential/resolveModel). So when the persona
+    // family can't back ctx.llm (codex/ChatGPT OAuth is harness-only), a
+    // connected anthropic credential is the honest deploy-time encoding
+    // of what the runtime would do anyway.
+    const anthropicId = body ? findConnectedHarnessCredentialId(body, 'anthropic') : null;
+    if (anthropicId) {
+      args.io.info(
+        `cloud: ${provider} subscriptions are harness-only and cannot back ctx.llm; ` +
+          'stamping your connected anthropic credential instead (the runtime adapts the model family).'
+      );
+      return { anthropic: anthropicId };
+    }
     args.io.info(
       `cloud: ${provider} subscriptions are harness-only and cannot back ctx.llm; ` +
         'use --harness-source byok with a platform API key, or connect an anthropic credential.'
     );
     return {};
   }
-  const body = await fetchCloudAgents(args.cloudUrl);
   const credentialId = body ? findConnectedHarnessCredentialId(body, provider) : null;
   if (!credentialId) {
     args.io.info(
