@@ -69,6 +69,7 @@ export function parseInvokeArgs(args: readonly string[]): ParsedInvokeArgs {
   let outputPath: string | undefined;
   let workspaceId: string | undefined;
   let scaffoldType: string | undefined;
+  let sawFixture = false;
   const inputs: Record<string, string> = {};
   const seeds: Record<string, string> = {};
 
@@ -77,8 +78,10 @@ export function parseInvokeArgs(args: readonly string[]): ParsedInvokeArgs {
     if (a === '-h' || a === '--help') {
       return { help: true };
     } else if (a === '--fixture') {
+      sawFixture = true;
       fixturePath = expectValue('--fixture', args[++i]);
     } else if (a.startsWith('--fixture=')) {
+      sawFixture = true;
       fixturePath = expectInline('--fixture', a.slice('--fixture='.length));
     } else if (a === '--output') {
       outputPath = expectValue('--output', args[++i]);
@@ -110,6 +113,18 @@ export function parseInvokeArgs(args: readonly string[]): ParsedInvokeArgs {
   }
 
   if (scaffoldType) {
+    const invalidScaffoldFlags = [
+      sawFixture ? '--fixture' : '',
+      workspaceId ? '--workspace' : '',
+      Object.keys(inputs).length > 0 ? '--input' : '',
+      Object.keys(seeds).length > 0 ? '--seed' : '',
+      personaPath ? '<persona-path>' : ''
+    ].filter(Boolean);
+    if (invalidScaffoldFlags.length > 0) {
+      throw new Error(
+        `invoke: --scaffold only accepts --output; remove ${invalidScaffoldFlags.join(', ')}`
+      );
+    }
     // Scaffold mode authors a fixture skeleton; no persona/fixture needed.
     return { scaffold: scaffoldType, ...(outputPath ? { outputPath: path.resolve(outputPath) } : {}) };
   }

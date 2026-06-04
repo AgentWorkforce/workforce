@@ -339,6 +339,21 @@ test('parseInvokeArgs: --scaffold needs no persona or fixture', () => {
   assert.equal(path.basename(parsed.outputPath ?? ''), 'event.json');
 });
 
+test('parseInvokeArgs: --scaffold rejects invoke-only args instead of ignoring them', () => {
+  assert.throws(
+    () => parseInvokeArgs(['./persona.json', '--scaffold', 'cron.tick']),
+    /only accepts --output.*<persona-path>/
+  );
+  assert.throws(
+    () => parseInvokeArgs(['--scaffold', 'cron.tick', '--fixture', './event.json']),
+    /only accepts --output.*--fixture/
+  );
+  assert.throws(
+    () => parseInvokeArgs(['--scaffold', 'cron.tick', '--input', 'FOO=bar', '--seed', '/x=./x.json']),
+    /only accepts --output.*--input, --seed/
+  );
+});
+
 test('scaffoldFixture: cron.tick emits a complete frame with name/cron and no warnings', () => {
   const { fixture, warnings } = scaffoldFixture('cron.tick');
   assert.deepEqual(warnings, []);
