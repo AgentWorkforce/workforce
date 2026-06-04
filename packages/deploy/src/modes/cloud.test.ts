@@ -587,7 +587,9 @@ test('cloud harness OAuth starts auth and polls /cloud-agents until the harness 
     await cleanup();
   }
 
-  assert.equal(credentialChecks, 3);
+  // 3 connection polls + 1 post-connect selections lookup (the oauth leg
+  // re-reads /cloud-agents to stamp credentialSelections — workforce#196).
+  assert.equal(credentialChecks, 4);
   assert.deepEqual(connected, ['openai']);
 });
 
@@ -1021,3 +1023,273 @@ test('findExistingAgent: malformed array entries (null/empty) are skipped withou
 function callsForUrl(calls: FetchCall[], suffix: string): number {
   return calls.filter((call) => call.url.endsWith(suffix)).length;
 }
+
+test('cloud oauth deploy stamps anthropic credentialSelections from the connected row', async () => {
+  // workforce#196: the byok/plan legs stamp the credential they create, but
+  // the oauth leg deployed with empty selections, so ctx.llm stubbed on
+  // every fire. The connected row id comes back through
+  // /api/v1/cloud-agents (cloud selects it straight from
+  // provider_credentials). Note the row's harness field holds the
+  // OAuth-completion alias 'claude', not the model-provider string
+  // 'anthropic' — the lookup must match both spellings.
+  const restoreDeps = configureCloudCredentialDepsForTest({
+    readStoredAuth: async () => ({
+      apiUrl: 'https://cloud.example.test',
+      accessToken: 'access',
+      refreshToken: 'refresh',
+      accessTokenExpiresAt: '2999-01-01T00:00:00.000Z'
+    }),
+    createCloudApiClient() {
+      return {
+        async fetch(pathname: string) {
+          assert.equal(pathname, '/api/v1/cloud-agents');
+          return okJson({
+            agents: [
+              { id: 'pc-anthropic-1', harness: 'claude', status: 'connected' }
+            ]
+          });
+        }
+      };
+    }
+  });
+  try {
+    const { handle, io } = await launch({
+      persona: persona({ harness: 'claude', model: 'claude-sonnet-4-6' }),
+      defaultPlanCredential: false,
+      env: {
+        WORKFORCE_DEPLOY_CLOUD_URL: 'https://cloud.example.test',
+        WORKFORCE_DEPLOY_HARNESS_SOURCE: 'oauth',
+        WORKFORCE_DEPLOY_NO_PROMPT: '1'
+      },
+      fetch(url, init) {
+        if (init?.method === 'GET' && url.endsWith('/deployments')) return okJson({ agents: [] });
+        if (url.endsWith('/deployments')) {
+          const body = JSON.parse(String(init?.body)) as Record<string, unknown>;
+          assert.deepEqual(body.credentialSelections, { anthropic: 'pc-anthropic-1' });
+          assert.deepEqual(body.credential_selections, { anthropic: 'pc-anthropic-1' });
+          return okJson({ agentId: 'agent-oauth-anthropic', deploymentId: 'dep-1', status: 'active' }, 201);
+        }
+        throw new Error(`unexpected URL ${url}`);
+      }
+    });
+    assert.equal(handle.id, 'agent-oauth-anthropic');
+    assert.ok(
+      io.messages.some((entry) => entry.message.includes('selected connected anthropic credential')),
+      'expected the selected-credential info line'
+    );
+  } finally {
+    restoreDeps();
+  }
+});
+
+test('cloud oauth deploy does NOT stamp openai selections and prints the harness-only message', async () => {
+  // ChatGPT/codex OAuth tokens are harness-only: cloud's runtime credential
+  // resolution rejects them for env injection, so stamping one would turn
+  // the ctx.llm stub into a failed delivery. The deploy must stay
+  // unstamped and tell the user the working alternatives.
+  const restoreDeps = configureCloudCredentialDepsForTest({
+    readStoredAuth: async () => ({
+      apiUrl: 'https://cloud.example.test',
+      accessToken: 'access',
+      refreshToken: 'refresh',
+      accessTokenExpiresAt: '2999-01-01T00:00:00.000Z'
+    }),
+    createCloudApiClient() {
+      return {
+        async fetch(pathname: string) {
+          assert.equal(pathname, '/api/v1/cloud-agents');
+          return okJson({
+            agents: [
+              { id: 'pc-openai-1', harness: 'openai', status: 'connected' }
+            ]
+          });
+        }
+      };
+    }
+  });
+  try {
+    const { io } = await launch({
+      defaultPlanCredential: false,
+      env: {
+        WORKFORCE_DEPLOY_CLOUD_URL: 'https://cloud.example.test',
+        WORKFORCE_DEPLOY_HARNESS_SOURCE: 'oauth',
+        WORKFORCE_DEPLOY_NO_PROMPT: '1'
+      },
+      fetch(url, init) {
+        if (init?.method === 'GET' && url.endsWith('/deployments')) return okJson({ agents: [] });
+        if (url.endsWith('/deployments')) {
+          const body = JSON.parse(String(init?.body)) as Record<string, unknown>;
+          assert.deepEqual(body.credentialSelections, {});
+          assert.deepEqual(body.credential_selections, {});
+          return okJson({ agentId: 'agent-oauth-openai', deploymentId: 'dep-1', status: 'active' }, 201);
+        }
+        throw new Error(`unexpected URL ${url}`);
+      }
+    });
+    assert.ok(
+      io.messages.some((entry) => entry.message.includes('harness-only')),
+      'expected the harness-only guidance line'
+    );
+  } finally {
+    restoreDeps();
+  }
+});
+
+test('cloud oauth deploy falls back to unstamped when the connected row has no id', async () => {
+  // Defensive split between the probe and the stamp: a connected entry
+  // missing its id must still count as connected (no reconnect prompt)
+  // while the selection stamp degrades to today's unstamped behavior with
+  // an explanatory line instead of failing the deploy.
+  const restoreDeps = configureCloudCredentialDepsForTest({
+    readStoredAuth: async () => ({
+      apiUrl: 'https://cloud.example.test',
+      accessToken: 'access',
+      refreshToken: 'refresh',
+      accessTokenExpiresAt: '2999-01-01T00:00:00.000Z'
+    }),
+    createCloudApiClient() {
+      return {
+        async fetch(pathname: string) {
+          assert.equal(pathname, '/api/v1/cloud-agents');
+          return okJson({
+            agents: [{ harness: 'claude', status: 'connected' }]
+          });
+        }
+      };
+    }
+  });
+  try {
+    const { handle, io } = await launch({
+      persona: persona({ harness: 'claude', model: 'claude-sonnet-4-6' }),
+      defaultPlanCredential: false,
+      env: {
+        WORKFORCE_DEPLOY_CLOUD_URL: 'https://cloud.example.test',
+        WORKFORCE_DEPLOY_HARNESS_SOURCE: 'oauth',
+        WORKFORCE_DEPLOY_NO_PROMPT: '1'
+      },
+      fetch(url, init) {
+        if (init?.method === 'GET' && url.endsWith('/deployments')) return okJson({ agents: [] });
+        if (url.endsWith('/deployments')) {
+          const body = JSON.parse(String(init?.body)) as Record<string, unknown>;
+          assert.deepEqual(body.credentialSelections, {});
+          return okJson({ agentId: 'agent-oauth-noid', deploymentId: 'dep-1', status: 'active' }, 201);
+        }
+        throw new Error(`unexpected URL ${url}`);
+      }
+    });
+    assert.equal(handle.id, 'agent-oauth-noid');
+    assert.ok(
+      io.messages.some((entry) => entry.message.includes('no connected anthropic credential row')),
+      'expected the unstamped-fallback info line'
+    );
+  } finally {
+    restoreDeps();
+  }
+});
+
+test('cloud oauth deploy stamps the ACTIVE anthropic row over a newer inactive one', async () => {
+  // The web wizard selects on is_active (cloud keeps one active row per
+  // provider), not recency — cloud lists rows most-recently-updated first,
+  // so a newer-but-inactive row precedes the active one in the response.
+  // The stamp must prefer the flagged row and only fall back to list order
+  // when no row carries the flag.
+  const restoreDeps = configureCloudCredentialDepsForTest({
+    readStoredAuth: async () => ({
+      apiUrl: 'https://cloud.example.test',
+      accessToken: 'access',
+      refreshToken: 'refresh',
+      accessTokenExpiresAt: '2999-01-01T00:00:00.000Z'
+    }),
+    createCloudApiClient() {
+      return {
+        async fetch(pathname: string) {
+          assert.equal(pathname, '/api/v1/cloud-agents');
+          return okJson({
+            agents: [
+              { id: 'pc-newer-inactive', harness: 'claude', status: 'connected', isActive: false },
+              { id: 'pc-older-active', harness: 'claude', status: 'connected', is_active: true }
+            ]
+          });
+        }
+      };
+    }
+  });
+  try {
+    await launch({
+      persona: persona({ harness: 'claude', model: 'claude-sonnet-4-6' }),
+      defaultPlanCredential: false,
+      env: {
+        WORKFORCE_DEPLOY_CLOUD_URL: 'https://cloud.example.test',
+        WORKFORCE_DEPLOY_HARNESS_SOURCE: 'oauth',
+        WORKFORCE_DEPLOY_NO_PROMPT: '1'
+      },
+      fetch(url, init) {
+        if (init?.method === 'GET' && url.endsWith('/deployments')) return okJson({ agents: [] });
+        if (url.endsWith('/deployments')) {
+          const body = JSON.parse(String(init?.body)) as Record<string, unknown>;
+          assert.deepEqual(body.credentialSelections, { anthropic: 'pc-older-active' });
+          return okJson({ agentId: 'agent-oauth-active', deploymentId: 'dep-1', status: 'active' }, 201);
+        }
+        throw new Error(`unexpected URL ${url}`);
+      }
+    });
+  } finally {
+    restoreDeps();
+  }
+});
+
+test('cloud oauth deploy cross-stamps a connected anthropic credential for an openai-family persona', async () => {
+  // The codex/ChatGPT OAuth credential cannot back ctx.llm, but the runtime
+  // already falls back to whichever provider env IS present and swaps in
+  // that family's default model — so the deploy stamps the connected
+  // anthropic credential instead of leaving the deployment selection-less.
+  const restoreDeps = configureCloudCredentialDepsForTest({
+    readStoredAuth: async () => ({
+      apiUrl: 'https://cloud.example.test',
+      accessToken: 'access',
+      refreshToken: 'refresh',
+      accessTokenExpiresAt: '2999-01-01T00:00:00.000Z'
+    }),
+    createCloudApiClient() {
+      return {
+        async fetch(pathname: string) {
+          assert.equal(pathname, '/api/v1/cloud-agents');
+          return okJson({
+            agents: [
+              { id: 'pc-openai-oauth', harness: 'openai', status: 'connected' },
+              { id: 'pc-anthropic-1', harness: 'claude', status: 'connected', isActive: true }
+            ]
+          });
+        }
+      };
+    }
+  });
+  try {
+    const { io } = await launch({
+      defaultPlanCredential: false,
+      env: {
+        WORKFORCE_DEPLOY_CLOUD_URL: 'https://cloud.example.test',
+        WORKFORCE_DEPLOY_HARNESS_SOURCE: 'oauth',
+        WORKFORCE_DEPLOY_NO_PROMPT: '1'
+      },
+      fetch(url, init) {
+        if (init?.method === 'GET' && url.endsWith('/deployments')) return okJson({ agents: [] });
+        if (url.endsWith('/deployments')) {
+          const body = JSON.parse(String(init?.body)) as Record<string, unknown>;
+          assert.deepEqual(body.credentialSelections, { anthropic: 'pc-anthropic-1' });
+          assert.deepEqual(body.credential_selections, { anthropic: 'pc-anthropic-1' });
+          return okJson({ agentId: 'agent-cross-stamp', deploymentId: 'dep-1', status: 'active' }, 201);
+        }
+        throw new Error(`unexpected URL ${url}`);
+      }
+    });
+    assert.ok(
+      io.messages.some((entry) =>
+        entry.message.includes('stamping your connected anthropic credential instead')
+      ),
+      'expected the cross-stamp info line'
+    );
+  } finally {
+    restoreDeps();
+  }
+});

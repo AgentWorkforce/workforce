@@ -69,6 +69,8 @@ interface CloudAgentEntry {
   status?: unknown;
   credentialStoredAt?: unknown;
   id?: unknown;
+  isActive?: unknown;
+  is_active?: unknown;
 }
 
 interface ExistingAgentResponse {
@@ -324,7 +326,7 @@ async function ensureHarnessReady(args: {
   }
 
   await ensureHarnessOauth(args);
-  return {};
+  return resolveOauthCredentialSelections(args);
 }
 
 async function resolveHarnessSource(args: {
@@ -375,22 +377,87 @@ async function isHarnessOauthConnected(args: {
   cloudUrl: string;
   persona: PersonaSpec;
 }): Promise<boolean> {
-  const auth = await readUsableCloudAuth(args.cloudUrl);
-  if (!auth) return false;
-  const client = cloudCredentialDeps.createCloudApiClient(auth, args.cloudUrl);
+  const body = await fetchCloudAgents(args.cloudUrl);
+  if (!body) return false;
+  return hasConnectedHarness(body, deriveModelProvider(args.persona));
+}
+
+/**
+ * Fetch the `/api/v1/cloud-agents` list, or `null` when there is no usable
+ * stored auth or the route doesn't exist on the target cloud (404/405).
+ */
+async function fetchCloudAgents(cloudUrl: string): Promise<CloudAgentsListResponse | null> {
+  const auth = await readUsableCloudAuth(cloudUrl);
+  if (!auth) return null;
+  const client = cloudCredentialDeps.createCloudApiClient(auth, cloudUrl);
   const res = await client.fetch('/api/v1/cloud-agents', {
     method: 'GET',
     headers: { 'user-agent': USER_AGENT }
   });
-  if (res.status === 404 || res.status === 405) return false;
+  if (res.status === 404 || res.status === 405) return null;
   if (res.status === 401) {
     throw new Error('cloud harness check failed: unauthorized. Run `agentworkforce login` and retry.');
   }
   if (!res.ok) {
     throw new Error(`cloud harness check failed: ${res.status} ${await responseExcerpt(res)}`);
   }
-  const body = (await res.json()) as CloudAgentsListResponse;
-  return hasConnectedHarness(body, deriveModelProvider(args.persona));
+  return (await res.json()) as CloudAgentsListResponse;
+}
+
+/**
+ * Stamp `credentialSelections` for the oauth harness source so cloud's
+ * runtime can configure `ctx.llm` from the deployment. The byok/plan legs
+ * already stamp the credential they create; an oauth deploy without a
+ * selection leaves the deployment with empty selections and every fire
+ * stubs ctx.llm — workforce#196.
+ *
+ * Provider split is deliberate:
+ * - anthropic: the OAuth completion route upserts a `provider_credentials`
+ *   row, and cloud resolves it to a runtime env credential — stamp it.
+ * - openai (and anything else): ChatGPT/codex OAuth tokens are harness-only;
+ *   cloud rejects them for runtime env, so stamping the persona-family
+ *   credential would turn the ctx.llm stub into a failed delivery. Stamp a
+ *   connected anthropic credential instead when one exists (the runtime
+ *   adapts the model family), else print the actionable alternative.
+ */
+async function resolveOauthCredentialSelections(args: {
+  cloudUrl: string;
+  persona: PersonaSpec;
+  io: ModeLaunchInput['io'];
+}): Promise<Record<string, string>> {
+  const provider = deriveModelProvider(args.persona);
+  const body = await fetchCloudAgents(args.cloudUrl);
+  if (provider !== 'anthropic') {
+    // Cross-provider fallback: the runtime's credential pick already
+    // prefers the persona's model family but falls back to whatever
+    // provider env IS present, swapping in that family's default model
+    // (cloud-llm selectCredential/resolveModel). So when the persona
+    // family can't back ctx.llm (codex/ChatGPT OAuth is harness-only), a
+    // connected anthropic credential is the honest deploy-time encoding
+    // of what the runtime would do anyway.
+    const anthropicId = body ? findConnectedHarnessCredentialId(body, 'anthropic') : null;
+    if (anthropicId) {
+      args.io.info(
+        `cloud: ${provider} subscriptions are harness-only and cannot back ctx.llm; ` +
+          'stamping your connected anthropic credential instead (the runtime adapts the model family).'
+      );
+      return { anthropic: anthropicId };
+    }
+    args.io.info(
+      `cloud: ${provider} subscriptions are harness-only and cannot back ctx.llm; ` +
+        'use --harness-source byok with a platform API key, or connect an anthropic credential.'
+    );
+    return {};
+  }
+  const credentialId = body ? findConnectedHarnessCredentialId(body, provider) : null;
+  if (!credentialId) {
+    args.io.info(
+      `cloud: no connected ${provider} credential row found; deploying without a ctx.llm credential selection.`
+    );
+    return {};
+  }
+  args.io.info(`cloud: selected connected ${provider} credential for ctx.llm`);
+  return { [provider]: credentialId };
 }
 
 async function resolveByokKey(args: {
@@ -493,7 +560,10 @@ export async function ensureCloudSubscriptionReady(args: {
   }
 
   await ensureSubscriptionOauth(args);
-  return { provider };
+  const credentialSelections = await resolveOauthCredentialSelections(args);
+  return Object.keys(credentialSelections).length > 0
+    ? { provider, credentialSelections }
+    : { provider };
 }
 
 function resolveSubscriptionHarnessSource(args: {
@@ -869,26 +939,87 @@ function readCredentialId(body: Record<string, unknown>): string {
 }
 
 /**
- * Walk the `/api/v1/cloud-agents` response and decide whether any entry
- * represents a usable, connected credential for the given harness/provider.
+ * Walk the `/api/v1/cloud-agents` response and return the credential row id
+ * of the first entry that represents a usable, connected credential for the
+ * given model provider, or `null` when none matches.
  *
- * "Usable" means: the cloud_agents row exists, its `harness` field
- * matches the persona's derived model provider (case-insensitive), and
- * its `status` is `connected`. The S3-backed credential write happens
- * before the row is marked connected, so this single check is enough —
- * no second probe required.
+ * "Usable" means: the row exists, its `harness` field matches the persona's
+ * derived model provider (case-insensitive), and its `status` is
+ * `connected`. The S3-backed credential write happens before the row is
+ * marked connected, so this single check is enough — no second probe
+ * required.
+ *
+ * The response rows come straight from cloud's `provider_credentials`
+ * table, where `harness` may hold either the model-provider string
+ * ("anthropic") or the harness alias cloud's OAuth completion route stamps
+ * ("claude"), depending on which write path created the row — so match
+ * against both. Cloud lists rows most-recently-updated first.
  */
-function hasConnectedHarness(body: CloudAgentsListResponse, expectedHarness: string): boolean {
-  if (!body || !Array.isArray(body.agents)) return false;
-  const target = expectedHarness.trim().toLowerCase();
-  if (!target) return false;
-  return body.agents.some((value): boolean => {
-    if (!value || typeof value !== 'object' || Array.isArray(value)) return false;
+function connectedHarnessEntries(
+  body: CloudAgentsListResponse,
+  expectedProvider: string
+): CloudAgentEntry[] {
+  if (!body || !Array.isArray(body.agents)) return [];
+  const provider = expectedProvider.trim().toLowerCase();
+  if (!provider) return [];
+  const targets = new Set([provider, harnessAliasForModelProvider(provider)]);
+  const entries: CloudAgentEntry[] = [];
+  for (const value of body.agents) {
+    if (!value || typeof value !== 'object' || Array.isArray(value)) continue;
     const entry = value as CloudAgentEntry;
-    if (typeof entry.harness !== 'string') return false;
-    if (entry.harness.trim().toLowerCase() !== target) return false;
-    return entry.status === 'connected';
-  });
+    if (typeof entry.harness !== 'string') continue;
+    if (!targets.has(entry.harness.trim().toLowerCase())) continue;
+    if (entry.status !== 'connected') continue;
+    entries.push(entry);
+  }
+  return entries;
+}
+
+function hasConnectedHarness(body: CloudAgentsListResponse, expectedProvider: string): boolean {
+  return connectedHarnessEntries(body, expectedProvider).length > 0;
+}
+
+function findConnectedHarnessCredentialId(
+  body: CloudAgentsListResponse,
+  expectedProvider: string
+): string | null {
+  const entries = connectedHarnessEntries(body, expectedProvider);
+  // The web wizard selects on is_active (one active row per provider —
+  // cloud's partial unique index), not recency, so prefer the flagged row.
+  // Older clouds / pre-backfill rows may not carry the flag; fall back to
+  // the list order (cloud returns most-recently-updated first).
+  const candidates = [
+    ...entries.filter(isActiveCloudAgentEntry),
+    ...entries.filter((entry) => !isActiveCloudAgentEntry(entry))
+  ];
+  for (const entry of candidates) {
+    if (typeof entry.id === 'string' && entry.id.trim()) return entry.id.trim();
+  }
+  return null;
+}
+
+function isActiveCloudAgentEntry(entry: CloudAgentEntry): boolean {
+  return entry.isActive === true || entry.is_active === true;
+}
+
+/**
+ * Mirror of cloud's `harnessForModelProvider` (lib/billing/house-keys.ts):
+ * the harness name its OAuth completion route writes into
+ * `provider_credentials.harness` for each model provider.
+ */
+function harnessAliasForModelProvider(modelProvider: string): string {
+  switch (modelProvider) {
+    case 'anthropic':
+      return 'claude';
+    case 'openai':
+      return 'codex';
+    case 'google':
+      return 'gemini';
+    case 'openrouter':
+      return 'opencode';
+    default:
+      return modelProvider;
+  }
 }
 
 function expectHarnessSource(value: string): HarnessSource {
