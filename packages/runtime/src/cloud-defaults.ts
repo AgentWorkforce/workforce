@@ -11,12 +11,14 @@ import {
   resolveStringMapLenient,
   type PersonaSpec
 } from '@agentworkforce/persona-kit';
+import { createDefaultLlm } from './cloud-llm.js';
 import { SandboxNotAvailableError } from './errors.js';
 import type {
   FilesContext,
   HarnessRunArgs,
   HarnessRunResult,
   HarnessUsage,
+  LlmContext,
   SandboxContext,
   WorkforceAgentContext,
   WorkforceCtx,
@@ -57,6 +59,7 @@ export interface CloudRuntimeDefaults {
   sandbox: SandboxContext;
   files: FilesContext;
   workflow?: WorkflowContext;
+  llm?: LlmContext;
   harnessRunner: (args: HarnessRunArgs) => Promise<HarnessRunResult>;
 }
 
@@ -73,10 +76,18 @@ export function createCloudRuntimeDefaults(options: CloudDefaultOptions): CloudR
     workspaceRoot: root,
     env
   });
+  // ctx.llm from sandbox credentials — without this, no cloud persona ever
+  // gets a working ctx.llm (buildCtx falls back to a throwing stub).
+  const llm = createDefaultLlm({
+    persona: options.persona,
+    env,
+    log: options.log
+  });
   return {
     sandbox,
     files,
     ...(workflow ? { workflow } : {}),
+    ...(llm ? { llm } : {}),
     harnessRunner: createProcessHarnessRunner({
       ...options,
       workspaceRoot: root,
