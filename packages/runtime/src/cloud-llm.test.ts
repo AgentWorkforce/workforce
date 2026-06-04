@@ -26,7 +26,7 @@ interface CapturedRequest {
 
 function stubFetch(
   t: { after(fn: () => void): void },
-  response: { status?: number; payload?: unknown; rawBody?: string }
+  response: { status?: number; payload?: unknown; rawBody?: string; body?: BodyInit }
 ): CapturedRequest[] {
   const captured: CapturedRequest[] = [];
   const original = globalThis.fetch;
@@ -43,7 +43,7 @@ function stubFetch(
     });
     const status = response.status ?? 200;
     const body = response.rawBody ?? JSON.stringify(response.payload ?? {});
-    return new Response(body, {
+    return new Response(response.body ?? body, {
       status,
       headers: { 'content-type': 'application/json' }
     });
@@ -269,6 +269,64 @@ test('codex backend stream must reach response.completed', async (t) => {
   });
   assert.ok(llm);
   await assert.rejects(llm.complete('hi'), /response\.completed/);
+});
+
+test('codex backend stream resolves on response.completed without waiting for socket close', async (t) => {
+  const encoder = new TextEncoder();
+  const stream = new ReadableStream<Uint8Array>({
+    start(controller) {
+      controller.enqueue(
+        encoder.encode(
+          [
+            'event: response.output_text.delta',
+            'data: {"type":"response.output_text.delta","delta":"stream "}',
+            '',
+            'event: response.output_text.delta',
+            'data: {"type":"response.output_text.delta","delta":"done"}',
+            '',
+            'event: response.completed',
+            'data: {"type":"response.completed","response":{"id":"resp-1"}}',
+            '',
+            ''
+          ].join('\n')
+        )
+      );
+    }
+  });
+  const requests = stubFetch(t, { body: stream });
+  const llm = createDefaultLlm({
+    persona: { ...basePersona, harness: 'codex', model: 'openai-codex/gpt-5.5-codex' },
+    env: { CODEX_OAUTH_TOKEN: 'chatgpt-access', CODEX_ACCOUNT_ID: 'acct-123' },
+    log: noopLog
+  });
+  assert.ok(llm);
+  const result = await llm.complete('hi');
+  assert.equal(result, 'stream done');
+  assert.equal(requests.length, 1);
+});
+
+test('codex backend stream does not duplicate output_item.done after deltas', async (t) => {
+  stubFetch(t, {
+    rawBody: [
+      'event: response.output_text.delta',
+      'data: {"type":"response.output_text.delta","delta":"hello"}',
+      '',
+      'event: response.output_item.done',
+      'data: {"type":"response.output_item.done","item":{"type":"message","role":"assistant","content":[{"type":"output_text","text":"hello"}]}}',
+      '',
+      'event: response.completed',
+      'data: {"type":"response.completed","response":{"id":"resp-1"}}',
+      '',
+      ''
+    ].join('\n')
+  });
+  const llm = createDefaultLlm({
+    persona: { ...basePersona, harness: 'codex', model: 'openai-codex/gpt-5.5-codex' },
+    env: { CODEX_OAUTH_TOKEN: 'chatgpt-access', CODEX_ACCOUNT_ID: 'acct-123' },
+    log: noopLog
+  });
+  assert.ok(llm);
+  assert.equal(await llm.complete('hi'), 'hello');
 });
 
 test('anthropic credential is the default when the persona model names no family', async (t) => {

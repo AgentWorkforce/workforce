@@ -418,8 +418,7 @@ async function postCodexBackendStream(
     throw new Error(`ctx.llm: ${url} returned ${response.status}: ${detail}`);
   }
 
-  const raw = await response.text();
-  const { text, completed } = parseCodexBackendSse(raw);
+  const { text, completed } = await readCodexBackendSse(response);
   if (!completed) {
     throw new Error('ctx.llm: Codex backend stream closed before response.completed');
   }
@@ -429,35 +428,99 @@ async function postCodexBackendStream(
   return text;
 }
 
-function parseCodexBackendSse(raw: string): { text: string; completed: boolean } {
-  const chunks = raw.split(/\r?\n\r?\n/);
-  let text = '';
-  let completed = false;
-  for (const chunk of chunks) {
-    const lines = chunk.split(/\r?\n/);
-    const data = lines
-      .filter((line) => line.startsWith('data:'))
-      .map((line) => line.slice('data:'.length).trimStart())
-      .join('\n');
-    if (!data || data === '[DONE]') continue;
-    let event: unknown;
-    try {
-      event = JSON.parse(data) as unknown;
-    } catch {
-      continue;
-    }
-    if (!isRecord(event)) continue;
-    if (event.type === 'response.output_text.delta' && typeof event.delta === 'string') {
-      text += event.delta;
-    } else if (event.type === 'response.output_item.done') {
-      text += outputTextFromItem(event.item);
-    } else if (event.type === 'response.completed') {
-      completed = true;
-    } else if (event.type === 'response.failed' || event.type === 'response.incomplete') {
-      throw new Error(`ctx.llm: Codex backend stream returned ${String(event.type)}`);
-    }
+async function readCodexBackendSse(response: Response): Promise<{ text: string; completed: boolean }> {
+  if (!response.body) {
+    return parseCodexBackendSse(await response.text());
   }
-  return { text, completed };
+
+  const reader = response.body.getReader();
+  const decoder = new TextDecoder();
+  const parser = createCodexBackendSseParser();
+  try {
+    while (true) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      consumeCodexBackendSse(parser, decoder.decode(value, { stream: true }));
+      if (parser.completed) {
+        await reader.cancel().catch(() => undefined);
+        return { text: parser.text, completed: true };
+      }
+    }
+    consumeCodexBackendSse(parser, decoder.decode(), true);
+    return { text: parser.text, completed: parser.completed };
+  } finally {
+    reader.releaseLock();
+  }
+}
+
+function parseCodexBackendSse(raw: string): { text: string; completed: boolean } {
+  const parser = createCodexBackendSseParser();
+  consumeCodexBackendSse(parser, raw, true);
+  return { text: parser.text, completed: parser.completed };
+}
+
+interface CodexBackendSseParser {
+  buffer: string;
+  text: string;
+  completed: boolean;
+  sawTextDelta: boolean;
+}
+
+function createCodexBackendSseParser(): CodexBackendSseParser {
+  return { buffer: '', text: '', completed: false, sawTextDelta: false };
+}
+
+function consumeCodexBackendSse(
+  parser: CodexBackendSseParser,
+  chunk: string,
+  flush = false
+): void {
+  parser.buffer += chunk;
+  while (!parser.completed) {
+    const boundary = findSseFrameBoundary(parser.buffer);
+    if (!boundary) break;
+    const frame = parser.buffer.slice(0, boundary.index);
+    parser.buffer = parser.buffer.slice(boundary.index + boundary.length);
+    consumeCodexBackendSseFrame(parser, frame);
+  }
+  if (flush && parser.buffer.trim()) {
+    consumeCodexBackendSseFrame(parser, parser.buffer);
+    parser.buffer = '';
+  }
+}
+
+function findSseFrameBoundary(buffer: string): { index: number; length: number } | null {
+  const lf = buffer.indexOf('\n\n');
+  const crlf = buffer.indexOf('\r\n\r\n');
+  if (lf === -1) return crlf === -1 ? null : { index: crlf, length: 4 };
+  if (crlf === -1 || lf < crlf) return { index: lf, length: 2 };
+  return { index: crlf, length: 4 };
+}
+
+function consumeCodexBackendSseFrame(parser: CodexBackendSseParser, frame: string): void {
+  const data = frame
+    .split(/\r?\n/)
+    .filter((line) => line.startsWith('data:'))
+    .map((line) => line.slice('data:'.length).trimStart())
+    .join('\n');
+  if (!data || data === '[DONE]') return;
+  let event: unknown;
+  try {
+    event = JSON.parse(data) as unknown;
+  } catch {
+    return;
+  }
+  if (!isRecord(event)) return;
+  if (event.type === 'response.output_text.delta' && typeof event.delta === 'string') {
+    parser.text += event.delta;
+    parser.sawTextDelta = true;
+  } else if (event.type === 'response.output_item.done' && !parser.sawTextDelta) {
+    parser.text += outputTextFromItem(event.item);
+  } else if (event.type === 'response.completed') {
+    parser.completed = true;
+  } else if (event.type === 'response.failed' || event.type === 'response.incomplete') {
+    throw new Error(`ctx.llm: Codex backend stream returned ${String(event.type)}`);
+  }
 }
 
 function outputTextFromItem(item: unknown): string {
