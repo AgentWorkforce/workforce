@@ -414,11 +414,20 @@ export function scaffoldFixture(type: string): {
   const occurredAt = new Date().toISOString();
 
   if (type === 'cron.tick' || type.startsWith('cron.')) {
+    if (type !== 'cron.tick') {
+      // Preserve what was asked for (a silent rewrite would scaffold a
+      // DIFFERENT event type than requested) but warn: the gateway
+      // delivers schedule fires as `cron.tick`, and the runner shim
+      // treats any `cron.*` as a cron event.
+      warnings.push(
+        `the gateway delivers schedule fires as "cron.tick"; preserving requested type "${type}" (the runner shim still dispatches any cron.* as a cron event)`
+      );
+    }
     return {
       fixture: {
         id: 'evt_local_1',
         workspace: 'ws-local',
-        type: 'cron.tick',
+        type,
         occurredAt,
         name: 'TODO: your schedule name (persona schedules[].name)',
         cron: '0 9 * * 1'

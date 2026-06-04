@@ -112,3 +112,16 @@ test('parseRunsArgs: =-inline forms for workspace and cloud-url', () => {
   assert.equal(parsed.options.workspace, 'ws-9');
   assert.equal(parsed.options.cloudUrl, 'https://example.com');
 });
+
+test('interpretEnvelopeResponse: non-object envelopes are refused (string/number/array)', () => {
+  for (const envelope of ['"oops"', 42, ['not', 'an', 'envelope']]) {
+    const result = interpretEnvelopeResponse(
+      { captured: true, omitted: false, envelope },
+      'run-1',
+      'hn-monitor'
+    );
+    assert.ok(!result.ok, `expected refusal for ${JSON.stringify(envelope)}`);
+    if (result.ok) continue;
+    assert.match(result.error, /non-object envelope/);
+  }
+});

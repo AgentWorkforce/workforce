@@ -380,3 +380,10 @@ test('runInvoke --scaffold writes the skeleton and exits clean', async () => {
   const skeleton = JSON.parse(io.out.join(''));
   assert.equal(skeleton.type, 'cron.tick');
 });
+
+test('scaffoldFixture: non-tick cron types are PRESERVED with a warning, never rewritten', () => {
+  const { fixture, warnings } = scaffoldFixture('cron.daily');
+  assert.equal(fixture.type, 'cron.daily');
+  assert.equal(warnings.length, 1);
+  assert.match(warnings[0], /preserving requested type "cron.daily"/);
+});

@@ -240,6 +240,18 @@ export function interpretEnvelopeResponse(
   agentName: string
 ): { ok: true; fixture: string } | { ok: false; error: string } {
   if (payload.captured === true && payload.envelope !== null && payload.envelope !== undefined) {
+    // Same never-fabricate stance as below: an envelope MUST be a JSON
+    // object (RawGatewayEnvelope frame). A string/number/array here is a
+    // contract-violating response — exporting it would only move the
+    // failure to `invoke` time with a worse message.
+    if (typeof payload.envelope !== 'object' || Array.isArray(payload.envelope)) {
+      return {
+        ok: false,
+        error:
+          `run ${runId} (agent ${agentName}): the envelope endpoint returned a non-object envelope ` +
+          `(${Array.isArray(payload.envelope) ? 'array' : typeof payload.envelope}) — contract-violating response, refusing to write a fixture that cannot replay.`
+      };
+    }
     return { ok: true, fixture: `${JSON.stringify(payload.envelope, null, 2)}\n` };
   }
   if (payload.omitted === true) {
