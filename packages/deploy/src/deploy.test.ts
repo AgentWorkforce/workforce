@@ -54,6 +54,14 @@ export default defineAgent({
 });
 `;
 
+const INVALID_LAUNCHED_BY_AGENT_SRC = `import { defineAgent } from '@agentworkforce/runtime';
+export default defineAgent({
+  launchedBy: '',
+  schedules: [{ name: 'weekly', cron: '0 9 * * 6' }],
+  handler: async () => {}
+});
+`;
+
 const MISSING_HANDLER_AGENT_SRC = `import { defineAgent } from '@agentworkforce/runtime';
 export default defineAgent({
   schedules: [{ name: 'weekly', cron: '0 9 * * 6' }]
@@ -267,6 +275,18 @@ test('preflightPersona accepts listener-free agents launched by the team dispatc
     const pre = await preflightPersona(personaPath);
     assert.deepEqual(pre.schedules, []);
     assert.equal(pre.agent.launchedBy, 'team-dispatcher');
+  } finally {
+    await cleanup();
+  }
+});
+
+test('preflightPersona rejects unsupported launchedBy values even when listeners exist', async () => {
+  const { personaPath, cleanup } = await withTempPersona(
+    basePersonaJson({ integrations: undefined }),
+    INVALID_LAUNCHED_BY_AGENT_SRC
+  );
+  try {
+    await assert.rejects(preflightPersona(personaPath), /launchedBy must be one of: team-dispatcher/);
   } finally {
     await cleanup();
   }

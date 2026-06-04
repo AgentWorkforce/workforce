@@ -33,9 +33,10 @@ import {
  * named imports without a static "no matching export" error.
  */
 const RUNTIME_STUB = `
+const hasOwn = Object.prototype.hasOwnProperty;
 function defineAgent(input) {
   const out = {};
-  if (input && input.launchedBy) out.launchedBy = input.launchedBy;
+  if (input && hasOwn.call(input, 'launchedBy')) out.launchedBy = input.launchedBy;
   if (input && input.triggers) out.triggers = input.triggers;
   if (input && input.schedules) out.schedules = input.schedules;
   if (input && input.watch) out.watch = input.watch;

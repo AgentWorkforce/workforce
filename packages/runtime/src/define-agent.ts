@@ -163,7 +163,7 @@ export function defineAgent<
     watch?: readonly WatchRule[];
     handler: WorkforceHandlerExport;
   } = {
-    ...(input.launchedBy ? { launchedBy: input.launchedBy } : {}),
+    ...(input.launchedBy !== undefined ? { launchedBy: input.launchedBy } : {}),
     ...(input.triggers ? { triggers: input.triggers as TypedTriggerMap } : {}),
     ...(input.schedules ? { schedules: input.schedules } : {}),
     ...(input.watch ? { watch: input.watch } : {}),

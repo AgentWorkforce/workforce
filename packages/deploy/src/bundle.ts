@@ -135,7 +135,7 @@ let agentSpec;
 if (exported && exported.__workforceAgent) {
   candidate = exported.handler;
   agentSpec = {
-    ...(exported.launchedBy ? { launchedBy: exported.launchedBy } : {}),
+    ...(exported.launchedBy !== undefined ? { launchedBy: exported.launchedBy } : {}),
     ...(exported.triggers ? { triggers: exported.triggers } : {}),
     ...(exported.schedules ? { schedules: exported.schedules } : {}),
     ...(exported.watch ? { watch: exported.watch } : {})
@@ -143,7 +143,7 @@ if (exported && exported.__workforceAgent) {
 } else if (exported && typeof exported.handler === 'function') {
   candidate = exported.handler;
   agentSpec = {
-    ...(exported.launchedBy ? { launchedBy: exported.launchedBy } : {}),
+    ...(exported.launchedBy !== undefined ? { launchedBy: exported.launchedBy } : {}),
     ...(exported.triggers ? { triggers: exported.triggers } : {}),
     ...(exported.schedules ? { schedules: exported.schedules } : {}),
     ...(exported.watch ? { watch: exported.watch } : {})
