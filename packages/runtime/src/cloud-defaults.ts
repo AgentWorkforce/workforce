@@ -473,13 +473,15 @@ function createProcessHarnessRunner(args: CloudDefaultOptions & {
       name: args.persona.id,
       workingDirectory: cwd
     };
+    const brokerRelayHarness = relayMcp && (harness === 'claude' || harness === 'codex');
     let spec = buildNonInteractiveSpec({
       ...specInput,
-      ...(relayMcp && harness !== 'codex' ? { relayMcp } : {})
+      ...(relayMcp && !brokerRelayHarness ? { relayMcp } : {})
     });
     let spawnArgs = [...spec.args];
     if (relayMcp && harness === 'codex') {
-      const brokerMcpArgs = await resolveCodexAgentRelayMcpArgs({
+      const brokerMcpArgs = await resolveAgentRelayBrokerMcpArgs({
+        cli: 'codex',
         env: args.env,
         relayMcp,
         cwd,
@@ -495,6 +497,39 @@ function createProcessHarnessRunner(args: CloudDefaultOptions & {
         // `@relaycast/mcp` server self-registers during MCP initialize.
         spec = buildNonInteractiveSpec({ ...specInput, relayMcp });
         spawnArgs = [...spec.args];
+      }
+    } else if (relayMcp && harness === 'claude') {
+      if (claudeMcpConfigHasRelayOverride(spawnArgs)) {
+        args.log('debug', 'harness.relay_mcp.persona_override', {
+          harness,
+          serverNames: relayOverrideServerNames(spawnArgs)
+        });
+      } else {
+        const brokerMcpArgs = await resolveAgentRelayBrokerMcpArgs({
+          cli: 'claude',
+          env: args.env,
+          relayMcp,
+          cwd,
+          // Claude persona specs already contain --mcp-config; the broker
+          // treats that as user-managed MCP and returns no injection args.
+          // Ask for the canonical broker payload, then merge agent-relay into
+          // the persona's strict config below.
+          existingArgs: [],
+          log: args.log
+        });
+        const mergedArgs = brokerMcpArgs
+          ? injectClaudeAgentRelayMcpConfig(spawnArgs, brokerMcpArgs, args.log)
+          : undefined;
+        if (mergedArgs) {
+          spawnArgs = mergedArgs;
+        } else {
+          // Legacy compatibility fallback. The broker-generated `agent-relay`
+          // MCP server is preferred because it comes from the Relay SDK broker
+          // helper and carries the pre-registered token fast path; the older
+          // `@relaycast/mcp` server self-registers during MCP initialize.
+          spec = buildNonInteractiveSpec({ ...specInput, relayMcp });
+          spawnArgs = [...spec.args];
+        }
       }
     }
     for (const warning of spec.warnings) {
@@ -564,7 +599,8 @@ function resolveRelayMcpFromEnv(env: NodeJS.ProcessEnv): RelayMcpConfig | undefi
   };
 }
 
-async function resolveCodexAgentRelayMcpArgs(args: {
+async function resolveAgentRelayBrokerMcpArgs(args: {
+  cli: 'claude' | 'codex';
   env: NodeJS.ProcessEnv;
   relayMcp: RelayMcpConfig;
   cwd: string;
@@ -576,7 +612,7 @@ async function resolveCodexAgentRelayMcpArgs(args: {
   const brokerArgs = [
     'mcp-args',
     '--cli',
-    'codex',
+    args.cli,
     '--agent-name',
     args.relayMcp.agentName,
     '--api-key',
@@ -643,6 +679,9 @@ function resolveAgentRelayBrokerBinary(env: NodeJS.ProcessEnv): string {
 function resolveSandboxAgentRelayBrokerBinary(): string | undefined {
   const suffix = agentRelayBrokerPlatformSuffix();
   if (!suffix) return undefined;
+  // Daytona cloud images install the Relay SDK smoke dependency here. This is
+  // a compatibility fallback; env overrides and PATH remain the general SDK
+  // contract for locating agent-relay-broker.
   const candidate = path.join(
     '/opt/relay-smoke/node_modules/@agent-relay/sdk/bin',
     `agent-relay-broker-${suffix}`
@@ -676,6 +715,72 @@ function injectCodexSubcommandArgs(args: string[], injected: string[]): string[]
   if (args[0] === 'exec') return ['exec', ...injected, ...args.slice(1)];
   if (args.length === 0 || args[0]?.startsWith('-')) return [...injected, ...args];
   return [...args];
+}
+
+function injectClaudeAgentRelayMcpConfig(
+  args: string[],
+  injected: string[],
+  log: WorkforceCtx['log']
+): string[] | undefined {
+  const base = parseClaudeMcpConfigArg(args);
+  const broker = parseClaudeMcpConfigArg(injected);
+  if (!base || !broker) {
+    log('warn', 'harness.relay_mcp.claude_mcp_config_missing');
+    return undefined;
+  }
+  const baseServers = readMcpServersRecord(base.payload);
+  const brokerServers = readMcpServersRecord(broker.payload);
+  const agentRelay = brokerServers?.['agent-relay'];
+  if (!baseServers || !brokerServers || agentRelay === undefined) {
+    log('warn', 'harness.relay_mcp.claude_mcp_config_invalid');
+    return undefined;
+  }
+  const mergedServers: Record<string, unknown> = {
+    ...baseServers,
+    'agent-relay': agentRelay
+  };
+  delete mergedServers.relaycast;
+  const nextPayload = {
+    ...base.payload,
+    mcpServers: mergedServers
+  };
+  const next = [...args];
+  next[base.valueIndex] = JSON.stringify(nextPayload);
+  return next;
+}
+
+function claudeMcpConfigHasRelayOverride(args: string[]): boolean {
+  return relayOverrideServerNames(args).length > 0;
+}
+
+function relayOverrideServerNames(args: string[]): string[] {
+  const parsed = parseClaudeMcpConfigArg(args);
+  const servers = parsed ? readMcpServersRecord(parsed.payload) : undefined;
+  if (!servers) return [];
+  return ['agent-relay', 'relaycast'].filter((name) => servers[name] !== undefined);
+}
+
+function parseClaudeMcpConfigArg(
+  args: string[]
+): { valueIndex: number; payload: Record<string, unknown> } | undefined {
+  const flagIndex = args.indexOf('--mcp-config');
+  if (flagIndex < 0) return undefined;
+  const valueIndex = flagIndex + 1;
+  const raw = args[valueIndex];
+  if (typeof raw !== 'string') return undefined;
+  try {
+    const payload = JSON.parse(raw);
+    return isRecord(payload) ? { valueIndex, payload } : undefined;
+  } catch {
+    return undefined;
+  }
+}
+
+function readMcpServersRecord(
+  payload: Record<string, unknown>
+): Record<string, unknown> | undefined {
+  const servers = payload.mcpServers;
+  return isRecord(servers) ? servers : undefined;
 }
 
 function isBrokerMcpArgsOutput(value: unknown): value is BrokerMcpArgsOutput {
