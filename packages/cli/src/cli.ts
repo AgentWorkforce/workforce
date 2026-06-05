@@ -80,6 +80,7 @@ import {
   startLaunchMetadataRecording,
   type LaunchMetadataRun
 } from './launch-metadata.js';
+import { createLogger } from './logger.js';
 import {
   buildPersonaSourceDirectories,
   defaultCwdPersonaDir,
@@ -94,6 +95,8 @@ import { installPersonas, type PersonaInstallResult } from './persona-install.js
 import { runPersonaCompileCommand } from './persona-compile.js';
 import { pickPersona, type PickCandidate, type PickResult } from './persona-picker.js';
 import { recordRecent, loadRecents, runPersonaPickerTui, type TuiCandidate } from './persona-tui.js';
+
+const launchMetadataLog = createLogger('launch-metadata');
 
 const USAGE = `Usage: agentworkforce <command> [args...]
 
@@ -1729,7 +1732,11 @@ async function runInteractive(
       personaSource: options.personaSource,
       cwd,
       noLaunchMetadata: options.noLaunchMetadata,
-      env: process.env
+      env: process.env,
+      // Launch metadata ingest runs in the background while the user is reading
+      // persona output; route its warnings to the CLI log file rather than the
+      // terminal so a transient backend hiccup doesn't surface as scary noise.
+      onWarn: (msg) => launchMetadataLog.warn(msg)
     });
 
   const inputEnv = inputResolution.values;
