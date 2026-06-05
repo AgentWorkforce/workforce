@@ -304,8 +304,7 @@ function createCloudMemoryContext(args: {
   log: WorkforceCtx['log'];
 }): MemoryContext {
   const endpoint = new URL(
-    `/api/v1/workspaces/${encodeURIComponent(args.workspaceId)}/memory`,
-    normalizeBaseUrl(args.cloudBaseUrl)
+    `${normalizeBaseUrl(args.cloudBaseUrl)}/api/v1/workspaces/${encodeURIComponent(args.workspaceId)}/memory`
   );
   return {
     async save(content, opts) {
