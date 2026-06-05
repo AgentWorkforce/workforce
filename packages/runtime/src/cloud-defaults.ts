@@ -608,7 +608,6 @@ async function resolveAgentRelayBrokerMcpArgs(args: {
   log: WorkforceCtx['log'];
 }): Promise<string[] | undefined> {
   const broker = resolveAgentRelayBrokerBinary(args.env);
-  const baseUrl = args.relayMcp.baseUrl ?? 'https://api.relaycast.dev';
   const brokerArgs = [
     'mcp-args',
     '--cli',
@@ -617,8 +616,7 @@ async function resolveAgentRelayBrokerMcpArgs(args: {
     args.relayMcp.agentName,
     '--api-key',
     args.relayMcp.apiKey,
-    '--base-url',
-    baseUrl,
+    ...(args.relayMcp.baseUrl ? ['--base-url', args.relayMcp.baseUrl] : []),
     '--register',
     '--cwd',
     args.cwd,
@@ -642,7 +640,7 @@ async function resolveAgentRelayBrokerMcpArgs(args: {
     args.log('warn', 'harness.relay_mcp.broker_args_failed', {
       broker,
       exitCode: result.exitCode,
-      stderr: result.stderr.trim()
+      stderr: redactRelayBrokerOutput(result.stderr.trim(), args.relayMcp)
     });
     return undefined;
   }
@@ -657,7 +655,7 @@ async function resolveAgentRelayBrokerMcpArgs(args: {
     });
     return undefined;
   }
-  if (!isBrokerMcpArgsOutput(parsed)) {
+  if (!isBrokerMcpArgsOutput(parsed) || parsed.args.length === 0) {
     args.log('warn', 'harness.relay_mcp.broker_args_invalid_shape', { broker });
     return undefined;
   }
@@ -708,7 +706,15 @@ function canExecuteFileSync(candidate: string): boolean {
 }
 
 function codexExistingArgs(args: string[]): string[] {
-  return args[0] === 'exec' ? args.slice(1) : [...args];
+  return args[0] === 'exec' ? args.slice(1, -1) : [...args];
+}
+
+function redactRelayBrokerOutput(value: string, relayMcp: RelayMcpConfig): string {
+  let redacted = value;
+  for (const secret of [relayMcp.apiKey]) {
+    if (secret) redacted = redacted.replaceAll(secret, '[REDACTED]');
+  }
+  return redacted;
 }
 
 function injectCodexSubcommandArgs(args: string[], injected: string[]): string[] {
