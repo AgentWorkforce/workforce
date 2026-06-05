@@ -269,6 +269,28 @@ test('ctx.memory.save posts to the cloud memory endpoint when sandbox env is pre
   );
 });
 
+test('ctx.memory.save preserves a configured cloud base pathname', async () => {
+  await withEnv(
+    {
+      WORKFORCE_CLOUD_URL: 'https://agentrelay.com/cloud',
+      WORKFORCE_WORKSPACE_ID: 'ws-env',
+      WORKFORCE_AGENT_TOKEN: 'agent-token'
+    },
+    async () => {
+      const calls: string[] = [];
+      await withFetch(async (url) => {
+        calls.push(String(url));
+        return jsonResponse({ id: 'mem_123' });
+      }, async () => {
+        const ctx = ctxFor({ ...basePersona, memory: true });
+        assert.deepEqual(await ctx.memory.save('remember this'), { id: 'mem_123' });
+      });
+
+      assert.equal(calls[0], 'https://agentrelay.com/cloud/api/v1/workspaces/ws-env/memory');
+    }
+  );
+});
+
 test('ctx.memory.recall fetches normalized cloud memory items', async () => {
   await withEnv(
     {
@@ -301,6 +323,31 @@ test('ctx.memory.recall fetches normalized cloud memory items', async () => {
       assert.equal(url.searchParams.get('scope'), 'workspace');
       assert.equal(url.searchParams.get('query'), 'essay');
       assert.equal(url.searchParams.get('limit'), '5');
+    }
+  );
+});
+
+test('ctx.memory.recall preserves a configured cloud base pathname', async () => {
+  await withEnv(
+    {
+      WORKFORCE_CLOUD_URL: 'https://agentrelay.com/cloud',
+      WORKFORCE_AGENT_TOKEN: 'agent-token',
+      WORKFORCE_WORKSPACE_ID: undefined,
+      RELAY_WORKSPACE_ID: undefined,
+      RELAY_DEFAULT_WORKSPACE: undefined
+    },
+    async () => {
+      const calls: string[] = [];
+      await withFetch(async (url) => {
+        calls.push(String(url));
+        return jsonResponse({ items: [] });
+      }, async () => {
+        const ctx = ctxFor({ ...basePersona, memory: true });
+        assert.deepEqual(await ctx.memory.recall('essay'), []);
+      });
+
+      const url = new URL(calls[0]);
+      assert.equal(url.origin + url.pathname, 'https://agentrelay.com/cloud/api/v1/workspaces/ws-test/memory');
     }
   );
 });
