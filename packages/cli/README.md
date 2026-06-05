@@ -1,7 +1,7 @@
 # agentworkforce CLI
 
 A thin command-line front end for the workload-router. Spawns the harness CLI
-(`claude`, `codex`, `opencode`) configured by a selected **persona** from the
+(`claude`, `codex`, `opencode`, `grok`) configured by a selected **persona** from the
 project-local layer, configured source directories, or the small internal
 built-in system catalog.
 
@@ -37,7 +37,7 @@ agentworkforce --version
 - `integrations` — discover available integrations, known trigger events, and
   connection status for the active workspace.
 - `sources` — list, add, or remove persona source directories.
-- `harness check` — probe which harnesses (`claude`, `codex`, `opencode`)
+- `harness check` — probe which harnesses (`claude`, `codex`, `opencode`, `grok`)
   are installed. See [`## Harness check`](#harness-check) below.
 - `destroy` — tear down a deployed cloud agent: cancels all relaycron
   schedules and marks the agent as destroyed. Accepts either a persona
@@ -425,7 +425,7 @@ agentworkforce harness check
 ```
 
 Probes your PATH for each supported harness binary (`claude`, `codex`,
-`opencode`) and prints a table with status (`ok` / `missing`), resolved
+`opencode`, `grok`) and prints a table with status (`ok` / `missing`), resolved
 version, and the resolved path (or the error, for missing ones). Exit
 code is always `0` — this command is diagnostic, not a gate.
 
@@ -825,10 +825,11 @@ mount rules (`.agentignore` / `.agentreadonly`) for that.
 - **Tool patterns** are passed through verbatim; use the harness's native
   grammar. For Claude Code: `Bash(<pattern>)`, `mcp__<server>` (all tools
   from that server), `mcp__<server>__<tool>` (specific tool).
-- **Harness support today:** only `claude` is wired for `permissions` (flags:
-  `--allowedTools`, `--disallowedTools`, `--permission-mode`). codex and
-  opencode emit a warning and fall back to their defaults when `permissions`
-  is set.
+- **Harness support today:** `claude` is wired for allow/deny/mode flags
+  (`--allowedTools`, `--disallowedTools`, `--permission-mode`). `grok` is
+  wired for `mode` via `--permission-mode`; allow/deny lists warn and are
+  ignored. `codex` and `opencode` emit a warning and fall back to their
+  defaults when `permissions` is set.
 - **Cascade merge:** `allow` and `deny` are unions across layers (deduped on
   merge); `mode` is replaced by the topmost layer that sets it. So the
   library can declare the minimum-viable allow list, a user or configured
@@ -913,6 +914,7 @@ verbatim. Three transport types:
 | claude   | yes (via `--mcp-config` + `--strict-mcp-config`) | not yet — SDK workflow path doesn't thread MCP |
 | codex    | yes (via `--config mcp_servers.<name>...`) | not yet — SDK workflow path doesn't thread MCP |
 | opencode | not yet — warns and proceeds without MCP | not yet |
+| grok     | not yet — warns and proceeds without MCP | not yet |
 
 For a persona that needs MCP today, pick `claude` or `codex` as the harness
 for that tier.
@@ -934,14 +936,15 @@ persona session, add it to the persona's `mcpServers` block.
 agentworkforce agent [--install-in-repo] [--no-launch-metadata] <persona>[@<tier>]
 ```
 
-By default, claude and opencode sessions run inside a sandbox mount — see
+By default, interactive harness sessions run inside a sandbox mount — see
 [**Sandbox mount**](#sandbox-mount) below. `--install-in-repo` opts out.
 
 1. Resolves the persona, walks the cascade, resolves `$VAR` refs.
 2. **Stages skills outside the repo by default** (claude interactive only —
-   see **Skill staging** below). For codex / opencode, or when
+   see **Skill staging** below). For codex / opencode / grok, or when
    `--install-in-repo` is passed, falls back to the legacy repo-relative
-   install path (`.claude/skills/`, `.agents/skills/`, `.skills/`).
+   install path (`.claude/skills/`, `.agents/skills/`, `.skills/`,
+   `.grok/skills/`).
 3. Runs skill install (`prpm install …`) if the persona declares any skills,
    using the computed target (stage dir or repo).
 4. Execs the harness binary with stdio inherited:
@@ -954,8 +957,10 @@ By default, claude and opencode sessions run inside a sandbox mount — see
      isolation** above).
    - `codex`: `codex -m <model>` with the system prompt as the initial
      positional `[PROMPT]`. (codex has no `--system-prompt` flag today.)
-   - `opencode`: `opencode --model <model>` with the system prompt as the
-     initial argument.
+   - `opencode`: `opencode --agent <personaId>` with a generated
+     `opencode.json` in the sandbox carrying the persona model and prompt.
+   - `grok`: `grok --no-auto-update --model <model>`. In one-shot paths, the
+     CLI uses Grok Build's `--single` mode and passes cwd/output flags.
 5. Runs the skill cleanup command on exit, regardless of exit status. In
    stage-dir mode this is a single `rm -rf <stage-dir>`.
 6. Records launch metadata for the session and refreshes harness session logs
@@ -1042,7 +1047,7 @@ stage dir conflicts with something else (network filesystem, read-only
 
 **Caveats for V1:**
 
-- **Claude harness only.** codex and opencode continue to install into their
+- **Claude harness only.** codex, opencode, and grok continue to install into their
   conventional repo-relative directories. The SDK throws if `installRoot` is
   passed with a non-claude harness.
 - **No cache layer yet.** Every interactive session runs a fresh prpm install
@@ -1051,13 +1056,13 @@ stage dir conflicts with something else (network filesystem, read-only
 
 ## Sandbox mount
 
-By default, claude and opencode interactive sessions run inside a
+By default, interactive harness sessions run inside a
 [`@relayfile/local-mount`](https://www.npmjs.com/package/@relayfile/local-mount)
 mount that hides repo-level harness configuration from the session, applies
 the persona `mount` block plus Relayfile `.agentignore` / `.agentreadonly`
 rules, and routes skill-install writes into the sandbox — so the model sees
 persona context + user-level context, and only the project files the mount
-exposes. Codex sessions never mount (no harness-side support).
+exposes.
 
 `--install-in-repo` opts out and runs against the real cwd.
 
@@ -1081,12 +1086,12 @@ For claude:
 | `.claude` | Repo Claude Code config dir (settings, agents, skills, commands) |
 | `.mcp.json` | Repo-declared MCP servers |
 
-For opencode (skill-install pollution that would otherwise leak back to
-the repo):
+For non-claude harnesses (skill-install pollution that would otherwise leak
+back to the repo):
 
 | Pattern | Rationale |
 | --- | --- |
-| `.agents`, `.claude/skills`, `.factory/skills`, `.kiro/skills`, `skills` | skill.sh universal install root + per-harness symlink farms |
+| `.agents`, `.claude/skills`, `.factory/skills`, `.grok/skills`, `.kiro/skills`, `skills` | skill.sh universal install root + per-harness symlink farms |
 | `.opencode`, `.skills` | prpm `--as <harness>` output roots |
 | `prpm.lock`, `skills-lock.json` | provider lockfiles |
 
@@ -1098,8 +1103,8 @@ the repo):
 - **Persona skills.** For claude, the `--plugin-dir` passed to the harness
   resolves to an absolute path *outside* the mount, so staged skills from
   `~/.agentworkforce/workforce/sessions/<id>/claude/plugin/` load normally. For
-  opencode, the install runs inside the mount so the writes land in the
-  sandbox.
+  codex, opencode, and grok, the install runs inside the mount so the writes
+  land in the sandbox.
 - **Keychain auth.** The mount does not pass `--bare`; it only hides
   files. Claude Code's macOS keychain login stays active.
 - **Persona `mcpServers`.** Still passed via `--mcp-config` — unaffected

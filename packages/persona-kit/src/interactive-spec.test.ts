@@ -315,7 +315,116 @@ test('opencode configFiles carries a well-formed opencode.json with the agent de
   });
 });
 
-test('claude and codex emit an empty configFiles array', () => {
+test('grok launches the Grok Build CLI with model and no config file', () => {
+  const result = buildInteractiveSpec({
+    harness: 'grok',
+    personaId: 'test-persona',
+    model: 'grok-build-0.1',
+    systemPrompt: 'you are a test'
+  });
+  assert.equal(result.bin, 'grok');
+  assert.deepEqual(result.args, ['--no-auto-update', '--model', 'grok-build-0.1']);
+  assert.equal(result.initialPrompt, null);
+  assert.deepEqual(result.configFiles, []);
+  assert.deepEqual(result.warnings, []);
+});
+
+test('grok wires permission mode and plugin dirs to native flags', () => {
+  const result = buildInteractiveSpec({
+    harness: 'grok',
+    personaId: 'test-persona',
+    model: 'grok-build-0.1',
+    systemPrompt: 'x',
+    permissions: { mode: 'acceptEdits' },
+    pluginDirs: ['/tmp/session/grok/plugin']
+  });
+  assert.deepEqual(result.args, [
+    '--no-auto-update',
+    '--model',
+    'grok-build-0.1',
+    '--permission-mode',
+    'acceptEdits',
+    '--plugin-dir',
+    '/tmp/session/grok/plugin'
+  ]);
+  assert.deepEqual(result.warnings, []);
+});
+
+test('grok warns for permission allow/deny lists but still accepts mode', () => {
+  const result = buildInteractiveSpec({
+    harness: 'grok',
+    personaId: 'test-persona',
+    model: 'grok-build-0.1',
+    systemPrompt: 'x',
+    permissions: {
+      allow: ['Bash(git *)'],
+      deny: ['Bash(rm -rf *)'],
+      mode: 'acceptEdits'
+    }
+  });
+  assert.deepEqual(result.args, [
+    '--no-auto-update',
+    '--model',
+    'grok-build-0.1',
+    '--permission-mode',
+    'acceptEdits'
+  ]);
+  assert.deepEqual(result.warnings, [
+    'persona declares permission allow/deny lists but the grok harness only supports permission mode injection; proceeding without allow/deny rules.'
+  ]);
+});
+
+test('grok non-interactive spec uses single-shot mode with cwd and always-approve', () => {
+  const result = buildNonInteractiveSpec({
+    harness: 'grok',
+    personaId: 'daily-ship',
+    model: 'grok-build-0.1',
+    systemPrompt: 'Reply pong.',
+    task: 'say pong',
+    workingDirectory: '/tmp/project'
+  });
+
+  assert.equal(result.bin, 'grok');
+  assert.deepEqual(result.args, [
+    '--no-auto-update',
+    '--model',
+    'grok-build-0.1',
+    '--output-format',
+    'plain',
+    '--cwd',
+    '/tmp/project',
+    '--always-approve',
+    '--single',
+    'Reply pong.\n\nUser task:\nsay pong'
+  ]);
+  assert.deepEqual(result.configFiles, []);
+  assert.deepEqual(result.warnings, []);
+});
+
+test('grok non-interactive spec does not add always-approve when permission mode is explicit', () => {
+  const result = buildNonInteractiveSpec({
+    harness: 'grok',
+    personaId: 'daily-ship',
+    model: 'grok-build-0.1',
+    systemPrompt: '',
+    task: 'say pong',
+    permissions: { mode: 'plan' }
+  });
+
+  assert.deepEqual(result.args, [
+    '--no-auto-update',
+    '--model',
+    'grok-build-0.1',
+    '--permission-mode',
+    'plan',
+    '--output-format',
+    'plain',
+    '--single',
+    'say pong'
+  ]);
+});
+
+test('claude, codex, and grok emit an empty configFiles array', () => {
   const claude = buildInteractiveSpec({
     harness: 'claude',
     personaId: 'test-persona',
@@ -331,6 +440,14 @@ test('claude and codex emit an empty configFiles array', () => {
     systemPrompt: 'x'
   });
   assert.deepEqual(codex.configFiles, []);
+
+  const grok = buildInteractiveSpec({
+    harness: 'grok',
+    personaId: 'test-persona',
+    model: 'grok-build-0.1',
+    systemPrompt: 'x'
+  });
+  assert.deepEqual(grok.configFiles, []);
 });
 
 test('claude branch omits --append-system-prompt when systemPrompt is empty', () => {
@@ -440,7 +557,7 @@ test('claude branch omits --plugin-dir when pluginDirs is empty or absent', () =
   assert.ok(!without.args.includes('--plugin-dir'));
 });
 
-test('non-claude harnesses warn and ignore pluginDirs', () => {
+test('codex and opencode warn and ignore pluginDirs', () => {
   const codex = buildInteractiveSpec({
     harness: 'codex',
     personaId: 'test-persona',
@@ -593,6 +710,20 @@ test('relayMcp under opencode warns that MCP injection is unsupported', () => {
   assert.equal(result.mcpServers?.relaycast?.type, 'stdio');
 });
 
+test('relayMcp under grok warns that MCP injection is unsupported', () => {
+  const result = buildInteractiveSpec({
+    harness: 'grok',
+    personaId: 'p',
+    model: 'grok-build-0.1',
+    systemPrompt: 'x',
+    relayMcp: { apiKey: 'wk_live_abc', agentName: 'Grok1' }
+  });
+  assert.deepEqual(result.warnings, [
+    'broker requested relaycast MCP injection but the grok harness is not yet wired for runtime MCP injection; proceeding without MCP.'
+  ]);
+  assert.equal(result.mcpServers?.relaycast?.type, 'stdio');
+});
+
 test('opencode warning names both persona and broker MCP sources when both are present', () => {
   const result = buildInteractiveSpec({
     harness: 'opencode',
@@ -606,5 +737,21 @@ test('opencode warning names both persona and broker MCP sources when both are p
   });
   assert.deepEqual(result.warnings, [
     'persona declares mcpServers and broker requested relaycast MCP injection, but the opencode harness is not yet wired for runtime MCP injection; proceeding without MCP.'
+  ]);
+});
+
+test('grok warning names both persona and broker MCP sources when both are present', () => {
+  const result = buildInteractiveSpec({
+    harness: 'grok',
+    personaId: 'p',
+    model: 'grok-build-0.1',
+    systemPrompt: 'x',
+    mcpServers: {
+      posthog: { type: 'http', url: 'https://mcp.posthog.com/mcp' }
+    },
+    relayMcp: { apiKey: 'wk_live_abc', agentName: 'Grok1' }
+  });
+  assert.deepEqual(result.warnings, [
+    'persona declares mcpServers and broker requested relaycast MCP injection, but the grok harness is not yet wired for runtime MCP injection; proceeding without MCP.'
   ]);
 });

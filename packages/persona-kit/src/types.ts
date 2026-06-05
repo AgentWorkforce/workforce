@@ -383,7 +383,7 @@ export interface PersonaSpec {
    */
   inputs?: Record<string, PersonaInputSpec>;
   /**
-   * Harness binary used to run this persona (`claude`, `codex`, `opencode`).
+   * Harness binary used to run this persona (`claude`, `codex`, `opencode`, `grok`).
    * Required for interactive personas. Optional for handler-style personas
    * ({@link onEvent} set): only consumed when the handler calls
    * `ctx.harness.run(...)`; pure orchestrators omit it.
@@ -405,13 +405,14 @@ export interface PersonaSpec {
    * MCP servers to attach to the harness session.
    * - `claude`: passed via `--mcp-config`
    * - `codex`: translated into `--config mcp_servers.<name>...` overrides
-   * - `opencode`: currently warns and skips
+   * - `opencode` / `grok`: currently warn and skip
    */
   mcpServers?: Record<string, McpServerSpec>;
   /**
    * Permission policy (allow/deny lists, mode) for the harness session.
    * Only wired for `claude` today (via `--allowedTools`, `--disallowedTools`,
-   * `--permission-mode`); other harnesses warn and skip.
+   * `--permission-mode`). `grok` wires `mode` via `--permission-mode`;
+   * other fields/harnesses warn and skip.
    */
   permissions?: PersonaPermissions;
   /**
@@ -451,7 +452,7 @@ export interface PersonaSpec {
   claudeMdMode?: SidecarMdMode;
   /**
    * Author-supplied path to an `AGENTS.md` sidecar that should be applied
-   * when the persona runs under the opencode harness. Same resolution
+   * when the persona runs under the opencode/codex/grok harnesses. Same resolution
    * rules as {@link claudeMd}.
    */
   agentsMd?: string;

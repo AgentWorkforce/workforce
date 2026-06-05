@@ -82,6 +82,18 @@ test('buildPersonaSpawnPlan resolves sidecars from claudeMdContent / agentsMdCon
   assert.equal(opencodePlan.sidecars.length, 1);
   assert.equal(opencodePlan.sidecars[0].filename, 'AGENTS.md');
   assert.equal(opencodePlan.sidecars[0].mode, 'extend');
+
+  const grokPlan = buildPersonaSpawnPlan(
+    persona({
+      agentsMdContent: '# grok agents sidecar',
+      harness: 'grok',
+      model: 'grok-build-0.1'
+    }),
+    { processEnv: cleanEnv }
+  );
+  assert.equal(grokPlan.sidecars.length, 1);
+  assert.equal(grokPlan.sidecars[0].filename, 'AGENTS.md');
+  assert.equal(grokPlan.sidecars[0].contents, '# grok agents sidecar');
 });
 
 test('buildPersonaSpawnPlan threads mount policy through when patterns present', () => {
@@ -193,7 +205,7 @@ test('buildPersonaSpawnPlan emits sourcePath when only claudeMd path is set', ()
   assert.equal(plan.sidecars[0].mode, 'extend');
 });
 
-test('buildPersonaSpawnPlan emits sourcePath for opencode/codex agentsMd path', () => {
+test('buildPersonaSpawnPlan emits sourcePath for AGENTS.md harness agentsMd path', () => {
   const plan = buildPersonaSpawnPlan(
     persona({
       harness: 'opencode',
@@ -205,6 +217,18 @@ test('buildPersonaSpawnPlan emits sourcePath for opencode/codex agentsMd path', 
   );
   assert.equal(plan.sidecars.length, 1);
   assert.equal(plan.sidecars[0].sourcePath, '/abs/path/to/AGENTS.md');
+
+  const grokPlan = buildPersonaSpawnPlan(
+    persona({
+      harness: 'grok',
+      model: 'grok-build-0.1',
+      systemPrompt: 's',
+      agentsMd: '/abs/path/to/AGENTS.md'
+    }),
+    { processEnv: cleanEnv }
+  );
+  assert.equal(grokPlan.sidecars.length, 1);
+  assert.equal(grokPlan.sidecars[0].sourcePath, '/abs/path/to/AGENTS.md');
 });
 
 test('buildPersonaSpawnPlan does not capture ambient env by default', () => {
@@ -225,7 +249,7 @@ test('buildPersonaSpawnPlan opt-in includeProcessEnv captures process.env', () =
 });
 
 test('buildPersonaSpawnPlan empty-skills case keeps installs empty', () => {
-  for (const harness of ['claude', 'codex', 'opencode'] as Harness[]) {
+  for (const harness of ['claude', 'codex', 'opencode', 'grok'] as Harness[]) {
     const plan = buildPersonaSpawnPlan(
       persona({
         harness,
