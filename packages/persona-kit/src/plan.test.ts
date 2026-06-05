@@ -59,6 +59,22 @@ test('buildPersonaSpawnPlan emits configFiles for opencode', () => {
   );
 });
 
+test('buildPersonaSpawnPlan emits AGENTS.md configFile for grok systemPrompt', () => {
+  const plan = buildPersonaSpawnPlan(
+    persona({
+      personaId: 'sample',
+      harness: 'grok',
+      model: 'grok-build-0.1',
+      systemPrompt: 'grok prompt'
+    }),
+    { processEnv: cleanEnv }
+  );
+  assert.equal(plan.cli, 'grok');
+  assert.deepEqual(plan.configFiles, [
+    { path: 'AGENTS.md', contents: 'grok prompt\n' }
+  ]);
+});
+
 test('buildPersonaSpawnPlan resolves sidecars from claudeMdContent / agentsMdContent', () => {
   const claudePlan = buildPersonaSpawnPlan(
     persona({

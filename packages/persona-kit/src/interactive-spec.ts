@@ -29,7 +29,7 @@ export interface InteractiveSpec {
    * to carry the persona's system prompt as the initial user prompt.
    * Currently only codex takes this path; claude uses `--append-system-prompt`,
    * opencode writes the prompt into `opencode.json` (see `configFiles`), and
-   * grok consumes the rendered system prompt only in one-shot mode.
+   * grok writes the prompt into `AGENTS.md` (see `configFiles`).
    */
   initialPrompt: string | null;
   /**
@@ -41,7 +41,8 @@ export interface InteractiveSpec {
    * Config files the caller must write (relative to the harness cwd) before
    * launch. Opencode uses this to materialize an `opencode.json` carrying
    * the persona's agent definition (model + system prompt) so `--agent` can
-   * resolve it; claude, codex, and grok return an empty array.
+   * resolve it. Grok uses this to materialize `AGENTS.md` when `systemPrompt`
+   * is non-empty. Claude and codex return an empty array.
    */
   configFiles: InteractiveConfigFile[];
   /**
@@ -212,8 +213,9 @@ function appendCodexMcpServerArgs(
  * the final positional `[PROMPT]`.
  *
  * The grok branch launches the Grok Build CLI (`grok`) with the persona model.
- * Grok reads AGENTS.md and .grok/skills from the working tree; one-shot mode
- * uses `--single` because Grok has no separate system-prompt flag.
+ * Grok reads AGENTS.md and .grok/skills from the working tree; interactive
+ * mode writes the persona system prompt into AGENTS.md when present, and
+ * one-shot mode uses `--single` because Grok has no separate system-prompt flag.
  *
  * The opencode branch routes model + system prompt through opencode's
  * agent abstraction (see https://opencode.ai/config.json: `agent.<id>.{
@@ -231,7 +233,8 @@ function appendCodexMcpServerArgs(
  * the same declared MCP servers as the persona.
  *
  * The opencode/grok branches emit a warning if the persona declares `mcpServers`.
- * Grok wires `permissions.mode`; opencode and other Grok permission fields warn.
+ * Grok maps `permissions.mode: "bypassPermissions"` to `--always-approve`;
+ * other permission fields warn.
  */
 /**
  * Build the stdio MCP server spec for relaycast, mirroring the env block the
@@ -324,7 +327,7 @@ export function buildInteractiveSpec(input: BuildInteractiveSpecInput): Interact
       }
       if (hasPluginDirs) {
         warnings.push(
-          'pluginDirs is currently claude-only; ignoring under the codex harness. Skills must be staged via codex conventions.'
+          'pluginDirs is currently supported only for claude and grok; ignoring under the codex harness. Skills must be staged via codex conventions.'
         );
       }
       const args = ['-m', stripProviderPrefix(model)];
@@ -393,7 +396,7 @@ export function buildInteractiveSpec(input: BuildInteractiveSpecInput): Interact
       }
       if (hasPluginDirs) {
         warnings.push(
-          'pluginDirs is currently claude-only; ignoring under the opencode harness. Skills must be staged via opencode conventions.'
+          'pluginDirs is currently supported only for claude and grok; ignoring under the opencode harness. Skills must be staged via opencode conventions.'
         );
       }
       if (hasCodexLaunchSettings(harnessSettings)) {
@@ -481,12 +484,16 @@ export function buildInteractiveSpec(input: BuildInteractiveSpecInput): Interact
       }
       if (permissions?.allow?.length || permissions?.deny?.length) {
         warnings.push(
-          'persona declares permission allow/deny lists but the grok harness only supports permission mode injection; proceeding without allow/deny rules.'
+          'persona declares permission allow/deny lists but the grok harness is not wired for allow/deny injection; proceeding without allow/deny rules.'
         );
       }
       const args = ['--no-auto-update', '--model', model];
-      if (permissions?.mode) {
-        args.push('--permission-mode', permissions.mode);
+      if (permissions?.mode === 'bypassPermissions') {
+        args.push('--always-approve');
+      } else if (permissions?.mode && permissions.mode !== 'default') {
+        warnings.push(
+          `persona declares permissions.mode "${permissions.mode}" but the grok harness only supports bypassPermissions via --always-approve; proceeding with Grok defaults.`
+        );
       }
       if (hasPluginDirs) {
         for (const dir of pluginDirs!) {
@@ -495,7 +502,7 @@ export function buildInteractiveSpec(input: BuildInteractiveSpecInput): Interact
       }
       if (
         harnessSettings?.dangerouslyBypassApprovalsAndSandbox &&
-        !args.includes('--permission-mode')
+        !args.includes('--always-approve')
       ) {
         args.push('--always-approve');
       }
@@ -504,7 +511,7 @@ export function buildInteractiveSpec(input: BuildInteractiveSpecInput): Interact
       }
       if (harnessSettings?.approvalPolicy) {
         warnings.push(
-          'grok harnessSettings.approvalPolicy is not supported; use permissions.mode or dangerouslyBypassApprovalsAndSandbox.'
+          'grok harnessSettings.approvalPolicy is not supported; use permissions.mode "bypassPermissions" or dangerouslyBypassApprovalsAndSandbox for --always-approve.'
         );
       }
       if (harnessSettings?.workspaceWriteNetworkAccess !== undefined) {
@@ -518,7 +525,14 @@ export function buildInteractiveSpec(input: BuildInteractiveSpecInput): Interact
         args,
         initialPrompt: null,
         warnings,
-        configFiles: [],
+        configFiles: systemPrompt
+          ? [
+              {
+                path: 'AGENTS.md',
+                contents: systemPrompt.endsWith('\n') ? systemPrompt : `${systemPrompt}\n`
+              }
+            ]
+          : [],
         mcpServers
       };
     }
@@ -604,7 +618,7 @@ export function buildNonInteractiveSpec(
         : input.task;
       const args = [...interactive.args, '--output-format', 'plain'];
       if (input.workingDirectory) args.push('--cwd', input.workingDirectory);
-      if (!args.includes('--permission-mode') && !args.includes('--always-approve')) {
+      if (!args.includes('--always-approve')) {
         args.push('--always-approve');
       }
       args.push('--single', prompt);

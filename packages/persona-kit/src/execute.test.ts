@@ -265,6 +265,32 @@ test('executePersonaSpawnPlan happy path orders side effects and disposes them i
   });
 });
 
+test('executePersonaSpawnPlan lets grok AGENTS.md sidecar override generated systemPrompt file', async () => {
+  await withTmpDir(async (dir) => {
+    const plan = buildPersonaSpawnPlan(
+      persona({
+        personaId: 'sample',
+        harness: 'grok',
+        model: 'grok-build-0.1',
+        systemPrompt: 'generated prompt',
+        agentsMdContent: '# persona agents',
+        agentsMdMode: 'overwrite'
+      }),
+      { processEnv: cleanEnv }
+    );
+    assert.deepEqual(plan.configFiles, [
+      { path: 'AGENTS.md', contents: 'generated prompt\n' }
+    ]);
+    assert.equal(plan.sidecars[0]?.filename, 'AGENTS.md');
+
+    const handle = await executePersonaSpawnPlan(plan, { cwd: dir });
+    assert.equal(await readFile(join(dir, 'AGENTS.md'), 'utf8'), '# persona agents');
+
+    await handle.dispose();
+    assert.equal(await exists(join(dir, 'AGENTS.md')), false);
+  });
+});
+
 test('executePersonaSpawnPlan empty-skills path is a no-op for skills', async () => {
   await withTmpDir(async (dir) => {
     const plan = buildPersonaSpawnPlan(persona(), { processEnv: cleanEnv });
@@ -277,11 +303,10 @@ test('executePersonaSpawnPlan empty-skills path is a no-op for skills', async ()
 
 test('executePersonaSpawnPlan disposes prior handles when a later step fails', async () => {
   await withTmpDir(async (dir) => {
-    // Pre-create a stub at AGENTS.md so we can verify it gets restored after a
-    // later failing step. Then synthesize a plan whose configFile path is unsafe
-    // — it should reject after the sidecar step has already written to disk.
-    const target = join(dir, 'AGENTS.md');
-    await writeFile(target, 'previous content', 'utf8');
+    // Pre-create a stub at opencode.json so we can verify it gets restored after
+    // a later failing sidecar write.
+    const target = join(dir, 'opencode.json');
+    await writeFile(target, 'previous config', 'utf8');
 
     const plan = buildPersonaSpawnPlan(
       persona({
@@ -293,13 +318,13 @@ test('executePersonaSpawnPlan disposes prior handles when a later step fails', a
       }),
       { processEnv: cleanEnv }
     );
-    // Inject an unsafe configFile to force materializePersonaConfigFiles to throw
-    // after the sidecar has been written. The executor must then restore the
-    // sidecar's prior content before the error propagates.
-    plan.configFiles.push({ path: '../escape.json', contents: 'x' });
+    // Inject an unsafe sidecar filename to force writePersonaSidecars to throw
+    // after config files have been written. The executor must then restore the
+    // config file's prior content before the error propagates.
+    plan.sidecars[0] = { ...plan.sidecars[0]!, filename: '../escape.md' as 'AGENTS.md' };
 
-    await assert.rejects(executePersonaSpawnPlan(plan, { cwd: dir }), /must not contain/);
-    // Sidecar must be restored to its original content.
-    assert.equal(await readFile(target, 'utf8'), 'previous content');
+    await assert.rejects(executePersonaSpawnPlan(plan, { cwd: dir }), /must be a basename/);
+    // Config file must be restored to its original content.
+    assert.equal(await readFile(target, 'utf8'), 'previous config');
   });
 });

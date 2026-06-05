@@ -333,7 +333,7 @@ combination; by default only the **recommended tier per intent** is shown
 | `--all` | off | Show every tier of every persona. Alias: `--no-recommended`. |
 | `--recommended` | on | Only show the recommended tier per intent. Implicit default; mostly useful for undoing `--all` earlier in a wrapper script. |
 | `--filter-rating <tier>` | — | Restrict to a single tier (`best` \| `best-value` \| `minimum`). **Implicitly turns off the recommended-only default**, so filtering by `best` shows every persona's `best` row even when that's not the recommended tier. |
-| `--filter-harness <harness>` | — | Restrict to a single harness (`claude` \| `codex` \| `opencode`). Composable with `--filter-rating` and `--all`. |
+| `--filter-harness <harness>` | — | Restrict to a single harness (`claude` \| `codex` \| `opencode` \| `grok`). Composable with `--filter-rating` and `--all`. |
 | `--no-display-description` | off | Hide the `DESCRIPTION` column. `--display-description` re-enables it. |
 | `--json` | off | Emit `{ "personas": [...] }` with one object per row. Same field set as the table, useful for scripting. |
 | `-h`, `--help` | — | Print a one-line usage string and exit. |
@@ -780,9 +780,9 @@ persona JSON remains commit-safe as long as you only use references.
 
 ## Relayfile mount rules
 
-Interactive `claude` and `opencode` sessions run inside a Relayfile mount by
-default. File visibility and writability are controlled by the persona's
-`mount` block plus project-level dotfiles:
+Interactive harness sessions (`claude`, `opencode`, `grok`, `codex`) run inside
+a Relayfile mount by default. File visibility and writability are controlled by
+the persona's `mount` block plus project-level dotfiles:
 
 ```jsonc
 {
@@ -826,10 +826,10 @@ mount rules (`.agentignore` / `.agentreadonly`) for that.
   grammar. For Claude Code: `Bash(<pattern>)`, `mcp__<server>` (all tools
   from that server), `mcp__<server>__<tool>` (specific tool).
 - **Harness support today:** `claude` is wired for allow/deny/mode flags
-  (`--allowedTools`, `--disallowedTools`, `--permission-mode`). `grok` is
-  wired for `mode` via `--permission-mode`; allow/deny lists warn and are
-  ignored. `codex` and `opencode` emit a warning and fall back to their
-  defaults when `permissions` is set.
+  (`--allowedTools`, `--disallowedTools`, `--permission-mode`). `grok` maps
+  `mode: "bypassPermissions"` to `--always-approve`; other Grok permission
+  fields warn and are ignored. `codex` and `opencode` emit a warning and fall
+  back to their defaults when `permissions` is set.
 - **Cascade merge:** `allow` and `deny` are unions across layers (deduped on
   merge); `mode` is replaced by the topmost layer that sets it. So the
   library can declare the minimum-viable allow list, a user or configured
@@ -1170,7 +1170,7 @@ If a persona uses MCP, use `claude` or `codex` tiers.
   auth interactively (e.g. Claude Code's MCP OAuth flow).
 
 - **`Failed to spawn "claude": binary not found on PATH.`** — Install the
-  harness CLI (`claude`, `codex`, or `opencode`) and ensure it's on your PATH.
+  harness CLI (`claude`, `codex`, `opencode`, or `grok`) and ensure it's on your PATH.
 
 - **`warning: persona declares mcpServers but the opencode harness is not yet
   wired …`** — Switch that tier's `harness` to `claude` or `codex`, or drop the

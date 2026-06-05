@@ -410,9 +410,10 @@ export interface PersonaSpec {
   mcpServers?: Record<string, McpServerSpec>;
   /**
    * Permission policy (allow/deny lists, mode) for the harness session.
-   * Only wired for `claude` today (via `--allowedTools`, `--disallowedTools`,
-   * `--permission-mode`). `grok` wires `mode` via `--permission-mode`;
-   * other fields/harnesses warn and skip.
+   * `claude` is wired for allow/deny/mode flags (via `--allowedTools`,
+   * `--disallowedTools`, `--permission-mode`). `grok` maps
+   * `mode: "bypassPermissions"` to `--always-approve`; other
+   * fields/harnesses warn and skip.
    */
   permissions?: PersonaPermissions;
   /**

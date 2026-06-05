@@ -1352,7 +1352,7 @@ export function buildSpawnSummary(input: {
       summary.push(`deny=${input.permissions.deny.length} rule(s)`);
     }
   }
-  if (input.harness === 'claude' || input.harness === 'grok') {
+  if (input.harness === 'claude') {
     if (input.permissions?.mode) {
       summary.push(`mode=${input.permissions.mode}`);
     }

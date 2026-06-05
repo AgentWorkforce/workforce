@@ -315,7 +315,7 @@ test('opencode configFiles carries a well-formed opencode.json with the agent de
   });
 });
 
-test('grok launches the Grok Build CLI with model and no config file', () => {
+test('grok launches the Grok Build CLI and writes systemPrompt to AGENTS.md', () => {
   const result = buildInteractiveSpec({
     harness: 'grok',
     personaId: 'test-persona',
@@ -325,32 +325,33 @@ test('grok launches the Grok Build CLI with model and no config file', () => {
   assert.equal(result.bin, 'grok');
   assert.deepEqual(result.args, ['--no-auto-update', '--model', 'grok-build-0.1']);
   assert.equal(result.initialPrompt, null);
-  assert.deepEqual(result.configFiles, []);
+  assert.deepEqual(result.configFiles, [
+    { path: 'AGENTS.md', contents: 'you are a test\n' }
+  ]);
   assert.deepEqual(result.warnings, []);
 });
 
-test('grok wires permission mode and plugin dirs to native flags', () => {
+test('grok maps bypassPermissions to always-approve and wires plugin dirs', () => {
   const result = buildInteractiveSpec({
     harness: 'grok',
     personaId: 'test-persona',
     model: 'grok-build-0.1',
     systemPrompt: 'x',
-    permissions: { mode: 'acceptEdits' },
+    permissions: { mode: 'bypassPermissions' },
     pluginDirs: ['/tmp/session/grok/plugin']
   });
   assert.deepEqual(result.args, [
     '--no-auto-update',
     '--model',
     'grok-build-0.1',
-    '--permission-mode',
-    'acceptEdits',
+    '--always-approve',
     '--plugin-dir',
     '/tmp/session/grok/plugin'
   ]);
   assert.deepEqual(result.warnings, []);
 });
 
-test('grok warns for permission allow/deny lists but still accepts mode', () => {
+test('grok warns for unsupported permission fields', () => {
   const result = buildInteractiveSpec({
     harness: 'grok',
     personaId: 'test-persona',
@@ -366,11 +367,10 @@ test('grok warns for permission allow/deny lists but still accepts mode', () => 
     '--no-auto-update',
     '--model',
     'grok-build-0.1',
-    '--permission-mode',
-    'acceptEdits'
   ]);
   assert.deepEqual(result.warnings, [
-    'persona declares permission allow/deny lists but the grok harness only supports permission mode injection; proceeding without allow/deny rules.'
+    'persona declares permission allow/deny lists but the grok harness is not wired for allow/deny injection; proceeding without allow/deny rules.',
+    'persona declares permissions.mode "acceptEdits" but the grok harness only supports bypassPermissions via --always-approve; proceeding with Grok defaults.'
   ]);
 });
 
@@ -397,11 +397,13 @@ test('grok non-interactive spec uses single-shot mode with cwd and always-approv
     '--single',
     'Reply pong.\n\nUser task:\nsay pong'
   ]);
-  assert.deepEqual(result.configFiles, []);
+  assert.deepEqual(result.configFiles, [
+    { path: 'AGENTS.md', contents: 'Reply pong.\n' }
+  ]);
   assert.deepEqual(result.warnings, []);
 });
 
-test('grok non-interactive spec does not add always-approve when permission mode is explicit', () => {
+test('grok non-interactive spec still adds always-approve for unsupported permission modes', () => {
   const result = buildNonInteractiveSpec({
     harness: 'grok',
     personaId: 'daily-ship',
@@ -415,16 +417,18 @@ test('grok non-interactive spec does not add always-approve when permission mode
     '--no-auto-update',
     '--model',
     'grok-build-0.1',
-    '--permission-mode',
-    'plan',
     '--output-format',
     'plain',
+    '--always-approve',
     '--single',
     'say pong'
   ]);
+  assert.deepEqual(result.warnings, [
+    'persona declares permissions.mode "plan" but the grok harness only supports bypassPermissions via --always-approve; proceeding with Grok defaults.'
+  ]);
 });
 
-test('claude, codex, and grok emit an empty configFiles array', () => {
+test('claude and codex emit an empty configFiles array; grok does so only with an empty systemPrompt', () => {
   const claude = buildInteractiveSpec({
     harness: 'claude',
     personaId: 'test-persona',
@@ -445,7 +449,7 @@ test('claude, codex, and grok emit an empty configFiles array', () => {
     harness: 'grok',
     personaId: 'test-persona',
     model: 'grok-build-0.1',
-    systemPrompt: 'x'
+    systemPrompt: ''
   });
   assert.deepEqual(grok.configFiles, []);
 });
@@ -566,7 +570,7 @@ test('codex and opencode warn and ignore pluginDirs', () => {
     pluginDirs: ['/tmp/session/plugin']
   });
   assert.ok(!codex.args.includes('--plugin-dir'));
-  assert.ok(codex.warnings.some((w) => /pluginDirs is currently claude-only/.test(w)));
+  assert.ok(codex.warnings.some((w) => /supported only for claude and grok/.test(w)));
 
   const opencode = buildInteractiveSpec({
     harness: 'opencode',
@@ -576,7 +580,7 @@ test('codex and opencode warn and ignore pluginDirs', () => {
     pluginDirs: ['/tmp/session/plugin']
   });
   assert.ok(!opencode.args.includes('--plugin-dir'));
-  assert.ok(opencode.warnings.some((w) => /pluginDirs is currently claude-only/.test(w)));
+  assert.ok(opencode.warnings.some((w) => /supported only for claude and grok/.test(w)));
 });
 
 test('warnings are returned, not printed — library consumers route I/O themselves', () => {
