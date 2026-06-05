@@ -87,6 +87,7 @@ test('listIntegrations merges cloud catalog, trigger catalog aliases, and connec
 
 test('listIntegrations returns partial trigger-catalog document when unauthenticated and cloud catalog is unavailable', async () => {
   const document = await listIntegrations({
+    env: {},
     activeWorkspace: null,
     async resolveWorkspaceToken() {
       throw new Error('missing login');
