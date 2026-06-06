@@ -1,0 +1,42 @@
+{
+  "id": "traj_6av60055yl3b",
+  "version": 1,
+  "task": {
+    "title": "cron:weekly",
+    "description": "cron schedule \"weekly\" (0 9 * * 6)"
+  },
+  "status": "completed",
+  "startedAt": "2026-06-06T12:44:26.326Z",
+  "agents": [
+    {
+      "name": "demo",
+      "role": "lead",
+      "joinedAt": "2026-06-06T12:44:26.328Z"
+    }
+  ],
+  "chapters": [
+    {
+      "id": "chap_f70dst0c8dwk",
+      "title": "handle cron:tick",
+      "agentName": "demo",
+      "startedAt": "2026-06-06T12:44:26.328Z",
+      "events": [],
+      "endedAt": "2026-06-06T12:44:26.329Z"
+    }
+  ],
+  "commits": [],
+  "filesChanged": [],
+  "projectId": "ws-test",
+  "tags": [
+    "persona:demo",
+    "workspace:ws-test",
+    "source:cron"
+  ],
+  "workflowId": "run_e1_1",
+  "completedAt": "2026-06-06T12:44:26.329Z",
+  "retrospective": {
+    "summary": "Completed cron:weekly",
+    "approach": "Auto-recorded by the workforce runtime.",
+    "confidence": 0.8
+  }
+}

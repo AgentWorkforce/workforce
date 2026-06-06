@@ -1,0 +1,20 @@
+{
+  "id": "traj_6av60055yl3b",
+  "version": 1,
+  "personaId": "demo",
+  "projectId": "ws-test",
+  "task": {
+    "title": "cron:weekly",
+    "description": "cron schedule \"weekly\" (0 9 * * 6)"
+  },
+  "status": "completed",
+  "startedAt": "2026-06-06T12:44:26.326Z",
+  "completedAt": "2026-06-06T12:44:26.329Z",
+  "decisions": [],
+  "retrospective": {
+    "summary": "Completed cron:weekly",
+    "approach": "Auto-recorded by the workforce runtime.",
+    "learnings": [],
+    "confidence": 0.8
+  }
+}

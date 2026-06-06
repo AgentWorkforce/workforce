@@ -1,0 +1,29 @@
+{
+  "id": "compact_pshnmqrxvagf",
+  "version": 1,
+  "type": "compacted",
+  "compactedAt": "2026-06-06T12:50:23.991Z",
+  "workflowId": "run_e2_1",
+  "sourceTrajectories": [
+    "traj_xy4mhleo2s4t",
+    "traj_btfwlo1rifd8",
+    "traj_hl38ha430u2d",
+    "traj_q4ooq45xrqsh"
+  ],
+  "dateRange": {
+    "start": "2026-06-06T12:44:26.446Z",
+    "end": "2026-06-06T12:50:23.913Z"
+  },
+  "summary": {
+    "totalDecisions": 0,
+    "totalEvents": 0,
+    "uniqueAgents": [
+      "demo"
+    ]
+  },
+  "decisionGroups": [],
+  "keyLearnings": [],
+  "keyFindings": [],
+  "filesAffected": [],
+  "commits": []
+}

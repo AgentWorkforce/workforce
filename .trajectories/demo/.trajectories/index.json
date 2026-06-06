@@ -1,0 +1,126 @@
+{
+  "version": 1,
+  "lastUpdated": "2026-06-06T12:50:23.998Z",
+  "trajectories": {
+    "traj_6av60055yl3b": {
+      "title": "cron:weekly",
+      "status": "completed",
+      "startedAt": "2026-06-06T12:44:26.326Z",
+      "completedAt": "2026-06-06T12:44:26.329Z",
+      "path": "/home/daytona/workspace/.trajectories/demo/.trajectories/completed/2026-06/traj_6av60055yl3b.json",
+      "compactedInto": "compact_dvnd10xpalwm"
+    },
+    "traj_hyzykah9u8l3": {
+      "title": "cron:",
+      "status": "abandoned",
+      "startedAt": "2026-06-06T12:44:26.437Z",
+      "completedAt": "2026-06-06T12:44:26.440Z",
+      "path": "/home/daytona/workspace/.trajectories/demo/.trajectories/completed/2026-06/traj_hyzykah9u8l3.json"
+    },
+    "traj_wf2u3l8sdco1": {
+      "title": "cron:",
+      "status": "abandoned",
+      "startedAt": "2026-06-06T12:44:26.441Z",
+      "completedAt": "2026-06-06T12:44:26.444Z",
+      "path": "/home/daytona/workspace/.trajectories/demo/.trajectories/completed/2026-06/traj_wf2u3l8sdco1.json"
+    },
+    "traj_q4ooq45xrqsh": {
+      "title": "cron:tick",
+      "status": "completed",
+      "startedAt": "2026-06-06T12:44:26.446Z",
+      "completedAt": "2026-06-06T12:44:26.448Z",
+      "path": "/home/daytona/workspace/.trajectories/demo/.trajectories/completed/2026-06/traj_q4ooq45xrqsh.json",
+      "compactedInto": "compact_pshnmqrxvagf"
+    },
+    "traj_8eedsznlz76m": {
+      "title": "cron:weekly",
+      "status": "completed",
+      "startedAt": "2026-06-06T12:46:14.426Z",
+      "completedAt": "2026-06-06T12:46:14.429Z",
+      "path": "/home/daytona/workspace/.trajectories/demo/.trajectories/completed/2026-06/traj_8eedsznlz76m.json",
+      "compactedInto": "compact_dvnd10xpalwm"
+    },
+    "traj_vuab5wtvyzm8": {
+      "title": "cron:",
+      "status": "abandoned",
+      "startedAt": "2026-06-06T12:46:14.542Z",
+      "completedAt": "2026-06-06T12:46:14.544Z",
+      "path": "/home/daytona/workspace/.trajectories/demo/.trajectories/completed/2026-06/traj_vuab5wtvyzm8.json"
+    },
+    "traj_mkc1x2bgr1lf": {
+      "title": "cron:",
+      "status": "abandoned",
+      "startedAt": "2026-06-06T12:46:14.546Z",
+      "completedAt": "2026-06-06T12:46:14.548Z",
+      "path": "/home/daytona/workspace/.trajectories/demo/.trajectories/completed/2026-06/traj_mkc1x2bgr1lf.json"
+    },
+    "traj_hl38ha430u2d": {
+      "title": "cron:tick",
+      "status": "completed",
+      "startedAt": "2026-06-06T12:46:14.550Z",
+      "completedAt": "2026-06-06T12:46:14.552Z",
+      "path": "/home/daytona/workspace/.trajectories/demo/.trajectories/completed/2026-06/traj_hl38ha430u2d.json",
+      "compactedInto": "compact_pshnmqrxvagf"
+    },
+    "traj_p3jde1krz9nq": {
+      "title": "cron:weekly",
+      "status": "completed",
+      "startedAt": "2026-06-06T12:47:21.386Z",
+      "completedAt": "2026-06-06T12:47:21.390Z",
+      "path": "/home/daytona/workspace/.trajectories/demo/.trajectories/completed/2026-06/traj_p3jde1krz9nq.json",
+      "compactedInto": "compact_dvnd10xpalwm"
+    },
+    "traj_36osqed0a1eh": {
+      "title": "cron:",
+      "status": "abandoned",
+      "startedAt": "2026-06-06T12:47:21.988Z",
+      "completedAt": "2026-06-06T12:47:21.992Z",
+      "path": "/home/daytona/workspace/.trajectories/demo/.trajectories/completed/2026-06/traj_36osqed0a1eh.json"
+    },
+    "traj_r5msjhjdw525": {
+      "title": "cron:",
+      "status": "abandoned",
+      "startedAt": "2026-06-06T12:47:21.994Z",
+      "completedAt": "2026-06-06T12:47:21.998Z",
+      "path": "/home/daytona/workspace/.trajectories/demo/.trajectories/completed/2026-06/traj_r5msjhjdw525.json"
+    },
+    "traj_btfwlo1rifd8": {
+      "title": "cron:tick",
+      "status": "completed",
+      "startedAt": "2026-06-06T12:47:22.180Z",
+      "completedAt": "2026-06-06T12:47:22.182Z",
+      "path": "/home/daytona/workspace/.trajectories/demo/.trajectories/completed/2026-06/traj_btfwlo1rifd8.json",
+      "compactedInto": "compact_pshnmqrxvagf"
+    },
+    "traj_uyek7xkfjghm": {
+      "title": "cron:weekly",
+      "status": "completed",
+      "startedAt": "2026-06-06T12:50:23.779Z",
+      "completedAt": "2026-06-06T12:50:23.783Z",
+      "path": "/home/daytona/workspace/.trajectories/demo/.trajectories/completed/2026-06/traj_uyek7xkfjghm.json",
+      "compactedInto": "compact_dvnd10xpalwm"
+    },
+    "traj_daf6b05pendz": {
+      "title": "cron:",
+      "status": "abandoned",
+      "startedAt": "2026-06-06T12:50:23.902Z",
+      "completedAt": "2026-06-06T12:50:23.905Z",
+      "path": "/home/daytona/workspace/.trajectories/demo/.trajectories/completed/2026-06/traj_daf6b05pendz.json"
+    },
+    "traj_wxnozbqakles": {
+      "title": "cron:",
+      "status": "abandoned",
+      "startedAt": "2026-06-06T12:50:23.907Z",
+      "completedAt": "2026-06-06T12:50:23.909Z",
+      "path": "/home/daytona/workspace/.trajectories/demo/.trajectories/completed/2026-06/traj_wxnozbqakles.json"
+    },
+    "traj_xy4mhleo2s4t": {
+      "title": "cron:tick",
+      "status": "completed",
+      "startedAt": "2026-06-06T12:50:23.911Z",
+      "completedAt": "2026-06-06T12:50:23.913Z",
+      "path": "/home/daytona/workspace/.trajectories/demo/.trajectories/completed/2026-06/traj_xy4mhleo2s4t.json",
+      "compactedInto": "compact_pshnmqrxvagf"
+    }
+  }
+}

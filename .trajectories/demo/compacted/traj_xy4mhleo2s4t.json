@@ -1,0 +1,20 @@
+{
+  "id": "traj_xy4mhleo2s4t",
+  "version": 1,
+  "personaId": "demo",
+  "projectId": "ws-test",
+  "task": {
+    "title": "cron:tick",
+    "description": "cron schedule \"tick\" ()"
+  },
+  "status": "completed",
+  "startedAt": "2026-06-06T12:50:23.911Z",
+  "completedAt": "2026-06-06T12:50:23.913Z",
+  "decisions": [],
+  "retrospective": {
+    "summary": "Completed cron:tick",
+    "approach": "Auto-recorded by the workforce runtime.",
+    "learnings": [],
+    "confidence": 0.8
+  }
+}

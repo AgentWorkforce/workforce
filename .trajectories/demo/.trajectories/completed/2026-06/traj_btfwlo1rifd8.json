@@ -1,0 +1,42 @@
+{
+  "id": "traj_btfwlo1rifd8",
+  "version": 1,
+  "task": {
+    "title": "cron:tick",
+    "description": "cron schedule \"tick\" ()"
+  },
+  "status": "completed",
+  "startedAt": "2026-06-06T12:47:22.180Z",
+  "agents": [
+    {
+      "name": "demo",
+      "role": "lead",
+      "joinedAt": "2026-06-06T12:47:22.181Z"
+    }
+  ],
+  "chapters": [
+    {
+      "id": "chap_hrm46iom1vkq",
+      "title": "handle cron:tick",
+      "agentName": "demo",
+      "startedAt": "2026-06-06T12:47:22.181Z",
+      "events": [],
+      "endedAt": "2026-06-06T12:47:22.182Z"
+    }
+  ],
+  "commits": [],
+  "filesChanged": [],
+  "projectId": "ws-test",
+  "tags": [
+    "persona:demo",
+    "workspace:ws-test",
+    "source:cron"
+  ],
+  "workflowId": "run_e2_1",
+  "completedAt": "2026-06-06T12:47:22.182Z",
+  "retrospective": {
+    "summary": "Completed cron:tick",
+    "approach": "Auto-recorded by the workforce runtime.",
+    "confidence": 0.8
+  }
+}

@@ -1,0 +1,50 @@
+{
+  "id": "traj_daf6b05pendz",
+  "version": 1,
+  "task": {
+    "title": "cron:",
+    "description": "cron schedule \"\" ()"
+  },
+  "status": "abandoned",
+  "startedAt": "2026-06-06T12:50:23.902Z",
+  "agents": [
+    {
+      "name": "demo",
+      "role": "lead",
+      "joinedAt": "2026-06-06T12:50:23.903Z"
+    }
+  ],
+  "chapters": [
+    {
+      "id": "chap_03zkj0xnz3xx",
+      "title": "handle cron:tick",
+      "agentName": "demo",
+      "startedAt": "2026-06-06T12:50:23.903Z",
+      "events": [
+        {
+          "ts": 1780750223904,
+          "type": "error",
+          "content": "boom",
+          "significance": "high"
+        },
+        {
+          "ts": 1780750223905,
+          "type": "note",
+          "content": "Abandoned: boom",
+          "significance": "high"
+        }
+      ],
+      "endedAt": "2026-06-06T12:50:23.905Z"
+    }
+  ],
+  "commits": [],
+  "filesChanged": [],
+  "projectId": "ws-test",
+  "tags": [
+    "persona:demo",
+    "workspace:ws-test",
+    "source:cron"
+  ],
+  "workflowId": "run_e1_1",
+  "completedAt": "2026-06-06T12:50:23.905Z"
+}

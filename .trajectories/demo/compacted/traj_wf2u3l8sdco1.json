@@ -1,0 +1,15 @@
+{
+  "id": "traj_wf2u3l8sdco1",
+  "version": 1,
+  "personaId": "demo",
+  "projectId": "ws-test",
+  "task": {
+    "title": "cron:",
+    "description": "cron schedule \"\" ()"
+  },
+  "status": "abandoned",
+  "startedAt": "2026-06-06T12:44:26.441Z",
+  "completedAt": "2026-06-06T12:44:26.444Z",
+  "decisions": [],
+  "retrospective": null
+}

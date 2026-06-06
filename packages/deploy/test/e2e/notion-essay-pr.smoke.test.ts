@@ -201,6 +201,20 @@ class MockNotionEssayRuntime {
         read: (filePath) => this.read(filePath),
         write: (filePath, contents) => this.write(filePath, contents)
       },
+      credentials: {
+        get relayfile(): never {
+          throw new Error('unused');
+        },
+        get cloudApi(): never {
+          throw new Error('unused');
+        },
+        tryRequire() {
+          return null;
+        },
+        require(): never {
+          throw new Error('unused');
+        }
+      },
       memory: {
         async recall() {
           return [{
@@ -231,6 +245,13 @@ class MockNotionEssayRuntime {
         async cancel() {
           /* unused */
         }
+      },
+      trajectory: {
+        async chapter() {},
+        async note() {},
+        async decide() {},
+        async error() {},
+        async done() {}
       },
       log: () => undefined
     };
