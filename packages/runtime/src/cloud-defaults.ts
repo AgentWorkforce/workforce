@@ -9,6 +9,7 @@ import {
   resolveMcpServersLenient,
   resolvePersonaInputs,
   resolveStringMapLenient,
+  type AiHistMcpConfig,
   type PersonaSpec,
   type RelayMcpConfig
 } from '@agentworkforce/persona-kit';
@@ -461,6 +462,12 @@ function createProcessHarnessRunner(args: CloudDefaultOptions & {
     });
     const task = run.prompt;
     const relayMcp = resolveRelayMcpFromEnv(args.env);
+    // Inject the ai-hist MCP (the "why" + "how" retrieval surface) by default,
+    // unless the persona disabled trajectory recording. resolveAiHistFromEnv
+    // keys off the SAME TRAJECTORY_ROOT the runtime recorder writes to, so the
+    // MCP reads back exactly what this deployment wrote.
+    const aiHist =
+      args.persona.recordTrajectories === false ? undefined : resolveAiHistFromEnv(args.env);
     const specInput = {
       harness,
       personaId: args.persona.id,
@@ -471,7 +478,8 @@ function createProcessHarnessRunner(args: CloudDefaultOptions & {
       permissions: args.persona.permissions,
       task,
       name: args.persona.id,
-      workingDirectory: cwd
+      workingDirectory: cwd,
+      ...(aiHist ? { aiHist } : {})
     };
     const brokerRelayHarness = relayMcp && (harness === 'claude' || harness === 'codex');
     let spec = buildNonInteractiveSpec({
@@ -596,6 +604,25 @@ function resolveRelayMcpFromEnv(env: NodeJS.ProcessEnv): RelayMcpConfig | undefi
     agentName,
     ...(baseUrl ? { baseUrl } : {}),
     ...(defaultWorkspace ? { defaultWorkspace } : {})
+  };
+}
+
+/**
+ * Resolve the ai-hist MCP config from env. Mirrors the CLI helper so cloud and
+ * local spawns inject the same server. `WORKFORCE_AIHIST_DISABLED` (`1`/`true`)
+ * is the escape hatch. Both fields are optional — when `TRAJECTORY_ROOT` is
+ * unset the MCP falls back to its own discovery, which matches the runtime
+ * recorder (also keyed off `TRAJECTORY_ROOT`): with no root, the recorder
+ * writes nothing, so there is nothing to mis-read.
+ */
+function resolveAiHistFromEnv(env: NodeJS.ProcessEnv): AiHistMcpConfig | undefined {
+  const disabled = env.WORKFORCE_AIHIST_DISABLED?.trim();
+  if (disabled === '1' || disabled === 'true') return undefined;
+  const trajectoryRoot = env.TRAJECTORY_ROOT?.trim();
+  const dbPath = env.AI_HIST_DB?.trim();
+  return {
+    ...(trajectoryRoot ? { trajectoryRoot } : {}),
+    ...(dbPath ? { dbPath } : {})
   };
 }
 

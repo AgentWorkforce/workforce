@@ -321,6 +321,72 @@ export interface WorkforceDeploymentContext {
   readonly parentDeploymentId: string | null;
 }
 
+/** A single decision in the compacted trajectory contract. */
+export interface TrajectoryDecisionRecord {
+  question: string;
+  chosen: string;
+  reasoning: string;
+  alternatives: Array<{ option: string; reason?: string }>;
+}
+
+/** Retrospective subset carried in the compacted trajectory contract. */
+export interface TrajectoryRetrospectiveRecord {
+  summary: string;
+  approach: string;
+  learnings: string[];
+  confidence: number;
+}
+
+/**
+ * Compacted, contract-shaped trajectory artifact emitted once per completed
+ * (or abandoned) run. This is the frozen A↔B interface consumed by the
+ * ai-hist trajectory sync source — one JSON file per run at
+ * `$TRAJECTORY_ROOT/<personaId>/compacted/<id>.json`. It deliberately omits
+ * the `type:"compacted"` / `sourceTrajectories[]` markers of `trail compact`
+ * aggregates so ai-hist's defensive ingest filter keeps it.
+ */
+export interface CompactedTrajectoryContract {
+  id: string;
+  version: number;
+  personaId: string;
+  projectId: string | null;
+  task: { title: string; description: string | null };
+  status: 'active' | 'completed' | 'abandoned' | string;
+  startedAt: string;
+  completedAt: string | null;
+  decisions: TrajectoryDecisionRecord[];
+  retrospective: TrajectoryRetrospectiveRecord | null;
+}
+
+/**
+ * Auto-recording trajectory surface. Handlers narrate their decision
+ * trajectory (the WHY) through these methods; the runtime opens a trajectory
+ * around each run and emits the compacted contract on completion. Every method
+ * is safe to call even when recording is disabled (`recordTrajectories: false`
+ * or no resolvable `TRAJECTORY_ROOT`) — it then no-ops.
+ */
+export interface TrajectoryContext {
+  /** Open a new logical phase of work within the run. */
+  chapter(title: string): Promise<void>;
+  /** Record a free-form observation. */
+  note(content: string): Promise<void>;
+  /** Record a structured decision and the alternatives considered. */
+  decide(
+    question: string,
+    chosen: string,
+    reasoning: string,
+    alternatives?: Array<{ option: string; reason?: string }>
+  ): Promise<void>;
+  /** Record an error encountered while working. */
+  error(content: string): Promise<void>;
+  /**
+   * Finish the run with a retrospective. Optional — when the handler does not
+   * call it, the runner auto-finalizes on return. Idempotent: the first
+   * `done`/auto-finalize wins.
+   */
+  done(summary: string, confidence: number): Promise<void>;
+}
+
 /**
  * The context object handlers receive on every event invocation.
  * Provider data is accessed via the VFS helpers exported from the runtime
@@ -356,6 +422,12 @@ export interface WorkforceCtx {
   workflow: WorkflowContext;
   /** Schedule one-off follow-up ticks. */
   schedule: ScheduleContext;
+  /**
+   * Auto-recorded decision trajectory (the WHY). No-op when recording is
+   * disabled (`persona.recordTrajectories: false` or no resolvable
+   * `TRAJECTORY_ROOT`), so it is always safe to call from a handler.
+   */
+  trajectory: TrajectoryContext;
   /** Structured logger; every line is forwarded to the gateway. */
   log: (level: 'debug' | 'info' | 'warn' | 'error', message: string, attrs?: Record<string, unknown>) => void;
 }
