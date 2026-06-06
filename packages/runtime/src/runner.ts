@@ -124,6 +124,10 @@ export async function startRunner(options: StartRunnerOptions): Promise<void> {
       : {}),
     ...(options.subsystems?.schedule ? { schedule: options.subsystems.schedule } : {}),
     ...(options.subsystems?.log ? { log: options.subsystems.log } : {}),
+    // Recorder write-root resolved once by cloud-defaults; identical to the
+    // value cloud-defaults passes to the ai-hist MCP. Undefined locally/in
+    // tests (recording stays opt-in via TRAJECTORY_ROOT).
+    ...(cloudDefaults.trajectoryRoot ? { trajectoryRoot: cloudDefaults.trajectoryRoot } : {}),
     ...(Object.keys(integrations).length > 0 ? { integrations } : {})
   });
 

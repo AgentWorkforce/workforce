@@ -63,11 +63,24 @@ export interface CloudRuntimeDefaults {
   workflow?: WorkflowContext;
   llm?: LlmContext;
   harnessRunner: (args: HarnessRunArgs) => Promise<HarnessRunResult>;
+  /**
+   * Resolved trajectory root for this deployment, or `undefined` when there is
+   * no cloud workspace and `TRAJECTORY_ROOT` is unset (local/tests stay opt-in,
+   * so the runtime never writes to a developer's cwd). The runner threads this
+   * into `buildCtx` as the recorder write-root; the harness spec passes the
+   * same value to the ai-hist MCP — that single source keeps write-root and
+   * MCP-root identical.
+   */
+  trajectoryRoot?: string;
 }
 
 export function createCloudRuntimeDefaults(options: CloudDefaultOptions): CloudRuntimeDefaults {
   const env = options.env ?? process.env;
   const root = resolveCloudWorkspaceRoot(env);
+  // Single source of truth for the trajectory root, computed once. Both the
+  // recorder write-root (threaded into buildCtx by the runner) and the ai-hist
+  // MCP env (in the harness spec) consume this exact value.
+  const trajectoryRoot = resolveCloudTrajectoryRoot(env, root);
   const isSandboxOptional = options.persona.sandbox === false;
   const baseSandbox = createProcessSandbox(root, env);
   const sandbox = isSandboxOptional
@@ -90,12 +103,34 @@ export function createCloudRuntimeDefaults(options: CloudDefaultOptions): CloudR
     files,
     ...(workflow ? { workflow } : {}),
     ...(llm ? { llm } : {}),
+    ...(trajectoryRoot ? { trajectoryRoot } : {}),
     harnessRunner: createProcessHarnessRunner({
       ...options,
       workspaceRoot: root,
-      env
+      env,
+      trajectoryRoot
     })
   };
+}
+
+/**
+ * Resolve the trajectory root for a cloud deployment. An explicit
+ * `TRAJECTORY_ROOT` always wins. Otherwise it defaults to
+ * `<workspaceRoot>/.trajectories` — but ONLY in a real cloud workspace
+ * (configured mount or an accessible `/workspace`), so local/test runs stay
+ * opt-in via env and never write to a developer's cwd.
+ */
+function resolveCloudTrajectoryRoot(env: NodeJS.ProcessEnv, workspaceRoot: string): string | undefined {
+  const explicit = env.TRAJECTORY_ROOT?.trim();
+  if (explicit) return explicit;
+  const hasCloudWorkspace =
+    firstNonEmpty(
+      env.WORKFORCE_SANDBOX_ROOT,
+      env.WORKFORCE_WORKSPACE_DIR,
+      env.RELAYFILE_MOUNT_ROOT,
+      env.RELAYFILE_ROOT
+    ) !== undefined || canAccessSync('/workspace');
+  return hasCloudWorkspace ? path.join(workspaceRoot, '.trajectories') : undefined;
 }
 
 function resolveCloudWorkspaceRoot(env: NodeJS.ProcessEnv): string {
@@ -414,6 +449,7 @@ function delay(ms: number): Promise<void> {
 function createProcessHarnessRunner(args: CloudDefaultOptions & {
   workspaceRoot: string;
   env: NodeJS.ProcessEnv;
+  trajectoryRoot?: string;
 }): (run: HarnessRunArgs) => Promise<HarnessRunResult> {
   return async (run) => {
     // harness/model/systemPrompt are optional on the persona spec (pure
@@ -467,7 +503,9 @@ function createProcessHarnessRunner(args: CloudDefaultOptions & {
     // keys off the SAME TRAJECTORY_ROOT the runtime recorder writes to, so the
     // MCP reads back exactly what this deployment wrote.
     const aiHist =
-      args.persona.recordTrajectories === false ? undefined : resolveAiHistFromEnv(args.env);
+      args.persona.recordTrajectories === false
+        ? undefined
+        : resolveAiHistFromEnv(args.env, args.trajectoryRoot);
     const specInput = {
       harness,
       personaId: args.persona.id,
@@ -615,10 +653,15 @@ function resolveRelayMcpFromEnv(env: NodeJS.ProcessEnv): RelayMcpConfig | undefi
  * recorder (also keyed off `TRAJECTORY_ROOT`): with no root, the recorder
  * writes nothing, so there is nothing to mis-read.
  */
-function resolveAiHistFromEnv(env: NodeJS.ProcessEnv): AiHistMcpConfig | undefined {
+function resolveAiHistFromEnv(
+  env: NodeJS.ProcessEnv,
+  defaultTrajectoryRoot?: string
+): AiHistMcpConfig | undefined {
   const disabled = env.WORKFORCE_AIHIST_DISABLED?.trim();
   if (disabled === '1' || disabled === 'true') return undefined;
-  const trajectoryRoot = env.TRAJECTORY_ROOT?.trim();
+  // env.TRAJECTORY_ROOT wins; otherwise the deployment default (same value the
+  // recorder writes to) — keeps the MCP read-root identical to the write-root.
+  const trajectoryRoot = env.TRAJECTORY_ROOT?.trim() || defaultTrajectoryRoot;
   const dbPath = env.AI_HIST_DB?.trim();
   return {
     ...(trajectoryRoot ? { trajectoryRoot } : {}),
