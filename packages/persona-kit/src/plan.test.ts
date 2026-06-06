@@ -39,16 +39,18 @@ test('buildPersonaSpawnPlan returns the persona, cli, and args for claude', () =
   assert.equal(plan.initialPrompt, undefined);
 });
 
-test('buildPersonaSpawnPlan injects ai-hist by default for recorded trajectories', () => {
-  const plan = buildPersonaSpawnPlan(persona(), { processEnv: cleanEnv });
+test('buildPersonaSpawnPlan injects ai-hist when memory.aiMemory is opted in', () => {
+  const plan = buildPersonaSpawnPlan(persona({ memory: { aiMemory: true } }), {
+    processEnv: cleanEnv
+  });
   const mcpIdx = plan.args.indexOf('--mcp-config');
   assert.ok(mcpIdx >= 0, 'expected --mcp-config');
   const payload = JSON.parse(plan.args[mcpIdx + 1]);
   assertAiHistServer(payload.mcpServers['ai-hist'], {});
 });
 
-test('buildPersonaSpawnPlan threads ai-hist env overrides from processEnv', () => {
-  const plan = buildPersonaSpawnPlan(persona(), {
+test('buildPersonaSpawnPlan threads ai-hist env overrides when aiMemory is on', () => {
+  const plan = buildPersonaSpawnPlan(persona({ memory: { aiMemory: true } }), {
     processEnv: {
       TRAJECTORY_ROOT: '/repo/.trajectories',
       AI_HIST_DB: '/tmp/ai-history.db'
@@ -62,21 +64,32 @@ test('buildPersonaSpawnPlan threads ai-hist env overrides from processEnv', () =
   });
 });
 
-test('buildPersonaSpawnPlan honors recordTrajectories false and ai-hist env disable', () => {
-  const optedOut = buildPersonaSpawnPlan(persona({ recordTrajectories: false }), {
+test('buildPersonaSpawnPlan: memory.aiMemory.dbPath overrides the history DB', () => {
+  const plan = buildPersonaSpawnPlan(persona({ memory: { aiMemory: { dbPath: '/custom/hist.db' } } }), {
     processEnv: cleanEnv
   });
-  const optedOutMcpIdx = optedOut.args.indexOf('--mcp-config');
-  assert.equal(JSON.parse(optedOut.args[optedOutMcpIdx + 1]).mcpServers['ai-hist'], undefined);
+  const mcpIdx = plan.args.indexOf('--mcp-config');
+  const payload = JSON.parse(plan.args[mcpIdx + 1]);
+  assert.deepEqual(payload.mcpServers['ai-hist'].env, { AI_HIST_DB: '/custom/hist.db' });
+});
 
-  const envDisabled = buildPersonaSpawnPlan(persona(), {
-    processEnv: { WORKFORCE_AIHIST_DISABLED: 'true' } as NodeJS.ProcessEnv
+test('buildPersonaSpawnPlan omits ai-hist when memory.aiMemory is not opted in', () => {
+  // Default (no memory) — off.
+  const off = buildPersonaSpawnPlan(persona(), { processEnv: cleanEnv });
+  const offIdx = off.args.indexOf('--mcp-config');
+  assert.equal(JSON.parse(off.args[offIdx + 1]).mcpServers['ai-hist'], undefined);
+
+  // `memory: true` enables long-form memory only, NOT the aiMemory facet.
+  const longFormOnly = buildPersonaSpawnPlan(persona({ memory: true }), { processEnv: cleanEnv });
+  const lfIdx = longFormOnly.args.indexOf('--mcp-config');
+  assert.equal(JSON.parse(longFormOnly.args[lfIdx + 1]).mcpServers['ai-hist'], undefined);
+
+  // Explicit opt-out.
+  const explicitOff = buildPersonaSpawnPlan(persona({ memory: { aiMemory: false } }), {
+    processEnv: cleanEnv
   });
-  const envDisabledMcpIdx = envDisabled.args.indexOf('--mcp-config');
-  assert.equal(
-    JSON.parse(envDisabled.args[envDisabledMcpIdx + 1]).mcpServers['ai-hist'],
-    undefined
-  );
+  const eoIdx = explicitOff.args.indexOf('--mcp-config');
+  assert.equal(JSON.parse(explicitOff.args[eoIdx + 1]).mcpServers['ai-hist'], undefined);
 });
 
 test('buildPersonaSpawnPlan emits initialPrompt for codex', () => {

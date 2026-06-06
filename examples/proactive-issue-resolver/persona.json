@@ -18,7 +18,9 @@
     "enabled": true,
     "scopes": [
       "workspace"
-    ]
+    ],
+    "trajectories": true,
+    "aiMemory": true
   },
   "onEvent": "./agent.ts",
   "harness": "claude",

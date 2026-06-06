@@ -4,6 +4,7 @@ import {
   type InteractiveConfigFile
 } from './interactive-spec.js';
 import { resolvePersonaInputs, renderPersonaInputs } from './inputs.js';
+import { resolveAiMemory } from './parse.js';
 import { materializeSkills } from './skills.js';
 import type {
   Harness,
@@ -126,11 +127,9 @@ export interface PlanOptions {
   inputValues?: Record<string, string | number | boolean | null | undefined>;
 }
 
-function resolveAiHistFromEnv(env: NodeJS.ProcessEnv): AiHistMcpConfig | false {
-  const disabled = env.WORKFORCE_AIHIST_DISABLED?.trim();
-  if (disabled === '1' || disabled === 'true') return false;
+function resolveAiHistConfig(env: NodeJS.ProcessEnv, dbPathOverride?: string): AiHistMcpConfig {
   const trajectoryRoot = env.TRAJECTORY_ROOT?.trim();
-  const dbPath = env.AI_HIST_DB?.trim();
+  const dbPath = dbPathOverride?.trim() || env.AI_HIST_DB?.trim();
   return {
     ...(trajectoryRoot ? { trajectoryRoot } : {}),
     ...(dbPath ? { dbPath } : {})
@@ -247,8 +246,8 @@ export function buildPersonaSpawnPlan(
     persona.systemPrompt,
     inputResolution.values
   );
-  const aiHist =
-    persona.recordTrajectories === false ? false : resolveAiHistFromEnv(processEnv);
+  const aiMemory = resolveAiMemory(persona.memory);
+  const aiHist = aiMemory.enabled ? resolveAiHistConfig(processEnv, aiMemory.dbPath) : false;
   const skills = materializeSkills(
     persona.skills,
     harness,

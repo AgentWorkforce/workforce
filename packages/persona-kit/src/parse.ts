@@ -21,10 +21,12 @@ import type {
   PersonaIntegrationConfig,
   PersonaIntegrationTrigger,
   PersonaIntent,
+  PersonaAiMemoryConfig,
   PersonaMemory,
   PersonaMemoryConfig,
   PersonaMemoryScope,
   PersonaMount,
+  PersonaTrajectoryConfig,
   PersonaPermissions,
   PersonaSchedule,
   PersonaSelection,
@@ -858,7 +860,7 @@ export function parseMemory(value: unknown, context: string): PersonaMemory | un
   if (!isObject(value)) {
     throw new Error(`${context} must be a boolean or an object if provided`);
   }
-  const { enabled, scopes, ttlDays, autoPromote, dedupMs } = value;
+  const { enabled, scopes, ttlDays, autoPromote, dedupMs, trajectories, aiMemory } = value;
   const out: PersonaMemoryConfig = {};
   if (enabled !== undefined) {
     if (typeof enabled !== 'boolean') {
@@ -902,7 +904,98 @@ export function parseMemory(value: unknown, context: string): PersonaMemory | un
     }
     out.dedupMs = dedupMs;
   }
+  if (trajectories !== undefined) {
+    out.trajectories = parseTrajectoryConfig(trajectories, `${context}.trajectories`);
+  }
+  if (aiMemory !== undefined) {
+    out.aiMemory = parseAiMemoryConfig(aiMemory, `${context}.aiMemory`);
+  }
   return out;
+}
+
+function parseTrajectoryConfig(
+  value: unknown,
+  context: string
+): boolean | PersonaTrajectoryConfig {
+  if (typeof value === 'boolean') return value;
+  if (!isObject(value)) {
+    throw new Error(`${context} must be a boolean or an object if provided`);
+  }
+  const out: PersonaTrajectoryConfig = {};
+  if (value.enabled !== undefined) {
+    if (typeof value.enabled !== 'boolean') {
+      throw new Error(`${context}.enabled must be a boolean if provided`);
+    }
+    out.enabled = value.enabled;
+  }
+  if (value.autoCompact !== undefined) {
+    if (typeof value.autoCompact !== 'boolean') {
+      throw new Error(`${context}.autoCompact must be a boolean if provided`);
+    }
+    out.autoCompact = value.autoCompact;
+  }
+  return out;
+}
+
+function parseAiMemoryConfig(
+  value: unknown,
+  context: string
+): boolean | PersonaAiMemoryConfig {
+  if (typeof value === 'boolean') return value;
+  if (!isObject(value)) {
+    throw new Error(`${context} must be a boolean or an object if provided`);
+  }
+  const out: PersonaAiMemoryConfig = {};
+  if (value.enabled !== undefined) {
+    if (typeof value.enabled !== 'boolean') {
+      throw new Error(`${context}.enabled must be a boolean if provided`);
+    }
+    out.enabled = value.enabled;
+  }
+  if (value.dbPath !== undefined) {
+    if (typeof value.dbPath !== 'string' || !value.dbPath.trim()) {
+      throw new Error(`${context}.dbPath must be a non-empty string if provided`);
+    }
+    out.dbPath = value.dbPath;
+  }
+  return out;
+}
+
+/**
+ * Resolve the opt-in `memory.trajectories` facet (the "why" write side).
+ * Off unless the persona declares it: `true`, or an object whose
+ * `enabled !== false`. The boolean `memory: true` shorthand does NOT enable it.
+ */
+export function resolveTrajectoryRecording(memory: PersonaMemory | undefined): {
+  enabled: boolean;
+  autoCompact?: boolean;
+} {
+  if (!memory || typeof memory === 'boolean') return { enabled: false };
+  const value = memory.trajectories;
+  if (value === undefined) return { enabled: false };
+  if (typeof value === 'boolean') return { enabled: value };
+  return {
+    enabled: value.enabled !== false,
+    ...(value.autoCompact !== undefined ? { autoCompact: value.autoCompact } : {})
+  };
+}
+
+/**
+ * Resolve the opt-in `memory.aiMemory` facet (the "how"+"why" recall side that
+ * loads the ai-hist MCP). Off unless declared; `memory: true` does NOT enable it.
+ */
+export function resolveAiMemory(memory: PersonaMemory | undefined): {
+  enabled: boolean;
+  dbPath?: string;
+} {
+  if (!memory || typeof memory === 'boolean') return { enabled: false };
+  const value = memory.aiMemory;
+  if (value === undefined) return { enabled: false };
+  if (typeof value === 'boolean') return { enabled: value };
+  return {
+    enabled: value.enabled !== false,
+    ...(value.dbPath ? { dbPath: value.dbPath } : {})
+  };
 }
 
 function parseCapabilityValue(value: unknown, context: string): CapabilityValue {
@@ -997,7 +1090,6 @@ export function parsePersonaSpec(value: unknown, expectedIntent: PersonaIntent):
     integrations,
     capabilities,
     memory,
-    recordTrajectories,
     onEvent
   } = value;
 
@@ -1096,11 +1188,6 @@ export function parsePersonaSpec(value: unknown, expectedIntent: PersonaIntent):
   if (useSubscription !== undefined && typeof useSubscription !== 'boolean') {
     throw new Error(`persona[${expectedIntent}].useSubscription must be a boolean if provided`);
   }
-  if (recordTrajectories !== undefined && typeof recordTrajectories !== 'boolean') {
-    throw new Error(
-      `persona[${expectedIntent}].recordTrajectories must be a boolean if provided`
-    );
-  }
   const parsedIntegrations = parseIntegrations(
     integrations,
     `persona[${expectedIntent}].integrations`
@@ -1140,7 +1227,6 @@ export function parsePersonaSpec(value: unknown, expectedIntent: PersonaIntent):
     ...(parsedIntegrations ? { integrations: parsedIntegrations } : {}),
     ...(parsedCapabilities ? { capabilities: parsedCapabilities } : {}),
     ...(parsedMemory !== undefined ? { memory: parsedMemory } : {}),
-    ...(typeof recordTrajectories === 'boolean' ? { recordTrajectories } : {}),
     ...(parsedOnEvent !== undefined ? { onEvent: parsedOnEvent } : {})
   };
 }

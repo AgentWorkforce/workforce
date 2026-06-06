@@ -321,6 +321,44 @@ export interface PersonaMemoryConfig {
   ttlDays?: number;
   autoPromote?: boolean;
   dedupMs?: number;
+  /**
+   * Opt into decision-trajectory recording (the "why"). **Off by default.**
+   * When enabled, the runtime auto-records this persona's decisions per run and
+   * writes a compacted contract artifact to
+   * `<root>/<personaId>/compacted/<runId>.json` (root = `TRAJECTORY_ROOT` env or
+   * the cloud workspace default). Object form lets you toggle compaction.
+   */
+  trajectories?: boolean | PersonaTrajectoryConfig;
+  /**
+   * Opt into ai-memory recall (the "how" + "why" retrieval). **Off by default.**
+   * When enabled, the persona loads the ai-hist MCP so it can recall its own
+   * compacted trajectories (the why) and cross-tool prompt/session history
+   * (the how). Object form lets you override the history DB path.
+   */
+  aiMemory?: boolean | PersonaAiMemoryConfig;
+}
+
+/**
+ * Decision-trajectory recording config (the "why"). `enabled` defaults to true
+ * in object form, so `{ autoCompact: false }` means "record, don't compact".
+ * The store root is never per-persona — it's resolved once from
+ * `TRAJECTORY_ROOT` (or the cloud default) so the recorder's write-root always
+ * matches the ai-hist MCP's read-root.
+ */
+export interface PersonaTrajectoryConfig {
+  enabled?: boolean;
+  /** Run mechanical+markdown compaction on completion. Defaults to true. */
+  autoCompact?: boolean;
+}
+
+/**
+ * ai-memory recall config (the "how" + "why" retrieval via the ai-hist MCP).
+ * `enabled` defaults to true in object form.
+ */
+export interface PersonaAiMemoryConfig {
+  enabled?: boolean;
+  /** Override the ai-hist history DB path; else `AI_HIST_DB` env / discovery. */
+  dbPath?: string;
 }
 
 export type PersonaMemory = boolean | PersonaMemoryConfig;
@@ -507,17 +545,6 @@ export interface PersonaSpec {
    */
   memory?: PersonaMemory;
   /**
-   * Decision-trajectory recording opt-out. Recording is **on by default**:
-   * the runtime auto-records this persona's decisions/reasoning per run (the
-   * "why") and the deploy CLI auto-injects the `ai-hist` MCP server (the
-   * "how" + "why" retrieval surface) into {@link mcpServers}. Set to `false`
-   * to opt a persona out entirely — but note deploy preflight REJECTS a
-   * cloud persona with `recordTrajectories: false` (trajectory recording is
-   * an enforced capability for deployed agents). Omit (or `true`) for the
-   * default enforced-on behavior.
-   */
-  recordTrajectories?: boolean;
-  /**
    * Relative POSIX path to the TypeScript (or compiled .js / .mjs) file
    * whose default export is the deploy-time event handler. Resolved
    * relative to the persona JSON's directory at deploy time. Required by
@@ -544,12 +571,12 @@ export interface PersonaSelection {
   permissions?: PersonaPermissions;
   mount?: PersonaMount;
   /**
-   * Carried through from {@link PersonaSpec.recordTrajectories}. When not
-   * `false`, launchers inject the `ai-hist` MCP server so the session can
-   * recall its own decision trajectories (the "why") and prior history (the
-   * "how"). Omitted/`true` ⇒ recording on (default).
+   * Carried through from {@link PersonaSpec.memory}. Launchers read its opt-in
+   * facets: `memory.aiMemory` gates injecting the `ai-hist` MCP (recall), and
+   * `memory.trajectories` gates runtime decision-trajectory recording. Both are
+   * off unless declared. Use {@link resolveAiMemory} / {@link resolveTrajectoryRecording}.
    */
-  recordTrajectories?: boolean;
+  memory?: PersonaMemory;
   /**
    * Effective sidecar config for the persona. Modes default to `overwrite`
    * when a path or inlined content exists; otherwise the mode field is omitted.

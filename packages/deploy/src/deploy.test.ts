@@ -254,27 +254,13 @@ test('preflightPersona refuses when cloud is not true', async () => {
   }
 });
 
-test('preflightPersona refuses a cloud persona that opts out of trajectory recording', async () => {
+test('preflightPersona accepts a cloud persona that opts into memory facets', async () => {
   const { personaPath, cleanup } = await withTempPersona(
-    basePersonaJson({ recordTrajectories: false })
-  );
-  try {
-    await assert.rejects(
-      preflightPersona(personaPath),
-      /recordTrajectories:false but trajectory recording is required/
-    );
-  } finally {
-    await cleanup();
-  }
-});
-
-test('preflightPersona accepts a cloud persona with recordTrajectories explicitly true', async () => {
-  const { personaPath, cleanup } = await withTempPersona(
-    basePersonaJson({ recordTrajectories: true })
+    basePersonaJson({ memory: { trajectories: true, aiMemory: true } })
   );
   try {
     const pre = await preflightPersona(personaPath);
-    assert.equal(pre.persona.recordTrajectories, true);
+    assert.deepEqual(pre.persona.memory, { trajectories: true, aiMemory: true });
   } finally {
     await cleanup();
   }
