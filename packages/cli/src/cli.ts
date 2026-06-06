@@ -1870,13 +1870,28 @@ async function runInteractive(
   const hasConfigFiles = spec.configFiles.length > 0;
   const degradeConfigFiles = hasConfigFiles && !useClean;
   let effectiveArgs: readonly string[] = spec.args;
+  let effectiveInitialPrompt = spec.initialPrompt;
   if (degradeConfigFiles) {
-    process.stderr.write(
-      'warning: --install-in-repo cannot safely materialize the persona agent config (would write opencode.json into your repo); launching without --agent. Drop --install-in-repo to apply the persona prompt.\n'
-    );
-    effectiveArgs = stripAgentFlag(spec.args);
+    if (harness === 'opencode') {
+      process.stderr.write(
+        'warning: --install-in-repo cannot safely materialize the persona agent config (would write opencode.json into your repo); launching without --agent. Drop --install-in-repo to apply the persona prompt.\n'
+      );
+      effectiveArgs = stripAgentFlag(spec.args);
+    } else if (harness === 'cursor') {
+      process.stderr.write(
+        'warning: --install-in-repo cannot safely materialize Cursor AGENTS.md (would write AGENTS.md into your repo); launching with the persona system prompt as Cursor\'s initial prompt. Drop --install-in-repo to apply the persona prompt via AGENTS.md.\n'
+      );
+      effectiveInitialPrompt = systemPrompt || null;
+    } else {
+      const files = spec.configFiles.map((file) => file.path).join(', ');
+      process.stderr.write(
+        `warning: --install-in-repo cannot safely materialize persona config file(s) ${files} into your repo; launching without those config files. Drop --install-in-repo to apply them.\n`
+      );
+    }
   }
-  const finalArgs = spec.initialPrompt ? [...effectiveArgs, spec.initialPrompt] : [...effectiveArgs];
+  const finalArgs = effectiveInitialPrompt
+    ? [...effectiveArgs, effectiveInitialPrompt]
+    : [...effectiveArgs];
 
   // Print a sanitized summary rather than raw argv: spec.args for the claude
   // harness contains the resolved --mcp-config JSON and the full system

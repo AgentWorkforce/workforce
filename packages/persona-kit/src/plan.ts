@@ -66,8 +66,8 @@ export interface ResolvedInputBinding {
 export interface PersonaSpawnPlan {
   /** The fully resolved persona this plan was built from. */
   persona: ResolvedPersona;
-  /** Which CLI to spawn (`claude` | `codex` | `opencode` | `grok` | `cursor`). */
-  cli: Harness;
+  /** Which binary to spawn (`claude` | `codex` | `opencode` | `grok` | `cursor-agent`). */
+  cli: string;
   /** argv (excluding the cli itself) that the harness should be spawned with. */
   args: string[];
   /** Optional initial prompt — used by codex's argv-driven prompt mode. */
@@ -280,7 +280,7 @@ export function buildPersonaSpawnPlan(
 
   const plan: PersonaSpawnPlan = {
     persona,
-    cli: harness,
+    cli: spec.bin,
     args: [...spec.args],
     configFiles: spec.configFiles.map((f) => ({ path: f.path, contents: f.contents })),
     skills,

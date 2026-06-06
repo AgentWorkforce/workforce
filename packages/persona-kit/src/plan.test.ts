@@ -85,7 +85,7 @@ test('buildPersonaSpawnPlan emits AGENTS.md configFile for cursor systemPrompt',
     }),
     { processEnv: cleanEnv }
   );
-  assert.equal(plan.cli, 'cursor');
+  assert.equal(plan.cli, 'cursor-agent');
   assert.deepEqual(plan.configFiles, [
     { path: 'AGENTS.md', contents: 'cursor prompt\n' }
   ]);

@@ -102,6 +102,26 @@ function writeStandaloneCodexPersona(workforceHome: string, id = 'local-codex'):
   return id;
 }
 
+function writeStandaloneCursorPersona(workforceHome: string, id = 'local-cursor'): string {
+  const personaDir = join(workforceHome, 'personas');
+  mkdirSync(personaDir, { recursive: true });
+  writeFileSync(
+    join(personaDir, `${id}.json`),
+    JSON.stringify({
+      id,
+      intent: 'review',
+      tags: ['review'],
+      description: 'Local no-skill cursor persona for CLI subprocess tests.',
+      harness: 'cursor',
+      model: 'test-cursor',
+      systemPrompt: 'Run the local cursor test harness.',
+      harnessSettings: { reasoning: 'medium', timeoutSeconds: 30 }
+    }),
+    'utf8'
+  );
+  return id;
+}
+
 test('parseAgentArgs: --install-in-repo sets flag and preserves positional selector', () => {
   const { flags, positional } = parseAgentArgs(['--install-in-repo', 'local-codex@best']);
   assert.equal(flags.installInRepo, true);
@@ -1194,6 +1214,42 @@ test('main: codex --install-in-repo disengages the sandbox mount', async () => {
     );
   } finally {
     rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test('main: cursor --install-in-repo passes systemPrompt as an initial prompt fallback', async () => {
+  const dir = mkdtempSync(join(tmpdir(), 'aw-cli-cursor-no-mount-'));
+  try {
+    const cursorAgent = join(dir, 'cursor-agent');
+    writeFileSync(
+      cursorAgent,
+      `#!/usr/bin/env node
+process.stderr.write(JSON.stringify(process.argv.slice(2)));
+process.exit(0);
+`,
+      'utf8'
+    );
+    chmodSync(cursorAgent, 0o755);
+
+    const workforceHome = join(dir, '.agentworkforce', 'workforce');
+    const personaId = writeStandaloneCursorPersona(workforceHome);
+    const { stderr, exitCode } = await runCliCapturingStderr(
+      ['agent', `${personaId}`, '--install-in-repo'],
+      {
+        PATH: `${dir}:${process.env.PATH ?? ''}`,
+        AGENT_WORKFORCE_HOME: workforceHome,
+        AGENTWORKFORCE_LAUNCH_METADATA: '0'
+      }
+    );
+
+    assert.equal(exitCode, 0);
+    assert.match(stderr, /cannot safely materialize Cursor AGENTS\.md/);
+    assert.match(
+      stderr,
+      /\["--model","test-cursor","Run the local cursor test harness\."\]/
+    );
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
   }
 });
 
