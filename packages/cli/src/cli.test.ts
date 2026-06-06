@@ -404,6 +404,11 @@ test('decideCleanMode: codex defaults to mount (parity with claude/opencode)', (
   assert.deepEqual(decideCleanMode('codex', true), { useClean: false });
 });
 
+test('decideCleanMode: grok defaults to mount', () => {
+  assert.deepEqual(decideCleanMode('grok'), { useClean: true });
+  assert.deepEqual(decideCleanMode('grok', true), { useClean: false });
+});
+
 test('formatSandboxMountReadyMessage: appends mount metrics when available', () => {
   assert.equal(
     formatSandboxMountReadyMessage('/tmp/mount', {
@@ -535,6 +540,7 @@ test('SKILL_INSTALL_IGNORED_PATTERNS: keeps skill-install artifacts out of the r
     '.agents',
     '.claude/skills',
     '.factory/skills',
+    '.grok/skills',
     '.kiro/skills',
     'skills',
     '.opencode',
@@ -1080,6 +1086,23 @@ test('loadSidecarForSelection: opencode picks agentsMd, not claudeMd', () => {
     personaId: 'p',
     harness: 'opencode' as const,
     model: 'gpt-5.2',
+    systemPrompt: 'X',
+    harnessSettings: { reasoning: 'medium' as const, timeoutSeconds: 300 },
+    skills: [],
+    rationale: 'test',
+    claudeMdContent: '# claude\n',
+    agentsMdContent: '# agents\n'
+  };
+  const { sidecar } = loadSidecarForSelection(selection);
+  assert.equal(sidecar?.mountFile, 'AGENTS.md');
+  assert.equal(sidecar?.personaContent, '# agents\n');
+});
+
+test('loadSidecarForSelection: grok picks agentsMd, not claudeMd', () => {
+  const selection = {
+    personaId: 'p',
+    harness: 'grok' as const,
+    model: 'grok-build-0.1',
     systemPrompt: 'X',
     harnessSettings: { reasoning: 'medium' as const, timeoutSeconds: 300 },
     skills: [],

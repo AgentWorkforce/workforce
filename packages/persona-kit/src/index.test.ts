@@ -44,6 +44,10 @@ test('claude is a recognized harness value', () => {
   assert.ok(HARNESS_VALUES.includes('claude'));
 });
 
+test('grok is a recognized harness value', () => {
+  assert.ok(HARNESS_VALUES.includes('grok'));
+});
+
 test('HARNESS_SKILL_TARGETS covers every harness value', () => {
   for (const harness of HARNESS_VALUES) {
     const target = HARNESS_SKILL_TARGETS[harness];
@@ -87,6 +91,18 @@ test('materializeSkills routes claude skills to .claude/skills via --as claude',
   assert.equal(install.installedDir, '.claude/skills/npm-trusted-publishing');
 });
 
+test('materializeSkills routes grok skills to .grok/skills via --as grok', () => {
+  const plan = materializeSkills([prpmSkill], 'grok');
+  const [install] = plan.installs;
+  assert.deepEqual(
+    [...install.installCommand],
+    ['npx', '-y', 'prpm', 'install', '@prpm/npm-trusted-publishing', '--as', 'grok']
+  );
+  assert.equal(install.installedDir, '.grok/skills/npm-trusted-publishing');
+  assert.equal(install.installedManifest, '.grok/skills/npm-trusted-publishing/SKILL.md');
+  assert.deepEqual([...install.cleanupPaths], ['.grok/skills/npm-trusted-publishing']);
+});
+
 test('materializeSkills emits a skill.sh install for a github#skill source', () => {
   const plan = materializeSkills([skillShSkill], 'claude');
 
@@ -115,6 +131,7 @@ test('materializeSkills emits a skill.sh install for a github#skill source', () 
       '.agents/skills/find-skills',
       '.claude/skills/find-skills',
       '.factory/skills/find-skills',
+      '.grok/skills/find-skills',
       '.kiro/skills/find-skills',
       'skills/find-skills'
     ]

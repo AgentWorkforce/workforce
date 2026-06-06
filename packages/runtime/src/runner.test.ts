@@ -191,6 +191,67 @@ test('startRunner throws when workspaceId is missing from both options and env',
   }
 });
 
+test('cloud harness runner materializes AGENTS.md for grok personas', async () => {
+  const root = await mkdtemp(path.join(os.tmpdir(), 'workforce-grok-cloud-'));
+  const binDir = path.join(root, 'bin');
+  await mkdir(binDir, { recursive: true });
+  await writeFile(
+    path.join(binDir, 'grok'),
+    [
+      '#!/usr/bin/env node',
+      'const fs = require("node:fs");',
+      'const path = require("node:path");',
+      'const agents = fs.readFileSync(path.join(process.cwd(), "AGENTS.md"), "utf8");',
+      'process.stdout.write(JSON.stringify({ args: process.argv.slice(2), agents }));'
+    ].join('\n'),
+    'utf8'
+  );
+  await chmod(path.join(binDir, 'grok'), 0o755);
+
+  const envSnapshot = snapshotEnv(['PATH', 'WORKFORCE_SANDBOX_ROOT']);
+  process.env.PATH = `${binDir}${path.delimiter}${envSnapshot.PATH ?? ''}`;
+  process.env.WORKFORCE_SANDBOX_ROOT = root;
+  try {
+    const logs: Array<{ level: string; message: string; details?: unknown }> = [];
+    const defaults = createCloudRuntimeDefaults({
+      persona: {
+        ...persona,
+        harness: 'grok',
+        model: 'grok-build-0.1',
+        systemPrompt: 'Grok system prompt',
+        agentsMdContent: 'Grok agents sidecar',
+        agentsMdMode: 'overwrite'
+      },
+      agent: runtimeAgent,
+      deployment: runtimeDeployment,
+      workspaceId: 'ws-test',
+      log: (level, message, details) => logs.push({ level, message, details }),
+      env: process.env
+    });
+
+    const result = await defaults.harnessRunner({ prompt: 'say hello' });
+    assert.equal(result.exitCode, 0);
+    const parsed = JSON.parse(result.output) as { args: string[]; agents: string };
+    assert.deepEqual(parsed.args, [
+      '--no-auto-update',
+      '--model',
+      'grok-build-0.1',
+      '--output-format',
+      'plain',
+      '--cwd',
+      root,
+      '--always-approve',
+      '--single',
+      'Grok system prompt\n\nUser task:\nsay hello'
+    ]);
+    assert.equal(parsed.agents, 'Grok agents sidecar\n');
+    assert.ok(logs.find((l) => l.message === 'harness.sidecar.materialized'));
+  } finally {
+    restoreEnv(envSnapshot);
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
 async function writeFakeHarness(binDir: string, name: string, stdout: string): Promise<void> {
   await mkdir(binDir, { recursive: true });
   await writeFile(

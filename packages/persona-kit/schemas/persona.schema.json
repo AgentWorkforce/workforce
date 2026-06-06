@@ -38,7 +38,7 @@
         },
         "harness": {
           "$ref": "#/definitions/Harness",
-          "description": "Harness binary used to run this persona (`claude`, `codex`, `opencode`). Required for interactive personas. Optional for handler-style personas ( {@link  onEvent }  set): only consumed when the handler calls `ctx.harness.run(...)`; pure orchestrators omit it."
+          "description": "Harness binary used to run this persona (`claude`, `codex`, `opencode`, `grok`). Required for interactive personas. Optional for handler-style personas ( {@link  onEvent }  set): only consumed when the handler calls `ctx.harness.run(...)`; pure orchestrators omit it."
         },
         "model": {
           "type": "string",
@@ -64,11 +64,11 @@
           "additionalProperties": {
             "$ref": "#/definitions/McpServerSpec"
           },
-          "description": "MCP servers to attach to the harness session.\n- `claude`: passed via `--mcp-config`\n- `codex`: translated into `--config mcp_servers.<name>...` overrides\n- `opencode`: currently warns and skips"
+          "description": "MCP servers to attach to the harness session.\n- `claude`: passed via `--mcp-config`\n- `codex`: translated into `--config mcp_servers.<name>...` overrides\n- `opencode` / `grok`: currently warn and skip"
         },
         "permissions": {
           "$ref": "#/definitions/PersonaPermissions",
-          "description": "Permission policy (allow/deny lists, mode) for the harness session. Only wired for `claude` today (via `--allowedTools`, `--disallowedTools`, `--permission-mode`); other harnesses warn and skip."
+          "description": "Permission policy (allow/deny lists, mode) for the harness session. `claude` is wired for allow/deny/mode flags (via `--allowedTools`, `--disallowedTools`, `--permission-mode`). `grok` maps `mode: \"bypassPermissions\"` to `--always-approve`; other fields/harnesses warn and skip."
         },
         "sandbox": {
           "type": "boolean",
@@ -88,7 +88,7 @@
         },
         "agentsMd": {
           "type": "string",
-          "description": "Author-supplied path to an `AGENTS.md` sidecar that should be applied when the persona runs under the opencode harness. Same resolution rules as  {@link  claudeMd } ."
+          "description": "Author-supplied path to an `AGENTS.md` sidecar that should be applied when the persona runs under the opencode/codex/grok harnesses. Same resolution rules as  {@link  claudeMd } ."
         },
         "agentsMdMode": {
           "$ref": "#/definitions/SidecarMdMode",
@@ -228,7 +228,8 @@
       "enum": [
         "opencode",
         "codex",
-        "claude"
+        "claude",
+        "grok"
       ]
     },
     "HarnessSettings": {

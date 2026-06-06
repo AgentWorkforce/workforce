@@ -35,7 +35,7 @@ export interface ResolvedMountPolicy {
  * JSON-serializable; the executor reads the file at write time.
  */
 export type ResolvedSidecarWrite = {
-  /** Filename inside the cwd: `CLAUDE.md` (claude) or `AGENTS.md` (opencode/codex). */
+  /** Filename inside the cwd: `CLAUDE.md` (claude) or `AGENTS.md` (opencode/codex/grok). */
   filename: 'CLAUDE.md' | 'AGENTS.md';
   /**
    * `overwrite` writes verbatim; `extend` appends a `\n\n---\n\n`-joined
@@ -66,7 +66,7 @@ export interface ResolvedInputBinding {
 export interface PersonaSpawnPlan {
   /** The fully resolved persona this plan was built from. */
   persona: ResolvedPersona;
-  /** Which CLI to spawn (`claude` | `codex` | `opencode`). */
+  /** Which CLI to spawn (`claude` | `codex` | `opencode` | `grok`). */
   cli: Harness;
   /** argv (excluding the cli itself) that the harness should be spawned with. */
   args: string[];
@@ -161,7 +161,7 @@ function resolveSidecarWrite(
     }
     return [];
   }
-  if (harness === 'opencode' || harness === 'codex') {
+  if (harness === 'opencode' || harness === 'codex' || harness === 'grok') {
     if (selection.agentsMdContent !== undefined) {
       return [
         {

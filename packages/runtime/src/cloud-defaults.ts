@@ -453,12 +453,6 @@ function createProcessHarnessRunner(args: CloudDefaultOptions & {
     const renderedSystemPrompt = renderPersonaInputs(personaSystemPrompt, inputResolution.values);
     const cwd = resolveWorkspacePath(args.workspaceRoot, run.cwd ?? args.workspaceRoot);
     await assertDirectory(cwd);
-    await materializeSidecar({
-      persona: args.persona,
-      inputValues: inputResolution.values,
-      cwd,
-      log: args.log
-    });
     const task = run.prompt;
     const relayMcp = resolveRelayMcpFromEnv(args.env);
     const specInput = {
@@ -538,6 +532,12 @@ function createProcessHarnessRunner(args: CloudDefaultOptions & {
     for (const file of spec.configFiles) {
       await writeWorkspaceRelativeFile(cwd, file.path, file.contents);
     }
+    await materializeSidecar({
+      persona: args.persona,
+      inputValues: inputResolution.values,
+      cwd,
+      log: args.log
+    });
     const startedAt = Date.now();
     const childEnv = {
       ...callerEnv,
@@ -837,7 +837,10 @@ function sidecarForPersona(
       mode: persona.claudeMdMode ?? 'overwrite'
     };
   }
-  if ((persona.harness === 'codex' || persona.harness === 'opencode') && persona.agentsMdContent) {
+  if (
+    (persona.harness === 'codex' || persona.harness === 'opencode' || persona.harness === 'grok') &&
+    persona.agentsMdContent
+  ) {
     return {
       file: 'AGENTS.md',
       content: renderPersonaInputs(persona.agentsMdContent, inputValues),
