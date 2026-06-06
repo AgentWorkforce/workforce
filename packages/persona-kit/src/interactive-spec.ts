@@ -284,9 +284,9 @@ function buildRelaycastMcpServer(relay: RelayMcpConfig): McpServerSpec {
  * Build the stdio MCP server spec for ai-hist — the unified retrieval surface
  * that serves both the "why" (this persona's compacted decision trajectories)
  * and the "how" (cross-tool prompt/session history). Launched via
- * `npx -y -p ai-hist ai-hist-mcp`: the `ai-hist-mcp` bin ships inside the
- * published `ai-hist` package, so this needs no separately-published wrapper.
- * Env carries the trajectory root + optional DB override.
+ * `npx -y ai-hist-mcp` — the published, provenance-signed wrapper package that
+ * re-exports the server from `ai-hist`. Env carries the trajectory root +
+ * optional DB override.
  */
 function buildAiHistMcpServer(cfg: AiHistMcpConfig): McpServerSpec {
   const env: Record<string, string> = {};
@@ -295,7 +295,7 @@ function buildAiHistMcpServer(cfg: AiHistMcpConfig): McpServerSpec {
   return {
     type: 'stdio',
     command: 'npx',
-    args: ['-y', '-p', 'ai-hist', 'ai-hist-mcp'],
+    args: ['-y', 'ai-hist-mcp'],
     env
   };
 }
