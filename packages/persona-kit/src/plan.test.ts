@@ -1,6 +1,5 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import path from 'node:path';
 import { buildPersonaSpawnPlan, type ResolvedPersona } from './plan.js';
 import type { Harness } from './types.js';
 
@@ -22,11 +21,10 @@ const cleanEnv: NodeJS.ProcessEnv = Object.freeze({}) as NodeJS.ProcessEnv;
 function assertAiHistServer(server: unknown, env: Record<string, string>): void {
   assert.deepEqual(server, {
     type: 'stdio',
-    command: process.execPath,
-    args: [(server as { args: string[] }).args[0]],
+    command: 'npx',
+    args: ['-y', '-p', 'ai-hist', 'ai-hist-mcp'],
     env
   });
-  assert.equal(path.basename((server as { args: string[] }).args[0]), 'ai-hist-mcp-server.js');
 }
 
 test('buildPersonaSpawnPlan returns the persona, cli, and args for claude', () => {
