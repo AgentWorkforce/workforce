@@ -10,6 +10,7 @@ import {
   resolvePersonaInputs,
   resolveStringMapLenient,
   type PersonaSpec,
+  type AiHistMcpConfig,
   type RelayMcpConfig
 } from '@agentworkforce/persona-kit';
 import { createDefaultLlm } from './cloud-llm.js';
@@ -115,6 +116,17 @@ function canAccessSync(candidate: string): boolean {
   } catch {
     return false;
   }
+}
+
+function resolveAiHistFromEnv(env: NodeJS.ProcessEnv): AiHistMcpConfig | undefined {
+  const disabled = env.WORKFORCE_AIHIST_DISABLED?.trim();
+  if (disabled === '1' || disabled === 'true') return undefined;
+  const trajectoryRoot = env.TRAJECTORY_ROOT?.trim();
+  const dbPath = env.AI_HIST_DB?.trim();
+  return {
+    ...(trajectoryRoot ? { trajectoryRoot } : {}),
+    ...(dbPath ? { dbPath } : {})
+  };
 }
 
 function createProcessSandbox(root: string, env: NodeJS.ProcessEnv): SandboxContext {
@@ -461,6 +473,10 @@ function createProcessHarnessRunner(args: CloudDefaultOptions & {
     });
     const task = run.prompt;
     const relayMcp = resolveRelayMcpFromEnv(args.env);
+    const aiHist =
+      args.persona.recordTrajectories === false
+        ? undefined
+        : resolveAiHistFromEnv(args.env);
     const specInput = {
       harness,
       personaId: args.persona.id,
@@ -468,6 +484,7 @@ function createProcessHarnessRunner(args: CloudDefaultOptions & {
       systemPrompt: renderedSystemPrompt,
       harnessSettings: args.persona.harnessSettings,
       mcpServers: mcpResolution.servers,
+      ...(aiHist ? { aiHist } : {}),
       permissions: args.persona.permissions,
       task,
       name: args.persona.id,

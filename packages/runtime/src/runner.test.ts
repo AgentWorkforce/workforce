@@ -361,6 +361,8 @@ test('cloud default codex harness injects agent-relay MCP args from broker helpe
     assert.equal(captured.argv[10], 'mcp_servers.agent-relay.env.RELAY_SKIP_BOOTSTRAP="1"');
     assert.equal(captured.argv[11], '-m');
     assert.equal(captured.argv[12], 'gpt-5');
+    assert.ok(captured.argv.some((arg) => arg.startsWith('mcp_servers.ai-hist.command=')));
+    assert.ok(captured.argv.some((arg) => arg.startsWith('mcp_servers.ai-hist.args=')));
     assert.ok(captured.argv.includes('--dangerously-bypass-approvals-and-sandbox'));
     assert.ok(captured.argv.includes('--skip-git-repo-check'));
 
@@ -564,7 +566,9 @@ test('cloud default claude harness merges agent-relay MCP config from broker hel
         RELAY_AGENT_NAME: 'claude-1',
         RELAY_BASE_URL: 'https://relay.example.test',
         RELAY_DEFAULT_WORKSPACE: 'ws-relay',
-        RELAY_WORKSPACES_JSON: '{"workspaces":[{"id":"ws-relay"}]}'
+        RELAY_WORKSPACES_JSON: '{"workspaces":[{"id":"ws-relay"}]}',
+        TRAJECTORY_ROOT: path.join(workspaceRoot, '.trajectories'),
+        AI_HIST_DB: path.join(tempDir, 'ai-history.db')
       }
     });
 
@@ -588,6 +592,12 @@ test('cloud default claude harness merges agent-relay MCP config from broker hel
     assert.deepEqual(payload.mcpServers.filesystem, {
       type: 'stdio',
       command: 'filesystem-mcp'
+    });
+    assert.equal(payload.mcpServers['ai-hist'].command, process.execPath);
+    assert.equal(path.basename(payload.mcpServers['ai-hist'].args?.[0] ?? ''), 'ai-hist-mcp-server.js');
+    assert.deepEqual(payload.mcpServers['ai-hist'].env, {
+      TRAJECTORY_ROOT: path.join(workspaceRoot, '.trajectories'),
+      AI_HIST_DB: path.join(tempDir, 'ai-history.db')
     });
     assert.equal(payload.mcpServers.relaycast, undefined);
     assert.equal(payload.mcpServers['agent-relay'].command, 'npx');
@@ -624,6 +634,48 @@ test('cloud default claude harness merges agent-relay MCP config from broker hel
       brokerCaptured.argv[brokerCaptured.argv.indexOf('--default-workspace') + 1],
       'ws-relay'
     );
+  } finally {
+    await rm(tempDir, { recursive: true, force: true });
+  }
+});
+
+test('cloud default harness honors the ai-hist env disable', async () => {
+  const tempDir = await mkdtemp(path.join(os.tmpdir(), 'workforce-runtime-'));
+  try {
+    const binDir = path.join(tempDir, 'bin');
+    const workspaceRoot = path.join(tempDir, 'workspace');
+    const capturePath = path.join(tempDir, 'claude-argv.json');
+    await mkdir(workspaceRoot, { recursive: true });
+    await writeArgCaptureHarness(binDir, 'claude', capturePath);
+
+    const defaults = createCloudRuntimeDefaults({
+      persona: {
+        ...persona,
+        harness: 'claude',
+        model: 'anthropic/claude-3-5-sonnet',
+        systemPrompt: 'coordinate with the team',
+        harnessSettings: { reasoning: 'medium', timeoutSeconds: 5 }
+      },
+      agent: runtimeAgent,
+      deployment: runtimeDeployment,
+      workspaceId: 'ws-test',
+      log: () => {},
+      env: {
+        PATH: `${binDir}${path.delimiter}${process.env.PATH ?? ''}`,
+        WORKFORCE_SANDBOX_ROOT: workspaceRoot,
+        WORKFORCE_AIHIST_DISABLED: 'true'
+      }
+    });
+
+    const result = await defaults.harnessRunner({ prompt: 'do the work' });
+    assert.equal(result.exitCode, 0);
+
+    const captured = JSON.parse(await readFile(capturePath, 'utf8')) as { argv: string[] };
+    const mcpConfigIdx = captured.argv.indexOf('--mcp-config');
+    const payload = JSON.parse(captured.argv[mcpConfigIdx + 1]) as {
+      mcpServers: Record<string, unknown>;
+    };
+    assert.equal(payload.mcpServers['ai-hist'], undefined);
   } finally {
     await rm(tempDir, { recursive: true, force: true });
   }
