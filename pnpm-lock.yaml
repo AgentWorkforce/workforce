@@ -123,6 +123,9 @@ importers:
       '@relayfile/adapter-core':
         specifier: ^0.3.29
         version: 0.3.29(@relayfile/sdk@0.7.40)
+      agent-trajectories:
+        specifier: ^0.5.3
+        version: 0.5.3
 
   packages/workload-router:
     dependencies:

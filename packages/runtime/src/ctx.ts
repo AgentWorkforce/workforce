@@ -13,6 +13,7 @@ import type {
   WorkforceDeploymentContext,
   WorkflowContext
 } from './types.js';
+import { attachTrajectoryRecorder, createTrajectoryRecorder } from './trajectory.js';
 
 type AgentInputValue = string | number | boolean | null | undefined;
 
@@ -55,6 +56,14 @@ export interface CtxBuildOptions {
   integrations?: Record<string, unknown>;
   log?: WorkforceCtx['log'];
   harnessRunner: WorkforceCtx['harness']['run'];
+  /**
+   * Root directory for per-run trajectory contract files. Defaults to
+   * `env.TRAJECTORY_ROOT`; when neither resolves, trajectory recording is
+   * disabled (the runtime never writes to the process cwd). The cloud runtime
+   * sets this to the same value it passes to the injected ai-hist MCP so the
+   * MCP reads back exactly what the runtime wrote.
+   */
+  trajectoryRoot?: string;
 }
 
 const NOOP_MEMORY: MemoryContext = {
@@ -126,6 +135,17 @@ export function buildCtx(options: CtxBuildOptions): WorkforceCtx {
   };
   const log = options.log ?? defaultLog;
   const files = options.files ?? filesFromSandbox(options.sandbox);
+  const agentName = options.agentName ?? options.persona.id;
+  // Per-persona trajectory recorder (the WHY). No-op unless recording is on
+  // (`recordTrajectories !== false`) and a trajectory root resolves.
+  const trajectoryRecorder = createTrajectoryRecorder({
+    personaId: options.persona.id,
+    agentName,
+    workspaceId: options.workspaceId,
+    recordTrajectories: options.persona.recordTrajectories,
+    ...(options.trajectoryRoot ? { trajectoryRoot: options.trajectoryRoot } : {}),
+    log
+  });
   const ctx: WorkforceCtx = {
     persona: buildPersonaContext(options.persona, mergedAgentInputValues),
     agent: {
@@ -135,7 +155,7 @@ export function buildCtx(options: CtxBuildOptions): WorkforceCtx {
     },
     deployment,
     workspaceId: options.workspaceId,
-    agentName: options.agentName ?? options.persona.id,
+    agentName,
     llm: options.llm ?? UNAVAILABLE_LLM,
     harness: { run: options.harnessRunner },
     sandbox: options.sandbox,
@@ -144,8 +164,12 @@ export function buildCtx(options: CtxBuildOptions): WorkforceCtx {
     memory: options.memory ?? defaultMemoryFor(options.persona.memory, options.workspaceId, log),
     workflow: options.workflow ?? UNAVAILABLE_WORKFLOW,
     schedule: options.schedule ?? UNAVAILABLE_SCHEDULE,
+    trajectory: trajectoryRecorder.context,
     log
   };
+  // The runner drives the recorder's lifecycle (begin/complete/fail) via this
+  // non-enumerable handle, keeping those internals off the public ctx surface.
+  attachTrajectoryRecorder(ctx, trajectoryRecorder);
 
   // Optional per-integration subsystems attach as named ctx fields. The
   // cloud-default runtime does not populate this — handlers read provider
@@ -186,6 +210,7 @@ const CORE_CTX_FIELDS: ReadonlySet<string> = new Set([
   'memory',
   'workflow',
   'schedule',
+  'trajectory',
   'log'
 ]);
 
