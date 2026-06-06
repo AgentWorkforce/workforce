@@ -52,6 +52,7 @@ import {
   type InteractiveSpec,
   type NonInteractiveSpec,
   type PersonaMount,
+  type AiHistMcpConfig,
   type PersonaSelection,
   type PersonaSpec,
   type PersonaTag,
@@ -502,6 +503,9 @@ function buildSelection(spec: PersonaSpec, kind: 'repo' | 'local'): PersonaSelec
     ...(spec.mcpServers ? { mcpServers: spec.mcpServers } : {}),
     ...(spec.permissions ? { permissions: spec.permissions } : {}),
     ...(spec.mount ? { mount: spec.mount } : {}),
+    ...(typeof spec.recordTrajectories === 'boolean'
+      ? { recordTrajectories: spec.recordTrajectories }
+      : {}),
     ...(sidecar.claudeMd ? { claudeMd: sidecar.claudeMd } : {}),
     ...(sidecar.claudeMdContent ? { claudeMdContent: sidecar.claudeMdContent } : {}),
     ...(sidecar.claudeMd || sidecar.claudeMdContent
@@ -547,6 +551,26 @@ function resolveRelayMcpFromEnv(env: NodeJS.ProcessEnv): RelayMcpConfig | undefi
     agentName,
     ...(baseUrl ? { baseUrl } : {}),
     ...(defaultWorkspace ? { defaultWorkspace } : {})
+  };
+}
+
+/**
+ * Resolve the `ai-hist` MCP config for a session. Injection is ON by default
+ * (trajectory recording is the default), so this returns a config unless the
+ * operator explicitly opts the environment out via `WORKFORCE_AIHIST_DISABLED`
+ * (useful where the `ai-hist-mcp` package isn't installable). The persona-level
+ * opt-out (`recordTrajectories: false`) is enforced by the caller, not here.
+ * `TRAJECTORY_ROOT` / `AI_HIST_DB` flow through when set; otherwise the MCP
+ * falls back to its own discovery defaults.
+ */
+function resolveAiHistFromEnv(env: NodeJS.ProcessEnv): AiHistMcpConfig | undefined {
+  const disabled = env.WORKFORCE_AIHIST_DISABLED?.trim();
+  if (disabled === '1' || disabled === 'true') return undefined;
+  const trajectoryRoot = env.TRAJECTORY_ROOT?.trim();
+  const dbPath = env.AI_HIST_DB?.trim();
+  return {
+    ...(trajectoryRoot ? { trajectoryRoot } : {}),
+    ...(dbPath ? { dbPath } : {})
   };
 }
 
@@ -1428,6 +1452,10 @@ function runDryRun(selection: PersonaSelection): number {
   let spec: InteractiveSpec;
   try {
     const relayMcp = resolveRelayMcpFromEnv(process.env);
+    const aiHist =
+      effectiveSelection.recordTrajectories === false
+        ? undefined
+        : resolveAiHistFromEnv(process.env);
     spec = buildInteractiveSpec({
       harness,
       personaId,
@@ -1436,6 +1464,7 @@ function runDryRun(selection: PersonaSelection): number {
       harnessSettings,
       mcpServers: mcpResolution.servers,
       ...(relayMcp ? { relayMcp } : {}),
+      ...(aiHist ? { aiHist } : {}),
       permissions: effectiveSelection.permissions
     });
   } catch (err) {
@@ -1805,6 +1834,10 @@ async function runInteractive(
   }
 
   const relayMcp = resolveRelayMcpFromEnv(process.env);
+  const aiHist =
+    effectiveSelection.recordTrajectories === false
+      ? undefined
+      : resolveAiHistFromEnv(process.env);
   const spec = buildInteractiveSpec({
     harness,
     personaId,
@@ -1813,6 +1846,7 @@ async function runInteractive(
     harnessSettings,
     mcpServers: resolvedMcp,
     ...(relayMcp ? { relayMcp } : {}),
+    ...(aiHist ? { aiHist } : {}),
     permissions: effectiveSelection.permissions,
     ...(installRoot !== undefined ? { pluginDirs: [installRoot] } : {})
   });

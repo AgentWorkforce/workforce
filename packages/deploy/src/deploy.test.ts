@@ -254,6 +254,32 @@ test('preflightPersona refuses when cloud is not true', async () => {
   }
 });
 
+test('preflightPersona refuses a cloud persona that opts out of trajectory recording', async () => {
+  const { personaPath, cleanup } = await withTempPersona(
+    basePersonaJson({ recordTrajectories: false })
+  );
+  try {
+    await assert.rejects(
+      preflightPersona(personaPath),
+      /recordTrajectories:false but trajectory recording is required/
+    );
+  } finally {
+    await cleanup();
+  }
+});
+
+test('preflightPersona accepts a cloud persona with recordTrajectories explicitly true', async () => {
+  const { personaPath, cleanup } = await withTempPersona(
+    basePersonaJson({ recordTrajectories: true })
+  );
+  try {
+    const pre = await preflightPersona(personaPath);
+    assert.equal(pre.persona.recordTrajectories, true);
+  } finally {
+    await cleanup();
+  }
+});
+
 test('preflightPersona refuses when the agent declares no listeners', async () => {
   const { personaPath, cleanup } = await withTempPersona(
     basePersonaJson({ integrations: undefined }),

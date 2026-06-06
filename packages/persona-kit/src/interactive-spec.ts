@@ -81,6 +81,22 @@ export interface RelayMcpConfig {
   defaultWorkspace?: string;
 }
 
+/**
+ * Resolved config for the `ai-hist` MCP server. Both fields are optional —
+ * the MCP defaults to its own discovery (`~/Projects/**​/.trajectories/**` for
+ * the "why" and `~/.local/share/ai-hist/ai-history.db` for the "how") when the
+ * caller supplies neither.
+ */
+export interface AiHistMcpConfig {
+  /**
+   * Root directory the MCP scans for per-run trajectory contract files
+   * (`$TRAJECTORY_ROOT/**​/compacted/*.json`). Passed through as `TRAJECTORY_ROOT`.
+   */
+  trajectoryRoot?: string;
+  /** Override the ai-hist SQLite DB path. Passed through as `AI_HIST_DB`. */
+  dbPath?: string;
+}
+
 export interface BuildInteractiveSpecInput {
   harness: Harness;
   /**
@@ -101,6 +117,16 @@ export interface BuildInteractiveSpecInput {
    * MCP injection is unsupported.
    */
   relayMcp?: RelayMcpConfig;
+  /**
+   * When set, an `ai-hist` MCP server is merged into {@link mcpServers} so a
+   * persona has retrieval access to its own decision trajectories (the "why")
+   * and cross-tool prompt/session history (the "how"). A persona-declared
+   * server literally named `ai-hist` takes precedence (it is not overwritten).
+   * Callers resolve this from env + the persona's `recordTrajectories` flag and
+   * pass it explicitly — this function reads no environment itself. Wired for
+   * claude and codex; opencode still warns that MCP injection is unsupported.
+   */
+  aiHist?: AiHistMcpConfig;
   permissions?: PersonaPermissions;
   harnessSettings?: HarnessSettings;
   /**
@@ -247,6 +273,19 @@ function buildRelaycastMcpServer(relay: RelayMcpConfig): McpServerSpec {
   return { type: 'stdio', command: 'npx', args: ['-y', '@relaycast/mcp'], env };
 }
 
+/**
+ * Build the stdio MCP server spec for ai-hist — the unified retrieval surface
+ * that serves both the "why" (this persona's compacted decision trajectories)
+ * and the "how" (cross-tool prompt/session history). Launched via
+ * `npx -y ai-hist-mcp`; env carries the trajectory root + optional DB override.
+ */
+function buildAiHistMcpServer(cfg: AiHistMcpConfig): McpServerSpec {
+  const env: Record<string, string> = {};
+  if (cfg.trajectoryRoot) env.TRAJECTORY_ROOT = cfg.trajectoryRoot;
+  if (cfg.dbPath) env.AI_HIST_DB = cfg.dbPath;
+  return { type: 'stdio', command: 'npx', args: ['-y', 'ai-hist-mcp'], env };
+}
+
 export function buildInteractiveSpec(input: BuildInteractiveSpecInput): InteractiveSpec {
   const {
     harness,
@@ -267,10 +306,20 @@ export function buildInteractiveSpec(input: BuildInteractiveSpecInput): Interact
   const relayMcpServer = input.relayMcp
     ? buildRelaycastMcpServer(input.relayMcp)
     : undefined;
+  // ai-hist is injected by default for personas with trajectory recording on
+  // (callers gate `input.aiHist` on `recordTrajectories !== false`). A
+  // persona-declared `ai-hist` server wins, same as relaycast.
+  const aiHistServer = input.aiHist ? buildAiHistMcpServer(input.aiHist) : undefined;
   const injectsRelaycast = relayMcpServer !== undefined && personaMcpServers?.relaycast === undefined;
-  const mcpServers = relayMcpServer
-    ? { relaycast: relayMcpServer, ...(personaMcpServers ?? {}) }
-    : personaMcpServers;
+  const injectsAiHist = aiHistServer !== undefined && personaMcpServers?.['ai-hist'] === undefined;
+  const mcpServers =
+    injectsRelaycast || injectsAiHist
+      ? {
+          ...(injectsRelaycast ? { relaycast: relayMcpServer as McpServerSpec } : {}),
+          ...(injectsAiHist ? { 'ai-hist': aiHistServer as McpServerSpec } : {}),
+          ...(personaMcpServers ?? {})
+        }
+      : personaMcpServers;
   const warnings: string[] = [];
   const hasPluginDirs = pluginDirs !== undefined && pluginDirs.length > 0;
 
@@ -369,17 +418,22 @@ export function buildInteractiveSpec(input: BuildInteractiveSpecInput): Interact
       };
     }
     case 'opencode': {
-      if (hasPersonaMcpServers && injectsRelaycast) {
+      const injectsDefaults = injectsRelaycast || injectsAiHist;
+      const defaultNames = [
+        ...(injectsRelaycast ? ['relaycast'] : []),
+        ...(injectsAiHist ? ['ai-hist'] : [])
+      ].join('/');
+      if (hasPersonaMcpServers && injectsDefaults) {
         warnings.push(
-          'persona declares mcpServers and broker requested relaycast MCP injection, but the opencode harness is not yet wired for runtime MCP injection; proceeding without MCP.'
+          `persona declares mcpServers and default ${defaultNames} MCP injection was requested, but the opencode harness is not yet wired for runtime MCP injection; proceeding without MCP.`
         );
       } else if (hasPersonaMcpServers) {
         warnings.push(
           'persona declares mcpServers but the opencode harness is not yet wired for runtime MCP injection; proceeding without MCP.'
         );
-      } else if (injectsRelaycast) {
+      } else if (injectsDefaults) {
         warnings.push(
-          'broker requested relaycast MCP injection but the opencode harness is not yet wired for runtime MCP injection; proceeding without MCP.'
+          `default ${defaultNames} MCP injection was requested but the opencode harness is not yet wired for runtime MCP injection; proceeding without MCP.`
         );
       }
       if (hasAnyPermission(permissions)) {

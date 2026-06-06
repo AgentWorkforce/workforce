@@ -125,6 +125,10 @@
           "$ref": "#/definitions/PersonaMemory",
           "description": "Memory subsystem opt-in. Wires the agent-assistant memory adapter at runtime; the persona spec only declares intent, not implementation details (api keys, adapter type, etc. come from workforce env)."
         },
+        "recordTrajectories": {
+          "type": "boolean",
+          "description": "Decision-trajectory recording opt-out. Recording is **on by default**: the runtime auto-records this persona's decisions/reasoning per run (the \"why\") and the deploy CLI auto-injects the `ai-hist` MCP server (the \"how\" + \"why\" retrieval surface) into  {@link  mcpServers } . Set to `false` to opt a persona out entirely — but note deploy preflight REJECTS a cloud persona with `recordTrajectories: false` (trajectory recording is an enforced capability for deployed agents). Omit (or `true`) for the default enforced-on behavior."
+        },
         "onEvent": {
           "type": "string",
           "description": "Relative POSIX path to the TypeScript (or compiled .js / .mjs) file whose default export is the deploy-time event handler. Resolved relative to the persona JSON's directory at deploy time. Required by the JSON Schema whenever  {@link  cloud }  is `true` (any cloud persona needs an entrypoint, regardless of whether triggers are declared); the deploy CLI enforces the same rule. The parser itself keeps the field optional so partially-authored specs still parse."

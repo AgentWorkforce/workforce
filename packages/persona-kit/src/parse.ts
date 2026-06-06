@@ -997,6 +997,7 @@ export function parsePersonaSpec(value: unknown, expectedIntent: PersonaIntent):
     integrations,
     capabilities,
     memory,
+    recordTrajectories,
     onEvent
   } = value;
 
@@ -1095,6 +1096,11 @@ export function parsePersonaSpec(value: unknown, expectedIntent: PersonaIntent):
   if (useSubscription !== undefined && typeof useSubscription !== 'boolean') {
     throw new Error(`persona[${expectedIntent}].useSubscription must be a boolean if provided`);
   }
+  if (recordTrajectories !== undefined && typeof recordTrajectories !== 'boolean') {
+    throw new Error(
+      `persona[${expectedIntent}].recordTrajectories must be a boolean if provided`
+    );
+  }
   const parsedIntegrations = parseIntegrations(
     integrations,
     `persona[${expectedIntent}].integrations`
@@ -1134,6 +1140,7 @@ export function parsePersonaSpec(value: unknown, expectedIntent: PersonaIntent):
     ...(parsedIntegrations ? { integrations: parsedIntegrations } : {}),
     ...(parsedCapabilities ? { capabilities: parsedCapabilities } : {}),
     ...(parsedMemory !== undefined ? { memory: parsedMemory } : {}),
+    ...(typeof recordTrajectories === 'boolean' ? { recordTrajectories } : {}),
     ...(parsedOnEvent !== undefined ? { onEvent: parsedOnEvent } : {})
   };
 }
