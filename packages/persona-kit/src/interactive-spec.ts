@@ -123,7 +123,7 @@ export interface BuildInteractiveSpecInput {
    * persona has retrieval access to its own decision trajectories (the "why")
    * and cross-tool prompt/session history (the "how"). A persona-declared
    * server literally named `ai-hist` takes precedence (it is not overwritten).
-   * Callers resolve this from env + the persona's `recordTrajectories` flag and
+   * Callers resolve this from env + the persona's `memory.aiMemory` opt-in and
    * pass it explicitly — this function reads no environment itself. Wired for
    * claude and codex; opencode still warns that MCP injection is unsupported.
    */
@@ -320,9 +320,9 @@ export function buildInteractiveSpec(input: BuildInteractiveSpecInput): Interact
   const relayMcpServer = input.relayMcp
     ? buildRelaycastMcpServer(input.relayMcp)
     : undefined;
-  // ai-hist is injected by default for personas with trajectory recording on
-  // (callers gate `input.aiHist` on `recordTrajectories !== false`). A
-  // persona-declared `ai-hist` server wins, same as relaycast.
+  // ai-hist is injected only for personas that opt into recall
+  // (callers gate `input.aiHist` on `memory.aiMemory`). A persona-declared
+  // `ai-hist` server wins, same as relaycast.
   const aiHistServer = input.aiHist ? buildAiHistMcpServer(input.aiHist) : undefined;
   const injectsRelaycast = relayMcpServer !== undefined && personaMcpServers?.relaycast === undefined;
   const injectsAiHist = aiHistServer !== undefined && personaMcpServers?.['ai-hist'] === undefined;

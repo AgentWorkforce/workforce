@@ -1,4 +1,4 @@
-import type { PersonaSpec } from '@agentworkforce/persona-kit';
+import { resolveTrajectoryRecording, type PersonaSpec } from '@agentworkforce/persona-kit';
 import type {
   LlmContext,
   MemoryContext,
@@ -136,13 +136,15 @@ export function buildCtx(options: CtxBuildOptions): WorkforceCtx {
   const log = options.log ?? defaultLog;
   const files = options.files ?? filesFromSandbox(options.sandbox);
   const agentName = options.agentName ?? options.persona.id;
-  // Per-persona trajectory recorder (the WHY). No-op unless recording is on
-  // (`recordTrajectories !== false`) and a trajectory root resolves.
+  // Per-persona trajectory recorder (the WHY). Opt-in: no-op unless the
+  // persona declares `memory.trajectories` AND a trajectory root resolves.
+  const trajectory = resolveTrajectoryRecording(options.persona.memory);
   const trajectoryRecorder = createTrajectoryRecorder({
     personaId: options.persona.id,
     agentName,
     workspaceId: options.workspaceId,
-    recordTrajectories: options.persona.recordTrajectories,
+    recordTrajectories: trajectory.enabled,
+    ...(trajectory.autoCompact !== undefined ? { autoCompact: trajectory.autoCompact } : {}),
     ...(options.trajectoryRoot ? { trajectoryRoot: options.trajectoryRoot } : {}),
     log
   });

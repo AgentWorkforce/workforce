@@ -6,6 +6,7 @@ import path from 'node:path';
 import {
   buildNonInteractiveSpec,
   renderPersonaInputs,
+  resolveAiMemory,
   resolveMcpServersLenient,
   resolvePersonaInputs,
   resolveStringMapLenient,
@@ -492,14 +493,14 @@ function createProcessHarnessRunner(args: CloudDefaultOptions & {
     await assertDirectory(cwd);
     const task = run.prompt;
     const relayMcp = resolveRelayMcpFromEnv(args.env);
-    // Inject the ai-hist MCP (the "why" + "how" retrieval surface) by default,
-    // unless the persona disabled trajectory recording. resolveAiHistFromEnv
-    // keys off the SAME TRAJECTORY_ROOT the runtime recorder writes to, so the
-    // MCP reads back exactly what this deployment wrote.
-    const aiHist =
-      args.persona.recordTrajectories === false
-        ? undefined
-        : resolveAiHistFromEnv(args.env, args.trajectoryRoot);
+    // Inject the ai-hist MCP (the "why" + "how" retrieval surface) only when the
+    // persona opts into recall via `memory.aiMemory` (off by default).
+    // resolveAiHistFromEnv keys off the SAME TRAJECTORY_ROOT the runtime recorder
+    // writes to, so the MCP reads back exactly what this deployment wrote.
+    const aiMemory = resolveAiMemory(args.persona.memory);
+    const aiHist = aiMemory.enabled
+      ? resolveAiHistFromEnv(args.env, args.trajectoryRoot, aiMemory.dbPath)
+      : undefined;
     const specInput = {
       harness,
       personaId: args.persona.id,
@@ -646,23 +647,21 @@ function resolveRelayMcpFromEnv(env: NodeJS.ProcessEnv): RelayMcpConfig | undefi
 }
 
 /**
- * Resolve the ai-hist MCP config from env. Mirrors the CLI helper so cloud and
- * local spawns inject the same server. `WORKFORCE_AIHIST_DISABLED` (`1`/`true`)
- * is the escape hatch. Both fields are optional — when `TRAJECTORY_ROOT` is
- * unset the MCP falls back to its own discovery, which matches the runtime
- * recorder (also keyed off `TRAJECTORY_ROOT`): with no root, the recorder
- * writes nothing, so there is nothing to mis-read.
+ * Resolve the ai-hist MCP config. Only called when the persona opts into recall
+ * via `memory.aiMemory`. The "why" read-root mirrors the runtime recorder's
+ * write-root (env `TRAJECTORY_ROOT` wins, else the deployment default), so the
+ * MCP reads back exactly what the recorder wrote. The "how" DB comes from the
+ * persona's `memory.aiMemory.dbPath` override, else `AI_HIST_DB` env.
  */
 function resolveAiHistFromEnv(
   env: NodeJS.ProcessEnv,
-  defaultTrajectoryRoot?: string
+  defaultTrajectoryRoot?: string,
+  dbPathOverride?: string
 ): AiHistMcpConfig | undefined {
-  const disabled = env.WORKFORCE_AIHIST_DISABLED?.trim();
-  if (disabled === '1' || disabled === 'true') return undefined;
   // env.TRAJECTORY_ROOT wins; otherwise the deployment default (same value the
   // recorder writes to) — keeps the MCP read-root identical to the write-root.
   const trajectoryRoot = env.TRAJECTORY_ROOT?.trim() || defaultTrajectoryRoot;
-  const dbPath = env.AI_HIST_DB?.trim();
+  const dbPath = dbPathOverride?.trim() || env.AI_HIST_DB?.trim();
   return {
     ...(trajectoryRoot ? { trajectoryRoot } : {}),
     ...(dbPath ? { dbPath } : {})

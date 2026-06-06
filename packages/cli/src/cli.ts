@@ -40,6 +40,7 @@ import {
   PERSONA_TAGS,
   readSkillCacheMarker,
   renderPersonaInputs,
+  resolveAiMemory,
   resolveMcpServersLenient,
   resolvePersonaInputs,
   resolveSidecar,
@@ -506,9 +507,7 @@ function buildSelection(spec: PersonaSpec, kind: 'repo' | 'local'): PersonaSelec
     ...(spec.mcpServers ? { mcpServers: spec.mcpServers } : {}),
     ...(spec.permissions ? { permissions: spec.permissions } : {}),
     ...(spec.mount ? { mount: spec.mount } : {}),
-    ...(typeof spec.recordTrajectories === 'boolean'
-      ? { recordTrajectories: spec.recordTrajectories }
-      : {}),
+    ...(spec.memory !== undefined ? { memory: spec.memory } : {}),
     ...(sidecar.claudeMd ? { claudeMd: sidecar.claudeMd } : {}),
     ...(sidecar.claudeMdContent ? { claudeMdContent: sidecar.claudeMdContent } : {}),
     ...(sidecar.claudeMd || sidecar.claudeMdContent
@@ -558,19 +557,18 @@ function resolveRelayMcpFromEnv(env: NodeJS.ProcessEnv): RelayMcpConfig | undefi
 }
 
 /**
- * Resolve the `ai-hist` MCP config for a session. Injection is ON by default
- * (trajectory recording is the default), so this returns a config unless the
- * operator explicitly opts the environment out via `WORKFORCE_AIHIST_DISABLED`
- * (useful where a site does not want the bundled MCP enabled). The persona-level
- * opt-out (`recordTrajectories: false`) is enforced by the caller, not here.
- * `TRAJECTORY_ROOT` / `AI_HIST_DB` flow through when set; otherwise the MCP
- * falls back to its own discovery defaults.
+ * Build the `ai-hist` MCP config for a session. Only called when the persona
+ * opts into recall via `memory.aiMemory` (off by default). `TRAJECTORY_ROOT`
+ * (env) seeds the "why" read-root; `dbPathOverride` (from `memory.aiMemory.dbPath`)
+ * else `AI_HIST_DB` env seeds the "how" history DB. Anything unset falls back to
+ * the MCP's own discovery defaults.
  */
-function resolveAiHistFromEnv(env: NodeJS.ProcessEnv): AiHistMcpConfig | undefined {
-  const disabled = env.WORKFORCE_AIHIST_DISABLED?.trim();
-  if (disabled === '1' || disabled === 'true') return undefined;
+function resolveAiHistConfig(
+  env: NodeJS.ProcessEnv,
+  dbPathOverride?: string
+): AiHistMcpConfig {
   const trajectoryRoot = env.TRAJECTORY_ROOT?.trim();
-  const dbPath = env.AI_HIST_DB?.trim();
+  const dbPath = dbPathOverride?.trim() || env.AI_HIST_DB?.trim();
   return {
     ...(trajectoryRoot ? { trajectoryRoot } : {}),
     ...(dbPath ? { dbPath } : {})
@@ -1466,10 +1464,10 @@ function runDryRun(selection: PersonaSelection): number {
   let spec: InteractiveSpec;
   try {
     const relayMcp = resolveRelayMcpFromEnv(process.env);
-    const aiHist =
-      effectiveSelection.recordTrajectories === false
-        ? undefined
-        : resolveAiHistFromEnv(process.env);
+    const aiMemory = resolveAiMemory(effectiveSelection.memory);
+    const aiHist = aiMemory.enabled
+      ? resolveAiHistConfig(process.env, aiMemory.dbPath)
+      : undefined;
     spec = buildInteractiveSpec({
       harness,
       personaId,
@@ -1852,10 +1850,10 @@ async function runInteractive(
   }
 
   const relayMcp = resolveRelayMcpFromEnv(process.env);
-  const aiHist =
-    effectiveSelection.recordTrajectories === false
-      ? undefined
-      : resolveAiHistFromEnv(process.env);
+  const aiMemory = resolveAiMemory(effectiveSelection.memory);
+  const aiHist = aiMemory.enabled
+    ? resolveAiHistConfig(process.env, aiMemory.dbPath)
+    : undefined;
   const spec = buildInteractiveSpec({
     harness,
     personaId,

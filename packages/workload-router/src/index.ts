@@ -128,9 +128,7 @@ export function resolvePersona(intent: PersonaIntent, profile: RoutingProfile | 
     ...(spec.mcpServers ? { mcpServers: spec.mcpServers } : {}),
     ...(spec.permissions ? { permissions: spec.permissions } : {}),
     ...(spec.mount ? { mount: spec.mount } : {}),
-    ...(typeof spec.recordTrajectories === 'boolean'
-      ? { recordTrajectories: spec.recordTrajectories }
-      : {}),
+    ...(spec.memory !== undefined ? { memory: spec.memory } : {}),
     ...sidecarSelectionFields(resolveSidecar(spec))
   };
 }

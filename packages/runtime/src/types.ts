@@ -362,8 +362,8 @@ export interface CompactedTrajectoryContract {
  * Auto-recording trajectory surface. Handlers narrate their decision
  * trajectory (the WHY) through these methods; the runtime opens a trajectory
  * around each run and emits the compacted contract on completion. Every method
- * is safe to call even when recording is disabled (`recordTrajectories: false`
- * or no resolvable `TRAJECTORY_ROOT`) — it then no-ops.
+ * is safe to call even when recording is disabled (no `memory.trajectories`
+ * opt-in, or no resolvable `TRAJECTORY_ROOT`) — it then no-ops.
  */
 export interface TrajectoryContext {
   /** Open a new logical phase of work within the run. */
@@ -424,7 +424,7 @@ export interface WorkforceCtx {
   schedule: ScheduleContext;
   /**
    * Auto-recorded decision trajectory (the WHY). No-op when recording is
-   * disabled (`persona.recordTrajectories: false` or no resolvable
+   * disabled (no `persona.memory.trajectories` opt-in or no resolvable
    * `TRAJECTORY_ROOT`), so it is always safe to call from a handler.
    */
   trajectory: TrajectoryContext;

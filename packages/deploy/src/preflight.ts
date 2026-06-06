@@ -55,19 +55,6 @@ export async function preflightPersona(personaPath: string): Promise<DeployPrefl
     );
   }
 
-  // Trajectory recording is an enforced capability for deployed agents: the
-  // runtime auto-records the persona's decisions (the "why") and the deploy
-  // surface auto-injects the `ai-hist` MCP (the "how" + "why" retrieval). A
-  // cloud persona may not opt out — recording is on unless `recordTrajectories`
-  // is explicitly `false`, which we reject here loudly rather than silently
-  // shipping a deployed agent with no history.
-  if (persona.recordTrajectories === false) {
-    throw new Error(
-      `persona "${persona.id}" sets recordTrajectories:false but trajectory recording is required for cloud deploy — ` +
-        `remove the override (recording is on by default) to deploy.`
-    );
-  }
-
   if (!persona.onEvent) {
     throw new Error(
       `persona "${persona.id}" declares cloud:true but is missing "onEvent" (path to the agent file)`
