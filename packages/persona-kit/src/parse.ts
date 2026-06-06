@@ -857,7 +857,7 @@ export function parseAgentSpec(value: unknown, context = 'agent'): AgentSpec {
 export function parseMemory(value: unknown, context: string): PersonaMemory | undefined {
   if (value === undefined) return undefined;
   if (typeof value === 'boolean') return value;
-  if (!isObject(value)) {
+  if (!isObject(value) || Array.isArray(value)) {
     throw new Error(`${context} must be a boolean or an object if provided`);
   }
   const { enabled, scopes, ttlDays, autoPromote, dedupMs, trajectories, aiMemory } = value;
@@ -918,7 +918,7 @@ function parseTrajectoryConfig(
   context: string
 ): boolean | PersonaTrajectoryConfig {
   if (typeof value === 'boolean') return value;
-  if (!isObject(value)) {
+  if (!isObject(value) || Array.isArray(value)) {
     throw new Error(`${context} must be a boolean or an object if provided`);
   }
   const out: PersonaTrajectoryConfig = {};
@@ -942,7 +942,7 @@ function parseAiMemoryConfig(
   context: string
 ): boolean | PersonaAiMemoryConfig {
   if (typeof value === 'boolean') return value;
-  if (!isObject(value)) {
+  if (!isObject(value) || Array.isArray(value)) {
     throw new Error(`${context} must be a boolean or an object if provided`);
   }
   const out: PersonaAiMemoryConfig = {};

@@ -19,6 +19,8 @@ import {
   parseOnEvent,
   parsePermissions,
   parsePersonaSpec,
+  resolveAiMemory,
+  resolveTrajectoryRecording,
   parseSchedules,
   parseSkills,
   parseStringList,
@@ -590,6 +592,56 @@ test('parseMemory accepts boolean + object forms and validates scopes', () => {
     autoPromote: true,
     dedupMs: 0
   });
+});
+
+test('parseMemory accepts and resolves trajectory and ai-memory facets', () => {
+  const m = parseMemory(
+    {
+      trajectories: { autoCompact: false },
+      aiMemory: { dbPath: '/tmp/ai-history.db' }
+    },
+    'memory'
+  );
+
+  assert.deepEqual(m, {
+    trajectories: { autoCompact: false },
+    aiMemory: { dbPath: '/tmp/ai-history.db' }
+  });
+  assert.deepEqual(resolveTrajectoryRecording(m), {
+    enabled: true,
+    autoCompact: false
+  });
+  assert.deepEqual(resolveAiMemory(m), {
+    enabled: true,
+    dbPath: '/tmp/ai-history.db'
+  });
+  assert.deepEqual(resolveTrajectoryRecording(undefined), { enabled: false });
+  assert.deepEqual(resolveTrajectoryRecording(true), { enabled: false });
+  assert.deepEqual(resolveAiMemory(undefined), { enabled: false });
+  assert.deepEqual(resolveAiMemory(true), { enabled: false });
+});
+
+test('parseMemory rejects malformed trajectory and ai-memory facet configs', () => {
+  assert.throws(
+    () => parseMemory({ trajectories: [] }, 'memory'),
+    /memory\.trajectories must be a boolean or an object if provided/
+  );
+  assert.throws(
+    () => parseMemory({ aiMemory: [] }, 'memory'),
+    /memory\.aiMemory must be a boolean or an object if provided/
+  );
+  assert.throws(
+    () => parseMemory({ trajectories: { enabled: 'yes' } }, 'memory'),
+    /memory\.trajectories\.enabled must be a boolean if provided/
+  );
+  assert.throws(
+    () => parseMemory({ trajectories: { autoCompact: 'no' } }, 'memory'),
+    /memory\.trajectories\.autoCompact must be a boolean if provided/
+  );
+  assert.throws(
+    () => parseMemory({ aiMemory: { dbPath: '' } }, 'memory'),
+    /memory\.aiMemory\.dbPath must be a non-empty string if provided/
+  );
 });
 
 test('parseMemory rejects unknown scopes and non-positive ttl', () => {

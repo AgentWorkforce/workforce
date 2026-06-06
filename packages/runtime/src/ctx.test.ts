@@ -1,7 +1,11 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
+import { mkdtemp, readFile, readdir, rm } from 'node:fs/promises';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 import type { PersonaSpec } from '@agentworkforce/persona-kit';
 import { buildCtx } from './ctx.js';
+import { getTrajectoryRecorder } from './trajectory.js';
 import type { MemoryItem, SandboxContext } from './types.js';
 
 const basePersona: PersonaSpec = {
@@ -486,6 +490,58 @@ test('ctx.memory respects memory.enabled=false', async () => {
       assert.equal(fetchCalled, false);
     }
   );
+});
+
+test('buildCtx records trajectories only when memory.trajectories is opted in', async () => {
+  const root = await mkdtemp(join(tmpdir(), 'workforce-trajectory-'));
+  try {
+    const offCtx = ctxFor(basePersona);
+    const onCtx = buildCtx({
+      persona: { ...basePersona, memory: { trajectories: { autoCompact: false } } },
+      workspaceId: 'ws-test',
+      sandbox: stubSandbox,
+      trajectoryRoot: root,
+      harnessRunner: async () => ({ output: '', exitCode: 0, durationMs: 0 }),
+      agent: {
+        id: 'agent_123',
+        deployedName: 'docs-demo',
+        spawnedByAgentId: null
+      },
+      deployment: {
+        id: 'deployment_456',
+        triggerKind: 'inbox',
+        parentDeploymentId: null
+      },
+      log: () => {}
+    });
+    const event = {
+      id: 'evt_1',
+      occurredAt: '2026-06-06T00:00:00.000Z',
+      workspaceId: 'ws-test',
+      source: 'cron' as const,
+      name: 'nightly',
+      cron: '0 0 * * *',
+      attempt: 1
+    };
+
+    await getTrajectoryRecorder(offCtx).begin(event);
+    await getTrajectoryRecorder(offCtx).complete();
+    await assert.rejects(readdir(join(root, 'demo')), /ENOENT/);
+
+    await getTrajectoryRecorder(onCtx).begin(event);
+    await onCtx.trajectory.note('recorded');
+    await getTrajectoryRecorder(onCtx).complete();
+    const files = await readdir(join(root, 'demo', 'compacted'));
+    assert.equal(files.length, 1);
+    assert.match(files[0], /^traj_.*\.json$/);
+    const contract = JSON.parse(
+      await readFile(join(root, 'demo', 'compacted', files[0]), 'utf8')
+    );
+    assert.equal(contract.personaId, 'demo');
+    assert.equal(contract.status, 'completed');
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
 });
 
 async function withEnv(
