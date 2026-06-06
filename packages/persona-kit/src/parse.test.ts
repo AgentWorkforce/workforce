@@ -143,7 +143,12 @@ test('parsePersonaSpec accepts the Relayfile-VFS example personas', () => {
   // Triggers moved to agent.ts; persona declares the github/slack connections.
   assert.ok(reviewAgent.integrations?.github);
   assert.ok(reviewAgent.integrations?.slack);
-  assert.deepEqual(reviewAgent.memory, { enabled: true, scopes: ['workspace'] });
+  assert.deepEqual(reviewAgent.memory, {
+    enabled: true,
+    scopes: ['workspace'],
+    trajectories: { enabled: true, autoCompact: true },
+    aiMemory: { enabled: true }
+  });
 
   const linearShipper = parsePersonaFixture('examples/linear-shipper/persona.json');
   assert.equal(linearShipper.id, 'linear-shipper');
