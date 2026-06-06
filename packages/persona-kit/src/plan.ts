@@ -1,4 +1,8 @@
-import { buildInteractiveSpec, type InteractiveConfigFile } from './interactive-spec.js';
+import {
+  buildInteractiveSpec,
+  type AiHistMcpConfig,
+  type InteractiveConfigFile
+} from './interactive-spec.js';
 import { resolvePersonaInputs, renderPersonaInputs } from './inputs.js';
 import { materializeSkills } from './skills.js';
 import type {
@@ -122,6 +126,17 @@ export interface PlanOptions {
   inputValues?: Record<string, string | number | boolean | null | undefined>;
 }
 
+function resolveAiHistFromEnv(env: NodeJS.ProcessEnv): AiHistMcpConfig | false {
+  const disabled = env.WORKFORCE_AIHIST_DISABLED?.trim();
+  if (disabled === '1' || disabled === 'true') return false;
+  const trajectoryRoot = env.TRAJECTORY_ROOT?.trim();
+  const dbPath = env.AI_HIST_DB?.trim();
+  return {
+    ...(trajectoryRoot ? { trajectoryRoot } : {}),
+    ...(dbPath ? { dbPath } : {})
+  };
+}
+
 function resolvedInputBindings(
   inputs: Record<string, PersonaInputSpec> | undefined,
   values: Record<string, string>
@@ -232,6 +247,8 @@ export function buildPersonaSpawnPlan(
     persona.systemPrompt,
     inputResolution.values
   );
+  const aiHist =
+    persona.recordTrajectories === false ? false : resolveAiHistFromEnv(processEnv);
   const skills = materializeSkills(
     persona.skills,
     harness,
@@ -244,6 +261,7 @@ export function buildPersonaSpawnPlan(
     model: persona.model,
     systemPrompt: renderedSystemPrompt,
     ...(persona.mcpServers ? { mcpServers: persona.mcpServers } : {}),
+    ...(aiHist ? { aiHist } : {}),
     ...(persona.permissions ? { permissions: persona.permissions } : {}),
     ...(persona.harnessSettings
       ? { harnessSettings: persona.harnessSettings }

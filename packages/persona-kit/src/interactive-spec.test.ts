@@ -1,7 +1,18 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
+import path from 'node:path';
 
 import { buildInteractiveSpec, buildNonInteractiveSpec } from './interactive-spec.js';
+
+function assertAiHistServer(server: unknown, env: Record<string, string>): void {
+  assert.deepEqual(server, {
+    type: 'stdio',
+    command: process.execPath,
+    args: [(server as { args: string[] }).args[0]],
+    env
+  });
+  assert.equal(path.basename((server as { args: string[] }).args[0]), 'ai-hist-mcp-server.js');
+}
 
 test('claude branch always emits --mcp-config + --strict-mcp-config', () => {
   const result = buildInteractiveSpec({
@@ -564,14 +575,9 @@ test('aiHist injects an ai-hist server into the claude --mcp-config payload', ()
   });
   const mcpIdx = result.args.indexOf('--mcp-config');
   const payload = JSON.parse(result.args[mcpIdx + 1]);
-  assert.deepEqual(payload.mcpServers['ai-hist'], {
-    type: 'stdio',
-    command: 'npx',
-    args: ['-y', 'ai-hist-mcp'],
-    env: {
-      TRAJECTORY_ROOT: '/repo/.trajectories',
-      AI_HIST_DB: '/db/ai-history.db'
-    }
+  assertAiHistServer(payload.mcpServers['ai-hist'], {
+    TRAJECTORY_ROOT: '/repo/.trajectories',
+    AI_HIST_DB: '/db/ai-history.db'
   });
   assert.ok(result.args.includes('--strict-mcp-config'));
   assert.equal(result.mcpServers?.['ai-hist']?.type, 'stdio');
@@ -587,7 +593,7 @@ test('aiHist omits TRAJECTORY_ROOT / AI_HIST_DB env when not provided', () => {
   });
   const mcpIdx = result.args.indexOf('--mcp-config');
   const server = JSON.parse(result.args[mcpIdx + 1]).mcpServers['ai-hist'];
-  assert.deepEqual(server, { type: 'stdio', command: 'npx', args: ['-y', 'ai-hist-mcp'], env: {} });
+  assertAiHistServer(server, {});
 });
 
 test('aiHist merges alongside relaycast + persona servers; a persona ai-hist wins', () => {

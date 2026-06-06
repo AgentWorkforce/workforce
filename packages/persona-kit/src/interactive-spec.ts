@@ -1,9 +1,13 @@
+import { fileURLToPath } from 'node:url';
+
 import type {
   Harness,
   HarnessSettings,
   McpServerSpec,
   PersonaPermissions
 } from './types.js';
+
+const AI_HIST_SERVER_SCRIPT = fileURLToPath(new URL('./ai-hist-mcp-server.js', import.meta.url));
 
 /**
  * A config file the caller should materialize before launching the harness.
@@ -276,14 +280,20 @@ function buildRelaycastMcpServer(relay: RelayMcpConfig): McpServerSpec {
 /**
  * Build the stdio MCP server spec for ai-hist — the unified retrieval surface
  * that serves both the "why" (this persona's compacted decision trajectories)
- * and the "how" (cross-tool prompt/session history). Launched via
- * `npx -y ai-hist-mcp`; env carries the trajectory root + optional DB override.
+ * and the "how" (cross-tool prompt/session history). Launched from the
+ * persona-kit package itself; env carries the trajectory root + optional DB
+ * override.
  */
 function buildAiHistMcpServer(cfg: AiHistMcpConfig): McpServerSpec {
   const env: Record<string, string> = {};
   if (cfg.trajectoryRoot) env.TRAJECTORY_ROOT = cfg.trajectoryRoot;
   if (cfg.dbPath) env.AI_HIST_DB = cfg.dbPath;
-  return { type: 'stdio', command: 'npx', args: ['-y', 'ai-hist-mcp'], env };
+  return {
+    type: 'stdio',
+    command: process.execPath,
+    args: [AI_HIST_SERVER_SCRIPT],
+    env
+  };
 }
 
 export function buildInteractiveSpec(input: BuildInteractiveSpecInput): InteractiveSpec {

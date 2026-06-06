@@ -1,5 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
+import path from 'node:path';
 import { buildPersonaSpawnPlan, type ResolvedPersona } from './plan.js';
 import type { Harness } from './types.js';
 
@@ -18,6 +19,16 @@ function persona(over: Partial<ResolvedPersona> = {}): ResolvedPersona {
 
 const cleanEnv: NodeJS.ProcessEnv = Object.freeze({}) as NodeJS.ProcessEnv;
 
+function assertAiHistServer(server: unknown, env: Record<string, string>): void {
+  assert.deepEqual(server, {
+    type: 'stdio',
+    command: process.execPath,
+    args: [(server as { args: string[] }).args[0]],
+    env
+  });
+  assert.equal(path.basename((server as { args: string[] }).args[0]), 'ai-hist-mcp-server.js');
+}
+
 test('buildPersonaSpawnPlan returns the persona, cli, and args for claude', () => {
   const plan = buildPersonaSpawnPlan(persona(), { processEnv: cleanEnv });
   assert.equal(plan.cli, 'claude');
@@ -28,6 +39,46 @@ test('buildPersonaSpawnPlan returns the persona, cli, and args for claude', () =
   assert.equal(plan.mount, undefined);
   assert.deepEqual(plan.inputs, []);
   assert.equal(plan.initialPrompt, undefined);
+});
+
+test('buildPersonaSpawnPlan injects ai-hist by default for recorded trajectories', () => {
+  const plan = buildPersonaSpawnPlan(persona(), { processEnv: cleanEnv });
+  const mcpIdx = plan.args.indexOf('--mcp-config');
+  assert.ok(mcpIdx >= 0, 'expected --mcp-config');
+  const payload = JSON.parse(plan.args[mcpIdx + 1]);
+  assertAiHistServer(payload.mcpServers['ai-hist'], {});
+});
+
+test('buildPersonaSpawnPlan threads ai-hist env overrides from processEnv', () => {
+  const plan = buildPersonaSpawnPlan(persona(), {
+    processEnv: {
+      TRAJECTORY_ROOT: '/repo/.trajectories',
+      AI_HIST_DB: '/tmp/ai-history.db'
+    } as NodeJS.ProcessEnv
+  });
+  const mcpIdx = plan.args.indexOf('--mcp-config');
+  const payload = JSON.parse(plan.args[mcpIdx + 1]);
+  assert.deepEqual(payload.mcpServers['ai-hist'].env, {
+    TRAJECTORY_ROOT: '/repo/.trajectories',
+    AI_HIST_DB: '/tmp/ai-history.db'
+  });
+});
+
+test('buildPersonaSpawnPlan honors recordTrajectories false and ai-hist env disable', () => {
+  const optedOut = buildPersonaSpawnPlan(persona({ recordTrajectories: false }), {
+    processEnv: cleanEnv
+  });
+  const optedOutMcpIdx = optedOut.args.indexOf('--mcp-config');
+  assert.equal(JSON.parse(optedOut.args[optedOutMcpIdx + 1]).mcpServers['ai-hist'], undefined);
+
+  const envDisabled = buildPersonaSpawnPlan(persona(), {
+    processEnv: { WORKFORCE_AIHIST_DISABLED: 'true' } as NodeJS.ProcessEnv
+  });
+  const envDisabledMcpIdx = envDisabled.args.indexOf('--mcp-config');
+  assert.equal(
+    JSON.parse(envDisabled.args[envDisabledMcpIdx + 1]).mcpServers['ai-hist'],
+    undefined
+  );
 });
 
 test('buildPersonaSpawnPlan emits initialPrompt for codex', () => {

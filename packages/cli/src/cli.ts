@@ -558,7 +558,7 @@ function resolveRelayMcpFromEnv(env: NodeJS.ProcessEnv): RelayMcpConfig | undefi
  * Resolve the `ai-hist` MCP config for a session. Injection is ON by default
  * (trajectory recording is the default), so this returns a config unless the
  * operator explicitly opts the environment out via `WORKFORCE_AIHIST_DISABLED`
- * (useful where the `ai-hist-mcp` package isn't installable). The persona-level
+ * (useful where a site does not want the bundled MCP enabled). The persona-level
  * opt-out (`recordTrajectories: false`) is enforced by the caller, not here.
  * `TRAJECTORY_ROOT` / `AI_HIST_DB` flow through when set; otherwise the MCP
  * falls back to its own discovery defaults.
