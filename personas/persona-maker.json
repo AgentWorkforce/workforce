@@ -48,12 +48,5 @@
     "reasoning": "medium",
     "timeoutSeconds": 900
   },
-  "memory": {
-    "enabled": true,
-    "scopes": [
-      "workspace"
-    ],
-    "trajectories": true
-  },
   "agentsMd": "./persona-maker.md"
 }
