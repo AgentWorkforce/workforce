@@ -244,6 +244,13 @@ class MockNotionEssayRuntime {
           /* unused */
         }
       },
+      trajectory: {
+        async chapter() {},
+        async note() {},
+        async decide() {},
+        async error() {},
+        async done() {}
+      },
       log: () => undefined
     };
   }
