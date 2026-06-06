@@ -22,7 +22,7 @@ function assertAiHistServer(server: unknown, env: Record<string, string>): void 
   assert.deepEqual(server, {
     type: 'stdio',
     command: 'npx',
-    args: ['-y', '-p', 'ai-hist', 'ai-hist-mcp'],
+    args: ['-y', 'ai-hist-mcp'],
     env
   });
 }
