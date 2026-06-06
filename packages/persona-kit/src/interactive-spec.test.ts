@@ -1,17 +1,15 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import path from 'node:path';
 
 import { buildInteractiveSpec, buildNonInteractiveSpec } from './interactive-spec.js';
 
 function assertAiHistServer(server: unknown, env: Record<string, string>): void {
   assert.deepEqual(server, {
     type: 'stdio',
-    command: process.execPath,
-    args: [(server as { args: string[] }).args[0]],
+    command: 'npx',
+    args: ['-y', '-p', 'ai-hist', 'ai-hist-mcp'],
     env
   });
-  assert.equal(path.basename((server as { args: string[] }).args[0]), 'ai-hist-mcp-server.js');
 }
 
 test('claude branch always emits --mcp-config + --strict-mcp-config', () => {
