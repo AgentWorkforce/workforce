@@ -132,7 +132,8 @@ Commands:
                                             install skills into the repo's
                                             harness-conventional directory
                                             (.claude/skills, .opencode/skills,
-                                            .agents/skills, .grok/skills, etc.).
+                                            .agents/skills, .grok/skills,
+                                            .cursor/rules, etc.).
                                             By default, interactive harness
                                             sessions run inside a
                                             @relayfile/local-mount sandbox so
@@ -956,7 +957,7 @@ async function writeMarkerWithUpstream(
  * "install once, reuse forever" behaviour that claude gets for free via
  * `--plugin-dir <cacheDir>`. The destination is expected to be the mount
  * root: skill artifacts under `.skills/`, `.opencode/`, `.agents/`, `.grok/skills`,
- * etc. are
+ * `.cursor/rules`, etc. are
  * declared as mount-ignored patterns so the mirror does not sync back to the
  * user's real repo on session exit.
  */
@@ -1058,6 +1059,7 @@ export const SKILL_INSTALL_IGNORED_PATTERNS = [
   // skill.sh universal install root + per-harness symlink farms
   '.agents',
   '.claude/skills',
+  '.cursor/rules',
   '.factory/skills',
   '.grok/skills',
   '.kiro/skills',
@@ -1072,6 +1074,14 @@ export const SKILL_INSTALL_IGNORED_PATTERNS = [
   // into the mount; hide so the real-cwd AGENTS.md isn't copied in and
   // the persona-written copy doesn't sync back out.
   'AGENTS.md'
+] as const;
+
+const CURSOR_IGNORED_PATTERNS = [
+  ...SKILL_INSTALL_IGNORED_PATTERNS,
+  // Cursor CLI reads root CLAUDE.md alongside AGENTS.md; hide repo-level
+  // Claude guidance so persona AGENTS.md remains the only root memory file.
+  'CLAUDE.md',
+  'CLAUDE.local.md'
 ] as const;
 
 export interface RelayfileMountPatterns {
@@ -1092,7 +1102,9 @@ export function buildRelayfileMountPatterns(input: {
   const builtInIgnored =
     input.harness === 'claude'
       ? CLEAN_IGNORED_PATTERNS
-      : SKILL_INSTALL_IGNORED_PATTERNS;
+      : input.harness === 'cursor'
+        ? CURSOR_IGNORED_PATTERNS
+        : SKILL_INSTALL_IGNORED_PATTERNS;
 
   return {
     ignoredPatterns: [
@@ -1192,7 +1204,7 @@ export function configureGitForMount(mountDir: string, patterns: readonly string
  * harness has no mount (`--install-in-repo`).
  */
 export interface ResolvedSidecar {
-  /** Filename inside the mount: `CLAUDE.md` (claude) or `AGENTS.md` (opencode/codex/grok). */
+  /** Filename inside the mount: `CLAUDE.md` (claude) or `AGENTS.md` (opencode/codex/grok/cursor). */
   mountFile: 'CLAUDE.md' | 'AGENTS.md';
   /** Persona-author content. Already inlined for built-ins; read from disk for local. */
   personaContent: string;
@@ -1215,7 +1227,8 @@ export function loadSidecarForSelection(
     harness !== 'claude' &&
     harness !== 'opencode' &&
     harness !== 'codex' &&
-    harness !== 'grok'
+    harness !== 'grok' &&
+    harness !== 'cursor'
   ) {
     return {};
   }
@@ -1245,7 +1258,7 @@ export function loadSidecarForSelection(
     }
     return {};
   }
-  // opencode, codex, and grok all read AGENTS.md from cwd. The resolution
+  // opencode, codex, grok, and cursor all read AGENTS.md from cwd. The resolution
   // rule is identical for these harnesses here.
   if (selection.agentsMdContent) {
     return {
@@ -1307,7 +1320,7 @@ export function buildSidecarBody(
  *
  * All interactive harnesses default to the mount.
  * The mount hides CLAUDE.md / .claude / .mcp.json (claude) or the
- * skill-install patterns + AGENTS.md (codex / opencode / grok) so
+ * skill-install patterns + AGENTS.md (codex / opencode / grok / cursor) so
  * persona-supplied sidecars and any per-session writes stay sandboxed and
  * don't leak into the user's real repo. `--install-in-repo` is the single
  * opt-out that disengages the mount across all harnesses.
@@ -1318,7 +1331,13 @@ export function decideCleanMode(
   harness: Harness,
   installInRepo = false
 ): { useClean: boolean } {
-  if (harness === 'claude' || harness === 'opencode' || harness === 'codex' || harness === 'grok') {
+  if (
+    harness === 'claude' ||
+    harness === 'opencode' ||
+    harness === 'codex' ||
+    harness === 'grok' ||
+    harness === 'cursor'
+  ) {
     return { useClean: !installInRepo };
   }
   return { useClean: false };

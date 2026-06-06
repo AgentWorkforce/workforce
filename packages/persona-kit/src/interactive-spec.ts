@@ -19,7 +19,7 @@ export interface InteractiveConfigFile {
 
 /** Result of translating a persona's runtime into a spawnable command. */
 export interface InteractiveSpec {
-  /** Binary to exec (e.g. `claude`, `codex`, `opencode`, `grok`). */
+  /** Binary to exec (e.g. `claude`, `codex`, `opencode`, `grok`, `cursor-agent`). */
   bin: string;
   /** Argv for the binary, in order. Callers should `spawn(bin, args)`. */
   args: readonly string[];
@@ -29,7 +29,7 @@ export interface InteractiveSpec {
    * to carry the persona's system prompt as the initial user prompt.
    * Currently only codex takes this path; claude uses `--append-system-prompt`,
    * opencode writes the prompt into `opencode.json` (see `configFiles`), and
-   * grok writes the prompt into `AGENTS.md` (see `configFiles`).
+   * grok/cursor write the prompt into `AGENTS.md` (see `configFiles`).
    */
   initialPrompt: string | null;
   /**
@@ -41,8 +41,8 @@ export interface InteractiveSpec {
    * Config files the caller must write (relative to the harness cwd) before
    * launch. Opencode uses this to materialize an `opencode.json` carrying
    * the persona's agent definition (model + system prompt) so `--agent` can
-   * resolve it. Grok uses this to materialize `AGENTS.md` when `systemPrompt`
-   * is non-empty. Claude and codex return an empty array.
+   * resolve it. Grok and Cursor use this to materialize `AGENTS.md` when
+   * `systemPrompt` is non-empty. Claude and codex return an empty array.
    */
   configFiles: InteractiveConfigFile[];
   /**
@@ -85,8 +85,8 @@ export interface RelayMcpConfig {
 export interface BuildInteractiveSpecInput {
   harness: Harness;
   /**
-   * Persona id — used as the opencode agent name. Claude, codex, and grok ignore
-   * this field today; keeping it required here keeps call sites honest and
+   * Persona id — used as the opencode agent name. Claude, codex, grok, and
+   * cursor ignore this field today; keeping it required here keeps call sites honest and
    * lets future harnesses consume it without another type change.
    */
   personaId: string;
@@ -98,8 +98,8 @@ export interface BuildInteractiveSpecInput {
    * When set, a `relaycast` MCP server is merged into {@link mcpServers} so a
    * persona running under an Agent Relay broker can talk to the team. A
    * persona-declared server literally named `relaycast` takes precedence (it
-   * is not overwritten). Wired for claude and codex; opencode/grok still warn
-   * that MCP injection is unsupported.
+   * is not overwritten). Wired for claude and codex; opencode/grok/cursor still
+   * warn that MCP injection is unsupported.
    */
   relayMcp?: RelayMcpConfig;
   permissions?: PersonaPermissions;
@@ -109,7 +109,7 @@ export interface BuildInteractiveSpecInput {
    * session (`--plugin-dir <path>` per entry where supported). Used to wire in out-of-repo
    * skill stages produced by
    * {@link SkillMaterializationOptions.installRoot}.
-   * Currently supported by Claude and Grok. Codex/opencode emit a warning and
+   * Currently supported by Claude and Grok. Codex/opencode/cursor emit a warning and
    * ignore the field.
    */
   pluginDirs?: readonly string[];
@@ -217,6 +217,11 @@ function appendCodexMcpServerArgs(
  * mode writes the persona system prompt into AGENTS.md when present, and
  * one-shot mode uses `--single` because Grok has no separate system-prompt flag.
  *
+ * The cursor branch launches the Cursor Agent CLI (`cursor-agent`) with the
+ * persona model. Cursor reads AGENTS.md / CLAUDE.md / .cursor/rules from the
+ * working tree; this translator uses AGENTS.md for persona instructions and
+ * `--print --output-format text` for one-shot runs.
+ *
  * The opencode branch routes model + system prompt through opencode's
  * agent abstraction (see https://opencode.ai/config.json: `agent.<id>.{
  * model, prompt, mode }`). It emits an `opencode.json` via `configFiles`
@@ -232,9 +237,10 @@ function appendCodexMcpServerArgs(
  * `--config mcp_servers.<name>...` TOML overrides so codex sessions receive
  * the same declared MCP servers as the persona.
  *
- * The opencode/grok branches emit a warning if the persona declares `mcpServers`.
+ * The opencode/grok/cursor branches emit a warning if the persona declares `mcpServers`.
  * Grok maps `permissions.mode: "bypassPermissions"` to `--always-approve`;
- * other permission fields warn.
+ * Cursor maps `permissions.mode: "bypassPermissions"` to `--force`; other
+ * permission fields warn.
  */
 /**
  * Build the stdio MCP server spec for relaycast, mirroring the env block the
@@ -536,6 +542,71 @@ export function buildInteractiveSpec(input: BuildInteractiveSpecInput): Interact
         mcpServers
       };
     }
+    case 'cursor': {
+      if (hasPersonaMcpServers && injectsRelaycast) {
+        warnings.push(
+          'persona declares mcpServers and broker requested relaycast MCP injection, but the cursor harness is not yet wired for runtime MCP injection; proceeding without MCP.'
+        );
+      } else if (hasPersonaMcpServers) {
+        warnings.push(
+          'persona declares mcpServers but the cursor harness is not yet wired for runtime MCP injection; proceeding without MCP.'
+        );
+      } else if (injectsRelaycast) {
+        warnings.push(
+          'broker requested relaycast MCP injection but the cursor harness is not yet wired for runtime MCP injection; proceeding without MCP.'
+        );
+      }
+      if (permissions?.allow?.length || permissions?.deny?.length) {
+        warnings.push(
+          'persona declares permission allow/deny lists but the cursor harness is not wired for allow/deny injection; proceeding without allow/deny rules.'
+        );
+      }
+      const args = ['--model', model];
+      if (permissions?.mode === 'bypassPermissions') {
+        args.push('--force');
+      } else if (permissions?.mode && permissions.mode !== 'default') {
+        warnings.push(
+          `persona declares permissions.mode "${permissions.mode}" but the cursor harness only supports bypassPermissions via --force; proceeding with Cursor defaults.`
+        );
+      }
+      if (hasPluginDirs) {
+        warnings.push(
+          'pluginDirs is currently supported only for claude and grok; ignoring under the cursor harness. Skills must be staged via cursor conventions.'
+        );
+      }
+      if (harnessSettings?.dangerouslyBypassApprovalsAndSandbox && !args.includes('--force')) {
+        args.push('--force');
+      }
+      if (harnessSettings?.sandboxMode) {
+        warnings.push('cursor harnessSettings.sandboxMode is not yet wired; proceeding with Cursor defaults.');
+      }
+      if (harnessSettings?.approvalPolicy) {
+        warnings.push(
+          'cursor harnessSettings.approvalPolicy is not supported; use permissions.mode "bypassPermissions" or dangerouslyBypassApprovalsAndSandbox for --force.'
+        );
+      }
+      if (harnessSettings?.workspaceWriteNetworkAccess !== undefined) {
+        warnings.push('cursor harnessSettings.workspaceWriteNetworkAccess is not yet wired; proceeding with Cursor defaults.');
+      }
+      if (harnessSettings?.webSearch) {
+        warnings.push('cursor harnessSettings.webSearch is not wired to a Cursor CLI flag; proceeding with Cursor defaults.');
+      }
+      return {
+        bin: 'cursor-agent',
+        args,
+        initialPrompt: null,
+        warnings,
+        configFiles: systemPrompt
+          ? [
+              {
+                path: 'AGENTS.md',
+                contents: systemPrompt.endsWith('\n') ? systemPrompt : `${systemPrompt}\n`
+              }
+            ]
+          : [],
+        mcpServers
+      };
+    }
     default: {
       // Exhaustiveness guard: if `Harness` gains a new variant, this
       // assertion will fail to compile and force the maintainer to handle
@@ -569,6 +640,8 @@ export interface NonInteractiveSpec {
  * - `grok`: appends `--output-format plain [--cwd <cwd>] --always-approve
  *   --single <prompt>`, where prompt includes the persona system prompt plus
  *   the one-shot task.
+ * - `cursor`: appends `--print --output-format text <task>`; persona
+ *   instructions are carried by the AGENTS.md config file.
  */
 export function buildNonInteractiveSpec(
   input: BuildInteractiveSpecInput & {
@@ -625,6 +698,14 @@ export function buildNonInteractiveSpec(
       return {
         bin: interactive.bin,
         args,
+        configFiles: interactive.configFiles,
+        warnings: interactive.warnings
+      };
+    }
+    case 'cursor': {
+      return {
+        bin: interactive.bin,
+        args: [...interactive.args, '--print', '--output-format', 'text', input.task],
         configFiles: interactive.configFiles,
         warnings: interactive.warnings
       };

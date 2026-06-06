@@ -1,7 +1,7 @@
 # agentworkforce CLI
 
 A thin command-line front end for the workload-router. Spawns the harness CLI
-(`claude`, `codex`, `opencode`, `grok`) configured by a selected **persona** from the
+(`claude`, `codex`, `opencode`, `grok`, `cursor`) configured by a selected **persona** from the
 project-local layer, configured source directories, or the small internal
 built-in system catalog.
 
@@ -37,7 +37,7 @@ agentworkforce --version
 - `integrations` — discover available integrations, known trigger events, and
   connection status for the active workspace.
 - `sources` — list, add, or remove persona source directories.
-- `harness check` — probe which harnesses (`claude`, `codex`, `opencode`, `grok`)
+- `harness check` — probe which harnesses (`claude`, `codex`, `opencode`, `grok`, `cursor`)
   are installed. See [`## Harness check`](#harness-check) below.
 - `destroy` — tear down a deployed cloud agent: cancels all relaycron
   schedules and marks the agent as destroyed. Accepts either a persona
@@ -333,7 +333,7 @@ combination; by default only the **recommended tier per intent** is shown
 | `--all` | off | Show every tier of every persona. Alias: `--no-recommended`. |
 | `--recommended` | on | Only show the recommended tier per intent. Implicit default; mostly useful for undoing `--all` earlier in a wrapper script. |
 | `--filter-rating <tier>` | — | Restrict to a single tier (`best` \| `best-value` \| `minimum`). **Implicitly turns off the recommended-only default**, so filtering by `best` shows every persona's `best` row even when that's not the recommended tier. |
-| `--filter-harness <harness>` | — | Restrict to a single harness (`claude` \| `codex` \| `opencode` \| `grok`). Composable with `--filter-rating` and `--all`. |
+| `--filter-harness <harness>` | — | Restrict to a single harness (`claude` \| `codex` \| `opencode` \| `grok` \| `cursor`). Composable with `--filter-rating` and `--all`. |
 | `--no-display-description` | off | Hide the `DESCRIPTION` column. `--display-description` re-enables it. |
 | `--json` | off | Emit `{ "personas": [...] }` with one object per row. Same field set as the table, useful for scripting. |
 | `-h`, `--help` | — | Print a one-line usage string and exit. |
@@ -425,7 +425,7 @@ agentworkforce harness check
 ```
 
 Probes your PATH for each supported harness binary (`claude`, `codex`,
-`opencode`, `grok`) and prints a table with status (`ok` / `missing`), resolved
+`opencode`, `grok`, `cursor-agent`) and prints a table with status (`ok` / `missing`), resolved
 version, and the resolved path (or the error, for missing ones). Exit
 code is always `0` — this command is diagnostic, not a gate.
 
@@ -780,7 +780,7 @@ persona JSON remains commit-safe as long as you only use references.
 
 ## Relayfile mount rules
 
-Interactive harness sessions (`claude`, `opencode`, `grok`, `codex`) run inside
+Interactive harness sessions (`claude`, `opencode`, `grok`, `codex`, `cursor`) run inside
 a Relayfile mount by default. File visibility and writability are controlled by
 the persona's `mount` block plus project-level dotfiles:
 
@@ -827,9 +827,10 @@ mount rules (`.agentignore` / `.agentreadonly`) for that.
   from that server), `mcp__<server>__<tool>` (specific tool).
 - **Harness support today:** `claude` is wired for allow/deny/mode flags
   (`--allowedTools`, `--disallowedTools`, `--permission-mode`). `grok` maps
-  `mode: "bypassPermissions"` to `--always-approve`; other Grok permission
-  fields warn and are ignored. `codex` and `opencode` emit a warning and fall
-  back to their defaults when `permissions` is set.
+  `mode: "bypassPermissions"` to `--always-approve`; `cursor` maps it to
+  `--force`. Other Grok/Cursor permission fields warn and are ignored.
+  `codex` and `opencode` emit a warning and fall back to their defaults when
+  `permissions` is set.
 - **Cascade merge:** `allow` and `deny` are unions across layers (deduped on
   merge); `mode` is replaced by the topmost layer that sets it. So the
   library can declare the minimum-viable allow list, a user or configured
@@ -915,6 +916,7 @@ verbatim. Three transport types:
 | codex    | yes (via `--config mcp_servers.<name>...`) | not yet — SDK workflow path doesn't thread MCP |
 | opencode | not yet — warns and proceeds without MCP | not yet |
 | grok     | not yet — warns and proceeds without MCP | not yet |
+| cursor   | not yet — warns and proceeds without MCP | not yet |
 
 For a persona that needs MCP today, pick `claude` or `codex` as the harness
 for that tier.
@@ -941,10 +943,10 @@ By default, interactive harness sessions run inside a sandbox mount — see
 
 1. Resolves the persona, walks the cascade, resolves `$VAR` refs.
 2. **Stages skills outside the repo by default** (claude interactive only —
-   see **Skill staging** below). For codex / opencode / grok, or when
+   see **Skill staging** below). For codex / opencode / grok / cursor, or when
    `--install-in-repo` is passed, falls back to the legacy repo-relative
    install path (`.claude/skills/`, `.agents/skills/`, `.skills/`,
-   `.grok/skills/`).
+   `.grok/skills/`, `.cursor/rules/`).
 3. Runs skill install (`prpm install …`) if the persona declares any skills,
    using the computed target (stage dir or repo).
 4. Execs the harness binary with stdio inherited:
@@ -961,6 +963,8 @@ By default, interactive harness sessions run inside a sandbox mount — see
      `opencode.json` in the sandbox carrying the persona model and prompt.
    - `grok`: `grok --no-auto-update --model <model>`. In one-shot paths, the
      CLI uses Grok Build's `--single` mode and passes cwd/output flags.
+   - `cursor`: `cursor-agent --model <model>`. In one-shot paths, the CLI
+     uses Cursor Agent's `--print --output-format text` mode.
 5. Runs the skill cleanup command on exit, regardless of exit status. In
    stage-dir mode this is a single `rm -rf <stage-dir>`.
 6. Records launch metadata for the session and refreshes harness session logs
@@ -1047,7 +1051,7 @@ stage dir conflicts with something else (network filesystem, read-only
 
 **Caveats for V1:**
 
-- **Claude harness only.** codex, opencode, and grok continue to install into their
+- **Claude harness only.** codex, opencode, grok, and cursor continue to install into their
   conventional repo-relative directories. The SDK throws if `installRoot` is
   passed with a non-claude harness.
 - **No cache layer yet.** Every interactive session runs a fresh prpm install
@@ -1091,9 +1095,12 @@ back to the repo):
 
 | Pattern | Rationale |
 | --- | --- |
-| `.agents`, `.claude/skills`, `.factory/skills`, `.grok/skills`, `.kiro/skills`, `skills` | skill.sh universal install root + per-harness symlink farms |
+| `.agents`, `.claude/skills`, `.cursor/rules`, `.factory/skills`, `.grok/skills`, `.kiro/skills`, `skills` | skill.sh universal install root + per-harness symlink farms |
 | `.opencode`, `.skills` | prpm `--as <harness>` output roots |
 | `prpm.lock`, `skills-lock.json` | provider lockfiles |
+
+For `cursor`, the mount also hides root `CLAUDE.md` / `CLAUDE.local.md`
+because Cursor Agent reads root Claude guidance alongside `AGENTS.md`.
 
 **What's preserved:**
 
@@ -1103,7 +1110,7 @@ back to the repo):
 - **Persona skills.** For claude, the `--plugin-dir` passed to the harness
   resolves to an absolute path *outside* the mount, so staged skills from
   `~/.agentworkforce/workforce/sessions/<id>/claude/plugin/` load normally. For
-  codex, opencode, and grok, the install runs inside the mount so the writes
+  codex, opencode, grok, and cursor, the install runs inside the mount so the writes
   land in the sandbox.
 - **Keychain auth.** The mount does not pass `--bare`; it only hides
   files. Claude Code's macOS keychain login stays active.
@@ -1156,7 +1163,7 @@ stage dir is cleaned up by the existing `rm -rf` cleanup command.
 A persona's three tiers can use different harnesses.
 
 If a persona uses MCP, use `claude` or `codex` tiers.
-`opencode` still does not inject persona `mcpServers` at spawn time.
+`opencode`, `grok`, and `cursor` still do not inject persona `mcpServers` at spawn time.
 
 ## Troubleshooting
 
@@ -1170,9 +1177,9 @@ If a persona uses MCP, use `claude` or `codex` tiers.
   auth interactively (e.g. Claude Code's MCP OAuth flow).
 
 - **`Failed to spawn "claude": binary not found on PATH.`** — Install the
-  harness CLI (`claude`, `codex`, `opencode`, or `grok`) and ensure it's on your PATH.
+  harness CLI (`claude`, `codex`, `opencode`, `grok`, or `cursor-agent`) and ensure it's on your PATH.
 
-- **`warning: persona declares mcpServers but the opencode harness is not yet
+- **`warning: persona declares mcpServers but the <harness> harness is not yet
   wired …`** — Switch that tier's `harness` to `claude` or `codex`, or drop the
   MCP requirement.
 

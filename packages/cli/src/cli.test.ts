@@ -409,6 +409,11 @@ test('decideCleanMode: grok defaults to mount', () => {
   assert.deepEqual(decideCleanMode('grok', true), { useClean: false });
 });
 
+test('decideCleanMode: cursor defaults to mount', () => {
+  assert.deepEqual(decideCleanMode('cursor'), { useClean: true });
+  assert.deepEqual(decideCleanMode('cursor', true), { useClean: false });
+});
+
 test('formatSandboxMountReadyMessage: appends mount metrics when available', () => {
   assert.equal(
     formatSandboxMountReadyMessage('/tmp/mount', {
@@ -539,6 +544,7 @@ test('SKILL_INSTALL_IGNORED_PATTERNS: keeps skill-install artifacts out of the r
   assert.deepEqual([...SKILL_INSTALL_IGNORED_PATTERNS], [
     '.agents',
     '.claude/skills',
+    '.cursor/rules',
     '.factory/skills',
     '.grok/skills',
     '.kiro/skills',
@@ -593,6 +599,24 @@ test('buildRelayfileMountPatterns: merges Relayfile dotfiles with built-in claud
       '*',
       '!app/**'
     ]);
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test('buildRelayfileMountPatterns: cursor hides root memory files it reads', () => {
+  const dir = mkdtempSync(join(tmpdir(), 'aw-cursor-patterns-'));
+  try {
+    const patterns = buildRelayfileMountPatterns({
+      projectDir: dir,
+      personaId: 'cursor-persona',
+      harness: 'cursor'
+    });
+
+    assert.ok(patterns.ignoredPatterns.includes('AGENTS.md'));
+    assert.ok(patterns.ignoredPatterns.includes('.cursor/rules'));
+    assert.ok(patterns.ignoredPatterns.includes('CLAUDE.md'));
+    assert.ok(patterns.ignoredPatterns.includes('CLAUDE.local.md'));
   } finally {
     rmSync(dir, { recursive: true, force: true });
   }
@@ -1103,6 +1127,23 @@ test('loadSidecarForSelection: grok picks agentsMd, not claudeMd', () => {
     personaId: 'p',
     harness: 'grok' as const,
     model: 'grok-build-0.1',
+    systemPrompt: 'X',
+    harnessSettings: { reasoning: 'medium' as const, timeoutSeconds: 300 },
+    skills: [],
+    rationale: 'test',
+    claudeMdContent: '# claude\n',
+    agentsMdContent: '# agents\n'
+  };
+  const { sidecar } = loadSidecarForSelection(selection);
+  assert.equal(sidecar?.mountFile, 'AGENTS.md');
+  assert.equal(sidecar?.personaContent, '# agents\n');
+});
+
+test('loadSidecarForSelection: cursor picks agentsMd, not claudeMd', () => {
+  const selection = {
+    personaId: 'p',
+    harness: 'cursor' as const,
+    model: 'gpt-5',
     systemPrompt: 'X',
     harnessSettings: { reasoning: 'medium' as const, timeoutSeconds: 300 },
     skills: [],
