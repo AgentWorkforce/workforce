@@ -1,0 +1,36 @@
+{
+  "version": 1,
+  "lastUpdated": "2026-06-06T12:50:17.344Z",
+  "trajectories": {
+    "traj_hbtkylwtpg7n": {
+      "title": "cron:weekly",
+      "status": "completed",
+      "startedAt": "2026-06-06T12:50:17.137Z",
+      "completedAt": "2026-06-06T12:50:17.140Z",
+      "path": "/home/daytona/workspace/.trajectories/demo/.trajectories/completed/2026-06/traj_hbtkylwtpg7n.json",
+      "compactedInto": "compact_qbg3q6h06qvf"
+    },
+    "traj_4n7yabnl8nv1": {
+      "title": "cron:",
+      "status": "abandoned",
+      "startedAt": "2026-06-06T12:50:17.239Z",
+      "completedAt": "2026-06-06T12:50:17.243Z",
+      "path": "/home/daytona/workspace/.trajectories/demo/.trajectories/completed/2026-06/traj_4n7yabnl8nv1.json"
+    },
+    "traj_t5umrb8u8jxp": {
+      "title": "cron:",
+      "status": "abandoned",
+      "startedAt": "2026-06-06T12:50:17.247Z",
+      "completedAt": "2026-06-06T12:50:17.249Z",
+      "path": "/home/daytona/workspace/.trajectories/demo/.trajectories/completed/2026-06/traj_t5umrb8u8jxp.json"
+    },
+    "traj_7tfaoxnysji0": {
+      "title": "cron:tick",
+      "status": "completed",
+      "startedAt": "2026-06-06T12:50:17.251Z",
+      "completedAt": "2026-06-06T12:50:17.252Z",
+      "path": "/home/daytona/workspace/.trajectories/demo/.trajectories/completed/2026-06/traj_7tfaoxnysji0.json",
+      "compactedInto": "compact_5q7cpw6x7l0c"
+    }
+  }
+}

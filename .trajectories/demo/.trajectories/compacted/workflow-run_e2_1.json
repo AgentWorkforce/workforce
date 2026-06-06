@@ -1,0 +1,26 @@
+{
+  "id": "compact_5q7cpw6x7l0c",
+  "version": 1,
+  "type": "compacted",
+  "compactedAt": "2026-06-06T12:50:17.337Z",
+  "workflowId": "run_e2_1",
+  "sourceTrajectories": [
+    "traj_7tfaoxnysji0"
+  ],
+  "dateRange": {
+    "start": "2026-06-06T12:50:17.251Z",
+    "end": "2026-06-06T12:50:17.252Z"
+  },
+  "summary": {
+    "totalDecisions": 0,
+    "totalEvents": 0,
+    "uniqueAgents": [
+      "demo"
+    ]
+  },
+  "decisionGroups": [],
+  "keyLearnings": [],
+  "keyFindings": [],
+  "filesAffected": [],
+  "commits": []
+}
