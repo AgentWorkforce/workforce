@@ -1,7 +1,18 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
+import path from 'node:path';
 
 import { buildInteractiveSpec, buildNonInteractiveSpec } from './interactive-spec.js';
+
+function assertAiHistServer(server: unknown, env: Record<string, string>): void {
+  assert.deepEqual(server, {
+    type: 'stdio',
+    command: process.execPath,
+    args: [(server as { args: string[] }).args[0]],
+    env
+  });
+  assert.equal(path.basename((server as { args: string[] }).args[0]), 'ai-hist-mcp-server.js');
+}
 
 test('claude branch always emits --mcp-config + --strict-mcp-config', () => {
   const result = buildInteractiveSpec({
@@ -675,6 +686,71 @@ test('relayMcp merges alongside persona-declared servers; a persona relaycast wi
   });
 });
 
+test('aiHist injects an ai-hist server into the claude --mcp-config payload', () => {
+  const result = buildInteractiveSpec({
+    harness: 'claude',
+    personaId: 'test-persona',
+    model: 'claude-sonnet-4-6',
+    systemPrompt: 'x',
+    aiHist: { trajectoryRoot: '/repo/.trajectories', dbPath: '/db/ai-history.db' }
+  });
+  const mcpIdx = result.args.indexOf('--mcp-config');
+  const payload = JSON.parse(result.args[mcpIdx + 1]);
+  assertAiHistServer(payload.mcpServers['ai-hist'], {
+    TRAJECTORY_ROOT: '/repo/.trajectories',
+    AI_HIST_DB: '/db/ai-history.db'
+  });
+  assert.ok(result.args.includes('--strict-mcp-config'));
+  assert.equal(result.mcpServers?.['ai-hist']?.type, 'stdio');
+});
+
+test('aiHist omits TRAJECTORY_ROOT / AI_HIST_DB env when not provided', () => {
+  const result = buildInteractiveSpec({
+    harness: 'claude',
+    personaId: 'p',
+    model: 'm',
+    systemPrompt: 'x',
+    aiHist: {}
+  });
+  const mcpIdx = result.args.indexOf('--mcp-config');
+  const server = JSON.parse(result.args[mcpIdx + 1]).mcpServers['ai-hist'];
+  assertAiHistServer(server, {});
+});
+
+test('aiHist merges alongside relaycast + persona servers; a persona ai-hist wins', () => {
+  const result = buildInteractiveSpec({
+    harness: 'claude',
+    personaId: 'p',
+    model: 'm',
+    systemPrompt: 'x',
+    mcpServers: {
+      posthog: { type: 'http', url: 'https://mcp.posthog.com/mcp' },
+      'ai-hist': { type: 'stdio', command: 'custom-ai-hist' }
+    },
+    relayMcp: { apiKey: 'wk_live_abc', agentName: 'Solo1' },
+    aiHist: { trajectoryRoot: '/repo/.trajectories' }
+  });
+  const mcpIdx = result.args.indexOf('--mcp-config');
+  const payload = JSON.parse(result.args[mcpIdx + 1]);
+  // relaycast still injected, persona servers preserved...
+  assert.equal(payload.mcpServers.relaycast?.command, 'npx');
+  assert.ok(payload.mcpServers.posthog);
+  // ...and a persona-declared `ai-hist` overrides the injected one.
+  assert.deepEqual(payload.mcpServers['ai-hist'], { type: 'stdio', command: 'custom-ai-hist' });
+});
+
+test('without aiHist the claude payload carries no ai-hist server', () => {
+  const result = buildInteractiveSpec({
+    harness: 'claude',
+    personaId: 'p',
+    model: 'm',
+    systemPrompt: 'x'
+  });
+  const mcpIdx = result.args.indexOf('--mcp-config');
+  const payload = JSON.parse(result.args[mcpIdx + 1]);
+  assert.equal(payload.mcpServers['ai-hist'], undefined);
+});
+
 test('without relayMcp the claude payload carries no relaycast server', () => {
   const result = buildInteractiveSpec({
     harness: 'claude',
@@ -709,7 +785,7 @@ test('relayMcp under opencode warns that MCP injection is unsupported', () => {
     relayMcp: { apiKey: 'wk_live_abc', agentName: 'Op1' }
   });
   assert.deepEqual(result.warnings, [
-    'broker requested relaycast MCP injection but the opencode harness is not yet wired for runtime MCP injection; proceeding without MCP.'
+    'default relaycast MCP injection was requested but the opencode harness is not yet wired for runtime MCP injection; proceeding without MCP.'
   ]);
   assert.equal(result.mcpServers?.relaycast?.type, 'stdio');
 });
@@ -740,7 +816,7 @@ test('opencode warning names both persona and broker MCP sources when both are p
     relayMcp: { apiKey: 'wk_live_abc', agentName: 'Op1' }
   });
   assert.deepEqual(result.warnings, [
-    'persona declares mcpServers and broker requested relaycast MCP injection, but the opencode harness is not yet wired for runtime MCP injection; proceeding without MCP.'
+    'persona declares mcpServers and default relaycast MCP injection was requested, but the opencode harness is not yet wired for runtime MCP injection; proceeding without MCP.'
   ]);
 });
 

@@ -507,6 +507,17 @@ export interface PersonaSpec {
    */
   memory?: PersonaMemory;
   /**
+   * Decision-trajectory recording opt-out. Recording is **on by default**:
+   * the runtime auto-records this persona's decisions/reasoning per run (the
+   * "why") and the deploy CLI auto-injects the `ai-hist` MCP server (the
+   * "how" + "why" retrieval surface) into {@link mcpServers}. Set to `false`
+   * to opt a persona out entirely — but note deploy preflight REJECTS a
+   * cloud persona with `recordTrajectories: false` (trajectory recording is
+   * an enforced capability for deployed agents). Omit (or `true`) for the
+   * default enforced-on behavior.
+   */
+  recordTrajectories?: boolean;
+  /**
    * Relative POSIX path to the TypeScript (or compiled .js / .mjs) file
    * whose default export is the deploy-time event handler. Resolved
    * relative to the persona JSON's directory at deploy time. Required by
@@ -532,6 +543,13 @@ export interface PersonaSelection {
   mcpServers?: Record<string, McpServerSpec>;
   permissions?: PersonaPermissions;
   mount?: PersonaMount;
+  /**
+   * Carried through from {@link PersonaSpec.recordTrajectories}. When not
+   * `false`, launchers inject the `ai-hist` MCP server so the session can
+   * recall its own decision trajectories (the "why") and prior history (the
+   * "how"). Omitted/`true` ⇒ recording on (default).
+   */
+  recordTrajectories?: boolean;
   /**
    * Effective sidecar config for the persona. Modes default to `overwrite`
    * when a path or inlined content exists; otherwise the mode field is omitted.

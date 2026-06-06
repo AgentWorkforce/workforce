@@ -191,6 +191,7 @@ export {
 export {
   buildInteractiveSpec,
   buildNonInteractiveSpec,
+  type AiHistMcpConfig,
   type BuildInteractiveSpecInput,
   type InteractiveConfigFile,
   type InteractiveSpec,
