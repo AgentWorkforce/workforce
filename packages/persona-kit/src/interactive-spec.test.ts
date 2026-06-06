@@ -437,7 +437,72 @@ test('grok non-interactive spec still adds always-approve for unsupported permis
   ]);
 });
 
-test('claude and codex emit an empty configFiles array; grok does so only with an empty systemPrompt', () => {
+test('cursor launches cursor-agent and writes systemPrompt to AGENTS.md', () => {
+  const result = buildInteractiveSpec({
+    harness: 'cursor',
+    personaId: 'test-persona',
+    model: 'gpt-5',
+    systemPrompt: 'you are a test'
+  });
+  assert.equal(result.bin, 'cursor-agent');
+  assert.deepEqual(result.args, ['--model', 'gpt-5']);
+  assert.equal(result.initialPrompt, null);
+  assert.deepEqual(result.configFiles, [
+    { path: 'AGENTS.md', contents: 'you are a test\n' }
+  ]);
+  assert.deepEqual(result.warnings, []);
+});
+
+test('cursor maps bypassPermissions to force and warns for unsupported fields', () => {
+  const result = buildInteractiveSpec({
+    harness: 'cursor',
+    personaId: 'test-persona',
+    model: 'gpt-5',
+    systemPrompt: 'x',
+    permissions: {
+      allow: ['Bash(git *)'],
+      deny: ['Bash(rm -rf *)'],
+      mode: 'bypassPermissions'
+    },
+    harnessSettings: {
+      reasoning: 'medium',
+      timeoutSeconds: 300,
+      dangerouslyBypassApprovalsAndSandbox: true,
+      approvalPolicy: 'never'
+    }
+  });
+  assert.deepEqual(result.args, ['--model', 'gpt-5', '--force']);
+  assert.deepEqual(result.warnings, [
+    'persona declares permission allow/deny lists but the cursor harness is not wired for allow/deny injection; proceeding without allow/deny rules.',
+    'cursor harnessSettings.approvalPolicy is not supported; use permissions.mode "bypassPermissions" or dangerouslyBypassApprovalsAndSandbox for --force.'
+  ]);
+});
+
+test('cursor non-interactive spec uses print mode with text output', () => {
+  const result = buildNonInteractiveSpec({
+    harness: 'cursor',
+    personaId: 'daily-ship',
+    model: 'gpt-5',
+    systemPrompt: 'Reply pong.',
+    task: 'say pong'
+  });
+
+  assert.equal(result.bin, 'cursor-agent');
+  assert.deepEqual(result.args, [
+    '--model',
+    'gpt-5',
+    '--print',
+    '--output-format',
+    'text',
+    'say pong'
+  ]);
+  assert.deepEqual(result.configFiles, [
+    { path: 'AGENTS.md', contents: 'Reply pong.\n' }
+  ]);
+  assert.deepEqual(result.warnings, []);
+});
+
+test('claude and codex emit an empty configFiles array; grok/cursor do so only with an empty systemPrompt', () => {
   const claude = buildInteractiveSpec({
     harness: 'claude',
     personaId: 'test-persona',
@@ -461,6 +526,14 @@ test('claude and codex emit an empty configFiles array; grok does so only with a
     systemPrompt: ''
   });
   assert.deepEqual(grok.configFiles, []);
+
+  const cursor = buildInteractiveSpec({
+    harness: 'cursor',
+    personaId: 'test-persona',
+    model: 'gpt-5',
+    systemPrompt: ''
+  });
+  assert.deepEqual(cursor.configFiles, []);
 });
 
 test('claude branch omits --append-system-prompt when systemPrompt is empty', () => {
@@ -570,7 +643,7 @@ test('claude branch omits --plugin-dir when pluginDirs is empty or absent', () =
   assert.ok(!without.args.includes('--plugin-dir'));
 });
 
-test('codex and opencode warn and ignore pluginDirs', () => {
+test('codex, opencode, and cursor warn and ignore pluginDirs', () => {
   const codex = buildInteractiveSpec({
     harness: 'codex',
     personaId: 'test-persona',
@@ -590,6 +663,16 @@ test('codex and opencode warn and ignore pluginDirs', () => {
   });
   assert.ok(!opencode.args.includes('--plugin-dir'));
   assert.ok(opencode.warnings.some((w) => /supported only for claude and grok/.test(w)));
+
+  const cursor = buildInteractiveSpec({
+    harness: 'cursor',
+    personaId: 'test-persona',
+    model: 'x',
+    systemPrompt: 'x',
+    pluginDirs: ['/tmp/session/plugin']
+  });
+  assert.ok(!cursor.args.includes('--plugin-dir'));
+  assert.ok(cursor.warnings.some((w) => /supported only for claude and grok/.test(w)));
 });
 
 test('warnings are returned, not printed — library consumers route I/O themselves', () => {
@@ -802,6 +885,20 @@ test('relayMcp under grok warns that MCP injection is unsupported', () => {
   assert.equal(result.mcpServers?.relaycast?.type, 'stdio');
 });
 
+test('relayMcp under cursor warns that MCP injection is unsupported', () => {
+  const result = buildInteractiveSpec({
+    harness: 'cursor',
+    personaId: 'p',
+    model: 'gpt-5',
+    systemPrompt: 'x',
+    relayMcp: { apiKey: 'wk_live_abc', agentName: 'Cursor1' }
+  });
+  assert.deepEqual(result.warnings, [
+    'broker requested relaycast MCP injection but the cursor harness is not yet wired for runtime MCP injection; proceeding without MCP.'
+  ]);
+  assert.equal(result.mcpServers?.relaycast?.type, 'stdio');
+});
+
 test('opencode warning names both persona and broker MCP sources when both are present', () => {
   const result = buildInteractiveSpec({
     harness: 'opencode',
@@ -831,5 +928,21 @@ test('grok warning names both persona and broker MCP sources when both are prese
   });
   assert.deepEqual(result.warnings, [
     'persona declares mcpServers and broker requested relaycast MCP injection, but the grok harness is not yet wired for runtime MCP injection; proceeding without MCP.'
+  ]);
+});
+
+test('cursor warning names both persona and broker MCP sources when both are present', () => {
+  const result = buildInteractiveSpec({
+    harness: 'cursor',
+    personaId: 'p',
+    model: 'gpt-5',
+    systemPrompt: 'x',
+    mcpServers: {
+      posthog: { type: 'http', url: 'https://mcp.posthog.com/mcp' }
+    },
+    relayMcp: { apiKey: 'wk_live_abc', agentName: 'Cursor1' }
+  });
+  assert.deepEqual(result.warnings, [
+    'persona declares mcpServers and broker requested relaycast MCP injection, but the cursor harness is not yet wired for runtime MCP injection; proceeding without MCP.'
   ]);
 });

@@ -102,6 +102,26 @@ function writeStandaloneCodexPersona(workforceHome: string, id = 'local-codex'):
   return id;
 }
 
+function writeStandaloneCursorPersona(workforceHome: string, id = 'local-cursor'): string {
+  const personaDir = join(workforceHome, 'personas');
+  mkdirSync(personaDir, { recursive: true });
+  writeFileSync(
+    join(personaDir, `${id}.json`),
+    JSON.stringify({
+      id,
+      intent: 'review',
+      tags: ['review'],
+      description: 'Local no-skill cursor persona for CLI subprocess tests.',
+      harness: 'cursor',
+      model: 'test-cursor',
+      systemPrompt: 'Run the local cursor test harness.',
+      harnessSettings: { reasoning: 'medium', timeoutSeconds: 30 }
+    }),
+    'utf8'
+  );
+  return id;
+}
+
 test('parseAgentArgs: --install-in-repo sets flag and preserves positional selector', () => {
   const { flags, positional } = parseAgentArgs(['--install-in-repo', 'local-codex@best']);
   assert.equal(flags.installInRepo, true);
@@ -409,6 +429,11 @@ test('decideCleanMode: grok defaults to mount', () => {
   assert.deepEqual(decideCleanMode('grok', true), { useClean: false });
 });
 
+test('decideCleanMode: cursor defaults to mount', () => {
+  assert.deepEqual(decideCleanMode('cursor'), { useClean: true });
+  assert.deepEqual(decideCleanMode('cursor', true), { useClean: false });
+});
+
 test('formatSandboxMountReadyMessage: appends mount metrics when available', () => {
   assert.equal(
     formatSandboxMountReadyMessage('/tmp/mount', {
@@ -539,6 +564,7 @@ test('SKILL_INSTALL_IGNORED_PATTERNS: keeps skill-install artifacts out of the r
   assert.deepEqual([...SKILL_INSTALL_IGNORED_PATTERNS], [
     '.agents',
     '.claude/skills',
+    '.cursor/rules',
     '.factory/skills',
     '.grok/skills',
     '.kiro/skills',
@@ -593,6 +619,24 @@ test('buildRelayfileMountPatterns: merges Relayfile dotfiles with built-in claud
       '*',
       '!app/**'
     ]);
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test('buildRelayfileMountPatterns: cursor hides root memory files it reads', () => {
+  const dir = mkdtempSync(join(tmpdir(), 'aw-cursor-patterns-'));
+  try {
+    const patterns = buildRelayfileMountPatterns({
+      projectDir: dir,
+      personaId: 'cursor-persona',
+      harness: 'cursor'
+    });
+
+    assert.ok(patterns.ignoredPatterns.includes('AGENTS.md'));
+    assert.ok(patterns.ignoredPatterns.includes('.cursor/rules'));
+    assert.ok(patterns.ignoredPatterns.includes('CLAUDE.md'));
+    assert.ok(patterns.ignoredPatterns.includes('CLAUDE.local.md'));
   } finally {
     rmSync(dir, { recursive: true, force: true });
   }
@@ -1115,6 +1159,23 @@ test('loadSidecarForSelection: grok picks agentsMd, not claudeMd', () => {
   assert.equal(sidecar?.personaContent, '# agents\n');
 });
 
+test('loadSidecarForSelection: cursor picks agentsMd, not claudeMd', () => {
+  const selection = {
+    personaId: 'p',
+    harness: 'cursor' as const,
+    model: 'gpt-5',
+    systemPrompt: 'X',
+    harnessSettings: { reasoning: 'medium' as const, timeoutSeconds: 300 },
+    skills: [],
+    rationale: 'test',
+    claudeMdContent: '# claude\n',
+    agentsMdContent: '# agents\n'
+  };
+  const { sidecar } = loadSidecarForSelection(selection);
+  assert.equal(sidecar?.mountFile, 'AGENTS.md');
+  assert.equal(sidecar?.personaContent, '# agents\n');
+});
+
 test('main: codex sessions engage the sandbox mount by default', async () => {
   const root = mkdtempSync(join(tmpdir(), 'aw-cli-mount-'));
   try {
@@ -1153,6 +1214,42 @@ test('main: codex --install-in-repo disengages the sandbox mount', async () => {
     );
   } finally {
     rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test('main: cursor --install-in-repo passes systemPrompt as an initial prompt fallback', async () => {
+  const dir = mkdtempSync(join(tmpdir(), 'aw-cli-cursor-no-mount-'));
+  try {
+    const cursorAgent = join(dir, 'cursor-agent');
+    writeFileSync(
+      cursorAgent,
+      `#!/usr/bin/env node
+process.stderr.write(JSON.stringify(process.argv.slice(2)));
+process.exit(0);
+`,
+      'utf8'
+    );
+    chmodSync(cursorAgent, 0o755);
+
+    const workforceHome = join(dir, '.agentworkforce', 'workforce');
+    const personaId = writeStandaloneCursorPersona(workforceHome);
+    const { stderr, exitCode } = await runCliCapturingStderr(
+      ['agent', `${personaId}`, '--install-in-repo'],
+      {
+        PATH: `${dir}:${process.env.PATH ?? ''}`,
+        AGENT_WORKFORCE_HOME: workforceHome,
+        AGENTWORKFORCE_LAUNCH_METADATA: '0'
+      }
+    );
+
+    assert.equal(exitCode, 0);
+    assert.match(stderr, /cannot safely materialize Cursor AGENTS\.md/);
+    assert.match(
+      stderr,
+      /\["--model","test-cursor","Run the local cursor test harness\."\]/
+    );
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
   }
 });
 

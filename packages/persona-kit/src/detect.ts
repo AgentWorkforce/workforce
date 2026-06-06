@@ -5,6 +5,14 @@ import { delimiter, join } from 'node:path';
 import { HARNESS_VALUES } from './constants.js';
 import type { Harness } from './types.js';
 
+const HARNESS_BINARIES: Record<Harness, string> = {
+  claude: 'claude',
+  codex: 'codex',
+  opencode: 'opencode',
+  grok: 'grok',
+  cursor: 'cursor-agent'
+};
+
 /**
  * Result of probing a harness binary on the caller's machine.
  *
@@ -50,11 +58,12 @@ export function detectHarness(
   options: { timeoutMs?: number } = {}
 ): HarnessAvailability {
   const timeoutMs = options.timeoutMs ?? 3000;
-  const path = findOnPath(harness);
+  const bin = HARNESS_BINARIES[harness];
+  const path = findOnPath(bin);
   if (!path) {
     return { harness, available: false, error: 'not found on PATH' };
   }
-  const res = spawnSync(harness, ['--version'], {
+  const res = spawnSync(bin, ['--version'], {
     timeout: timeoutMs,
     encoding: 'utf8',
     shell: false

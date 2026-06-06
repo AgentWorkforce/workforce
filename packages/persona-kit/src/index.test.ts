@@ -48,6 +48,10 @@ test('grok is a recognized harness value', () => {
   assert.ok(HARNESS_VALUES.includes('grok'));
 });
 
+test('cursor is a recognized harness value', () => {
+  assert.ok(HARNESS_VALUES.includes('cursor'));
+});
+
 test('HARNESS_SKILL_TARGETS covers every harness value', () => {
   for (const harness of HARNESS_VALUES) {
     const target = HARNESS_SKILL_TARGETS[harness];
@@ -103,6 +107,18 @@ test('materializeSkills routes grok skills to .grok/skills via --as grok', () =>
   assert.deepEqual([...install.cleanupPaths], ['.grok/skills/npm-trusted-publishing']);
 });
 
+test('materializeSkills routes cursor skills to .cursor/rules via --as cursor', () => {
+  const plan = materializeSkills([prpmSkill], 'cursor');
+  const [install] = plan.installs;
+  assert.deepEqual(
+    [...install.installCommand],
+    ['npx', '-y', 'prpm', 'install', '@prpm/npm-trusted-publishing', '--as', 'cursor']
+  );
+  assert.equal(install.installedDir, '.cursor/rules/npm-trusted-publishing');
+  assert.equal(install.installedManifest, '.cursor/rules/npm-trusted-publishing/SKILL.md');
+  assert.deepEqual([...install.cleanupPaths], ['.cursor/rules/npm-trusted-publishing']);
+});
+
 test('materializeSkills emits a skill.sh install for a github#skill source', () => {
   const plan = materializeSkills([skillShSkill], 'claude');
 
@@ -130,6 +146,7 @@ test('materializeSkills emits a skill.sh install for a github#skill source', () 
     [
       '.agents/skills/find-skills',
       '.claude/skills/find-skills',
+      '.cursor/rules/find-skills',
       '.factory/skills/find-skills',
       '.grok/skills/find-skills',
       '.kiro/skills/find-skills',
