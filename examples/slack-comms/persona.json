@@ -15,11 +15,6 @@
       "description": "Canonical relayfile mount + writeback recipe. Read for the mount layout (.integrations/...), the writeback-as-files contract, writeback status/retry commands, and the creds/cloud-mount gotchas this persona depends on to read inbound events and post replies."
     },
     {
-      "id": "@agent-relay/using-agent-relay",
-      "source": "@agent-relay/using-agent-relay",
-      "description": "Participant-side Relaycast reference. Read for how a registered agent messages peers in the engineering team's #general channel: posting, threading, reactions, and reading the inbox when relaying a human message inbound."
-    },
-    {
       "id": "@agent-relay/orchestrating-agent-relay",
       "source": "@agent-relay/orchestrating-agent-relay",
       "description": "Outside-the-team relay reference. Read for CLI-first reading of team state and how milestones/decisions/blockers surface across the team, so the liaison reports the right signal to humans without driving implementation."
