@@ -15,6 +15,16 @@
       "description": "Canonical relayfile mount + writeback recipe. Read for the mount layout (.integrations/...), the writeback-as-files contract, writeback status/retry commands, and the creds/cloud-mount gotchas this persona depends on to read inbound events and post replies."
     },
     {
+      "id": "@agent-relay/workspace-layout",
+      "source": "@agent-relay/workspace-layout",
+      "description": "How to navigate a relayfile mount instead of guessing paths: start from <mount>/LAYOUT.md and <provider>/.layout.md, then use the by-title/, by-id/, by-name/, by-edited/<date>/, by-state/ alias subtrees and the <identifier>__<uuid> filename convention. Core to locating Slack channels/threads/messages this persona reads."
+    },
+    {
+      "id": "@agent-relay/writeback-as-files",
+      "source": "@agent-relay/writeback-as-files",
+      "description": "The file-creation writeback contract this persona posts replies with: drop JSON at the canonical path to trigger the provider mutation, discover paths/schemas via .schema.json siblings, set idempotency keys, check delivery with relayfile writeback list / relayfile status, and recover dead-lettered writes under .relay/dead-letter/."
+    },
+    {
       "id": "@agent-relay/orchestrating-agent-relay",
       "source": "@agent-relay/orchestrating-agent-relay",
       "description": "Outside-the-team relay reference. Read for CLI-first reading of team state and how milestones/decisions/blockers surface across the team, so the liaison reports the right signal to humans without driving implementation."

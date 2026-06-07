@@ -32,11 +32,17 @@ Connect Slack through relayfile first so the `.integrations/slack/...` mount and
 
 ## Skills
 
-The persona pulls its three operating skills from published collections (not
+The persona pulls its operating skills from published collections (not
 repo-local file paths), so a launch never hard-fails on a missing sidecar:
 
 - `@agent-relay/setting-up-relayfile` — the relayfile mount + writeback-as-files
   recipe (mount layout, writeback status/retry, creds/cloud-mount gotchas).
+- `@agent-relay/workspace-layout` — navigate a mount via `LAYOUT.md` /
+  `.layout.md` and the `by-title/` `by-id/` `by-name/` alias subtrees instead of
+  guessing paths, to locate Slack channels/threads/messages.
+- `@agent-relay/writeback-as-files` — the drop-JSON-at-the-canonical-path
+  writeback contract: `.schema.json` discovery, idempotency keys, `relayfile
+  writeback list` / `status`, and `.relay/dead-letter/` recovery.
 - `@agent-relay/orchestrating-agent-relay` — outside-the-team relay reference
   for CLI-first reading of team state (milestones / decisions / blockers).
 - `@agent-workforce/persona-relayfile-mount` — mount-field policy (allow-list

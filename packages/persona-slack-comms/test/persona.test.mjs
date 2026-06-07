@@ -55,9 +55,11 @@ test('skills are remotely sourced (no repo-local path that hard-fails launch)', 
   }
 });
 
-test('the three comms skills resolve to their published packages (no using-agent-relay)', () => {
+test('the comms skills resolve to their published packages (no using-agent-relay)', () => {
   const expected = [
     '@agent-relay/setting-up-relayfile',
+    '@agent-relay/workspace-layout',
+    '@agent-relay/writeback-as-files',
     '@agent-relay/orchestrating-agent-relay',
     '@agent-workforce/persona-relayfile-mount',
   ];
