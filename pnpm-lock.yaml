@@ -110,6 +110,8 @@ importers:
 
   packages/persona-nango-integrations: {}
 
+  packages/persona-slack-comms: {}
+
   packages/personas-core: {}
 
   packages/runtime:
