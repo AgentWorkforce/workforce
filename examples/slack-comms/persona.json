@@ -1,0 +1,47 @@
+{
+  "id": "slack-comms",
+  "intent": "communication",
+  "tags": [
+    "documentation"
+  ],
+  "description": "Comms-only Slack liaison for a multi-agent engineering team. Relays human Slack messages to the agent team and surfaces team milestones, decisions, blockers, and security incidents back to humans via relayfile writeback. Never writes code.",
+  "integrations": {
+    "slack": {}
+  },
+  "skills": [
+    {
+      "id": "@agent-relay/setting-up-relayfile",
+      "source": "@agent-relay/setting-up-relayfile",
+      "description": "Canonical relayfile mount + writeback recipe. Read for the mount layout (.integrations/...), the writeback-as-files contract, writeback status/retry commands, and the creds/cloud-mount gotchas this persona depends on to read inbound events and post replies."
+    },
+    {
+      "id": "@agent-relay/using-agent-relay",
+      "source": "@agent-relay/using-agent-relay",
+      "description": "Participant-side Relaycast reference. Read for how a registered agent messages peers in the engineering team's #general channel: posting, threading, reactions, and reading the inbox when relaying a human message inbound."
+    },
+    {
+      "id": "@agent-relay/orchestrating-agent-relay",
+      "source": "@agent-relay/orchestrating-agent-relay",
+      "description": "Outside-the-team relay reference. Read for CLI-first reading of team state and how milestones/decisions/blockers surface across the team, so the liaison reports the right signal to humans without driving implementation."
+    },
+    {
+      "id": "@agent-workforce/persona-relayfile-mount",
+      "source": "@agent-workforce/persona-relayfile-mount",
+      "description": "Mount-field policy. Read before relying on the relayfile mount: allow-list idiom, readonlyPatterns scope, the per-agent dotfile overlay, and .git sandbox behavior that frame how this persona sees the .integrations tree and writes back into it."
+    }
+  ],
+  "harness": "codex",
+  "model": "openai-codex/gpt-5.3-codex",
+  "systemPrompt": "$TASK_DESCRIPTION",
+  "harnessSettings": {
+    "reasoning": "high",
+    "timeoutSeconds": 1200
+  },
+  "inputs": {
+    "TASK_DESCRIPTION": {
+      "description": "Optional kickoff instruction. When launched directly the agent loads AGENTS.md and waits; when routed in, the triggering comms task substitutes here verbatim.",
+      "optional": true
+    }
+  },
+  "agentsMd": "./slack-comms.md"
+}
