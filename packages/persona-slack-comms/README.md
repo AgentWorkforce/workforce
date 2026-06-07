@@ -76,7 +76,7 @@ console.log(persona.id); // slack-comms
 
 ## Publishing
 
-Published via the `Publish Persona Package` GitHub workflow
-(`.github/workflows/publish-persona.yml`) using npm **provenance** (trusted
-publishing). The workflow publishes all `@agentworkforce/persona-*` packs by
-default, or a single one via the `package` input.
+Published via the `Publish Internal Persona Packs` GitHub workflow
+(`.github/workflows/publish-internal-personas.yml`) using npm **provenance**
+(trusted publishing). The workflow publishes all `@agentworkforce/persona-*`
+packs by default, or one or more selected packs via the `package` input.
