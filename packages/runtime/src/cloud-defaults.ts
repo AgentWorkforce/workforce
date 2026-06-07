@@ -635,7 +635,6 @@ function createProcessHarnessRunner(args: CloudDefaultOptions & {
   };
 }
 
-
 /**
  * Resolve the ai-hist MCP config. Only called when the persona opts into recall
  * via `memory.aiMemory`. The "why" read-root mirrors the runtime recorder's
@@ -657,7 +656,6 @@ function resolveAiHistFromEnv(
     ...(dbPath ? { dbPath } : {})
   };
 }
-
 
 async function materializeSidecar(args: {
   persona: PersonaSpec;
