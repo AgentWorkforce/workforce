@@ -1,6 +1,6 @@
 {
   "id": "slack-comms",
-  "intent": "communication",
+  "intent": "agent-relay-workflow",
   "tags": [
     "documentation"
   ],

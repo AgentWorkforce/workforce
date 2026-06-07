@@ -17,7 +17,8 @@ out-of-band relayfile read used to recover dropped or degraded inbound events
 ## Run
 
 ```bash
-agentworkforce agent ./examples/slack-comms/persona.json
+agentworkforce sources add ./examples/slack-comms
+agentworkforce agent slack-comms
 ```
 
 Connect Slack through relayfile first so the `.integrations/slack/...` mount and
