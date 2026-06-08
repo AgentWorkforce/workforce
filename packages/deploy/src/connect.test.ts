@@ -576,6 +576,63 @@ test('relayfileIntegrationResolver connects github via existing org installation
   );
 });
 
+test('relayfileIntegrationResolver github installation flow reads the latest workspace token while polling', async () => {
+  let token = 'initial-token';
+  const authHeaders: string[] = [];
+  const resolver = relayfileIntegrationResolver({
+    apiUrl: 'https://cloud.example.test',
+    workspaceId: 'ws-1',
+    workspaceToken: () => token,
+    pollIntervalMs: 0,
+    timeoutMs: 100,
+    openUrl: () => undefined,
+    sleep: async () => {
+      token = 'refreshed-token';
+    },
+    fetch: async (input, init) => {
+      const url = input.toString();
+      authHeaders.push(String(new Headers(init?.headers).get('authorization')));
+      if (url.endsWith('/integrations/connect-session')) {
+        return okJson({
+          connectLink: 'https://connect.example.test/github-oauth',
+          connectionId: 'conn-oauth',
+          githubInstallationFlow: {
+            enabled: true
+          }
+        });
+      }
+      if (url.endsWith('/integrations/github/reconcile')) {
+        return okJson({
+          matches: [
+            {
+              installationId: '9001',
+              accountLogin: 'Acme',
+              accountType: 'Organization',
+              suspended: false
+            }
+          ]
+        });
+      }
+      if (url.endsWith('/integrations/github/join')) {
+        return okJson({
+          outcome: 'joined',
+          landingWorkspace: { id: 'ws-acme' }
+        });
+      }
+      throw new Error(`unexpected URL ${url}`);
+    }
+  });
+
+  assert.deepEqual(await resolver.connect({ workspace: 'ws-runtime', provider: 'github' }), {
+    connectionId: 'github-installation:9001'
+  });
+  assert.deepEqual(authHeaders, [
+    'Bearer initial-token',
+    'Bearer refreshed-token',
+    'Bearer refreshed-token'
+  ]);
+});
+
 test('relayfileIntegrationResolver connect resolves when OAuth completes at workspace scope', async () => {
   const opened: string[] = [];
   const statusUrls: string[] = [];

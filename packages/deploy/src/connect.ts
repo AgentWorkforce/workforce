@@ -234,7 +234,7 @@ const fallbackSource = workspaceFallbackSource(
         const inherited = await tryConnectExistingGithubInstallation({
           fetchImpl,
           apiUrl,
-          token,
+          workspaceToken: opts.workspaceToken,
           workspaceId,
           session,
           sessionUrl,
@@ -428,7 +428,7 @@ function readGithubInstallationFlow(session: unknown): GithubInstallationFlow | 
 async function tryConnectExistingGithubInstallation(args: {
   fetchImpl: typeof fetch;
   apiUrl: string;
-  token: string;
+  workspaceToken: string | (() => string | Promise<string>);
   workspaceId: string;
   session: unknown;
   sessionUrl: string | undefined;
@@ -457,7 +457,8 @@ async function tryConnectExistingGithubInstallation(args: {
   const deadline = Date.now() + (args.timeoutMs ?? 5 * 60_000);
   while (Date.now() < deadline) {
     await args.sleep(args.pollIntervalMs ?? 2_000);
-    const reconcile = await readGithubReconcile(args, oauthConnectionId);
+    const token = await resolveWorkspaceToken(args.workspaceToken);
+    const reconcile = await readGithubReconcile({ ...args, token }, oauthConnectionId);
     if (!reconcile) continue;
 
     const match = reconcile.matches?.find((candidate) => (
@@ -465,10 +466,14 @@ async function tryConnectExistingGithubInstallation(args: {
     ));
     if (!match) return undefined;
 
-    const join = await postGithubJoin(args, {
-      installationId: match.installationId,
-      oauthConnectionId
-    });
+    const joinToken = await resolveWorkspaceToken(args.workspaceToken);
+    const join = await postGithubJoin(
+      { ...args, token: joinToken },
+      {
+        installationId: match.installationId,
+        oauthConnectionId
+      }
+    );
     if (join.outcome === 'joined' || join.outcome === 'already_member') {
       const destination = join.landingWorkspace?.name
         ?? join.landingWorkspace?.slug
