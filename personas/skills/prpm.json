@@ -53,39 +53,6 @@
         "agents-md"
       ],
       "files": ["persona-sidecars/SKILL.md"]
-    },
-    {
-      "name": "slack-relayfile-writeback-debugging",
-      "version": "1.0.0",
-      "description": "Use when an outbound Slack writeback (channel/thread/DM) silently fails to deliver — the relayfile ops-API getOp recipe (with the required X-Correlation-Id) to read the persisted lastError, where the Slack error surfaces (NOT the batch consumer logs), the missing_scope/im:write 3-place fix, cf-vs-bridge dispatch, and duplicate/silent-send pitfalls",
-      "format": "claude",
-      "subtype": "skill",
-      "tags": [
-        "agentworkforce",
-        "slack",
-        "relayfile",
-        "cloud",
-        "writeback",
-        "debugging"
-      ],
-      "files": ["slack-relayfile-writeback-debugging/SKILL.md"]
-    },
-    {
-      "name": "slack-relayfile-readdown-debugging",
-      "version": "1.0.0",
-      "description": "Use when inbound Slack content (channel/thread/DM) doesn't read down to disk or a preview says 'unavailable' — reading mount sync state, write-only-vs-mirror mounts, the bare-vs-suffixed channel-id drop, the preview two-shape gap, mount wedges, and the relayfile#262 backfill trap",
-      "format": "claude",
-      "subtype": "skill",
-      "tags": [
-        "agentworkforce",
-        "slack",
-        "relayfile",
-        "cloud",
-        "sync",
-        "mount",
-        "debugging"
-      ],
-      "files": ["slack-relayfile-readdown-debugging/SKILL.md"]
     }
   ]
 }
