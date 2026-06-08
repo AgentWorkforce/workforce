@@ -44,14 +44,15 @@ test('trajectory + ai-memory facets are explicitly enabled (opt-in)', () => {
   );
 });
 
-test('agentsMd sidecar is referenced and shipped alongside the persona JSON', () => {
-  assert.equal(persona.agentsMd, './slack-relayfile-doctor.md');
+test('claudeMd sidecar is referenced and shipped alongside the persona JSON', () => {
+  assert.equal(persona.claudeMd, './slack-relayfile-doctor.md');
   const sidecarPath = join(personasDir, 'slack-relayfile-doctor.md');
   assert.ok(existsSync(sidecarPath), 'slack-relayfile-doctor.md sidecar exists in personas/');
   const sidecar = readFileSync(sidecarPath, 'utf8');
   assert.ok(sidecar.startsWith('# slack-relayfile-doctor'));
   assert.ok(sidecar.includes('Diagnostic toolkit'));
   assert.equal(persona.claudeMdContent, undefined);
+  assert.equal(persona.agentsMd, undefined);
 });
 
 test('skills are remotely sourced (no repo-local path that hard-fails launch)', () => {

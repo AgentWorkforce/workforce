@@ -22,7 +22,7 @@
   },
   "harnessSettings": { "reasoning": "high", "timeoutSeconds": 900 },
   "inputs": {
-    "TASK_DESCRIPTION": { "description": "Optional kickoff: the symptom to diagnose (dropped Slack event, mount not reading down, writeback not delivering, DM-send failing). When launched directly the agent loads AGENTS.md and waits.", "optional": true }
+    "TASK_DESCRIPTION": { "description": "Optional kickoff: the symptom to diagnose (dropped Slack event, mount not reading down, writeback not delivering, DM-send failing). When launched directly the agent loads CLAUDE.md and waits.", "optional": true }
   },
-  "agentsMd": "./slack-relayfile-doctor.md"
+  "claudeMd": "./slack-relayfile-doctor.md"
 }

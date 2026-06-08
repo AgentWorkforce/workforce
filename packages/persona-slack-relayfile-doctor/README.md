@@ -39,7 +39,7 @@ The persona's playbook (`personas/slack-relayfile-doctor.md`) encodes:
 ```
 personas/
   slack-relayfile-doctor.json   # persona spec (id, skills, harness, model, memory)
-  slack-relayfile-doctor.md     # agentsMd playbook (source of truth for the knowledge)
+  slack-relayfile-doctor.md     # claudeMd playbook (source of truth for the knowledge)
 index.js / index.d.ts           # compatibility export of the persona JSON
 ```
 

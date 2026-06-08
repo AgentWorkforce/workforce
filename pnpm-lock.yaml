@@ -112,6 +112,8 @@ importers:
 
   packages/persona-slack-comms: {}
 
+  packages/persona-slack-relayfile-doctor: {}
+
   packages/personas-core: {}
 
   packages/runtime:

@@ -9,7 +9,7 @@ const require = createRequire(import.meta.url);
  * the relayfile ops API, prod logs), and prescribes the fix to the owning repo.
  *
  * Source of truth: `personas/slack-relayfile-doctor.json` (with its
- * `slack-relayfile-doctor.md` agentsMd sidecar). This compatibility export
+ * `slack-relayfile-doctor.md` claudeMd sidecar). This compatibility export
  * keeps programmatic consumers working while the package also acts as an
  * AgentWorkforce installable persona pack.
  */

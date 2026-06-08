@@ -22,7 +22,7 @@ export interface SlackRelayfileDoctorPersona {
   systemPrompt: string;
   harnessSettings: Record<string, unknown>;
   inputs: Record<string, PersonaInput>;
-  agentsMd: string;
+  claudeMd: string;
   memory?: Record<string, unknown>;
 }
 
