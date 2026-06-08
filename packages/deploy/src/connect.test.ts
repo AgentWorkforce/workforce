@@ -498,6 +498,84 @@ test('relayfileIntegrationResolver connect opens a session and polls until conne
   assert.ok(io.messages.some((message) => message.message.includes('notion connected')));
 });
 
+test('relayfileIntegrationResolver connects github via existing org installation without fresh install', async () => {
+  const opened: string[] = [];
+  const connectBodies: unknown[] = [];
+  const io = createBufferedIO();
+  const resolver = relayfileIntegrationResolver({
+    apiUrl: 'https://cloud.example.test',
+    workspaceId: 'ws-1',
+    workspaceToken: 'tok',
+    io,
+    pollIntervalMs: 0,
+    timeoutMs: 100,
+    openUrl: (url) => {
+      opened.push(url);
+    },
+    sleep: async () => undefined,
+    fetch: async (input, init) => {
+      const url = input.toString();
+      if (url.endsWith('/integrations/connect-session')) {
+        connectBodies.push(JSON.parse(String(init?.body)));
+        return okJson({
+          connectLink: 'https://connect.example.test/github-oauth',
+          connectionId: 'conn-oauth',
+          githubInstallationFlow: {
+            enabled: true,
+            oauthProviderConfigKey: 'github-oauth-relay',
+            installProviderConfigKey: 'github-relay'
+          }
+        });
+      }
+      if (url.endsWith('/integrations/github/reconcile')) {
+        assert.deepEqual(JSON.parse(String(init?.body)), {
+          oauthConnectionId: 'conn-oauth'
+        });
+        return okJson({
+          matches: [
+            {
+              installationId: '9001',
+              accountLogin: 'Acme',
+              accountType: 'Organization',
+              suspended: false
+            }
+          ],
+          fallthrough: 'github-relay'
+        });
+      }
+      if (url.endsWith('/integrations/github/join')) {
+        assert.deepEqual(JSON.parse(String(init?.body)), {
+          installationId: '9001',
+          oauthConnectionId: 'conn-oauth'
+        });
+        return okJson({
+          action: 'join',
+          outcome: 'already_member',
+          landingWorkspace: { id: 'ws-acme', slug: 'default', name: 'Acme Default' }
+        });
+      }
+      throw new Error(`unexpected URL ${url}`);
+    }
+  });
+
+  assert.deepEqual(await resolver.connect({ workspace: 'ws-runtime', provider: 'github' }), {
+    connectionId: 'github-installation:9001'
+  });
+  assert.deepEqual(opened, ['https://connect.example.test/github-oauth']);
+  assert.deepEqual(connectBodies, [
+    {
+      allowedIntegrations: ['github'],
+      scope: { kind: 'deployer_user' },
+      githubInstallationFlow: true
+    }
+  ]);
+  assert.ok(
+    io.messages.some((message) =>
+      message.message.includes('already connected via Acme')
+    )
+  );
+});
+
 test('relayfileIntegrationResolver connect resolves when OAuth completes at workspace scope', async () => {
   const opened: string[] = [];
   const statusUrls: string[] = [];
@@ -775,7 +853,13 @@ test('relayfileIntegrationResolver connect defaults to deployer_user when source
     }
   });
   await resolver.connect({ workspace: 'ws-1', provider: 'github' });
-  assert.deepEqual(bodies, [{ allowedIntegrations: ['github'], scope: { kind: 'deployer_user' } }]);
+  assert.deepEqual(bodies, [
+    {
+      allowedIntegrations: ['github'],
+      scope: { kind: 'deployer_user' },
+      githubInstallationFlow: true
+    }
+  ]);
 });
 
 test('relayfileIntegrationResolver connect turns 409 unknown_provider into a "did you mean" error', async () => {
