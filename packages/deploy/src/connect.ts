@@ -194,7 +194,10 @@ const fallbackSource = workspaceFallbackSource(
       // dispatcher reads at tick time.
       const sessionBody = {
         allowedIntegrations: [provider],
-        scope: scopeRequest(effectiveSource)
+        scope: scopeRequest(effectiveSource),
+        ...(provider === 'github' && effectiveSource.kind === 'deployer_user'
+          ? { githubInstallationFlow: true }
+          : {})
       };
       let session: unknown;
       try {
@@ -226,14 +229,46 @@ const fallbackSource = workspaceFallbackSource(
       const sessionUrl = readString(session, 'sessionUrl')
         ?? readString(session, 'connectLink')
         ?? readString(session, 'url');
-      if (!sessionUrl) {
+      const githubFlow = readGithubInstallationFlow(session);
+      if (provider === 'github' && githubFlow?.enabled === true) {
+        const inherited = await tryConnectExistingGithubInstallation({
+          fetchImpl,
+          apiUrl,
+          workspaceToken: opts.workspaceToken,
+          workspaceId,
+          session,
+          sessionUrl,
+          flow: githubFlow,
+          io,
+          openUrl: opts.openUrl,
+          sleep: sleepImpl,
+          pollIntervalMs: opts.pollIntervalMs,
+          timeoutMs: opts.timeoutMs
+        });
+        if (inherited) return inherited;
+
+        const installToken = await resolveWorkspaceToken(opts.workspaceToken);
+        session = await requestJson(fetchImpl, `${apiUrl}/api/v1/workspaces/${encodeURIComponent(
+          workspaceId
+        )}/integrations/connect-session`, installToken, {
+          method: 'POST',
+          body: JSON.stringify({
+            allowedIntegrations: [githubFlow.installProviderConfigKey || provider],
+            scope: scopeRequest(effectiveSource)
+          })
+        });
+      }
+      const installSessionUrl = readString(session, 'sessionUrl')
+        ?? readString(session, 'connectLink')
+        ?? readString(session, 'url');
+      if (!installSessionUrl) {
         throw new Error(`integration ${provider} connect-session did not return a session URL`);
       }
       const sessionId = readString(session, 'sessionId') ?? readString(session, 'connectionId');
       const sessionConfigKey = readProviderConfigKey(session);
-      io?.info(`Connecting ${provider}: opening ${sessionUrl}`);
+      io?.info(`Connecting ${provider}: opening ${installSessionUrl}`);
       try {
-        await (opts.openUrl ?? openBrowser)(sessionUrl);
+        await (opts.openUrl ?? openBrowser)(installSessionUrl);
       } catch (err) {
         io?.warn?.(`Could not open browser automatically: ${err instanceof Error ? err.message : String(err)}`);
       }
@@ -355,6 +390,150 @@ function scopeRequest(
     return { kind: 'workspace_service_account', name: source.name };
   }
   return { kind: source.kind };
+}
+
+interface GithubInstallationFlow {
+  enabled: true;
+  oauthProviderConfigKey?: string;
+  installProviderConfigKey?: string;
+}
+
+interface GithubInstallationMatch {
+  installationId: string;
+  accountLogin?: string | null;
+  accountType?: string | null;
+  suspended?: boolean;
+}
+
+interface GithubReconcileResponse {
+  matches?: GithubInstallationMatch[];
+}
+
+interface GithubJoinResponse {
+  outcome?: string;
+  landingWorkspace?: { id?: string; slug?: string | null; name?: string | null } | null;
+}
+
+function readGithubInstallationFlow(session: unknown): GithubInstallationFlow | undefined {
+  if (!session || typeof session !== 'object' || Array.isArray(session)) return undefined;
+  const flow = (session as { githubInstallationFlow?: unknown }).githubInstallationFlow;
+  if (!flow || typeof flow !== 'object' || Array.isArray(flow)) return undefined;
+  if ((flow as { enabled?: unknown }).enabled !== true) return undefined;
+  return {
+    enabled: true,
+    oauthProviderConfigKey: readString(flow, 'oauthProviderConfigKey'),
+    installProviderConfigKey: readString(flow, 'installProviderConfigKey')
+  };
+}
+
+async function tryConnectExistingGithubInstallation(args: {
+  fetchImpl: typeof fetch;
+  apiUrl: string;
+  workspaceToken: string | (() => string | Promise<string>);
+  workspaceId: string;
+  session: unknown;
+  sessionUrl: string | undefined;
+  flow: GithubInstallationFlow;
+  io?: Pick<DeployIO, 'info' | 'warn'>;
+  openUrl?: (url: string) => void | Promise<void>;
+  sleep: (ms: number) => Promise<void>;
+  pollIntervalMs?: number;
+  timeoutMs?: number;
+}): Promise<{ connectionId: string } | undefined> {
+  if (!args.sessionUrl) {
+    throw new Error('GitHub user authorization session did not return a session URL');
+  }
+  const oauthConnectionId = readString(args.session, 'connectionId') ?? readString(args.session, 'sessionId');
+  if (!oauthConnectionId) {
+    throw new Error('GitHub user authorization session did not return a connection id');
+  }
+
+  args.io?.info(`Connecting github: opening ${args.sessionUrl}`);
+  try {
+    await (args.openUrl ?? openBrowser)(args.sessionUrl);
+  } catch (err) {
+    args.io?.warn?.(`Could not open browser automatically: ${err instanceof Error ? err.message : String(err)}`);
+  }
+
+  const deadline = Date.now() + (args.timeoutMs ?? 5 * 60_000);
+  while (Date.now() < deadline) {
+    await args.sleep(args.pollIntervalMs ?? 2_000);
+    const token = await resolveWorkspaceToken(args.workspaceToken);
+    const reconcile = await readGithubReconcile({ ...args, token }, oauthConnectionId);
+    if (!reconcile) continue;
+
+    const match = reconcile.matches?.find((candidate) => (
+      candidate.accountType === 'Organization' && candidate.suspended !== true
+    ));
+    if (!match) return undefined;
+
+    const joinToken = await resolveWorkspaceToken(args.workspaceToken);
+    const join = await postGithubJoin(
+      { ...args, token: joinToken },
+      {
+        installationId: match.installationId,
+        oauthConnectionId
+      }
+    );
+    if (join.outcome === 'joined' || join.outcome === 'already_member') {
+      const destination = join.landingWorkspace?.name
+        ?? join.landingWorkspace?.slug
+        ?? join.landingWorkspace?.id
+        ?? 'the organization workspace';
+      args.io?.info(
+        `integrations.github: already connected via ${match.accountLogin ?? 'GitHub'}; using ${destination}`
+      );
+      return { connectionId: `github-installation:${match.installationId}` };
+    }
+    if (join.outcome === 'pending_approval') {
+      throw new Error(
+        `GitHub App is already installed for ${match.accountLogin ?? 'this organization'}, but joining is pending owner/admin approval.`
+      );
+    }
+    return undefined;
+  }
+
+  throw new Error('Timed out waiting for GitHub user authorization to complete.');
+}
+
+async function readGithubReconcile(
+  args: { fetchImpl: typeof fetch; apiUrl: string; token: string; workspaceId: string },
+  oauthConnectionId: string
+): Promise<GithubReconcileResponse | undefined> {
+  try {
+    return await requestJson(
+      args.fetchImpl,
+      `${args.apiUrl}/api/v1/workspaces/${encodeURIComponent(args.workspaceId)}/integrations/github/reconcile`,
+      args.token,
+      {
+        method: 'POST',
+        body: JSON.stringify({ oauthConnectionId })
+      }
+    ) as GithubReconcileResponse;
+  } catch (err) {
+    if (
+      isCloudRequestError(err) &&
+      (err.status === 409 || err.status === 502)
+    ) {
+      return undefined;
+    }
+    throw err;
+  }
+}
+
+async function postGithubJoin(
+  args: { fetchImpl: typeof fetch; apiUrl: string; token: string; workspaceId: string },
+  body: { installationId: string; oauthConnectionId: string }
+): Promise<GithubJoinResponse> {
+  return await requestJson(
+    args.fetchImpl,
+    `${args.apiUrl}/api/v1/workspaces/${encodeURIComponent(args.workspaceId)}/integrations/github/join`,
+    args.token,
+    {
+      method: 'POST',
+      body: JSON.stringify(body)
+    }
+  ) as GithubJoinResponse;
 }
 
 function providerHasEnvCredentials(provider: string): boolean {
