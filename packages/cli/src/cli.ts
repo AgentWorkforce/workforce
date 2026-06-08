@@ -62,6 +62,14 @@ import {
   type SkillMaterializationPlan
 } from '@agentworkforce/persona-kit';
 import {
+  claudeMcpConfigHasRelayOverride,
+  codexExistingArgs,
+  injectClaudeAgentRelayMcpConfig,
+  injectCodexSubcommandArgs,
+  resolveAgentRelayBrokerMcpArgs,
+  resolveRelayMcpFromEnv as resolveRelayMcpFromEnvShared
+} from '@agentworkforce/runtime';
+import {
   listBuiltInPersonas,
   personaCatalog,
   routingProfiles
@@ -534,27 +542,9 @@ function emitDropWarnings(lines: string[]): void {
  * relaycast wiring to inject into the harness's MCP config so the persona can
  * message the team — the same capability a non-persona broker spawn gets.
  *
- * The broker sets `RELAY_API_KEY` (+ optional `RELAY_BASE_URL` /
- * `RELAY_DEFAULT_WORKSPACE`) on every worker child, and the broker-assigned
- * worker name on `RELAY_AGENT_NAME`. Both the key and the name are required:
- * the name must match what the broker routes to so the relaycast identity and
- * the PTY worker are the same agent. Absent either, we're not under a broker
- * (or it's too old to expose the name) and return undefined — a plain
- * `agentworkforce agent` run is unaffected.
+ * Delegates to the shared `resolveRelayMcpFromEnv` in `@agentworkforce/runtime`.
  */
-function resolveRelayMcpFromEnv(env: NodeJS.ProcessEnv): RelayMcpConfig | undefined {
-  const apiKey = env.RELAY_API_KEY?.trim();
-  const agentName = env.RELAY_AGENT_NAME?.trim();
-  if (!apiKey || !agentName) return undefined;
-  const baseUrl = env.RELAY_BASE_URL?.trim();
-  const defaultWorkspace = env.RELAY_DEFAULT_WORKSPACE?.trim();
-  return {
-    apiKey,
-    agentName,
-    ...(baseUrl ? { baseUrl } : {}),
-    ...(defaultWorkspace ? { defaultWorkspace } : {})
-  };
-}
+const resolveRelayMcpFromEnv = resolveRelayMcpFromEnvShared;
 
 /**
  * Build the `ai-hist` MCP config for a session. Only called when the persona
@@ -1854,19 +1844,76 @@ async function runInteractive(
   const aiHist = aiMemory.enabled
     ? resolveAiHistConfig(process.env, aiMemory.dbPath)
     : undefined;
-  const spec = buildInteractiveSpec({
+  const brokerRelayHarness = relayMcp && (harness === 'claude' || harness === 'codex');
+  const specInput = {
     harness,
     personaId,
     model,
     systemPrompt,
     harnessSettings,
     mcpServers: resolvedMcp,
-    ...(relayMcp ? { relayMcp } : {}),
     ...(aiHist ? { aiHist } : {}),
     permissions: effectiveSelection.permissions,
     ...(installRoot !== undefined ? { pluginDirs: [installRoot] } : {})
+  };
+  const spec = buildInteractiveSpec({
+    ...specInput,
+    ...(relayMcp && !brokerRelayHarness ? { relayMcp } : {})
   });
   for (const w of spec.warnings) process.stderr.write(`warning: ${w}\n`);
+  let spawnArgs = [...spec.args];
+
+  // Broker-aware relay MCP injection: prefer the broker binary's `mcp-args
+  // --register` subcommand (pre-mints RELAY_AGENT_TOKEN, sets
+  // RELAY_SKIP_BOOTSTRAP=1) over the legacy `@relaycast/mcp` self-registration
+  // path. Falls back to @relaycast/mcp when the broker binary is unavailable.
+  const cliRelayLog = (level: 'debug' | 'info' | 'warn' | 'error', message: string, attrs?: Record<string, unknown>) => {
+    if (level === 'warn' || level === 'error') {
+      process.stderr.write(`warning: ${message}${attrs ? ` ${JSON.stringify(attrs)}` : ''}\n`);
+    }
+  };
+  if (relayMcp && harness === 'claude') {
+    if (claudeMcpConfigHasRelayOverride(spawnArgs)) {
+      process.stderr.write('• relay: persona overrides relay MCP config\n');
+    } else {
+      const brokerMcpArgs = await resolveAgentRelayBrokerMcpArgs({
+        cli: 'claude',
+        env: process.env,
+        relayMcp,
+        cwd: process.cwd(),
+        existingArgs: [],
+        log: cliRelayLog
+      });
+      const mergedArgs = brokerMcpArgs
+        ? injectClaudeAgentRelayMcpConfig(spawnArgs, brokerMcpArgs, cliRelayLog)
+        : undefined;
+      if (mergedArgs) {
+        spawnArgs = mergedArgs;
+        process.stderr.write('• relay: agent-relay (broker pre-registered)\n');
+      } else {
+        const fallbackSpec = buildInteractiveSpec({ ...specInput, relayMcp });
+        spawnArgs = [...fallbackSpec.args];
+        process.stderr.write('• relay: @relaycast/mcp (fallback)\n');
+      }
+    }
+  } else if (relayMcp && harness === 'codex') {
+    const brokerMcpArgs = await resolveAgentRelayBrokerMcpArgs({
+      cli: 'codex',
+      env: process.env,
+      relayMcp,
+      cwd: process.cwd(),
+      existingArgs: codexExistingArgs(spawnArgs),
+      log: cliRelayLog
+    });
+    if (brokerMcpArgs) {
+      spawnArgs = injectCodexSubcommandArgs(spawnArgs, brokerMcpArgs);
+      process.stderr.write('• relay: agent-relay (broker pre-registered)\n');
+    } else {
+      const fallbackSpec = buildInteractiveSpec({ ...specInput, relayMcp });
+      spawnArgs = [...fallbackSpec.args];
+      process.stderr.write('• relay: @relaycast/mcp (fallback)\n');
+    }
+  }
 
   // Config-file materialization strategy:
   //  - Mount path (default): write each configFile into the
@@ -1882,12 +1929,12 @@ async function runInteractive(
   //    default handles this cleanly).
   const hasConfigFiles = spec.configFiles.length > 0;
   const degradeConfigFiles = hasConfigFiles && !useClean;
-  let effectiveArgs: readonly string[] = spec.args;
+  let effectiveArgs: readonly string[] = spawnArgs;
   if (degradeConfigFiles) {
     process.stderr.write(
       'warning: --install-in-repo cannot safely materialize the persona agent config (would write opencode.json into your repo); launching without --agent. Drop --install-in-repo to apply the persona prompt.\n'
     );
-    effectiveArgs = stripAgentFlag(spec.args);
+    effectiveArgs = stripAgentFlag(spawnArgs);
   }
   const finalArgs = spec.initialPrompt ? [...effectiveArgs, spec.initialPrompt] : [...effectiveArgs];
 

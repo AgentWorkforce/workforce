@@ -107,6 +107,21 @@ export {
   SandboxNotAvailableError
 } from './clients/index.js';
 
+// Broker-aware relay MCP resolution. Shared between the cloud harness runner
+// (cloud-defaults.ts) and the local CLI (packages/cli). Callers use these to
+// resolve pre-registered agent-relay MCP args from the broker binary, falling
+// back to the legacy @relaycast/mcp injection when the broker is unavailable.
+export {
+  claudeMcpConfigHasRelayOverride,
+  codexExistingArgs,
+  injectClaudeAgentRelayMcpConfig,
+  injectCodexSubcommandArgs,
+  relayOverrideServerNames,
+  resolveAgentRelayBrokerMcpArgs,
+  resolveRelayMcpFromEnv,
+  type RelayMcpLog
+} from './relay-mcp.js';
+
 // Re-export persona-kit types personas commonly reference at the handler
 // surface, so users don't need a second import for the shapes the ctx
 // carries.
