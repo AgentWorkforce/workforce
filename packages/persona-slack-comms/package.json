@@ -1,6 +1,6 @@
 {
   "name": "@agentworkforce/persona-slack-comms",
-  "version": "0.1.1",
+  "version": "0.1.2",
   "description": "AgentWorkforce slack-comms persona pack — comms-only Slack liaison for a multi-agent engineering team: relays human Slack messages to the agent team and surfaces milestones, decisions, blockers, and security incidents back to humans via relayfile writeback. Install with `agentworkforce install`.",
   "type": "module",
   "main": "index.js",
