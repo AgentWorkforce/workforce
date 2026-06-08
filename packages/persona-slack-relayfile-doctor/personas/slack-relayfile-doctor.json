@@ -5,11 +5,8 @@
   "description": "Debugging specialist for the Slack <-> relayfile <-> cloud sync + writeback stack. Diagnoses inbound-event drops, mount read-down failures (channels/threads/DMs), writeback non-delivery, bare-vs-suffixed channel-id routing bugs, and OAuth scope gaps. Reads mounts, the relayfile ops API, and event logs; confirms a root cause with concrete evidence; reports the fix with file/PR pointers to the owning repo.",
   "integrations": { "slack": {} },
   "skills": [
-    { "id": "@agent-relay/setting-up-relayfile", "source": "@agent-relay/setting-up-relayfile", "description": "Mount + writeback recipe: .integrations layout, writeback-as-files contract, status/retry, creds/cloud-mount gotchas." },
-    { "id": "@agent-relay/workspace-layout", "source": "@agent-relay/workspace-layout", "description": "Navigate a mount via LAYOUT.md / .layout.md and by-title/by-id/by-name alias trees; the <identifier>__<uuid> filename convention central to bare-vs-suffixed bugs." },
-    { "id": "@agent-relay/writeback-as-files", "source": "@agent-relay/writeback-as-files", "description": "Drop-JSON writeback contract: .schema.json discovery, idempotency keys, relayfile writeback list/status, .relay/dead-letter recovery." },
-    { "id": "@agent-relay/orchestrating-agent-relay", "source": "@agent-relay/orchestrating-agent-relay", "description": "CLI-first reading of team + mount state for diagnosis." },
-    { "id": "@agent-workforce/persona-relayfile-mount", "source": "@agent-workforce/persona-relayfile-mount", "description": "Mount-field policy: allow-list idiom, readonlyPatterns scope, per-agent dotfile overlay, .git sandbox." }
+    { "id": "slack-relayfile-writeback-debugging", "source": "@agent-workforce/slack-relayfile-writeback-debugging", "description": "Diagnose outbound Slack writeback non-delivery: the ops-API getOp recipe (X-Correlation-Id required) to read lastError, where the Slack error surfaces, the missing_scope/im:write 3-place fix, cf-vs-bridge dispatch, duplicate/silent-send." },
+    { "id": "slack-relayfile-readdown-debugging", "source": "@agent-workforce/slack-relayfile-readdown-debugging", "description": "Diagnose inbound Slack read-down failures: mount sync state, write-only-vs-mirror mounts, bare-vs-suffixed channel-id drops, the preview two-shape gap, mount wedges, the relayfile#262 backfill trap." }
   ],
   "harness": "claude",
   "model": "claude-sonnet-4-6",

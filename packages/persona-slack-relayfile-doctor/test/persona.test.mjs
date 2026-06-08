@@ -64,19 +64,23 @@ test('skills are remotely sourced (no repo-local path that hard-fails launch)', 
   }
 });
 
-test('the doctor skills resolve to their published packages', () => {
+test('the doctor skills are local @agent-workforce skills (authored in this repo, not external refs)', () => {
   const expected = [
-    '@agent-relay/setting-up-relayfile',
-    '@agent-relay/workspace-layout',
-    '@agent-relay/writeback-as-files',
-    '@agent-relay/orchestrating-agent-relay',
-    '@agent-workforce/persona-relayfile-mount',
+    '@agent-workforce/slack-relayfile-writeback-debugging',
+    '@agent-workforce/slack-relayfile-readdown-debugging',
   ];
   assert.equal(persona.skills.length, expected.length);
   for (const source of expected) {
     assert.ok(
       persona.skills.find((s) => s.source === source),
       `skill "${source}" present`,
+    );
+  }
+  // All skills must be @agent-workforce-owned (no external @agent-relay/* deps).
+  for (const skill of persona.skills) {
+    assert.ok(
+      skill.source.startsWith('@agent-workforce/'),
+      `skill "${skill.source}" must be @agent-workforce-owned`,
     );
   }
 });
