@@ -72,12 +72,12 @@
       "completedAt": "2026-06-08T17:50:00.000Z",
       "path": "/Users/khaliqgant/Projects/AgentWorkforce/workforce/.trajectories/completed/2026-06/traj_msgmnt170rd.json"
     },
-    "traj_slack_dm_missing_scope": {
+    "traj_dmscope": {
       "title": "Slack DM-send silent failure — missing_scope diagnosis & fix",
       "status": "completed",
       "startedAt": "2026-06-08T16:00:00.000Z",
       "completedAt": "2026-06-08T18:52:00.000Z",
-      "path": "/Users/khaliqgant/Projects/AgentWorkforce/workforce/.trajectories/completed/2026-06/traj_slack_dm_missing_scope.json"
+      "path": "/Users/khaliqgant/Projects/AgentWorkforce/workforce/.trajectories/completed/2026-06/traj_dmscope.json"
     }
   }
 }

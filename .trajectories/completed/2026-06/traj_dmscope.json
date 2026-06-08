@@ -1,5 +1,5 @@
 {
-  "id": "traj_slack_dm_missing_scope",
+  "id": "traj_dmscope",
   "version": 1,
   "task": { "title": "Slack DM-send silent failure — missing_scope diagnosis & fix" },
   "status": "completed",
