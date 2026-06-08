@@ -7,6 +7,27 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [3.0.51] - 2026-06-08
+
+### Added
+
+- **Auto-inject ai-hist MCP + enforce trajectory recording**
+- **Add grok harness support**
+
+### Fixed
+
+- Use broker-aware agent-relay MCP for local persona spawns (#214)
+- Route launch-metadata warnings to a log file
+- Address grok harness review feedback
+
+### Changed
+
+- Consolidate trajectories + ai-memory under memory (opt-in) (#210)
+
+### Dependencies
+
+- Apply pr-reviewer fixes for #206 (#206)
+
 ## [3.0.45] - 2026-06-04
 
 ### Documentation

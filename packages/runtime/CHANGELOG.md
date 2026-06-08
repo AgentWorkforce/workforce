@@ -7,6 +7,21 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [3.0.51] - 2026-06-08
+
+### Added
+
+- **Auto-record decision trajectories + emit ai-hist contract (Workstream B)** (#207)
+
+### Fixed
+
+- Use broker-aware agent-relay MCP for local persona spawns (#214)
+- Address grok harness review feedback
+
+### Changed
+
+- Consolidate trajectories + ai-memory under memory (opt-in) (#210)
+
 ## [3.0.50] - 2026-06-06
 
 ### Fixed

@@ -7,6 +7,27 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [3.0.51] - 2026-06-08
+
+### Added
+
+- **Launch ai-hist via plain npx -y ai-hist-mcp + enable trajectory memory on persona-maker** (#211)
+- **Auto-inject ai-hist MCP + enforce trajectory recording**
+- **Add grok harness support**
+
+### Fixed
+
+- Launch full ai-hist MCP via npx -p ai-hist (revert bundled WHY-only server) (#209)
+- Address grok harness review feedback
+
+### Changed
+
+- Consolidate trajectories + ai-memory under memory (opt-in) (#210)
+
+### Dependencies
+
+- Apply pr-reviewer fixes for #206 (#206)
+
 ## [3.0.47] - 2026-06-04
 
 ### Added
