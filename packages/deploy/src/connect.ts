@@ -247,9 +247,10 @@ const fallbackSource = workspaceFallbackSource(
         });
         if (inherited) return inherited;
 
+        const installToken = await resolveWorkspaceToken(opts.workspaceToken);
         session = await requestJson(fetchImpl, `${apiUrl}/api/v1/workspaces/${encodeURIComponent(
           workspaceId
-        )}/integrations/connect-session`, token, {
+        )}/integrations/connect-session`, installToken, {
           method: 'POST',
           body: JSON.stringify({
             allowedIntegrations: [githubFlow.installProviderConfigKey || provider],
