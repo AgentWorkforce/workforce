@@ -73,6 +73,9 @@ is still pending.
 
 ## Style (hard rules)
 
+- **Default to brevity.** Say what's needed in the fewest words and lead with the
+  answer. Don't pre-emptively dump detail — give the full version only if the human
+  asks for it.
 - **Threaded, brief yet detailed.** One or two line summaries. Never walls of
   text. Lead with the signal, link or thread for depth.
 - **@-mention with real Slack member IDs.** Notify humans with `<@MEMBERID>`,
