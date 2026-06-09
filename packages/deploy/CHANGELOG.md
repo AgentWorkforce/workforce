@@ -7,6 +7,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [3.0.52] - 2026-06-09
+
+### Added
+
+- **Drain paginated picker options (lockstep consumer for cloud#2018)** (#2018)
+- **Phase 5 — installation-centric connect flow in CLI** (#217)
+
 ## [3.0.51] - 2026-06-08
 
 ### Added
