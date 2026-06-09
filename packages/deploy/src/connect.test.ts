@@ -4,6 +4,7 @@ import type { PersonaSpec } from '@agentworkforce/persona-kit';
 import {
   collectPickerInputs,
   connectIntegrations,
+  RELAYFILE_OPTIONS_MAX_PAGES,
   relayfileCatalogConfigKeyResolver,
   relayfileIntegrationResolver,
   relayfileOptionsResolver,
@@ -1613,4 +1614,162 @@ test('relayfileOptionsResolver normalizes the cloud options response', async () 
   assert.deepEqual(urls, [
     'https://cloud.example.test/api/v1/workspaces/ws%201/integrations/linear/options/teams'
   ]);
+});
+
+test('relayfileOptionsResolver keeps old cloud behavior with no nextCursor', async () => {
+  const urls: string[] = [];
+  const resolver = relayfileOptionsResolver({
+    apiUrl: 'https://cloud.example.test',
+    workspaceToken: 'tok',
+    fetch: async (url) => {
+      urls.push(String(url));
+      return okJson({
+        ok: true,
+        options: [{ value: 'team-1', label: 'Engineering', hint: 'ENG' }]
+      });
+    }
+  });
+
+  const options = await resolver.list({ workspace: 'ws-1', provider: 'linear', resource: 'teams' });
+
+  assert.deepEqual(options, [{ value: 'team-1', label: 'Engineering', hint: 'ENG' }]);
+  assert.equal(urls.length, 1);
+  assert.equal(new URL(urls[0]!).searchParams.has('cursor'), false);
+});
+
+test('relayfileOptionsResolver drains multiple option pages in order', async () => {
+  const urls: string[] = [];
+  const pages: Record<string, unknown> = {
+    '': {
+      options: [
+        { value: 'A', label: 'Alpha' },
+        { value: 'B', label: 'Beta' }
+      ],
+      nextCursor: 'c1'
+    },
+    c1: { options: [{ value: 'C', label: 'Gamma' }], nextCursor: 'c2' },
+    c2: { options: [{ value: 'D', label: 'Delta' }] }
+  };
+  const resolver = relayfileOptionsResolver({
+    apiUrl: 'https://cloud.example.test',
+    workspaceToken: 'tok',
+    fetch: async (url) => {
+      urls.push(String(url));
+      const cursor = new URL(String(url)).searchParams.get('cursor') ?? '';
+      return okJson(pages[cursor]);
+    }
+  });
+
+  const options = await resolver.list({ workspace: 'ws-1', provider: 'slack', resource: 'users' });
+
+  assert.deepEqual(options, [
+    { value: 'A', label: 'Alpha' },
+    { value: 'B', label: 'Beta' },
+    { value: 'C', label: 'Gamma' },
+    { value: 'D', label: 'Delta' }
+  ]);
+  assert.equal(urls.length, 3);
+  assert.equal(new URL(urls[0]!).searchParams.get('cursor'), null);
+  assert.equal(new URL(urls[1]!).searchParams.get('cursor'), 'c1');
+  assert.equal(new URL(urls[2]!).searchParams.get('cursor'), 'c2');
+});
+
+test('relayfileOptionsResolver keeps paging after an empty page with nextCursor', async () => {
+  const urls: string[] = [];
+  const resolver = relayfileOptionsResolver({
+    apiUrl: 'https://cloud.example.test',
+    workspaceToken: 'tok',
+    fetch: async (url) => {
+      urls.push(String(url));
+      const cursor = new URL(String(url)).searchParams.get('cursor');
+      if (!cursor) return okJson({ options: [], nextCursor: 'c1' });
+      return okJson({ options: [{ value: 'U1', label: 'Benjamin' }] });
+    }
+  });
+
+  const options = await resolver.list({ workspace: 'ws-1', provider: 'slack', resource: 'users' });
+
+  assert.deepEqual(options, [{ value: 'U1', label: 'Benjamin' }]);
+  assert.equal(urls.length, 2);
+  assert.equal(new URL(urls[1]!).searchParams.get('cursor'), 'c1');
+});
+
+test('relayfileOptionsResolver stops at the page cap and warns', async () => {
+  const io = createBufferedIO();
+  let calls = 0;
+  const resolver = relayfileOptionsResolver({
+    apiUrl: 'https://cloud.example.test',
+    workspaceToken: 'tok',
+    io,
+    fetch: async () => {
+      calls += 1;
+      return okJson({
+        options: [{ value: `item-${calls}`, label: `Item ${calls}` }],
+        nextCursor: `cursor-${calls}`
+      });
+    }
+  });
+
+  const options = await resolver.list({ workspace: 'ws-1', provider: 'slack', resource: 'channels' });
+
+  assert.equal(calls, RELAYFILE_OPTIONS_MAX_PAGES);
+  assert.equal(options.length, RELAYFILE_OPTIONS_MAX_PAGES);
+  assert.equal(options[0]?.value, 'item-1');
+  assert.equal(options.at(-1)?.value, `item-${RELAYFILE_OPTIONS_MAX_PAGES}`);
+  assert.ok(
+    io.messages.some(
+      (message) =>
+        message.level === 'warn' &&
+        /exceeded 200 pages/.test(message.message) &&
+        /truncated/.test(message.message)
+    )
+  );
+});
+
+test('relayfileOptionsResolver forwards query and limit params', async () => {
+  const urls: string[] = [];
+  const resolver = relayfileOptionsResolver({
+    apiUrl: 'https://cloud.example.test',
+    workspaceToken: 'tok',
+    fetch: async (url) => {
+      urls.push(String(url));
+      return okJson({ options: [] });
+    }
+  });
+
+  await resolver.list({
+    workspace: 'ws-1',
+    provider: 'linear',
+    resource: 'teams',
+    query: 'eng',
+    limit: 25
+  });
+
+  assert.equal(urls.length, 1);
+  const params = new URL(urls[0]!).searchParams;
+  assert.equal(params.get('query'), 'eng');
+  assert.equal(params.get('limit'), '25');
+});
+
+test('relayfileOptionsResolver stops when the server repeats the same cursor', async () => {
+  const urls: string[] = [];
+  const resolver = relayfileOptionsResolver({
+    apiUrl: 'https://cloud.example.test',
+    workspaceToken: 'tok',
+    fetch: async (url) => {
+      urls.push(String(url));
+      const cursor = new URL(String(url)).searchParams.get('cursor');
+      if (!cursor) return okJson({ options: [{ value: 'A', label: 'Alpha' }], nextCursor: 'same' });
+      return okJson({ options: [{ value: 'B', label: 'Beta' }], nextCursor: 'same' });
+    }
+  });
+
+  const options = await resolver.list({ workspace: 'ws-1', provider: 'slack', resource: 'users' });
+
+  assert.deepEqual(options, [
+    { value: 'A', label: 'Alpha' },
+    { value: 'B', label: 'Beta' }
+  ]);
+  assert.equal(urls.length, 2);
+  assert.equal(new URL(urls[1]!).searchParams.get('cursor'), 'same');
 });
