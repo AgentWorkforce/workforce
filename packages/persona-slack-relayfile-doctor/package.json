@@ -1,6 +1,6 @@
 {
   "name": "@agentworkforce/persona-slack-relayfile-doctor",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "description": "AgentWorkforce slack-relayfile-doctor persona pack — a debugging specialist for the Slack ↔ relayfile ↔ cloud sync/writeback stack. Localizes a symptom to the right layer, confirms root cause with concrete evidence (mount state, the ops API, logs), and prescribes the fix to the owning repo. Install with `agentworkforce install`.",
   "type": "module",
   "main": "index.js",
