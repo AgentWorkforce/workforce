@@ -363,6 +363,40 @@ export interface PersonaAiMemoryConfig {
 
 export type PersonaMemory = boolean | PersonaMemoryConfig;
 
+/**
+ * Relay (agent-relay / relaycast) participation config. Like {@link
+ * PersonaMemoryConfig}, the persona declares **intent** only — the API key and
+ * base URL are secrets that come from workforce env (`RELAY_API_KEY`,
+ * `RELAY_BASE_URL`). When enabled, launchers inject the relaycast MCP server
+ * (see `buildRelaycastMcpServer`) so the persona is a first-class chat
+ * participant: it can post to channels, DM, and answer replies — the
+ * human-in-the-loop surface a solo persona otherwise lacks.
+ */
+export interface PersonaRelayConfig {
+  /** Master switch. Object form defaults to enabled (`{}` ⇒ on). */
+  enabled?: boolean;
+  /**
+   * Agent identity registered on relay (`RELAY_AGENT_NAME`). Defaults to the
+   * env value, then the persona id. Must match the broker's routing name.
+   */
+  agentName?: string;
+  /**
+   * Relaycast channels the persona participates in (names may omit the leading
+   * `#`). Declarative intent consumed when wiring inbox triggers (Unit C);
+   * does not affect MCP injection on its own.
+   */
+  channels?: string[];
+  /**
+   * Relaycast inbox selectors the persona subscribes to (e.g. `@self`, `#eng`),
+   * mirroring the SDK `AgentDefinition.inbox` contract.
+   */
+  inbox?: string[];
+  /** Default relay workspace (`RELAY_DEFAULT_WORKSPACE`); else env. */
+  defaultWorkspace?: string;
+}
+
+export type PersonaRelay = boolean | PersonaRelayConfig;
+
 export type CapabilityValue =
   | boolean
   | { enabled?: boolean; [k: string]: unknown };
@@ -544,6 +578,13 @@ export interface PersonaSpec {
    * details (api keys, adapter type, etc. come from workforce env).
    */
   memory?: PersonaMemory;
+  /**
+   * Relay (agent-relay / relaycast) participation. Off unless declared. When
+   * enabled, launchers inject the relaycast MCP so the persona can post to
+   * channels, DM, and answer replies — see {@link PersonaRelayConfig}. Secrets
+   * (`RELAY_API_KEY`, `RELAY_BASE_URL`) come from workforce env, not the spec.
+   */
+  relay?: PersonaRelay;
   /**
    * Relative POSIX path to the TypeScript (or compiled .js / .mjs) file
    * whose default export is the deploy-time event handler. Resolved

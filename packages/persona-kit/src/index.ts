@@ -36,6 +36,8 @@ export type {
   PersonaMemory,
   PersonaMemoryConfig,
   PersonaMemoryScope,
+  PersonaRelay,
+  PersonaRelayConfig,
   PersonaTrajectoryConfig,
   PersonaMount,
   PersonaPermissions,
@@ -99,6 +101,7 @@ export {
   parseMemory,
   parseMount,
   parseOnEvent,
+  parseRelay,
   parsePermissions,
   parsePersonaSpec,
   resolveAiMemory,
@@ -200,7 +203,9 @@ export {
   type InteractiveConfigFile,
   type InteractiveSpec,
   type NonInteractiveSpec,
-  type RelayMcpConfig
+  type RelayMcpConfig,
+  resolvePersonaRelayMcp,
+  type ResolveRelayMcpResult
 } from './interactive-spec.js';
 
 // Harness detection
