@@ -1306,8 +1306,17 @@ export interface PickerOption {
 
 /** Resolves the candidate list for a persona input's `picker`. */
 export interface IntegrationOptionsResolver {
-  list(args: { workspace: string; provider: string; resource: string }): Promise<PickerOption[]>;
+  list(args: {
+    workspace: string;
+    provider: string;
+    resource: string;
+    query?: string;
+    cursor?: string;
+    limit?: number;
+  }): Promise<PickerOption[]>;
 }
+
+export const RELAYFILE_OPTIONS_MAX_PAGES = 200;
 
 /**
  * Cloud-backed options resolver: `GET /api/v1/workspaces/<ws>/integrations/<provider>/options/<resource>`.
@@ -1319,25 +1328,53 @@ export function relayfileOptionsResolver(opts: {
   apiUrl: string;
   workspaceToken: string | (() => string | Promise<string>);
   fetch?: typeof fetch;
+  io?: Pick<DeployIO, 'warn'>;
 }): IntegrationOptionsResolver {
   const fetchImpl = opts.fetch ?? fetch;
   const apiUrl = opts.apiUrl.replace(/\/+$/, '');
   return {
-    async list({ workspace, provider, resource }) {
+    async list({ workspace, provider, resource, query, cursor, limit }) {
       const token = await resolveWorkspaceToken(opts.workspaceToken);
-      const url =
+      const baseUrl =
         `${apiUrl}/api/v1/workspaces/${encodeURIComponent(workspace)}` +
         `/integrations/${encodeURIComponent(provider)}/options/${encodeURIComponent(resource)}`;
-      const body = await requestJson(fetchImpl, url, token);
-      const raw = body && typeof body === 'object' ? (body as { options?: unknown }).options : undefined;
-      if (!Array.isArray(raw)) return [];
       const options: PickerOption[] = [];
-      for (const entry of raw) {
-        const value = readString(entry, 'value');
-        if (!value) continue;
-        const label = readString(entry, 'label') ?? value;
-        const hint = readString(entry, 'hint');
-        options.push({ value, label, ...(hint ? { hint } : {}) });
+      const trimmedQuery = typeof query === 'string' && query.trim() ? query.trim() : undefined;
+      let pageCursor = typeof cursor === 'string' && cursor.trim() ? cursor.trim() : undefined;
+      let pages = 0;
+
+      while (true) {
+        const params = new URLSearchParams();
+        if (trimmedQuery) params.set('query', trimmedQuery);
+        if (typeof limit === 'number' && Number.isInteger(limit) && limit > 0) {
+          params.set('limit', String(limit));
+        }
+        if (pageCursor) params.set('cursor', pageCursor);
+        const queryString = params.toString();
+        const url = queryString ? `${baseUrl}?${queryString}` : baseUrl;
+        const body = await requestJson(fetchImpl, url, token);
+        const raw = body && typeof body === 'object' ? (body as { options?: unknown }).options : undefined;
+        if (Array.isArray(raw)) {
+          for (const entry of raw) {
+            const value = readString(entry, 'value');
+            if (!value) continue;
+            const label = readString(entry, 'label') ?? value;
+            const hint = readString(entry, 'hint');
+            options.push({ value, label, ...(hint ? { hint } : {}) });
+          }
+        }
+
+        pages += 1;
+        const next = readString(body, 'nextCursor');
+        if (!next) break;
+        if (next === pageCursor) break;
+        if (pages >= RELAYFILE_OPTIONS_MAX_PAGES) {
+          opts.io?.warn?.(
+            `cloud options list for ${provider}/${resource} exceeded ${RELAYFILE_OPTIONS_MAX_PAGES} pages; returning a truncated picker list`
+          );
+          break;
+        }
+        pageCursor = next;
       }
       return options;
     }
