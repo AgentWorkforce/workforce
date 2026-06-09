@@ -1751,6 +1751,28 @@ test('relayfileOptionsResolver forwards query and limit params', async () => {
   assert.equal(params.get('limit'), '25');
 });
 
+test('relayfileOptionsResolver only forwards positive integer limits', async () => {
+  const urls: string[] = [];
+  const resolver = relayfileOptionsResolver({
+    apiUrl: 'https://cloud.example.test',
+    workspaceToken: 'tok',
+    fetch: async (url) => {
+      urls.push(String(url));
+      return okJson({ options: [] });
+    }
+  });
+
+  await resolver.list({ workspace: 'ws-1', provider: 'linear', resource: 'teams', limit: 0 });
+  await resolver.list({ workspace: 'ws-1', provider: 'linear', resource: 'teams', limit: -5 });
+  await resolver.list({ workspace: 'ws-1', provider: 'linear', resource: 'teams', limit: 2.5 });
+  await resolver.list({ workspace: 'ws-1', provider: 'linear', resource: 'teams', limit: 3 });
+
+  assert.deepEqual(
+    urls.map((url) => new URL(url).searchParams.get('limit')),
+    [null, null, null, '3']
+  );
+});
+
 test('relayfileOptionsResolver stops when the server repeats the same cursor', async () => {
   const urls: string[] = [];
   const resolver = relayfileOptionsResolver({

@@ -1346,7 +1346,9 @@ export function relayfileOptionsResolver(opts: {
       while (true) {
         const params = new URLSearchParams();
         if (trimmedQuery) params.set('query', trimmedQuery);
-        if (Number.isFinite(limit)) params.set('limit', String(limit));
+        if (typeof limit === 'number' && Number.isInteger(limit) && limit > 0) {
+          params.set('limit', String(limit));
+        }
         if (pageCursor) params.set('cursor', pageCursor);
         const queryString = params.toString();
         const url = queryString ? `${baseUrl}?${queryString}` : baseUrl;
