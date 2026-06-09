@@ -83,12 +83,17 @@ export function envelopeToAgentEvent(env: RawGatewayEnvelope): AgentEvent | null
     const res = isPlainObject(env.resource) ? env.resource : {};
     const message = isPlainObject(res.message) ? res.message : undefined;
     const resume = isPlainObject(env.resumeContext) ? env.resumeContext : {};
-    const channel = firstString(res.channel) ?? 'dm';
+    // Prefer the first-class envelope fields (cloud now surfaces these top-level
+    // per Unit B / workforce#189); fall back to `resource` for envelopes from an
+    // older gateway that still nests them, then to the message/resume shapes.
+    const channel = firstString(env.channel) ?? firstString(res.channel) ?? 'dm';
     const messageId =
+      firstString(env.messageId) ??
       firstString(res.messageId) ??
       firstString(message?.id) ??
       (typeof env.deliveryId === 'string' && env.deliveryId ? env.deliveryId : env.id);
-    const threadId = firstString(res.threadId) ?? firstString(resume.threadId);
+    const threadId =
+      firstString(env.threadId) ?? firstString(res.threadId) ?? firstString(resume.threadId);
     const text = firstString(res.text) ?? firstString(message?.text);
     const path = firstString(res.path) ?? `/relaycast/${channel}/messages/${messageId}`;
     return createAgentEvent(

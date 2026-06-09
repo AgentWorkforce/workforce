@@ -43,6 +43,14 @@ export interface RawGatewayEnvelope {
   paths?: string[];
   /** Opaque resume token for multi-phase deliveries (pr-reviewer resume). */
   resumeContext?: unknown;
+  /** Harness resume session cloud attaches for multi-phase deliveries. */
+  harnessSession?: unknown;
+  /** Relaycast channel (or DM id) for `relaycast.message` envelopes. */
+  channel?: string;
+  /** Relaycast message id for `relaycast.message` envelopes. */
+  messageId?: string;
+  /** Relaycast thread id for `relaycast.message` envelopes, when threaded. */
+  threadId?: string;
 }
 
 /**
@@ -69,6 +77,10 @@ export const RAW_GATEWAY_ENVELOPE_FIELDS = [
   'paths',
   'summary',
   'resumeContext',
+  'harnessSession',
+  'channel',
+  'messageId',
+  'threadId',
   // Declared on the frame but never emitted by cloud's buildEnvelope —
   // kept for older gateway shapes; not part of the cloud contract.
   'expand',

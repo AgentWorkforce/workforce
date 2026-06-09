@@ -70,6 +70,27 @@ test('envelopeToAgentEvent exposes the cloud payload via expand("full")', async 
   assert.deepEqual(full.data, { issue: { identifier: 'ENG-1' } });
 });
 
+test('envelopeToAgentEvent reads first-class channel/messageId/threadId (Unit B)', () => {
+  // Cloud now surfaces these top-level on the envelope; the mapper should
+  // prefer them over the nested `resource` copy.
+  const ev = envelopeToAgentEvent({
+    id: 'evt-top',
+    workspace: 'ws-acme',
+    type: 'relaycast.message',
+    occurredAt: '2026-05-12T11:00:00Z',
+    channel: 'eng',
+    messageId: 'm-top',
+    threadId: 't-top',
+    resource: { channel: 'stale', messageId: 'stale', text: 'hi' }
+  });
+  assert.ok(ev);
+  assert.ok(isRelaycastMessageEvent(ev));
+  if (!isRelaycastMessageEvent(ev)) return;
+  assert.equal(ev.channel, 'eng');
+  assert.equal(ev.messageId, 'm-top');
+  assert.equal(ev.threadId, 't-top');
+});
+
 test('envelopeToAgentEvent maps a relaycast.message envelope (fields ride in resource)', () => {
   // Shape the proactive-runtime HTTP gateway delivers: the relay-native
   // envelope is nested under `resource` (resource: payload.resource ?? payload).
