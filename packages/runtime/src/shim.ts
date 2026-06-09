@@ -8,11 +8,15 @@ import type {
 /**
  * Raw envelope shape the cloud proactive-runtime gateway delivers per M1
  * spec (`cloud-proactive-runtime-spec/docs/proactive-runtime/spec.md`).
- * Kept as a structural type rather than imported from `@agent-relay/agent`
- * so the runtime compiles even when that package isn't yet published.
  *
- * Once `@agent-relay/agent` ships, the shim swaps its internal envelope
- * type for the SDK's published one — call sites stay unchanged.
+ * This is workforce's own type, not an import from `@agent-relay/agent` —
+ * and intentionally so. The relay agent SDK exports *decoded* events
+ * (`CronTickEvent`, `RelayfileChangeEvent`, …) but no raw-envelope type;
+ * the wire format below is cloud's gateway contract, mirrored here and
+ * pinned to `envelope-fields.cloud.ts` (cloud#1841) via
+ * `shim.contract.test.ts`. There is nothing in the SDK to "swap to" — the
+ * runtime owns this decode boundary so it can track the cloud gateway
+ * contract independently of the SDK's version.
  */
 export interface RawGatewayEnvelope {
   id: string;
