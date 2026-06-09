@@ -6,6 +6,7 @@ import os from 'node:os';
 import { deploy } from './deploy.js';
 import { createBufferedIO } from './io.js';
 import { preflightPersona } from './preflight.js';
+import { RELAYFILE_OPTIONS_MAX_PAGES } from './connect.js';
 import type {
   BundleStager,
   CloudAuthRecoveryResolver,
@@ -1835,6 +1836,94 @@ test('deploy merges explicit --input with picker-collected values for the launch
 
     assert.deepEqual(launchedInputs, { EXPLICIT: 'explicit-val', BENJAMIN: 'U1' });
   } finally {
+    await cleanup();
+  }
+});
+
+test('deploy surfaces default cloud picker pagination warnings through deploy io', async () => {
+  const { personaPath, cleanup } = await withTempPersona(
+    basePersonaJson({
+      integrations: { slack: {} },
+      inputs: {
+        BENJAMIN: {
+          description: 'picked from slack users',
+          optional: true,
+          picker: { provider: 'slack', resource: 'users' }
+        }
+      }
+    })
+  );
+  const io = createBufferedIO();
+  io.scriptAnswers(['1']);
+  const originalFetch = globalThis.fetch;
+  let optionCalls = 0;
+
+  const workspaceAuth: WorkspaceAuth = {
+    async resolveWorkspace() {
+      return { workspace: 'ws-test', token: 'tok' };
+    }
+  };
+  const integrations: IntegrationConnectResolver = {
+    async isConnected() {
+      return true;
+    },
+    async connect() {
+      return { connectionId: 'conn-slack' };
+    }
+  };
+  const providerConfigKeys: ProviderConfigKeyResolver = {
+    async resolve() {
+      return undefined;
+    }
+  };
+
+  globalThis.fetch = (async (input) => {
+    const url = String(input);
+    if (url.includes('/integrations/slack/options/users')) {
+      optionCalls += 1;
+      return jsonResponse({
+        options: [{ value: `U${optionCalls}`, label: `User ${optionCalls}` }],
+        nextCursor: `cursor-${optionCalls}`
+      });
+    }
+    return jsonResponse({});
+  }) as typeof fetch;
+
+  try {
+    await deploy(
+      { personaPath, mode: 'cloud', cloudUrl: 'https://cloud.example.test', io },
+      {
+        workspaceAuth,
+        integrations,
+        providerConfigKeys,
+        bundle: successfulBundleStager(),
+        modes: {
+          cloud: {
+            async launch() {
+              return {
+                id: 'cloud-1',
+                async stop() {
+                  /* no-op */
+                },
+                done: Promise.resolve({ code: 0 })
+              };
+            }
+          }
+        }
+      }
+    );
+
+    assert.equal(optionCalls, RELAYFILE_OPTIONS_MAX_PAGES);
+    assert.ok(
+      io.messages.some(
+        (message) =>
+          message.level === 'warn' &&
+          /exceeded 200 pages/.test(message.message) &&
+          /truncated/.test(message.message)
+      )
+    );
+  } finally {
+    globalThis.fetch = originalFetch;
     await cleanup();
   }
 });

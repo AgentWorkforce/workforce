@@ -277,7 +277,8 @@ export async function deploy(opts: DeployOptions, resolvers: DeployResolvers = {
     (mode === 'cloud'
       ? relayfileOptionsResolver({
           apiUrl: normalizeCloudUrl(cloudUrl ?? defaultApiUrl()),
-          workspaceToken: () => activeToken
+          workspaceToken: () => activeToken,
+          io
         })
       : undefined);
   if (optionsResolver && opts.noPrompt !== true && (preflight.persona.inputs !== undefined)) {
