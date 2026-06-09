@@ -10,7 +10,7 @@ export {
   defineAgent,
   isWorkforceAgent,
   type AgentDefinition,
-  type AgentEvent,
+  type WorkforceEventFor,
   type WorkforceAgentExport
 } from './define-agent.js';
 
@@ -34,14 +34,26 @@ export type {
   WorkflowContext,
   WorkflowRunHandle,
   WorkforceAgentContext,
-  WorkforceCronEvent,
   WorkforceCtx,
   WorkforceDeploymentContext,
   WorkforceEvent,
-  WorkforceEventSource,
   WorkforceHandler,
   WorkforceHandlerExport,
-  WorkforceProviderEvent
+  AgentEvent,
+  EventType,
+  CronTickEvent,
+  RelaycastMessageEvent,
+  RelayfileChangeEvent,
+  StartupEvent
+} from './types.js';
+
+// Relay SDK event type guards, re-exported so persona handlers can narrow
+// `event` by type without importing `@agent-relay/events` directly.
+export {
+  isCronTickEvent,
+  isRelaycastMessageEvent,
+  isRelayfileChangeEvent,
+  isStartupEvent
 } from './types.js';
 
 // Runtime envelope helpers shared by provider-triggered agents.
@@ -50,8 +62,9 @@ export {
 } from './types.js';
 
 // Raw gateway envelope contract (the runner's stdin NDJSON line shape, and
-// the fixture format for invocation simulation).
-export { shimEnvelope, type RawGatewayEnvelope } from './shim.js';
+// the fixture format for invocation simulation) + the envelope→AgentEvent decoder.
+export { type RawGatewayEnvelope } from './shim.js';
+export { envelopeToAgentEvent } from './to-agent-event.js';
 
 export type {
   LinearAgentActivity,

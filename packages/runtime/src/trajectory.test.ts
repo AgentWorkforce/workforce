@@ -3,18 +3,18 @@ import assert from 'node:assert/strict';
 import { mkdtemp, readFile, readdir, rm } from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
+import { createCronTickEvent } from '@agent-relay/events';
 import { createTrajectoryRecorder } from './trajectory.js';
 import type { CompactedTrajectoryContract, WorkforceEvent } from './types.js';
 
-const cronEvent: WorkforceEvent = {
-  source: 'cron',
+const cronEvent: WorkforceEvent = createCronTickEvent({
+  workspace: 'ws-1',
+  schedule: '0 9 * * 6',
+  scheduleId: 'weekly',
   id: 'evt-1',
-  occurredAt: '2026-01-01T00:00:00.000Z',
   attempt: 1,
-  workspaceId: 'ws-1',
-  name: 'weekly',
-  cron: '0 9 * * 6'
-};
+  occurredAt: '2026-01-01T00:00:00.000Z'
+});
 
 const silentLog = () => {};
 
@@ -59,7 +59,7 @@ test('records a run and emits a contract-shaped artifact', async () => {
     assert.equal(contract.version, 1);
     assert.equal(contract.personaId, 'demo');
     assert.equal(contract.projectId, 'ws-1'); // workspaceId fallback
-    assert.equal(contract.task.title, 'cron:weekly');
+    assert.equal(contract.task.title, 'cron:0 9 * * 6');
     assert.equal(contract.status, 'completed');
     assert.equal(typeof contract.startedAt, 'string');
     assert.equal(typeof contract.completedAt, 'string');
@@ -101,7 +101,7 @@ test('auto-finalizes on complete() when the handler did not call done()', async 
     const contract = await readOnlyContract(root, 'demo');
     assert.equal(contract.status, 'completed');
     assert.ok(contract.retrospective, 'auto-finalize still emits a retrospective');
-    assert.equal(contract.retrospective?.summary, 'Completed cron:weekly');
+    assert.equal(contract.retrospective?.summary, 'Completed cron:0 9 * * 6');
   });
 });
 

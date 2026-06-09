@@ -3,58 +3,40 @@ import type {
   PersonaSpec,
   PersonaMemoryScope
 } from '@agentworkforce/persona-kit';
+import type { AgentEvent, EventType } from '@agent-relay/events';
 
 /**
- * Source of an event delivered to a persona's `onEvent` handler. The
- * runtime narrows the rest of the envelope based on this discriminator.
+ * v4: the event delivered to a persona handler IS the relay SDK's normalized
+ * {@link AgentEvent} (`@agent-relay/events`). The runtime decodes cloud's
+ * gateway envelope into it via `envelopeToAgentEvent`. Events discriminate on
+ * `event.type` (e.g. `cron.tick`, `github.pull_request.opened`,
+ * `relaycast.message`); the provider payload is reached via
+ * `await event.expand('full')`, and `event.resource` is the resource handle.
  *
- * Sources today: `cron` (schedule tick), the Tier-1 Relayfile providers
- * (`github`, `linear`, `slack`, `notion`, `jira`). Additional sources land
- * as cloud proactive-runtime milestones M2/M3 ship.
+ * The pre-v4 `{ source, payload, workspaceId }` shape and its
+ * `WorkforceEventSource`/`WorkforceCronEvent`/`WorkforceProviderEvent`
+ * members are gone — see CHANGELOG and the migration notes in `define-agent`.
  */
-export type WorkforceEventSource =
-  | 'cron'
-  | 'github'
-  | 'linear'
-  | 'slack'
-  | 'notion'
-  | 'jira';
+export type { AgentEvent, EventType };
+export type {
+  CronTickEvent,
+  RelaycastMessageEvent,
+  RelayfileChangeEvent,
+  StartupEvent
+} from '@agent-relay/events';
+export {
+  isCronTickEvent,
+  isRelaycastMessageEvent,
+  isRelayfileChangeEvent,
+  isStartupEvent
+} from '@agent-relay/events';
 
-/** Common envelope fields every event carries, regardless of source. */
-interface WorkforceEventBase {
-  /** Stable, idempotency-safe identifier; the runtime dedupes on this. */
-  id: string;
-  /** ISO timestamp the event fired at the source (not at delivery). */
-  occurredAt: string;
-  /** Delivery attempt count, 1 for first delivery. */
-  attempt: number;
-  /** Workspace this event is scoped to. */
-  workspaceId: string;
-}
-
-export interface WorkforceCronEvent extends WorkforceEventBase {
-  source: 'cron';
-  /** Schedule name as declared in the persona's `schedules[].name`. */
-  name: string;
-  /** The persona's resolved cron expression for the schedule. */
-  cron: string;
-}
-
-/** Provider-specific event payload — kept loose for v1. */
-export interface WorkforceProviderEvent extends WorkforceEventBase {
-  source: Exclude<WorkforceEventSource, 'cron'>;
-  /** Provider-normalized event name (e.g. `pull_request.opened`). */
-  type: string;
-  /** Raw provider payload, normalized by the Relayfile adapter. */
-  payload: unknown;
-  /** Optional summary the gateway computed (M2). Missing on M1. */
-  summary?: {
-    title?: string;
-    status?: string;
-    actor?: string;
-    [key: string]: unknown;
-  };
-}
+/**
+ * @deprecated v4 alias for the relay SDK {@link AgentEvent}. Retained so
+ * internal runtime references keep compiling during the migration; new code
+ * should use `AgentEvent` directly.
+ */
+export type WorkforceEvent = AgentEvent;
 
 export function unwrapResourceRecord<T = unknown>(payload: unknown): T | unknown {
   const resource = isRecord(payload) && 'resource' in payload ? payload.resource : payload;
@@ -145,19 +127,18 @@ export type LinearAppUserNotificationEventPayload =
     notification?: LinearAppUserNotificationPayload['notification'];
   };
 
-export type LinearAgentSessionEvent =
-  | (Omit<WorkforceProviderEvent, 'payload' | 'source' | 'type'> & {
-      source: 'linear';
-      type: 'AgentSessionEvent.created' | 'AgentSessionEvent.prompted';
-      payload: LinearAgentSessionEventPayload;
-    })
-  | (Omit<WorkforceProviderEvent, 'payload' | 'source' | 'type'> & {
-      source: 'linear';
-      type: 'AppUserNotification.issueCommentMention';
-      payload: LinearAppUserNotificationEventPayload;
-    });
+/**
+ * Linear app-notification event types as cloud's gateway delivers them
+ * (provider-prefixed). The payload data (see {@link LinearAgentSessionEventPayload}
+ * / {@link LinearAppUserNotificationEventPayload}) is reached via
+ * `await event.expand('full')` — it is no longer a synchronous `event.payload`.
+ */
+export type LinearAgentSessionEventType =
+  | 'linear.AgentSessionEvent.created'
+  | 'linear.AgentSessionEvent.prompted'
+  | 'linear.AppUserNotification.issueCommentMention';
 
-export type WorkforceEvent = WorkforceCronEvent | LinearAgentSessionEvent | WorkforceProviderEvent;
+export type LinearAgentSessionEvent = AgentEvent<LinearAgentSessionEventType>;
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === 'object' && value !== null;

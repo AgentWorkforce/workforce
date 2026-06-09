@@ -18,7 +18,8 @@
  * `agent()` should import `@agent-relay/agent` themselves.
  */
 
-export { shimEnvelope, type RawGatewayEnvelope } from './shim.js';
+export { type RawGatewayEnvelope } from './shim.js';
+export { envelopeToAgentEvent } from './to-agent-event.js';
 export type { CtxBuildOptions } from './ctx.js';
 export { buildCtx } from './ctx.js';
 export { startRunner, type StartRunnerOptions } from './runner.js';

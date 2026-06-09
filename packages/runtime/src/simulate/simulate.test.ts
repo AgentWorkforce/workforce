@@ -2,6 +2,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import type { PersonaSpec } from '@agentworkforce/persona-kit';
 import { handler } from '../handler.js';
+import { isCronTickEvent } from '@agent-relay/events';
 import type { RawGatewayEnvelope } from '../shim.js';
 import { deriveSimulatedRunFailureClass } from './failure-class.js';
 import { simulateInvocation } from './simulate.js';
@@ -96,7 +97,7 @@ test('simulateInvocation: handler throw → failed run, replay continues', async
   const result = await simulateInvocation({
     persona,
     handler: handler(async (_ctx, event) => {
-      if (event.source === 'cron') throw new Error('boom on cron');
+      if (isCronTickEvent(event)) throw new Error('boom on cron');
     }),
     envelopes: [cronEnvelope, githubEnvelope],
     runIdFactory: deterministicIds(),
@@ -185,7 +186,7 @@ test('simulateInvocation: seeded files are readable; VFS persists across envelop
   const result = await simulateInvocation({
     persona,
     handler: handler(async (ctx, event) => {
-      if (event.source === 'cron') {
+      if (isCronTickEvent(event)) {
         reads.push(await ctx.files.read('/seeded.json'));
         await ctx.files.write('/from-event-1.txt', 'carried over');
       } else {
@@ -206,7 +207,9 @@ test('simulateInvocation: unsupported envelopes are reported, not dispatched', a
   const unknownEnvelope: RawGatewayEnvelope = {
     id: 'e3',
     workspace: 'ws-test',
-    type: 'unknownprovider.something',
+    // No dot and not a known single-word type (cron.*/startup/relaycast.message/
+    // user_reply) → the v4 mapper can't normalize it and drops it.
+    type: 'unknownthing',
     occurredAt: '2026-05-12T11:00:00Z'
   };
   let invocations = 0;
@@ -223,7 +226,7 @@ test('simulateInvocation: unsupported envelopes are reported, not dispatched', a
   assert.equal(invocations, 1);
   assert.equal(result.summary.total, 1);
   assert.equal(result.summary.unsupported, 1);
-  assert.deepEqual(result.unsupported, [{ id: 'e3', type: 'unknownprovider.something' }]);
+  assert.deepEqual(result.unsupported, [{ id: 'e3', type: 'unknownthing' }]);
   assert.equal(result.exitCode, 0); // unsupported is not a failure
 });
 
