@@ -56,14 +56,14 @@ test('defineAgent narrows the handler event type to declared triggers/schedules'
     triggers: { github: [{ on: 'pull_request.opened' }] },
     schedules: [{ name: 'nightly', cron: '0 2 * * *' }],
     handler: async (_ctx, event) => {
-      if (event.source === 'cron') {
-        // `name` is narrowed to the declared schedule names.
-        const name: 'nightly' = event.name;
-        void name;
-      } else {
-        // `type` is narrowed to the declared trigger `on` values.
-        const type: 'pull_request.opened' = event.type;
-        void type;
+      // v4: `event.type` is narrowed to the provider-qualified trigger types
+      // plus `cron.tick` — the relay SDK / cloud envelope form.
+      const type: 'github.pull_request.opened' | 'cron.tick' = event.type;
+      void type;
+      if (event.type === 'github.pull_request.opened') {
+        // Provider payload is reached via expand, not a sync `.payload`.
+        const full = await event.expand('full');
+        void full.data;
       }
     }
   });
@@ -79,33 +79,29 @@ test('defineAgent narrows Linear agent-session payloads for declared triggers', 
       ]
     },
     handler: async (_ctx, event) => {
-      if (event.source !== 'linear') return;
-      if (event.type === 'AgentSessionEvent.created') {
-        const record = unwrapResourceRecord<LinearAgentSessionPayload>(event.payload);
+      // v4: trigger `on` literals narrow `event.type` to the provider-qualified
+      // `linear.<on>` form; the payload data comes from `expand('full')`.
+      const type:
+        | 'linear.AgentSessionEvent.created'
+        | 'linear.AgentSessionEvent.prompted'
+        | 'linear.AppUserNotification.issueCommentMention' = event.type;
+      void type;
+      if (event.type === 'linear.AgentSessionEvent.created') {
+        const record = unwrapResourceRecord<LinearAgentSessionPayload>((await event.expand('full')).data);
         if (!isLinearAgentSessionPayload(record)) return;
         const sessionId: string = record.agentSession.id;
-        const promptContext: string | undefined = record.promptContext;
         void sessionId;
-        void promptContext;
         return;
       }
-      if (event.type === 'AgentSessionEvent.prompted') {
-        const record = unwrapResourceRecord<LinearAgentSessionPayload>(event.payload);
+      if (event.type === 'linear.AgentSessionEvent.prompted') {
+        const record = unwrapResourceRecord<LinearAgentSessionPayload>((await event.expand('full')).data);
         if (!isLinearAgentSessionPayload(record)) return;
-        const body: string | undefined = record.agentActivity?.body;
-        void body;
+        void record.agentActivity?.body;
         return;
       }
-      const record = unwrapResourceRecord<LinearAppUserNotificationPayload>(event.payload);
+      const record = unwrapResourceRecord<LinearAppUserNotificationPayload>((await event.expand('full')).data);
       if (!isLinearAppUserNotificationPayload(record)) return;
-      const issueId: string | undefined =
-        record.notification?.issue?.id ??
-        record.issue?.id;
-      const commentBody: string | undefined =
-        record.notification?.comment?.body ??
-        record.comment?.body;
-      void issueId;
-      void commentBody;
+      void (record.notification?.issue?.id ?? record.issue?.id);
     }
   });
 });

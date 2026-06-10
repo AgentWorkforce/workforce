@@ -25,6 +25,8 @@ import type {
   PersonaMemory,
   PersonaMemoryConfig,
   PersonaMemoryScope,
+  PersonaRelay,
+  PersonaRelayConfig,
   PersonaMount,
   PersonaTrajectoryConfig,
   PersonaPermissions,
@@ -913,6 +915,56 @@ export function parseMemory(value: unknown, context: string): PersonaMemory | un
   return out;
 }
 
+export function parseRelay(value: unknown, context: string): PersonaRelay | undefined {
+  if (value === undefined) return undefined;
+  if (typeof value === 'boolean') return value;
+  if (!isObject(value)) {
+    throw new Error(`${context} must be a boolean or an object if provided`);
+  }
+  const { enabled, agentName, channels, inbox, defaultWorkspace } = value;
+  const out: PersonaRelayConfig = {};
+  if (enabled !== undefined) {
+    if (typeof enabled !== 'boolean') {
+      throw new Error(`${context}.enabled must be a boolean if provided`);
+    }
+    out.enabled = enabled;
+  }
+  if (agentName !== undefined) {
+    if (typeof agentName !== 'string' || !agentName.trim()) {
+      throw new Error(`${context}.agentName must be a non-empty string if provided`);
+    }
+    out.agentName = agentName.trim();
+  }
+  if (channels !== undefined) {
+    out.channels = parseRelayStringList(channels, `${context}.channels`);
+  }
+  if (inbox !== undefined) {
+    out.inbox = parseRelayStringList(inbox, `${context}.inbox`);
+  }
+  if (defaultWorkspace !== undefined) {
+    if (typeof defaultWorkspace !== 'string' || !defaultWorkspace.trim()) {
+      throw new Error(`${context}.defaultWorkspace must be a non-empty string if provided`);
+    }
+    out.defaultWorkspace = defaultWorkspace.trim();
+  }
+  return out;
+}
+
+function parseRelayStringList(value: unknown, context: string): string[] {
+  if (!Array.isArray(value)) {
+    throw new Error(`${context} must be an array of strings if provided`);
+  }
+  const out: string[] = [];
+  for (const [idx, entry] of value.entries()) {
+    if (typeof entry !== 'string' || !entry.trim()) {
+      throw new Error(`${context}[${idx}] must be a non-empty string`);
+    }
+    const normalized = entry.trim();
+    if (!out.includes(normalized)) out.push(normalized);
+  }
+  return out;
+}
+
 function parseTrajectoryConfig(
   value: unknown,
   context: string
@@ -1090,6 +1142,7 @@ export function parsePersonaSpec(value: unknown, expectedIntent: PersonaIntent):
     integrations,
     capabilities,
     memory,
+    relay,
     onEvent
   } = value;
 
@@ -1197,6 +1250,7 @@ export function parsePersonaSpec(value: unknown, expectedIntent: PersonaIntent):
     `persona[${expectedIntent}].capabilities`
   );
   const parsedMemory = parseMemory(memory, `persona[${expectedIntent}].memory`);
+  const parsedRelay = parseRelay(relay, `persona[${expectedIntent}].relay`);
   const parsedOnEvent = parseOnEvent(onEvent, `persona[${expectedIntent}].onEvent`);
   const parsedSandbox = parseSandbox(sandbox, `persona[${expectedIntent}].sandbox`);
 
@@ -1227,6 +1281,7 @@ export function parsePersonaSpec(value: unknown, expectedIntent: PersonaIntent):
     ...(parsedIntegrations ? { integrations: parsedIntegrations } : {}),
     ...(parsedCapabilities ? { capabilities: parsedCapabilities } : {}),
     ...(parsedMemory !== undefined ? { memory: parsedMemory } : {}),
+    ...(parsedRelay !== undefined ? { relay: parsedRelay } : {}),
     ...(parsedOnEvent !== undefined ? { onEvent: parsedOnEvent } : {})
   };
 }

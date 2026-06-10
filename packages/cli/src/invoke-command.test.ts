@@ -146,13 +146,13 @@ const E2E_PERSONA = {
   onEvent: './agent.ts'
 };
 
-const E2E_AGENT_SRC = `import { defineAgent } from '@agentworkforce/runtime';
+const E2E_AGENT_SRC = `import { defineAgent, isCronTickEvent } from '@agentworkforce/runtime';
 export default defineAgent({
   schedules: [{ name: 'weekly', cron: '0 9 * * 6' }],
   handler: async (ctx, event) => {
     ctx.log('info', 'e2e handler ran', { id: event.id });
     await ctx.memory.save('e2e note');
-    if (event.source === 'cron' && event.name === 'explode') {
+    if (isCronTickEvent(event) && event.schedule === 'explode') {
       throw new Error('fixture asked for failure');
     }
     return 'weekly digest sent';
@@ -228,7 +228,7 @@ test('runInvoke e2e: bundles, simulates, emits Cloud-compatible record', async (
 test('runInvoke e2e: handler failure → exit 1, error in record', async () => {
   await withE2EPersona(async (dir, personaPath) => {
     const fixturePath = path.join(dir, 'events.ndjson');
-    const failing = { ...ENVELOPE, id: 'e-fail', name: 'explode' };
+    const failing = { ...ENVELOPE, id: 'e-fail', cron: 'explode' };
     await writeFile(
       fixturePath,
       `${JSON.stringify(failing)}\n${JSON.stringify(ENVELOPE)}\n`,
