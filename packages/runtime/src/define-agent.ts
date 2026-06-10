@@ -5,7 +5,7 @@ import type {
   WatchRule
 } from '@agentworkforce/persona-kit';
 import { handler as brandHandler } from './handler.js';
-import type { AgentEvent } from '@agent-relay/events';
+import type { AgentEvent, BaseAgentEvent, EventType } from '@agent-relay/events';
 import type {
   WorkforceCtx,
   WorkforceHandler,
@@ -35,9 +35,11 @@ type TriggerOnUnion<Tr> = OnLiteralsOf<NonNullable<Tr[keyof Tr]>>;
 
 // A provider trigger `{ github: [{ on: 'pull_request.opened' }] }` narrows to
 // the SDK event whose `type` is the provider-qualified `github.pull_request.opened`.
-type ProviderEventFor<P extends string, O extends string> = AgentEvent & {
-  type: `${P}.${O}`;
-};
+// Uses BaseAgentEvent so `event.type` is the exact declared literal and works
+// for any provider event shape — including 2-segment types like
+// `slack.app_mention` that aren't valid `EventType`s (those collapse to `never`
+// under `AgentEvent<...>`).
+type ProviderEventFor<P extends string, O extends string> = BaseAgentEvent<`${P}.${O}`>;
 
 type TriggerProviderEvents<Tr> = {
   [P in keyof Tr]: P extends string
