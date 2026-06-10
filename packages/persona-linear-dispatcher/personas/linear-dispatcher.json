@@ -33,9 +33,9 @@
       "description": "How to spawn, coordinate, and release agents via agent-relay MCP. Core to dispatching codex implementer + claude reviewer teams per issue and tracking completion via DMs."
     },
     {
-      "id": "@agent-workforce/persona-relayfile-mount",
-      "source": "@agent-workforce/persona-relayfile-mount",
-      "description": "Mount-field policy. Read before relying on the relayfile mount: allow-list idiom, readonlyPatterns scope, and how this persona sees the .integrations tree and writes back into it."
+      "id": "persona-relayfile-mount",
+      "source": "./skills/persona-relayfile-mount.md",
+      "description": "Local mount-field policy shipped with this persona pack. Read before relying on the relayfile mount: allow-list idiom, readonlyPatterns scope, and how this persona sees the .integrations tree and writes back into it."
     }
   ],
   "harness": "claude",

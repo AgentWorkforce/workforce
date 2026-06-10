@@ -31,7 +31,7 @@ You do not need to read every repo — scan descriptions first, then deep-read o
 
 ## Repo map
 
-The canonical repo map is in the `@agent-workforce/agentworkforce-repo-map` skill — read it first. It covers all core repos (pear, cloud, agents, workforce, relay, relayfile-adapters, skills), their roles, key issue signals, routing rules, and multi-repo patterns.
+The canonical repo map is in the local `agentworkforce-repo-map` skill shipped with this persona pack — read it first. It covers all core repos (pear, cloud, agents, workforce, relay, relayfile-adapters, skills), their roles, key issue signals, routing rules, and multi-repo patterns.
 
 Always verify against the live org — new repos are created frequently:
 

@@ -14,7 +14,7 @@
   "skills": [
     {
       "id": "agentworkforce-repo-map",
-      "source": "@agent-workforce/agentworkforce-repo-map",
+      "source": "./skills/agentworkforce-repo-map.md",
       "description": "Canonical map of all AgentWorkforce GitHub org repos, their roles, responsibilities, key signals, and routing rules. Read this first before routing any issue. Use gh repo list + gh api to verify against the live org."
     },
     {
@@ -28,9 +28,9 @@
       "description": "How to navigate a relayfile mount: by-state/, by-id/, by-uuid/ alias subtrees and the AR-{id}__{uuid} filename convention. Used when reading issue metadata from the Linear integration mount."
     },
     {
-      "id": "@agent-workforce/persona-relayfile-mount",
-      "source": "@agent-workforce/persona-relayfile-mount",
-      "description": "Mount-field policy. Read before relying on the relayfile mount for issue context."
+      "id": "persona-relayfile-mount",
+      "source": "./skills/persona-relayfile-mount.md",
+      "description": "Local mount-field policy shipped with this persona pack. Read before relying on the relayfile mount for issue context."
     }
   ],
   "harness": "claude",

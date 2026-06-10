@@ -11,9 +11,10 @@ const personasDir = join(pkgRoot, 'personas');
 const personaPath = join(personasDir, 'repo-router.json');
 const personaJson = JSON.parse(readFileSync(personaPath, 'utf8'));
 
-test('persona pack points at the personas dir', () => {
+test('persona pack points at the personas dir and ships skills', () => {
   const pkg = JSON.parse(readFileSync(join(pkgRoot, 'package.json'), 'utf8'));
   assert.equal(pkg.agentworkforce?.personas, 'personas');
+  assert.ok(pkg.files.includes('skills'));
 });
 
 test('default export and named export are the same object', () => {
@@ -24,12 +25,9 @@ test('compatibility export reads the persona pack JSON', () => {
   assert.deepEqual(persona, personaJson);
 });
 
-test('persona JSON has an id (required by `agentworkforce install`)', () => {
+test('persona JSON has the expected identity and runtime', () => {
   assert.equal(persona.id, 'repo-router');
   assert.equal(persona.intent, 'agent-relay-workflow');
-});
-
-test('persona has the expected harness/model', () => {
   assert.equal(persona.harness, 'claude');
   assert.equal(persona.model, 'claude-sonnet-4-6');
 });
@@ -41,18 +39,25 @@ test('agentsMd sidecar is referenced and shipped alongside the persona JSON', ()
   const sidecar = readFileSync(sidecarPath, 'utf8');
   assert.ok(sidecar.startsWith('# repo-router'));
   assert.ok(sidecar.includes('Build a repo map from GitHub'));
+  assert.ok(sidecar.includes('local `agentworkforce-repo-map` skill'));
   assert.equal(persona.claudeMdContent, undefined);
 });
 
-test('skills are remotely sourced (no repo-local path that hard-fails launch)', () => {
+test('local skills are shipped and @agent-workforce skill sources are not used', () => {
   for (const skill of persona.skills) {
     assert.ok(
-      !/\.(md)$/i.test(skill.source) || /^https?:\/\//.test(skill.source),
-      `skill "${skill.id}" source must be remote (prpm/url), got "${skill.source}"`,
+      skill.source !== '@agent-workforce/persona-relayfile-mount',
+      '@agent-workforce/persona-relayfile-mount must not be used as a remote source'
     );
   }
-  const repoMap = persona.skills.find((s) => s.id === 'agentworkforce-repo-map');
-  assert.ok(repoMap, 'agentworkforce-repo-map skill present');
-  assert.equal(repoMap.source, '@agent-workforce/agentworkforce-repo-map');
-});
 
+  const localSources = [
+    './skills/agentworkforce-repo-map.md',
+    './skills/persona-relayfile-mount.md'
+  ];
+  for (const source of localSources) {
+    const skill = persona.skills.find((s) => s.source === source);
+    assert.ok(skill, `local skill "${source}" present`);
+    assert.ok(existsSync(join(pkgRoot, source)), `local skill "${source}" shipped`);
+  }
+});
