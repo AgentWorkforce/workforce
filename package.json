@@ -4,6 +4,23 @@
   "private": true,
   "version": "0.1.0",
   "packageManager": "pnpm@10.17.1",
+  "pnpm": {
+    "overrides": {
+      "shell-quote": ">=1.8.4",
+      "@opentelemetry/otlp-transformer>protobufjs": ">=8.2.0",
+      "@grpc/proto-loader>protobufjs": ">=7.5.8 <8.0.0",
+      "hono": ">=4.12.21",
+      "ws": ">=8.20.1",
+      "qs": ">=6.15.2"
+    },
+    "packageExtensions": {
+      "@daytonaio/sdk@*": {
+        "dependencies": {
+          "ws": ">=8.20.1"
+        }
+      }
+    }
+  },
   "devDependencies": {
     "@types/node": "^22.18.0",
     "agent-trajectories": "^0.5.3",

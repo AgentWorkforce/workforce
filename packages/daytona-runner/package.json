@@ -34,9 +34,9 @@
   },
   "dependencies": {},
   "peerDependencies": {
-    "@daytonaio/sdk": "^0.179.0"
+    "@daytonaio/sdk": "^0.185.0"
   },
   "devDependencies": {
-    "@daytonaio/sdk": "^0.179.0"
+    "@daytonaio/sdk": "^0.185.0"
   }
 }
