@@ -13,6 +13,11 @@
   },
   "skills": [
     {
+      "id": "agentworkforce-repo-map",
+      "source": "./skills/agentworkforce-repo-map.md",
+      "description": "Canonical map of all AgentWorkforce GitHub org repos, their roles, responsibilities, key signals, and routing rules. Read this first before routing any issue. Use gh repo list + gh api to verify against the live org."
+    },
+    {
       "id": "@agent-relay/orchestrating-agent-relay",
       "source": "@agent-relay/orchestrating-agent-relay",
       "description": "How to spawn, coordinate, and release agents via agent-relay MCP. Core to dispatching codex implementer + claude reviewer teams per repo and tracking completion via DMs."

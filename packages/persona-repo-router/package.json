@@ -21,7 +21,8 @@
   "files": [
     "index.js",
     "index.d.ts",
-    "personas"
+    "personas",
+    "skills"
   ],
   "scripts": {
     "test": "node --test test/persona.test.mjs"
