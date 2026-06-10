@@ -39,7 +39,15 @@ type TriggerOnUnion<Tr> = OnLiteralsOf<NonNullable<Tr[keyof Tr]>>;
 // for any provider event shape — including 2-segment types like
 // `slack.app_mention` that aren't valid `EventType`s (those collapse to `never`
 // under `AgentEvent<...>`).
-type ProviderEventFor<P extends string, O extends string> = BaseAgentEvent<`${P}.${O}`>;
+//
+// When `O` is the wide `string` (a persona that declares no concrete trigger
+// literals — e.g. team members launched by a dispatcher), fall back to the full
+// `AgentEvent` so a `(event: AgentEvent)` handler stays assignable. Without this
+// the wide case narrows to `BaseAgentEvent<\`${string}.${string}\`>`, which is
+// narrower than `AgentEvent` and rejects an `AgentEvent`-typed handler.
+type ProviderEventFor<P extends string, O extends string> = string extends O
+  ? AgentEvent
+  : BaseAgentEvent<`${P}.${O}`>;
 
 type TriggerProviderEvents<Tr> = {
   [P in keyof Tr]: P extends string
