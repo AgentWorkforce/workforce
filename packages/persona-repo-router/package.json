@@ -1,0 +1,51 @@
+{
+  "name": "@agentworkforce/persona-repo-router",
+  "version": "0.1.0",
+  "description": "AgentWorkforce repo-router persona pack — codebase navigator that maps all sibling repos, determines which repo(s) an issue requires changes in, and spawns codex implementer + claude reviewer agents pointed at the correct repos. Handles multi-repo issues by splitting work across parallel implementers.",
+  "type": "module",
+  "main": "index.js",
+  "types": "index.d.ts",
+  "agentworkforce": {
+    "personas": "personas"
+  },
+  "exports": {
+    ".": {
+      "types": "./index.d.ts",
+      "import": "./index.js",
+      "default": "./index.js"
+    },
+    "./persona.json": "./personas/repo-router.json",
+    "./personas/repo-router.json": "./personas/repo-router.json",
+    "./package.json": "./package.json"
+  },
+  "files": [
+    "index.js",
+    "index.d.ts",
+    "personas",
+    "skills"
+  ],
+  "scripts": {
+    "test": "node --test test/persona.test.mjs"
+  },
+  "keywords": [
+    "agentworkforce",
+    "persona",
+    "routing",
+    "dispatch",
+    "orchestration",
+    "codebase",
+    "relayfile"
+  ],
+  "license": "MIT",
+  "engines": {
+    "node": ">=18"
+  },
+  "publishConfig": {
+    "access": "public"
+  },
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/AgentWorkforce/workforce",
+    "directory": "packages/persona-repo-router"
+  }
+}
