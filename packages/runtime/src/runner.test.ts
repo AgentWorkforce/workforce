@@ -10,6 +10,7 @@ import { startRunner } from './runner.js';
 import { createCloudRuntimeDefaults } from './cloud-defaults.js';
 import { buildCtx } from './ctx.js';
 import { handler } from './handler.js';
+import { isCronTickEvent } from '@agent-relay/events';
 import type { RawGatewayEnvelope } from './shim.js';
 import type {
   SandboxContext,
@@ -94,9 +95,9 @@ test('startRunner dispatches a cron envelope to the handler', async () => {
     ])
   });
   assert.equal(received.length, 1);
-  assert.equal(received[0].source, 'cron');
-  if (received[0].source !== 'cron') return;
-  assert.equal(received[0].name, 'weekly');
+  assert.ok(isCronTickEvent(received[0]));
+  if (!isCronTickEvent(received[0])) return;
+  assert.equal(received[0].schedule, '0 9 * * 6');
   assert.ok(logs.find((l) => l.message === 'runner.handler.ok'));
 });
 
@@ -142,7 +143,8 @@ test('startRunner skips envelopes that the shim can not translate', async () => 
       log: (level, message) => logs.push({ level, message })
     },
     envelopes: streamOf([
-      { id: 'e1', workspace: 'ws-test', type: 'mystery.thing', occurredAt: 'x' },
+      // No dot, and not a known single-word type → the mapper drops it.
+      { id: 'e1', workspace: 'ws-test', type: 'mystery', occurredAt: 'x' },
       { id: 'e2', workspace: 'ws-test', type: 'cron.tick', occurredAt: 'x', name: 'tick' }
     ])
   });

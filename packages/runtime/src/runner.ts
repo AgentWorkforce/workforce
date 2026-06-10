@@ -3,7 +3,9 @@ import { createCloudRuntimeDefaults } from './cloud-defaults.js';
 import { buildCtx, type CtxBuildOptions } from './ctx.js';
 import { getTrajectoryRecorder, type TrajectoryRecorder } from './trajectory.js';
 import { isWorkforceHandler } from './handler.js';
-import { shimEnvelope, type RawGatewayEnvelope } from './shim.js';
+import { type RawGatewayEnvelope } from './shim.js';
+import { envelopeToAgentEvent } from './to-agent-event.js';
+import { isCronTickEvent } from '@agent-relay/events';
 import type {
   HarnessRunArgs,
   HarnessRunResult,
@@ -142,7 +144,7 @@ export async function startRunner(options: StartRunnerOptions): Promise<void> {
   const recorder = getTrajectoryRecorder(ctx);
   const stream = options.envelopes ?? readEnvelopesFromStdin();
   for await (const raw of stream) {
-    const event = shimEnvelope(raw);
+    const event = envelopeToAgentEvent(raw);
     if (!event) {
       ctx.log('warn', 'runner.envelope.unsupported', { rawId: raw.id, rawType: raw.type });
       continue;
@@ -172,8 +174,8 @@ async function dispatch(
     await fn(ctx, event);
     ctx.log('info', 'runner.handler.ok', {
       eventId: event.id,
-      source: event.source,
-      type: event.source === 'cron' ? 'cron.tick' : event.type,
+      source: isCronTickEvent(event) ? 'cron' : event.resource.provider,
+      type: event.type,
       durationMs: Date.now() - t0
     });
     // Auto-finalize (no-op if the handler already called ctx.trajectory.done).
@@ -181,8 +183,8 @@ async function dispatch(
   } catch (err) {
     ctx.log('error', 'runner.handler.error', {
       eventId: event.id,
-      source: event.source,
-      type: event.source === 'cron' ? 'cron.tick' : event.type,
+      source: isCronTickEvent(event) ? 'cron' : event.resource.provider,
+      type: event.type,
       attempt: event.attempt,
       durationMs: Date.now() - t0,
       error: err instanceof Error ? err.message : String(err),

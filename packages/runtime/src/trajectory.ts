@@ -7,6 +7,7 @@ import {
   type TrajectorySession,
   type Trajectory
 } from 'agent-trajectories/sdk';
+import { isCronTickEvent } from '@agent-relay/events';
 import type {
   CompactedTrajectoryContract,
   TrajectoryContext,
@@ -14,6 +15,11 @@ import type {
   WorkforceCtx,
   WorkforceEvent
 } from './types.js';
+
+/** Stable display label for an event's origin (provider slug, or `cron`). */
+function eventSourceLabel(event: WorkforceEvent): string {
+  return isCronTickEvent(event) ? 'cron' : event.resource.provider;
+}
 
 /**
  * Per-run trajectory recorder. Wraps the `agent-trajectories` SDK so the
@@ -166,7 +172,7 @@ class ActiveTrajectoryRecorder implements TrajectoryRecorder {
       this.session = await this.client.start(title, {
         ...(description ? { description } : {}),
         workflowId: workflowIdFor(event),
-        tags: [`persona:${this.personaId}`, `workspace:${event.workspaceId}`, `source:${event.source}`]
+        tags: [`persona:${this.personaId}`, `workspace:${event.workspace}`, `source:${eventSourceLabel(event)}`]
       });
       await this.session.chapter(`handle ${eventLabel(event)}`);
     } catch (err) {
@@ -318,15 +324,19 @@ function normalizeAlternatives(alternatives: Decision['alternatives'] | undefine
 }
 
 function describeEvent(event: WorkforceEvent): { title: string; description?: string } {
-  if (event.source === 'cron') {
-    return { title: `cron:${event.name}`, description: `cron schedule "${event.name}" (${event.cron})` };
+  if (isCronTickEvent(event)) {
+    return {
+      title: `cron:${event.schedule}`,
+      description: `cron schedule "${event.schedule}" fired for ${event.scheduledFor}`
+    };
   }
-  const title = event.summary?.title?.trim() || `${event.source}:${event.type}`;
-  return { title, description: `${event.source} ${event.type} — event ${event.id}` };
+  const source = eventSourceLabel(event);
+  const title = event.summary?.title?.trim() || `${source}:${event.type}`;
+  return { title, description: `${source} ${event.type} — event ${event.id}` };
 }
 
 function eventLabel(event: WorkforceEvent): string {
-  return event.source === 'cron' ? 'cron:tick' : `${event.source}:${event.type}`;
+  return isCronTickEvent(event) ? 'cron:tick' : `${eventSourceLabel(event)}:${event.type}`;
 }
 
 function workflowIdFor(event: WorkforceEvent): string {

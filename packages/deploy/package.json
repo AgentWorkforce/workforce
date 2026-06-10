@@ -1,6 +1,6 @@
 {
   "name": "@agentworkforce/deploy",
-  "version": "3.0.52",
+  "version": "4.0.1",
   "private": false,
   "type": "module",
   "main": "dist/index.js",
@@ -35,7 +35,7 @@
     "@agent-relay/cloud": "^6.0.17",
     "@agentworkforce/persona-kit": "workspace:*",
     "@agentworkforce/runtime": "workspace:*",
-    "@daytonaio/sdk": "^0.179.0",
+    "@daytonaio/sdk": "^0.185.0",
     "esbuild": "^0.25.0"
   }
 }

@@ -2,7 +2,8 @@ import type {
   Harness,
   HarnessSettings,
   McpServerSpec,
-  PersonaPermissions
+  PersonaPermissions,
+  PersonaRelay
 } from './types.js';
 
 /**
@@ -278,6 +279,55 @@ function buildRelaycastMcpServer(relay: RelayMcpConfig): McpServerSpec {
   if (relay.baseUrl) env.RELAY_BASE_URL = relay.baseUrl;
   if (relay.defaultWorkspace) env.RELAY_DEFAULT_WORKSPACE = relay.defaultWorkspace;
   return { type: 'stdio', command: 'npx', args: ['-y', '@relaycast/mcp'], env };
+}
+
+/** Outcome of resolving a persona's declared `relay` against the environment. */
+export type ResolveRelayMcpResult =
+  | { kind: 'disabled' }
+  | { kind: 'missing-secret'; reason: string }
+  | { kind: 'ready'; config: RelayMcpConfig };
+
+/**
+ * Resolve a persona's declarative {@link PersonaRelay} into a
+ * {@link RelayMcpConfig} the launcher can hand to {@link buildInteractiveSpec}
+ * as `relayMcp`. The persona declares **intent** (enabled, agentName, default
+ * workspace); the secret (`RELAY_API_KEY`) and base URL come from `env`.
+ *
+ * Returns a discriminated result so callers can distinguish "off" from
+ * "declared but the deploy env is missing `RELAY_API_KEY`" (worth a warning)
+ * rather than silently dropping relay. Pure — reads only the passed `env`.
+ */
+export function resolvePersonaRelayMcp(
+  relay: PersonaRelay | undefined,
+  env: Record<string, string | undefined>,
+  fallbackAgentName?: string
+): ResolveRelayMcpResult {
+  if (relay === undefined || relay === false) return { kind: 'disabled' };
+  const cfg = typeof relay === 'object' ? relay : {};
+  if (cfg.enabled === false) return { kind: 'disabled' };
+
+  const apiKey = env.RELAY_API_KEY?.trim();
+  const agentName = cfg.agentName?.trim() || env.RELAY_AGENT_NAME?.trim() || fallbackAgentName?.trim();
+  if (!apiKey) {
+    return { kind: 'missing-secret', reason: 'RELAY_API_KEY is not set in the deploy environment' };
+  }
+  if (!agentName) {
+    return {
+      kind: 'missing-secret',
+      reason: 'no relay agent name (set relay.agentName, RELAY_AGENT_NAME, or pass the persona id)'
+    };
+  }
+  const baseUrl = env.RELAY_BASE_URL?.trim();
+  const defaultWorkspace = cfg.defaultWorkspace?.trim() || env.RELAY_DEFAULT_WORKSPACE?.trim();
+  return {
+    kind: 'ready',
+    config: {
+      apiKey,
+      agentName,
+      ...(baseUrl ? { baseUrl } : {}),
+      ...(defaultWorkspace ? { defaultWorkspace } : {})
+    }
+  };
 }
 
 /**

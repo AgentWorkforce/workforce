@@ -15,5 +15,16 @@
  */
 export const CLOUD_ENVELOPE_FIELDS = {
   always: ["id", "workspace", "type", "occurredAt", "attempt", "name", "cron", "resource"],
-  optional: ["provider", "eventType", "deliveryId", "paths", "summary", "resumeContext"],
+  optional: [
+    "provider",
+    "eventType",
+    "deliveryId",
+    "paths",
+    "summary",
+    "resumeContext",
+    "harnessSession",
+    "channel",
+    "messageId",
+    "threadId",
+  ],
 } as const;
