@@ -1,6 +1,6 @@
 {
   "name": "@agentworkforce/persona-linear-dispatcher",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "description": "AgentWorkforce linear-dispatcher persona pack — autonomous Linear issue dispatcher that watches for Ready for Agent issues, triages them, dispatches codex implementer + claude reviewer agent teams in batches of 5, posts comments, and updates issue state. Install with `agentworkforce install`.",
   "type": "module",
   "main": "index.js",
