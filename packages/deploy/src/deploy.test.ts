@@ -77,6 +77,15 @@ export default defineAgent({
 `;
 }
 
+function googleMailAgentSrc(on = 'file.created'): string {
+  return `import { defineAgent } from '@agentworkforce/runtime';
+export default defineAgent({
+  triggers: { 'google-mail': [{ on: '${on}' }] },
+  handler: async () => {}
+});
+`;
+}
+
 async function withTempPersona(
   persona: Record<string, unknown>,
   agentSource = SCHEDULE_AGENT_SRC
@@ -320,6 +329,23 @@ test('preflightPersona refuses when the agent triggers a provider the persona do
   );
   try {
     await assert.rejects(preflightPersona(personaPath), /does not connect/);
+  } finally {
+    await cleanup();
+  }
+});
+
+test('preflightPersona normalizes trigger provider aliases for the cloud agent spec', async () => {
+  const { personaPath, cleanup } = await withTempPersona(
+    basePersonaJson({ integrations: { 'google-mail': {} } }),
+    googleMailAgentSrc()
+  );
+  try {
+    const pre = await preflightPersona(personaPath);
+    assert.deepEqual(pre.agent.triggers, {
+      gmail: [{ on: 'file.created' }]
+    });
+    assert.deepEqual(pre.integrations, ['google-mail']);
+    assert.equal(pre.warnings.length, 0);
   } finally {
     await cleanup();
   }
@@ -706,6 +732,86 @@ test('deploy dev mode injects runtime credentials for a detected writeback trigg
     } else {
       process.env.WORKFORCE_INTEGRATION_GITHUB_TOKEN = originalProviderToken;
     }
+    globalThis.fetch = originalFetch;
+    await cleanup();
+  }
+});
+
+test('deploy dev mode preserves aliased trigger providers in runtime credential requests', async () => {
+  const { personaPath, cleanup } = await withTempPersona(
+    basePersonaJson({ integrations: { 'google-mail': {} } }),
+    googleMailAgentSrc()
+  );
+  const io = createBufferedIO();
+  const originalFetch = globalThis.fetch;
+  let launchedEnv: Record<string, string> | undefined;
+
+  globalThis.fetch = (async (input, init) => {
+    const url = String(input);
+    const method = init?.method ?? 'GET';
+    const body = init?.body ? JSON.parse(String(init.body)) : undefined;
+
+    if (url.includes('/api/v1/workspaces/ws-test/integrations/google-mail/status')) {
+      return jsonResponse({ provider: 'google-mail', status: 'ready' });
+    }
+    if (url.includes('/api/v1/workspaces/ws-test/runtime-credentials')) {
+      assert.equal(method, 'POST');
+      assert.deepEqual(body, {
+        personaId: 'demo',
+        agentId: 'demo',
+        integrations: {
+          'google-mail': {
+            source: { kind: 'deployer_user' },
+            triggers: [{ on: 'file.created' }]
+          }
+        },
+        ttlSeconds: 3600
+      });
+      return jsonResponse({
+        relayfileUrl: 'https://relayfile.test',
+        relayfileWorkspaceId: 'ws-test',
+        relayfileToken: 'relay_pa_scoped',
+        relayfileMountPaths: ['/google-mail/**']
+      });
+    }
+    throw new Error(`unexpected URL ${url}`);
+  }) as typeof fetch;
+
+  try {
+    await deploy(
+      {
+        personaPath,
+        mode: 'dev',
+        noPrompt: true,
+        cloudUrl: 'https://cloud.example.test',
+        io
+      },
+      {
+        workspaceAuth: {
+          async resolveWorkspace() {
+            return { workspace: 'ws-test', token: 'relay_ws_workspace' };
+          }
+        },
+        bundle: successfulBundleStager(),
+        modes: {
+          dev: {
+            async launch(input) {
+              launchedEnv = input.env;
+              return {
+                id: 'dev-1',
+                async stop() {
+                  /* no-op */
+                },
+                done: Promise.resolve({ code: 0 })
+              };
+            }
+          }
+        }
+      }
+    );
+
+    assert.equal(launchedEnv?.RELAYFILE_TOKEN, 'relay_pa_scoped');
+  } finally {
     globalThis.fetch = originalFetch;
     await cleanup();
   }

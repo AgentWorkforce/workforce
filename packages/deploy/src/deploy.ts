@@ -1,6 +1,7 @@
 import path from 'node:path';
 import { mkdir } from 'node:fs/promises';
 import { defaultApiUrl } from '@agent-relay/cloud';
+import { KNOWN_TRIGGER_PROVIDER_ALIASES } from '@agentworkforce/persona-kit';
 import type {
   AgentSpec,
   IntegrationSource,
@@ -507,7 +508,7 @@ function buildCredentialIntegrations(
 ): CredentialIntegrations {
   const out: CredentialIntegrations = {};
   for (const [provider, cfg] of Object.entries(integrations)) {
-    const providerTriggers = triggers?.[provider];
+    const providerTriggers = triggersForIntegrationProvider(triggers, provider);
     out[provider] = {
       ...(cfg?.source ? { source: cfg.source } : {}),
       ...(cfg?.scope ? { scope: cfg.scope } : {}),
@@ -515,6 +516,14 @@ function buildCredentialIntegrations(
     };
   }
   return out;
+}
+
+function triggersForIntegrationProvider(
+  triggers: AgentSpec['triggers'],
+  provider: string
+): PersonaIntegrationTrigger[] | undefined {
+  const aliases = KNOWN_TRIGGER_PROVIDER_ALIASES as Record<string, string | undefined>;
+  return triggers?.[provider] ?? triggers?.[aliases[provider] ?? ''];
 }
 
 function shouldRequestRuntimeCredentials(args: {
