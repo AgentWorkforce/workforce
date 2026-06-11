@@ -737,7 +737,8 @@ function assertStandaloneHarnessSettings(
 
 function standaloneSpecFromOverride(
   override: LocalPersonaOverride & { intent: string },
-  sidecarWarnings: string[] = []
+  sidecarWarnings: string[] = [],
+  cwd = process.cwd()
 ): PersonaSpec {
   const context = `standalone persona "${override.id}"`;
   const harness = requireStandaloneField(override.harness, `${context}.harness`);
@@ -804,7 +805,8 @@ function standaloneSpecFromOverride(
       override.skills ?? [],
       override.__sourceDir,
       override.id,
-      sidecarWarnings
+      sidecarWarnings,
+      cwd
     ),
     ...(inputs ? { inputs } : {}),
     harness,
@@ -835,7 +837,8 @@ function findInLowerLayers(
   layers: readonly SourceLayer[],
   overrides: Map<string, Map<string, LocalPersonaOverride>>,
   resolving: Set<string>,
-  sidecarWarnings: string[]
+  sidecarWarnings: string[],
+  cwd: string
 ): PersonaSpec | undefined {
   for (let i = startLayerIdx; i < layers.length; i++) {
     const layer = layers[i];
@@ -843,7 +846,7 @@ function findInLowerLayers(
     if (!layerOverrides) continue;
     const overrideId = findOverrideIdInLayer(key, layerOverrides, layer.source);
     if (overrideId) {
-      return resolveInLayer(overrideId, i, layers, overrides, resolving, sidecarWarnings);
+      return resolveInLayer(overrideId, i, layers, overrides, resolving, sidecarWarnings, cwd);
     }
   }
   return findInLibrary(key);
@@ -874,7 +877,8 @@ function resolveInLayer(
   layers: readonly SourceLayer[],
   overrides: Map<string, Map<string, LocalPersonaOverride>>,
   resolving: Set<string>,
-  sidecarWarnings: string[]
+  sidecarWarnings: string[],
+  cwd: string
 ): PersonaSpec {
   const layer = layers[layerIdx];
   const key = `${layer.key}:${id}`;
@@ -888,10 +892,18 @@ function resolveInLayer(
       throw new Error(`internal: resolveInLayer called for missing ${key}`);
     }
     if (isStandaloneOverride(override)) {
-      return standaloneSpecFromOverride(override, sidecarWarnings);
+      return standaloneSpecFromOverride(override, sidecarWarnings, cwd);
     }
     const baseKey = override.extends ?? override.id;
-    const base = findInLowerLayers(baseKey, layerIdx + 1, layers, overrides, resolving, sidecarWarnings);
+    const base = findInLowerLayers(
+      baseKey,
+      layerIdx + 1,
+      layers,
+      overrides,
+      resolving,
+      sidecarWarnings,
+      cwd
+    );
     if (!base) {
       const lowerLayers = [
         ...layers.slice(layerIdx + 1).map((lower) => lower.source),
@@ -902,7 +914,7 @@ function resolveInLayer(
         : `no lower-layer persona with id "${override.id}" to implicitly inherit from; add extends or define the persona in a lower layer`;
       throw new Error(hint);
     }
-    return mergeOverride(base, override, sidecarWarnings);
+    return mergeOverride(base, override, sidecarWarnings, cwd);
   } finally {
     resolving.delete(key);
   }
@@ -940,7 +952,8 @@ function resolveLocalSkillSources(
   skills: readonly PersonaSkill[],
   sourceDir: string | undefined,
   personaId: string,
-  warnings: string[]
+  warnings: string[],
+  cwd = process.cwd()
 ): PersonaSkill[] {
   return skills.flatMap((skill) => {
     const source = skill.source;
@@ -962,7 +975,7 @@ function resolveLocalSkillSources(
       ...(sourceDir
         ? [resolvePath(sourceDir, source), resolvePath(sourceDir, '..', source)]
         : []),
-      resolvePath(process.cwd(), source)
+      resolvePath(cwd, source)
     ];
     const resolved = candidates.find(isFile);
     if (!resolved) {
@@ -1013,7 +1026,8 @@ function resolveSidecarPath(
 function mergeOverride(
   base: PersonaSpec,
   override: LocalPersonaOverride,
-  sidecarWarnings: string[] = []
+  sidecarWarnings: string[] = [],
+  cwd = process.cwd()
 ): PersonaSpec {
   const harness = override.harness ?? base.harness;
   const model = override.model ?? base.model;
@@ -1085,7 +1099,8 @@ function mergeOverride(
           override.skills,
           override.__sourceDir,
           override.id,
-          sidecarWarnings
+          sidecarWarnings,
+          cwd
         )
       : base.skills;
   return {
@@ -1164,6 +1179,7 @@ function dedupe(values: string[]): string[] {
 }
 
 export function loadLocalPersonas(options: LoadOptions = {}): LoadedLocalPersonas {
+  const cwd = options.cwd ?? process.cwd();
   const sourceDirs = buildPersonaSourceDirectories(options);
   const warnings: string[] = [...sourceDirs.config.warnings];
   const layers: SourceLayer[] = sourceDirs.directories.map((sourceDir, idx) => ({
@@ -1190,7 +1206,7 @@ export function loadLocalPersonas(options: LoadOptions = {}): LoadedLocalPersona
       if (byId.has(id)) continue; // higher-layer already won
       const sidecarWarnings: string[] = [];
       try {
-        const resolved = resolveInLayer(id, i, layers, overrides, new Set(), sidecarWarnings);
+        const resolved = resolveInLayer(id, i, layers, overrides, new Set(), sidecarWarnings, cwd);
         byId.set(id, resolved);
         sources.set(id, layer.source);
         const filePath = layerFilePaths.get(`${layer.key}:${id}`);

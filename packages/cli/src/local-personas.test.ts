@@ -784,6 +784,26 @@ test('relative local skill source falls back to the package root above the perso
   });
 });
 
+test('relative local skill source falls back to the loader cwd', () => {
+  withLayers(({ cwd, homeDir }) => {
+    // Installed packs can rewrite asset paths to cwd-relative locations.
+    const assetsDir = join(cwd, '__assets', 'skills');
+    mkdirSync(assetsDir, { recursive: true });
+    writeFileSync(join(assetsDir, 'asset-skill.md'), '# asset skill\n');
+    writeJson(join(homeDir, 'p.json'), {
+      id: 'p',
+      extends: 'persona-maker',
+      skills: [
+        { id: 'asset-skill', source: './__assets/skills/asset-skill.md', description: 'asset skill' }
+      ]
+    });
+    const loaded = loadLocalPersonas({ cwd, homeDir });
+    assert.deepEqual(loaded.warnings, []);
+    const spec = loaded.byId.get('p');
+    assert.equal(spec?.skills[0]?.source, join(assetsDir, 'asset-skill.md'));
+  });
+});
+
 test('missing local skill file produces a warning and drops the skill, not a throw', () => {
   withLayers(({ cwd, homeDir }) => {
     writeJson(join(homeDir, 'p.json'), {
