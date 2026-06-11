@@ -826,6 +826,19 @@ test('missing local skill file produces a warning and drops the skill, not a thr
   });
 });
 
+test('malformed local skill entries produce a warning instead of crashing resolution', () => {
+  withLayers(({ cwd, homeDir }) => {
+    writeJson(join(homeDir, 'p.json'), {
+      id: 'p',
+      extends: 'persona-maker',
+      skills: [null]
+    });
+    const loaded = loadLocalPersonas({ cwd, homeDir });
+    assert.equal(loaded.byId.has('p'), false);
+    assert.match(loaded.warnings.join('\n'), /skills\[0\] must be an object/);
+  });
+});
+
 test('missing sidecar file produces a warning, not a throw', () => {
   withLayers(({ cwd, homeDir }) => {
     writeJson(join(homeDir, 'p.json'), {

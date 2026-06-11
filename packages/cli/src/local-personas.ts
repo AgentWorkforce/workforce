@@ -19,6 +19,7 @@ import {
   type PersonaSpec,
   type PersonaTag,
   type SidecarMdMode,
+  parseSkills,
   parseHarnessSettings
 } from '@agentworkforce/persona-kit';
 import { listBuiltInPersonas, personaCatalog } from '@agentworkforce/workload-router';
@@ -445,9 +446,8 @@ function parseOverride(value: unknown, context: string): LocalPersonaOverride {
     }
   }
 
-  if (raw.skills !== undefined && !Array.isArray(raw.skills)) {
-    throw new Error(`${context}.skills must be an array if provided`);
-  }
+  const skills =
+    raw.skills === undefined ? undefined : parseSkills(raw.skills, `${context}.skills`);
   const inputs = parseInputsShape(raw.inputs, `${context}.inputs`);
   assertStringMap(raw.env, `${context}.env`);
   assertMcpServersShape(raw.mcpServers, `${context}.mcpServers`);
@@ -500,7 +500,7 @@ function parseOverride(value: unknown, context: string): LocalPersonaOverride {
     intent: raw.intent as string | undefined,
     ...(normalizedTags !== undefined ? { tags: normalizedTags } : {}),
     description: raw.description as string | undefined,
-    skills: raw.skills as PersonaSpec['skills'] | undefined,
+    skills,
     inputs,
     env: raw.env as LocalPersonaOverride['env'],
     mcpServers: raw.mcpServers as LocalPersonaOverride['mcpServers'],
