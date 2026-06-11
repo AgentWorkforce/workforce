@@ -7,6 +7,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [4.0.2] - 2026-06-11
+
+### Added
+
+- **Add linear-dispatcher and repo-router persona packs** (#223)
+
+### Fixed
+
+- Resolve local skill sources against the persona JSON directory (#226)
+
 ## [4.0.0] - 2026-06-10
 
 ### Breaking Changes
