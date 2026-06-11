@@ -15,6 +15,7 @@ import {
   type PersonaInputSpec,
   type PersonaMount,
   type PersonaPermissions,
+  type PersonaSkill,
   type PersonaSpec,
   type PersonaTag,
   type SidecarMdMode,
@@ -799,7 +800,12 @@ function standaloneSpecFromOverride(
     // Tags are optional per cloud#553 (denormalized catalog metadata).
     ...(override.tags ? { tags: override.tags } : {}),
     description: requireStandaloneField(override.description, `${context}.description`),
-    skills: override.skills ?? [],
+    skills: resolveLocalSkillSources(
+      override.skills ?? [],
+      override.__sourceDir,
+      override.id,
+      sidecarWarnings
+    ),
     ...(inputs ? { inputs } : {}),
     harness,
     model,
@@ -900,6 +906,73 @@ function resolveInLayer(
   } finally {
     resolving.delete(key);
   }
+}
+
+// Local skill source detection mirrors persona-kit's local provider: a
+// non-URL path ending in `.md`. Anything else (prpm refs, skill.sh URLs)
+// passes through untouched.
+const LOCAL_SKILL_MD_RE = /\.md$/i;
+const SKILL_URL_PREFIX_RE = /^[a-z][a-z0-9+.-]*:\/\//i;
+
+function isFile(path: string): boolean {
+  try {
+    return statSync(path).isFile();
+  } catch {
+    return false;
+  }
+}
+
+/**
+ * Resolve relative local skill sources (`./skills/foo.md`) declared by an
+ * override against the directory of the JSON file that declared them, the
+ * same way sidecar paths resolve. Two fallbacks cover the other layouts in
+ * the wild: persona packs keep `skills/` at the package root (one level
+ * above `personas/`), and installer-rewritten specs use cwd-relative
+ * `__assets` paths.
+ *
+ * Missing files surface as warnings and the skill is dropped, matching
+ * sidecar semantics. A broken pointer must not abort the launch: skill
+ * installs run as one `&&` chain, so a failing `cp` would otherwise kill
+ * the harness spawn AND prevent the skill cache marker from being written,
+ * forcing every subsequent spawn to re-download all skills.
+ */
+function resolveLocalSkillSources(
+  skills: readonly PersonaSkill[],
+  sourceDir: string | undefined,
+  personaId: string,
+  warnings: string[]
+): PersonaSkill[] {
+  return skills.flatMap((skill) => {
+    const source = skill.source;
+    if (
+      typeof source !== 'string' ||
+      SKILL_URL_PREFIX_RE.test(source) ||
+      !LOCAL_SKILL_MD_RE.test(source)
+    ) {
+      return [skill];
+    }
+    if (isAbsolute(source)) {
+      if (isFile(source)) return [skill];
+      warnings.push(
+        `[${personaId}].skills "${skill.id}": local skill file not found at ${source}; skipping skill`
+      );
+      return [];
+    }
+    const candidates = [
+      ...(sourceDir
+        ? [resolvePath(sourceDir, source), resolvePath(sourceDir, '..', source)]
+        : []),
+      resolvePath(process.cwd(), source)
+    ];
+    const resolved = candidates.find(isFile);
+    if (!resolved) {
+      warnings.push(
+        `[${personaId}].skills "${skill.id}": local skill file not found (tried ${candidates.join(', ')}); skipping skill`
+      );
+      return [];
+    }
+    return [{ ...skill, source: resolved }];
+  });
 }
 
 /**
@@ -1003,12 +1076,24 @@ function mergeOverride(
   const agentsMdMode = override.agentsMdMode ?? base.agentsMdMode;
 
   const mergedTags = override.tags ?? base.tags;
+  // Skills replace wholesale, so resolution context is unambiguous: an
+  // override's skills resolve against its own __sourceDir; inherited skills
+  // were already resolved when the base layer was built.
+  const skills =
+    override.skills !== undefined
+      ? resolveLocalSkillSources(
+          override.skills,
+          override.__sourceDir,
+          override.id,
+          sidecarWarnings
+        )
+      : base.skills;
   return {
     id: override.id,
     intent: base.intent,
     ...(mergedTags ? { tags: mergedTags } : {}),
     description: override.description ?? base.description,
-    skills: override.skills ?? base.skills,
+    skills,
     ...(inputs ? { inputs } : {}),
     harness,
     model,
