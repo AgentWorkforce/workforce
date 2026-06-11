@@ -18,6 +18,9 @@
     "aiMemory": { "enabled": true }
   },
   "harnessSettings": { "reasoning": "high", "timeoutSeconds": 900 },
+  "permissions": {
+    "mode": "bypassPermissions"
+  },
   "inputs": {
     "TASK_DESCRIPTION": { "description": "Optional kickoff: the symptom to diagnose (dropped Slack event, mount not reading down, writeback not delivering, DM-send failing). When launched directly the agent loads CLAUDE.md and waits.", "optional": true }
   },
