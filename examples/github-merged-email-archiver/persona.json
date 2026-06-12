@@ -1,0 +1,59 @@
+{
+  "id": "github-merged-email-archiver",
+  "intent": "triage",
+  "tags": [
+    "proactive"
+  ],
+  "description": "Checks GitHub notification emails in Google Mail every hour and archives inbox messages for pull requests that are already merged.",
+  "inputs": {
+    "GMAIL_QUERY": {
+      "description": "Gmail search query used to find candidate GitHub notification emails in the inbox.",
+      "env": "GMAIL_QUERY",
+      "default": "in:inbox from:notifications@github.com"
+    },
+    "GITHUB_OWNER_ALLOWLIST": {
+      "description": "Optional comma-separated GitHub owner allowlist. Leave empty to consider any owner.",
+      "env": "GITHUB_OWNER_ALLOWLIST",
+      "default": "",
+      "optional": true
+    },
+    "GITHUB_REPO_ALLOWLIST": {
+      "description": "Optional comma-separated repo allowlist in owner/repo form. Leave empty to consider any repo.",
+      "env": "GITHUB_REPO_ALLOWLIST",
+      "default": "",
+      "optional": true
+    },
+    "ARCHIVE_DRY_RUN": {
+      "description": "When true, log candidate GitHub emails that would be archived without modifying Google Mail.",
+      "env": "ARCHIVE_DRY_RUN",
+      "default": "true"
+    },
+    "MAX_MESSAGES_PER_RUN": {
+      "description": "Maximum number of candidate Gmail messages to inspect per hourly run.",
+      "env": "MAX_MESSAGES_PER_RUN",
+      "default": "50"
+    }
+  },
+  "cloud": true,
+  "useSubscription": false,
+  "integrations": {
+    "google-mail": {},
+    "github": {}
+  },
+  "memory": {
+    "enabled": true,
+    "scopes": [
+      "workspace"
+    ]
+  },
+  "onEvent": "./agent.ts",
+  "harness": "codex",
+  "model": "gpt-5.4",
+  "systemPrompt": "You are a careful email triage agent. Safely archive GitHub notification emails only when the corresponding pull request is confirmed merged. Prefer false negatives over false positives and log clear reasons for every skipped message.",
+  "harnessSettings": {
+    "reasoning": "low",
+    "timeoutSeconds": 600,
+    "sandboxMode": "workspace-write",
+    "workspaceWriteNetworkAccess": true
+  }
+}
