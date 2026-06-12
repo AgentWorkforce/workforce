@@ -587,6 +587,27 @@ export interface ConnectAllResult {
 }
 
 /**
+ * Providers whose credential is captured out-of-band by the relay CLI
+ * (`agent-relay cloud connect <provider>` → local `daytona login` →
+ * normalized token uploaded to the cloud credential-store) rather than the
+ * browser `connect-session` OAuth flow.
+ *
+ * For these, deploy cannot drive the connect inline: there is no Nango/OAuth
+ * session URL to open (the cloud returns `409 unknown_provider` for them).
+ * The walker instead instructs the user to run the capture command and gates
+ * the deploy until the credential exists. Status is still reported through the
+ * same `/integrations/status` check every other provider uses, so the
+ * `already-connected` path is identical to slack/github.
+ *
+ * Keep this in sync with the relay CLI's `CLI_AUTH_CONFIG` capture providers.
+ */
+const CLI_CAPTURED_PROVIDERS = new Set<string>(['daytona']);
+
+function isCliCapturedProvider(provider: string): boolean {
+  return CLI_CAPTURED_PROVIDERS.has(provider);
+}
+
+/**
  * Walk the persona's declared integrations and ensure each is connected.
  * Per the deploy-v1 spec, the orchestrator prompts before each provider's
  * connect flow ("Connect github now? (Y/n)") so users running on a shared
@@ -707,6 +728,25 @@ export async function connectIntegrations(input: ConnectAllInput): Promise<Conne
         provider,
         status: 'failed',
         message: 'not connected (prompts are disabled)'
+      });
+      continue;
+    }
+
+    if (isCliCapturedProvider(provider)) {
+      // No browser OAuth flow exists for relay-CLI-captured providers — the
+      // credential is captured out-of-band. Don't show a misleading "(opens
+      // browser)" prompt or call connect-session (which 409s); instruct the
+      // user to run the capture command and gate the deploy. This covers both
+      // the interactive not-connected path and `--reconnect <provider>` (which
+      // reaches here when forceReconnect is set).
+      const command = `agent-relay cloud connect ${provider}`;
+      input.io.error(
+        `integrations.${provider}: not connected. Run \`${command}\` to capture the credential, then re-deploy.`
+      );
+      outcomes.push({
+        provider,
+        status: 'failed',
+        message: `not connected (run \`${command}\`)`
       });
       continue;
     }

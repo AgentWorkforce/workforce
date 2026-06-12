@@ -1795,3 +1795,217 @@ test('relayfileOptionsResolver stops when the server repeats the same cursor', a
   assert.equal(urls.length, 2);
   assert.equal(new URL(urls[1]!).searchParams.get('cursor'), 'same');
 });
+
+// --- Daytona status-route contract (resolver-level) -----------------------
+//
+// Locks the exact `/integrations/daytona/status` response shape Cloud-Cred
+// confirmed: connected emits ready:true / state:'ready' / oauth.connected:true
+// (credential row + encrypted store object both present); missing either
+// returns ready:false / state:'pending' / oauth.connected:false. These run the
+// REAL relayfileIntegrationResolver (not a stub) so a drift in either side's
+// contract fails here.
+
+test('relayfileIntegrationResolver reads a connected daytona status from the credential-backed route', async () => {
+  let requestedUrl = '';
+  const resolver = relayfileIntegrationResolver({
+    apiUrl: 'https://cloud.example.test',
+    workspaceId: 'ws-1',
+    workspaceToken: 'tok',
+    fetch: async (input) => {
+      requestedUrl = String(input);
+      return okJson({
+        provider: 'daytona',
+        ready: true,
+        state: 'ready',
+        connectionMatched: true,
+        oauth: { connected: true }
+      });
+    }
+  });
+  assert.equal(
+    await resolver.isConnected({ workspace: 'ws-1', provider: 'daytona' }),
+    true
+  );
+  assert.match(requestedUrl, /\/workspaces\/ws-1\/integrations\/daytona\/status/);
+  assert.match(requestedUrl, /scope=deployer_user/);
+});
+
+test('relayfileIntegrationResolver treats a pending daytona status (no store object yet) as not connected', async () => {
+  const resolver = relayfileIntegrationResolver({
+    apiUrl: 'https://cloud.example.test',
+    workspaceId: 'ws-1',
+    workspaceToken: 'tok',
+    fetch: async () => okJson({
+      provider: 'daytona',
+      ready: false,
+      state: 'pending',
+      oauth: { connected: false }
+    })
+  });
+  assert.equal(
+    await resolver.isConnected({ workspace: 'ws-1', provider: 'daytona' }),
+    false
+  );
+});
+
+// --- Daytona connect (provider-agnostic walker proof) ---------------------
+//
+// daytona is captured out-of-band by `agent-relay cloud connect daytona`
+// (sandbox `daytona login` → cloud stores provider 'daytona'), then surfaced
+// to deploy via the SAME `/integrations/status` check every other provider
+// uses. These tests prove the generic walker recognizes + gates `daytona`
+// with zero provider-specific plumbing, exactly mirroring slack/github.
+// See daytona-monitor/persona.json which declares `integrations.daytona`.
+
+test('connectIntegrations treats a connected daytona integration as already-connected (no connect call)', async () => {
+  const io = createBufferedIO();
+  let connectCalled = false;
+  io.confirm = async () => {
+    throw new Error('should not prompt when daytona is already connected');
+  };
+
+  const result = await connectIntegrations({
+    persona: {
+      id: 'daytona-monitor',
+      intent: 'relay-orchestrator',
+      description: 'test persona',
+      tags: ['discovery'],
+      integrations: { daytona: { scope: { sandboxes: '/daytona/sandboxes/**' } } }
+    } as never,
+    workspace: 'ws-1',
+    noConnect: false,
+    io,
+    integrations: {
+      async isConnected(args) {
+        assert.equal(args.provider, 'daytona');
+        return true;
+      },
+      async connect() {
+        connectCalled = true;
+        return { connectionId: 'conn-daytona' };
+      }
+    }
+  });
+
+  assert.equal(connectCalled, false);
+  assert.deepEqual(result.outcomes, [{ provider: 'daytona', status: 'already-connected' }]);
+  assert.ok(io.messages.some((m) => m.level === 'info' && /daytona: already connected/.test(m.message)));
+});
+
+test('connectIntegrations gates the deploy when daytona is not connected under --no-prompt', async () => {
+  const io = createBufferedIO();
+  let connectCalled = false;
+
+  const result = await connectIntegrations({
+    persona: {
+      id: 'daytona-monitor',
+      intent: 'relay-orchestrator',
+      description: 'test persona',
+      tags: ['discovery'],
+      integrations: { daytona: {} }
+    } as never,
+    workspace: 'ws-1',
+    noConnect: false,
+    noPrompt: true,
+    io,
+    integrations: {
+      async isConnected() {
+        return false;
+      },
+      async connect() {
+        connectCalled = true;
+        return { connectionId: 'conn-daytona' };
+      }
+    }
+  });
+
+  assert.equal(connectCalled, false);
+  assert.equal(result.outcomes.length, 1);
+  const [outcome] = result.outcomes;
+  assert.equal(outcome.provider, 'daytona');
+  assert.equal(outcome.status, 'failed');
+  assert.match(outcome.message ?? '', /not connected/i);
+});
+
+test('connectIntegrations instructs the relay CLI capture command when daytona is not connected (interactive)', async () => {
+  const io = createBufferedIO();
+  let connectCalled = false;
+  let confirmCalled = false;
+  io.confirm = async () => {
+    confirmCalled = true;
+    return true;
+  };
+
+  const result = await connectIntegrations({
+    persona: {
+      id: 'daytona-monitor',
+      intent: 'relay-orchestrator',
+      description: 'test persona',
+      tags: ['discovery'],
+      integrations: { daytona: {} }
+    } as never,
+    workspace: 'ws-1',
+    noConnect: false,
+    io,
+    integrations: {
+      async isConnected() {
+        return false;
+      },
+      async connect() {
+        connectCalled = true;
+        return { connectionId: 'conn-daytona' };
+      }
+    }
+  });
+
+  // daytona is captured out-of-band: no browser prompt, no connect-session call.
+  assert.equal(confirmCalled, false);
+  assert.equal(connectCalled, false);
+  assert.equal(result.outcomes.length, 1);
+  const [outcome] = result.outcomes;
+  assert.equal(outcome.provider, 'daytona');
+  assert.equal(outcome.status, 'failed');
+  assert.match(outcome.message ?? '', /agent-relay cloud connect daytona/);
+  assert.ok(io.messages.some((m) =>
+    m.level === 'error' && /agent-relay cloud connect daytona/.test(m.message)
+  ));
+  // Must NOT show the misleading browser prompt copy for a CLI-captured provider.
+  assert.ok(!io.messages.some((m) => /opens browser/.test(m.message)));
+});
+
+test('connectIntegrations --reconnect daytona instructs the relay CLI capture command (no browser connect)', async () => {
+  const io = createBufferedIO();
+  let connectCalled = false;
+
+  const result = await connectIntegrations({
+    persona: {
+      id: 'daytona-monitor',
+      intent: 'relay-orchestrator',
+      description: 'test persona',
+      tags: ['discovery'],
+      integrations: { daytona: {} }
+    } as never,
+    workspace: 'ws-1',
+    noConnect: false,
+    reconnectProviders: ['daytona'],
+    io,
+    integrations: {
+      async isConnected() {
+        return true;
+      },
+      async connect() {
+        connectCalled = true;
+        return { connectionId: 'conn-daytona' };
+      }
+    }
+  });
+
+  // --reconnect for a CLI-captured provider can't run a browser flow either;
+  // it instructs the capture command and gates.
+  assert.equal(connectCalled, false);
+  assert.equal(result.outcomes.length, 1);
+  const [outcome] = result.outcomes;
+  assert.equal(outcome.provider, 'daytona');
+  assert.equal(outcome.status, 'failed');
+  assert.match(outcome.message ?? '', /agent-relay cloud connect daytona/);
+});
