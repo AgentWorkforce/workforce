@@ -1924,7 +1924,47 @@ test('connectIntegrations gates the deploy when daytona is not connected under -
   const [outcome] = result.outcomes;
   assert.equal(outcome.provider, 'daytona');
   assert.equal(outcome.status, 'failed');
-  assert.match(outcome.message ?? '', /not connected/i);
+  assert.match(outcome.message ?? '', /agent-relay cloud connect daytona/);
+  assert.ok(io.messages.some((m) =>
+    m.level === 'error' && /agent-relay cloud connect daytona/.test(m.message)
+  ));
+});
+
+test('connectIntegrations gates the deploy with the daytona capture command under --no-connect', async () => {
+  const io = createBufferedIO();
+  let connectCalled = false;
+
+  const result = await connectIntegrations({
+    persona: {
+      id: 'daytona-monitor',
+      intent: 'relay-orchestrator',
+      description: 'test persona',
+      tags: ['discovery'],
+      integrations: { daytona: {} }
+    } as never,
+    workspace: 'ws-1',
+    noConnect: true,
+    io,
+    integrations: {
+      async isConnected() {
+        return false;
+      },
+      async connect() {
+        connectCalled = true;
+        return { connectionId: 'conn-daytona' };
+      }
+    }
+  });
+
+  assert.equal(connectCalled, false);
+  assert.equal(result.outcomes.length, 1);
+  const [outcome] = result.outcomes;
+  assert.equal(outcome.provider, 'daytona');
+  assert.equal(outcome.status, 'failed');
+  assert.match(outcome.message ?? '', /agent-relay cloud connect daytona/);
+  assert.ok(io.messages.some((m) =>
+    m.level === 'error' && /agent-relay cloud connect daytona/.test(m.message)
+  ));
 });
 
 test('connectIntegrations instructs the relay CLI capture command when daytona is not connected (interactive)', async () => {

@@ -708,6 +708,25 @@ export async function connectIntegrations(input: ConnectAllInput): Promise<Conne
       continue;
     }
 
+    if (isCliCapturedProvider(provider)) {
+      // No browser OAuth flow exists for relay-CLI-captured providers — the
+      // credential is captured out-of-band. Don't show a misleading "(opens
+      // browser)" prompt, a generic non-interactive retry hint, or call
+      // connect-session (which 409s); instruct the user to run the capture
+      // command and gate the deploy. This covers interactive, non-interactive,
+      // and `--reconnect <provider>` paths.
+      const command = `agent-relay cloud connect ${provider}`;
+      input.io.error(
+        `integrations.${provider}: not connected. Run \`${command}\` to capture the credential, then re-deploy.`
+      );
+      outcomes.push({
+        provider,
+        status: 'failed',
+        message: `not connected (run \`${command}\`)`
+      });
+      continue;
+    }
+
     if (input.noPrompt && !forceReconnect) {
       input.io.error(
         `integrations.${provider}: not connected, and --no-prompt was passed. Connect it before deploying or run without --no-prompt.`
@@ -728,25 +747,6 @@ export async function connectIntegrations(input: ConnectAllInput): Promise<Conne
         provider,
         status: 'failed',
         message: 'not connected (prompts are disabled)'
-      });
-      continue;
-    }
-
-    if (isCliCapturedProvider(provider)) {
-      // No browser OAuth flow exists for relay-CLI-captured providers — the
-      // credential is captured out-of-band. Don't show a misleading "(opens
-      // browser)" prompt or call connect-session (which 409s); instruct the
-      // user to run the capture command and gate the deploy. This covers both
-      // the interactive not-connected path and `--reconnect <provider>` (which
-      // reaches here when forceReconnect is set).
-      const command = `agent-relay cloud connect ${provider}`;
-      input.io.error(
-        `integrations.${provider}: not connected. Run \`${command}\` to capture the credential, then re-deploy.`
-      );
-      outcomes.push({
-        provider,
-        status: 'failed',
-        message: `not connected (run \`${command}\`)`
       });
       continue;
     }
