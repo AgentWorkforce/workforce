@@ -23,6 +23,7 @@ export interface TypedTrigger<P extends string> {
   on: TriggerNameFor<P>;
   match?: string;
   where?: string;
+  maxConcurrency?: number;
 }
 
 /**
