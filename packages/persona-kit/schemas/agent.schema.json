@@ -50,8 +50,9 @@
           "type": "string"
         },
         "maxConcurrency": {
-          "type": "number",
-          "description": "Optional delivery backpressure hint for this trigger. Positive integers are preserved by the parser; invalid values are treated as unset so older or malformed specs do not block delivery."
+          "type": "integer",
+          "description": "Optional delivery backpressure hint for this trigger. Positive integers are preserved by the parser; invalid values are treated as unset so older or malformed specs do not block delivery.",
+          "minimum": 1
         }
       },
       "required": [

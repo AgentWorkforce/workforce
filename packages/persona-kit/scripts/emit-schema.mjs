@@ -134,6 +134,18 @@ const agentSchema = agentGenerator.createSchema('AgentSpec');
 agentSchema.$schema = 'https://json-schema.org/draft/2020-12/schema';
 agentSchema.$id = 'https://agentworkforce.dev/schemas/agent.schema.json';
 
+const agentTrigger = agentSchema.definitions?.PersonaIntegrationTrigger;
+if (
+  agentTrigger &&
+  agentTrigger.properties?.maxConcurrency?.type === 'number'
+) {
+  agentTrigger.properties.maxConcurrency = {
+    ...agentTrigger.properties.maxConcurrency,
+    type: 'integer',
+    minimum: 1
+  };
+}
+
 const agentSerialized = `${JSON.stringify(agentSchema, null, 2)}\n`;
 let existingAgent = '';
 try {
