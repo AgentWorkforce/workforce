@@ -138,6 +138,24 @@ test('agent schema exposes launchedBy/triggers/schedules/watch', async () => {
   assert.equal(watchRule.properties?.paths && watchRule.properties.paths !== true
     ? watchRule.properties.paths.type
     : undefined, 'array');
+  const trigger = definitions.PersonaIntegrationTrigger;
+  const maxConcurrency = trigger.properties?.maxConcurrency;
+  assert.equal(maxConcurrency && maxConcurrency !== true
+    ? maxConcurrency.type
+    : undefined, 'integer');
+  assert.equal(maxConcurrency && maxConcurrency !== true
+    ? maxConcurrency.minimum
+    : undefined, 1);
+
+  assertSchema({ triggers: { slack: [{ on: 'message.created', maxConcurrency: 1 }] } }, schema, schema, 'agent');
+  assert.throws(
+    () => assertSchema({ triggers: { slack: [{ on: 'message.created', maxConcurrency: 0 }] } }, schema, schema, 'agent'),
+    /agent\.triggers\.slack\[0\]\.maxConcurrency must be >= 1/
+  );
+  assert.throws(
+    () => assertSchema({ triggers: { slack: [{ on: 'message.created', maxConcurrency: 1.5 }] } }, schema, schema, 'agent'),
+    /agent\.triggers\.slack\[0\]\.maxConcurrency must be integer/
+  );
 });
 
 type SchemaNode = Record<string, unknown> & {
@@ -150,6 +168,7 @@ type SchemaNode = Record<string, unknown> & {
   enum?: unknown[];
   const?: unknown;
   type?: string | string[];
+  minimum?: number;
   properties?: Record<string, SchemaNode | boolean>;
   additionalProperties?: SchemaNode | boolean;
   required?: string[];
@@ -188,6 +207,9 @@ function assertSchema(value: unknown, schema: SchemaNode, root: SchemaNode, path
   }
   if (schema.type) {
     assertType(value, schema.type, path);
+  }
+  if (typeof schema.minimum === 'number' && typeof value === 'number' && value < schema.minimum) {
+    throw new Error(`${path} must be >= ${schema.minimum}`);
   }
   if (schema.type === 'object' || schema.properties || schema.additionalProperties || schema.required) {
     if (!isObject(value)) {
