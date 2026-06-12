@@ -543,7 +543,7 @@ export function parseIntegrationTrigger(
   if (!isObject(value)) {
     throw new Error(`${context} must be an object`);
   }
-  const { on, match, where } = value;
+  const { on, match, where, maxConcurrency } = value;
   if (typeof on !== 'string' || !on.trim()) {
     throw new Error(`${context}.on must be a non-empty string`);
   }
@@ -553,10 +553,19 @@ export function parseIntegrationTrigger(
   if (where !== undefined && (typeof where !== 'string' || !where.trim())) {
     throw new Error(`${context}.where must be a non-empty string if provided`);
   }
+  const parsedMaxConcurrency =
+    typeof maxConcurrency === 'number' &&
+    Number.isInteger(maxConcurrency) &&
+    maxConcurrency >= 1
+      ? maxConcurrency
+      : undefined;
   return {
     on,
     ...(typeof match === 'string' ? { match } : {}),
-    ...(typeof where === 'string' ? { where } : {})
+    ...(typeof where === 'string' ? { where } : {}),
+    ...(parsedMaxConcurrency !== undefined
+      ? { maxConcurrency: parsedMaxConcurrency }
+      : {})
   };
 }
 

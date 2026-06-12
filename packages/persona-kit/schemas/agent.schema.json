@@ -48,12 +48,16 @@
         },
         "where": {
           "type": "string"
+        },
+        "maxConcurrency": {
+          "type": "number",
+          "description": "Optional delivery backpressure hint for this trigger. Positive integers are preserved by the parser; invalid values are treated as unset so older or malformed specs do not block delivery."
         }
       },
       "required": [
         "on"
       ],
-      "description": "A single event trigger declared by an **agent** (`agent.ts`). `on` is a Relayfile-adapter-normalized event name (e.g. `pull_request.opened`, `issue.create`, `message.created`). `match` and `where` are filter sugars the deploy CLI lints against a known registry; unknown values warn but do not fail parse, so the cloud runtime stays the source of truth.\n\nTriggers live on the agent ( {@link  AgentSpec.triggers } ), not the persona — the persona only declares which providers it connects to ( {@link  PersonaIntegrationConfig } ). The deploy CLI joins the two: events from `agent.triggers[provider]`, connection/scope from `persona.integrations[provider]`.\n\nExamples:   { on: \"pull_request.opened\" }   { on: \"pull_request_review_comment.created\", match: \"@mention\" }   { on: \"check_run.completed\", where: \"conclusion=failure\" }"
+      "description": "A single event trigger declared by an **agent** (`agent.ts`). `on` is a Relayfile-adapter-normalized event name (e.g. `pull_request.opened`, `issue.create`, `message.created`). `match` and `where` are filter sugars the deploy CLI lints against a known registry; unknown values warn but do not fail parse, so the cloud runtime stays the source of truth.\n\nTriggers live on the agent ( {@link  AgentSpec.triggers } ), not the persona — the persona only declares which providers it connects to ( {@link  PersonaIntegrationConfig } ). The deploy CLI joins the two: events from `agent.triggers[provider]`, connection/scope from `persona.integrations[provider]`.\n\nExamples:   { on: \"pull_request.opened\" }   { on: \"pull_request_review_comment.created\", match: \"@mention\" }   { on: \"check_run.completed\", where: \"conclusion=failure\" }   { on: \"message.created\", maxConcurrency: 1 }"
     },
     "PersonaSchedule": {
       "type": "object",
