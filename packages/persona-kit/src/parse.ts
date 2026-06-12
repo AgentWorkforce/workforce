@@ -553,6 +553,8 @@ export function parseIntegrationTrigger(
   if (where !== undefined && (typeof where !== 'string' || !where.trim())) {
     throw new Error(`${context}.where must be a non-empty string if provided`);
   }
+  // Intentionally lenient: Cloud derives this as an optional backpressure hint,
+  // so invalid values mean "unset" rather than a parse failure.
   const parsedMaxConcurrency =
     typeof maxConcurrency === 'number' &&
     Number.isInteger(maxConcurrency) &&

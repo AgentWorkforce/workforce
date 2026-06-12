@@ -695,6 +695,7 @@ test('parseAgentSpec omits invalid trigger maxConcurrency values', () => {
   const agent = parseAgentSpec({
     triggers: {
       github: [
+        { on: 'absent' },
         { on: 'valid', maxConcurrency: 2 },
         { on: 'zero', maxConcurrency: 0 },
         { on: 'negative', maxConcurrency: -1 },
@@ -707,6 +708,7 @@ test('parseAgentSpec omits invalid trigger maxConcurrency values', () => {
   });
 
   assert.deepEqual(agent.triggers?.github, [
+    { on: 'absent' },
     { on: 'valid', maxConcurrency: 2 },
     { on: 'zero' },
     { on: 'negative' },
@@ -727,6 +729,14 @@ test('parseAgentSpec rejects malformed triggers maps with precise field paths', 
   assert.throws(
     () => parseAgentSpec({ triggers: { github: [{ on: '' }] } }),
     /triggers\.github\[0\]\.on must be a non-empty string/
+  );
+  assert.throws(
+    () => parseAgentSpec({ triggers: { github: [{ on: 'issue.opened', match: '' }] } }),
+    /triggers\.github\[0\]\.match must be a non-empty string if provided/
+  );
+  assert.throws(
+    () => parseAgentSpec({ triggers: { github: [{ on: 'issue.opened', where: 1 }] } }),
+    /triggers\.github\[0\]\.where must be a non-empty string if provided/
   );
   // An empty agent (no listeners) parses to {}; the deploy CLI enforces "at least one".
   assert.deepEqual(parseAgentSpec({}), {});
