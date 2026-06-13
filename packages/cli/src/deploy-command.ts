@@ -3,7 +3,8 @@ import {
   CloudApiClient,
   clearStoredAuth,
   defaultApiUrl,
-  ensureAuthenticated,
+  ensureCloudSession,
+  setWorkspaceKey,
   type StoredAuth
 } from '@agent-relay/cloud';
 import {
@@ -12,7 +13,6 @@ import {
   clearStoredWorkspaceToken,
   createTerminalIO,
   deploy,
-  writeActiveWorkspace,
   type CloudAuthRecoveryResolver,
   type DeployMode,
   type DeployOptions,
@@ -23,21 +23,25 @@ import {
 type LoginApiClient = Pick<CloudApiClient, 'fetch'>;
 
 type DeployCommandDeps = {
-  ensureAuthenticated: typeof ensureAuthenticated;
+  ensureCloudSession(options?: {
+    apiUrl?: string;
+    force?: boolean;
+    interactive?: boolean;
+  }): Promise<{ auth: StoredAuth }>;
   clearStoredAuth: typeof clearStoredAuth;
   clearStoredWorkspaceToken: typeof clearStoredWorkspaceToken;
   clearActiveWorkspace: typeof clearActiveWorkspace;
-  writeActiveWorkspace: typeof writeActiveWorkspace;
+  setWorkspaceKey(name: string, key: string): unknown | Promise<unknown>;
   createTerminalIO: typeof createTerminalIO;
   createCloudApiClient(auth: StoredAuth, apiUrl: string): LoginApiClient;
 };
 
 const defaultDeployCommandDeps: DeployCommandDeps = {
-  ensureAuthenticated,
+  ensureCloudSession,
   clearStoredAuth,
   clearStoredWorkspaceToken,
   clearActiveWorkspace,
-  writeActiveWorkspace,
+  setWorkspaceKey,
   createTerminalIO,
   createCloudApiClient(auth, apiUrl) {
     return new CloudApiClient({
@@ -110,6 +114,7 @@ export async function runDeploy(args: readonly string[]): Promise<void> {
 function createDeployAuthRecovery(opts: DeployOptions): CloudAuthRecoveryResolver {
   return {
     async recover({ workspace, cloudUrl, io, reason }) {
+      if (opts.noPrompt) return false;
       const ok = await io.confirm(
         'Cloud login is required before deploy can check integrations. Log in now? (opens browser)',
         { defaultValue: true }
@@ -117,16 +122,15 @@ function createDeployAuthRecovery(opts: DeployOptions): CloudAuthRecoveryResolve
       if (!ok) return false;
 
       io.info(`cloud: starting login because integration auth failed (${reason})`);
-      const auth = await deployCommandDeps.ensureAuthenticated(cloudUrl, { force: true });
-      const apiUrl = normalizeCloudUrl(auth.apiUrl || cloudUrl);
-      const activeWorkspace = opts.workspace ?? workspace;
-      await deployCommandDeps.writeActiveWorkspace({
-        workspace: activeWorkspace,
-        cloudUrl: apiUrl
+      const session = await deployCommandDeps.ensureCloudSession({
+        apiUrl: cloudUrl,
+        force: true,
+        interactive: true
       });
+      const activeWorkspace = opts.workspace ?? workspace;
       io.info(`cloud: logged in for workspace ${activeWorkspace}; retrying integration check`);
       return {
-        token: auth.accessToken
+        token: session.auth.accessToken
       };
     }
   };
@@ -153,12 +157,8 @@ export async function runLogin(args: readonly string[]): Promise<void> {
   ));
 
   try {
-    const auth = await deployCommandDeps.ensureAuthenticated(cloudUrl);
-    // Canonicalize what ensureAuthenticated handed back — when the auth
-    // request happens to route through cloud's edge-bypass hostname,
-    // auth.apiUrl can be `https://origin.agentrelay.cloud` even though
-    // the user's session cookies are scoped to `agentrelay.com`. Storing
-    // that URL is what causes every subsequent API call to 401.
+    const session = await deployCommandDeps.ensureCloudSession({ apiUrl: cloudUrl });
+    const auth = session.auth;
     const apiUrl = canonicalizeCloudUrl(normalizeCloudUrl(auth.apiUrl || cloudUrl));
     let workspaces: LoginWorkspace[] = [];
     let chosen: string;
@@ -174,19 +174,11 @@ export async function runLogin(args: readonly string[]): Promise<void> {
       }
       chosen = await pickWorkspaceInteractive(workspaces, io);
     }
-    // No workspace-scoped token mint — cloud's resolveRequestAuth accepts
-    // the shared @agent-relay/cloud accessToken as Bearer directly. We just
-    // persist a pointer recording which workspace the user picked so
-    // resolveWorkspaceToken can pair it with the shared accessToken on
-    // each subsequent deploy call.
     const match = findWorkspace(workspaces, chosen);
-    await deployCommandDeps.writeActiveWorkspace({
-      workspace: chosen,
-      ...(match?.slug ? { workspaceSlug: match.slug } : {}),
-      ...(match?.id ? { workspaceId: match.id } : {}),
-      cloudUrl: apiUrl
-    });
-    process.stdout.write(`\nlogged in: ${chosen}\n`);
+    const descriptor = await resolveWorkspaceForLogin(auth, apiUrl, match?.id ?? chosen);
+    const workspaceName = descriptor.name ?? descriptor.slug ?? match?.slug ?? match?.name ?? chosen;
+    await deployCommandDeps.setWorkspaceKey(workspaceName, descriptor.key);
+    process.stdout.write(`\nlogged in: ${workspaceName}\n`);
     process.exit(0);
   } catch (err) {
     process.stderr.write(
@@ -245,9 +237,8 @@ Flags:
 
 const LOGIN_USAGE = `usage: agentworkforce login [flags]
 
-Connect this machine to a workforce workspace. Opens the browser to sign in
-to the workforce cloud and stores a small pointer at
-\`~/.agentworkforce/active.json\` recording which workspace this machine targets.
+Connect this machine to a workforce workspace through the canonical
+\`agent-relay\` cloud session and active workspace store.
 
 Flags:
   --workspace <name>          Workforce workspace; defaults to WORKFORCE_WORKSPACE_ID or prompt
@@ -480,6 +471,13 @@ type LoginWorkspace = {
   name?: string;
 };
 
+type LoginWorkspaceDescriptor = {
+  key: string;
+  relaycastWorkspaceId: string;
+  name?: string;
+  slug?: string;
+};
+
 async function listWorkspacesForLogin(auth: StoredAuth, apiUrl: string): Promise<LoginWorkspace[]> {
   const client = deployCommandDeps.createCloudApiClient(auth, apiUrl);
   const res = await client.fetch('/api/v1/workspaces');
@@ -499,6 +497,36 @@ async function listWorkspacesForLogin(auth: StoredAuth, apiUrl: string): Promise
   const who = await client.fetch('/api/v1/auth/whoami');
   if (!who.ok) return [];
   return parseWorkspaceList(await who.json().catch(() => null));
+}
+
+async function resolveWorkspaceForLogin(
+  auth: StoredAuth,
+  apiUrl: string,
+  workspace: string
+): Promise<LoginWorkspaceDescriptor> {
+  const client = deployCommandDeps.createCloudApiClient(auth, apiUrl);
+  const res = await client.fetch(`/api/v1/workspaces/${encodeURIComponent(workspace)}/resolve`);
+  if (!res.ok) {
+    throw new Error(`workspace resolve failed: ${res.status} ${await res.text().catch(() => '')}`.trim());
+  }
+  const payload = await res.json().catch(() => null);
+  if (!payload || typeof payload !== 'object' || Array.isArray(payload)) {
+    throw new Error('workspace resolve returned an invalid descriptor');
+  }
+  const record = payload as Record<string, unknown>;
+  const key = readString(record, 'key') ?? readString(record, 'relaycastApiKey') ?? '';
+  const relaycastWorkspaceId = readString(record, 'relaycastWorkspaceId')
+    ?? readString(record, 'workspaceId')
+    ?? '';
+  if (!key || !relaycastWorkspaceId) {
+    throw new Error('workspace resolve returned an incomplete descriptor');
+  }
+  return {
+    key,
+    relaycastWorkspaceId,
+    ...(readString(record, 'name') ? { name: readString(record, 'name') } : {}),
+    ...(readString(record, 'slug') ? { slug: readString(record, 'slug') } : {})
+  };
 }
 
 async function pickWorkspaceInteractive(

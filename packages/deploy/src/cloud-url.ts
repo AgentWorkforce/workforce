@@ -63,8 +63,7 @@ export function canonicalizeCloudUrl(input: string): string {
  *   1. Explicit `--cloud-url` flag.
  *   2. `WORKFORCE_DEPLOY_CLOUD_URL` (preferred env override).
  *   3. `WORKFORCE_CLOUD_URL` (legacy env override).
- *   4. `cloudUrl` recorded in `~/.agentworkforce/active.json` by
- *      `agentworkforce login`.
+ *   4. Deprecated compatibility active pointer supplied by a caller.
  *   5. `defaultApiUrl()` from `@agent-relay/cloud` (the public canonical
  *      URL — currently `https://agentrelay.com/cloud`).
  *
@@ -89,7 +88,7 @@ export interface CloudUrlContext {
   flag?: string | undefined;
   /** Process env override; defaults to `process.env`. Pass `{}` to ignore env. */
   env?: NodeJS.ProcessEnv;
-  /** Active workspace pointer read from `~/.agentworkforce/active.json`. */
+  /** Deprecated compatibility pointer. New callers should not pass this. */
   active?: Pick<ActiveWorkspacePointer, 'cloudUrl'> | null | undefined;
 }
 

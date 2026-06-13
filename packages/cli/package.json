@@ -10,7 +10,7 @@
     "package.json"
   ],
   "dependencies": {
-    "@agent-relay/cloud": "^6.0.17",
+    "@agent-relay/cloud": "^8.7.0",
     "@agentworkforce/deploy": "workspace:*",
     "@agentworkforce/persona-kit": "workspace:*",
     "@agentworkforce/runtime": "workspace:*",
