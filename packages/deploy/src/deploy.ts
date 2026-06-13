@@ -185,14 +185,10 @@ export async function deploy(opts: DeployOptions, resolvers: DeployResolvers = {
   });
 
   // Auth resolution: an explicit `resolvers.workspaceAuth` (used by tests
-  // and bespoke harnesses) wins. Otherwise consult the shared resolver
-  // that walks env → cloud-auth.json → active.json → legacy keychain,
-  // which is the same path `list`/`destroy` and the cloud launcher use.
-  // The orchestrator historically called `envWorkspaceAuth()` directly,
-  // which only honoured WORKFORCE_WORKSPACE_TOKEN + a long-dead keychain —
-  // a user who freshly ran `agentworkforce login` would hit "no workspace
-  // resolved" because that flow only writes the shared accessToken and
-  // active.json pointer.
+  // and bespoke harnesses) wins. Otherwise use the canonical agent-relay
+  // cloud session and active workspace descriptor. The only non-SDK
+  // credential path left here is the complete WORKFORCE_WORKSPACE_ID +
+  // WORKFORCE_WORKSPACE_TOKEN env override for CI.
   const resolvedAuth = resolvers.workspaceAuth
     ? await resolvers.workspaceAuth.resolveWorkspace({ override: opts.workspace, io })
     : await resolveWorkspaceToken({

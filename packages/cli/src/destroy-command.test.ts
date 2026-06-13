@@ -98,9 +98,7 @@ function withTokenEnv(token: string, workspace: string): () => void {
 /**
  * Pin every filesystem-backed auth source to definitely-missing/disabled
  * paths so the destroy CLI tests don't accidentally pick up the host
- * developer's `~/.agentworkforce/active.json` or `~/.agent-relay/cloud-auth.json`.
- * Tests that intentionally exercise the active.json fallback override
- * `WORKFORCE_ACTIVE_WORKSPACE_FILE` after this runs.
+ * developer's legacy `~/.agentworkforce/active.json` or cloud-auth state.
  */
 function isolateAuthFiles(): () => void {
   const prevActive = process.env.WORKFORCE_ACTIVE_WORKSPACE_FILE;
@@ -273,10 +271,8 @@ test('runDestroy: missing workspace exits 1', async () => {
   try {
     await assert.rejects(runDestroy([AGENT_UUID, '--no-prompt']), /__exit_trap__:1/);
     assert.deepEqual(trap.exits, [1]);
-    // Accept either the orchestrator-level message ("no workspace resolved")
-    // or the auth-resolver message ("no workspace credentials resolved")
-    // — both are valid pre-network failures.
-    assert.match(trap.stderr, /no workspace (credentials )?resolved/);
+    assert.match(trap.stderr, /No active Agent Relay workspace found/);
+    assert.match(trap.stderr, /agent-relay workspace/);
     assert.equal(fetchTrap.calls.length, 0);
   } finally {
     trap.restore();
@@ -478,11 +474,9 @@ test('runDestroy: HTML 404 body is replaced with a hint, not dumped verbatim', a
   }
 });
 
-test('runDestroy: reads active.json cloudUrl when no flag and no env is set', async () => {
-  // The destroy command must consult `~/.agentworkforce/active.json` for
-  // the cloud URL just like the deploy orchestrator does. Without this,
-  // a user who ran `agentworkforce login` (which writes active.json with
-  // the canonical cloud URL) would still hit the legacy default.
+test('runDestroy: ignores legacy active.json cloudUrl when no flag and no env is set', async () => {
+  // The canonical Agent Relay session owns the active workspace now.
+  // Legacy active.json state must not choose the cloud URL.
   const restoreIsolate = isolateAuthFiles();
   const prevToken = process.env.WORKFORCE_WORKSPACE_TOKEN;
   const prevWs = process.env.WORKFORCE_WORKSPACE_ID;
@@ -493,10 +487,10 @@ test('runDestroy: reads active.json cloudUrl when no flag and no env is set', as
   delete process.env.WORKFORCE_DEPLOY_CLOUD_URL;
   delete process.env.WORKFORCE_CLOUD_URL;
 
-  const tmp = await mkdtemp(path.join(os.tmpdir(), 'aw-destroy-active-'));
-  const activeFile = path.join(tmp, 'active.json');
+  const legacyDir = await mkdtemp(path.join(os.tmpdir(), 'aw-destroy-active-'));
+  process.env.WORKFORCE_ACTIVE_WORKSPACE_FILE = path.join(legacyDir, 'active.json');
   await writeFile(
-    activeFile,
+    process.env.WORKFORCE_ACTIVE_WORKSPACE_FILE,
     JSON.stringify({
       workspace: WORKSPACE,
       workspaceId: WORKSPACE,
@@ -505,7 +499,6 @@ test('runDestroy: reads active.json cloudUrl when no flag and no env is set', as
     }),
     'utf8'
   );
-  process.env.WORKFORCE_ACTIVE_WORKSPACE_FILE = activeFile;
 
   const fetchTrap = trapFetch(
     async () =>
@@ -521,12 +514,13 @@ test('runDestroy: reads active.json cloudUrl when no flag and no env is set', as
   );
   const trap = trapIO();
   try {
-    // No `--cloud-url` flag. The command must derive the URL from active.json.
+    // No `--cloud-url` flag. The command must use the canonical default,
+    // not the stale active.json value.
     await assert.rejects(runDestroy([AGENT_UUID]), /__exit_trap__:0/);
     assert.equal(fetchTrap.calls.length, 1);
     assert.equal(
       fetchTrap.calls[0].url,
-      `https://active.example.test/cloud/api/v1/workspaces/${WORKSPACE}/deployments/${AGENT_UUID}`
+      `https://agentrelay.com/cloud/api/v1/workspaces/${WORKSPACE}/deployments/${AGENT_UUID}`
     );
   } finally {
     trap.restore();
@@ -538,6 +532,6 @@ test('runDestroy: reads active.json cloudUrl when no flag and no env is set', as
     if (prevCloudA !== undefined) process.env.WORKFORCE_DEPLOY_CLOUD_URL = prevCloudA;
     if (prevCloudB !== undefined) process.env.WORKFORCE_CLOUD_URL = prevCloudB;
     restoreIsolate();
-    await rm(tmp, { recursive: true, force: true });
+    await rm(legacyDir, { recursive: true, force: true });
   }
 });

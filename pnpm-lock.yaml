@@ -38,8 +38,8 @@ importers:
   packages/cli:
     dependencies:
       '@agent-relay/cloud':
-        specifier: ^6.0.17
-        version: 6.0.19
+        specifier: ^8.7.0
+        version: 8.7.0
       '@agentworkforce/deploy':
         specifier: workspace:*
         version: link:../deploy
@@ -71,8 +71,8 @@ importers:
   packages/deploy:
     dependencies:
       '@agent-relay/cloud':
-        specifier: ^6.0.17
-        version: 6.0.19
+        specifier: ^8.7.0
+        version: 8.7.0
       '@agentworkforce/persona-kit':
         specifier: workspace:*
         version: link:../persona-kit
@@ -169,11 +169,11 @@ packages:
   '@agent-assistant/surfaces@0.4.32':
     resolution: {integrity: sha512-VI1UpwDD/RznfngRKatqL3zkZ6Bo9MszIGwZ5/H68r+6yghsFeTSq42eyoQM90DuQniX6Z/QfPmA890U1ZA2MQ==}
 
-  '@agent-relay/cloud@6.0.19':
-    resolution: {integrity: sha512-MCehAQwZBgoVh5ddFXUwDIxsuEzj6RfmyM3g5AExTYne2FZJmsPCcv/B916WVa7rpu2IxujP04CKEUcS4wiS5Q==}
+  '@agent-relay/cloud@8.7.0':
+    resolution: {integrity: sha512-7cXD1ziMOuAOy3IbVk0P6qDVipTYxbVFBWmxn9aME7hTHyy4AzfjLOj51AL7JLpDKj4I5OiXJjw12B29Wg/Krw==}
 
-  '@agent-relay/config@6.0.19':
-    resolution: {integrity: sha512-vARUMQm5066xyqSJgG1IgpS/4DcogOz/4Qjf5cgo/rs+F/f0R1D5YgvuBNKtmkqIQ9FZ3m6hwsK2ZM0kQyrQMQ==}
+  '@agent-relay/config@8.7.0':
+    resolution: {integrity: sha512-hCH0jPSbeBYoZs/Jx8NGDqbPe93xEXlF3q0E6HCO8+niLAuYZU3+hDWsS2dvDCg6S7BH5cTQbVUyMxV8T48U8Q==}
 
   '@agent-relay/events@6.3.6':
     resolution: {integrity: sha512-3el7/iImhQ/L+TKetELF8SY6MEebmpxI8hbJ8qX1GWNyy46aXhuM/SwCMSSKch+Wmk6w9kitmx8csCGuF+4iNA==}
@@ -2124,9 +2124,9 @@ snapshots:
 
   '@agent-assistant/surfaces@0.4.32': {}
 
-  '@agent-relay/cloud@6.0.19':
+  '@agent-relay/cloud@8.7.0':
     dependencies:
-      '@agent-relay/config': 6.0.19
+      '@agent-relay/config': 8.7.0
       '@aws-sdk/client-s3': 3.1020.0
       ignore: 7.0.5
       tar: 7.5.15
@@ -2135,7 +2135,7 @@ snapshots:
     transitivePeerDependencies:
       - aws-crt
 
-  '@agent-relay/config@6.0.19':
+  '@agent-relay/config@8.7.0':
     dependencies:
       zod: 3.25.76
       zod-to-json-schema: 3.25.2(zod@3.25.76)
