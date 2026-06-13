@@ -1733,7 +1733,7 @@ test('deploy: clear error when nothing resolves and noPrompt is set', async () =
           { personaPath, mode: 'dev', noConnect: true, noPrompt: true, io: createBufferedIO() },
           { bundle: successfulBundleStager(), modes: { dev: successfulDevLauncher() } }
         ),
-        /No active Agent Relay workspace found|workspace is required for deploy/
+        /No active Agent Relay workspace found|Cloud login required|workspace is required for deploy/
       );
     } finally {
       if (previousActiveFile === undefined) {

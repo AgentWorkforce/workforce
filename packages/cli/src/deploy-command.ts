@@ -31,7 +31,7 @@ type DeployCommandDeps = {
   clearStoredAuth: typeof clearStoredAuth;
   clearStoredWorkspaceToken: typeof clearStoredWorkspaceToken;
   clearActiveWorkspace: typeof clearActiveWorkspace;
-  setWorkspaceKey(name: string, key: string): unknown;
+  setWorkspaceKey(name: string, key: string): unknown | Promise<unknown>;
   createTerminalIO: typeof createTerminalIO;
   createCloudApiClient(auth: StoredAuth, apiUrl: string): LoginApiClient;
 };
@@ -176,7 +176,7 @@ export async function runLogin(args: readonly string[]): Promise<void> {
     const match = findWorkspace(workspaces, chosen);
     const descriptor = await resolveWorkspaceForLogin(auth, apiUrl, match?.id ?? chosen);
     const workspaceName = descriptor.name ?? descriptor.slug ?? match?.slug ?? match?.name ?? chosen;
-    deployCommandDeps.setWorkspaceKey(workspaceName, descriptor.key);
+    await deployCommandDeps.setWorkspaceKey(workspaceName, descriptor.key);
     process.stdout.write(`\nlogged in: ${workspaceName}\n`);
     process.exit(0);
   } catch (err) {

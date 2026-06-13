@@ -186,7 +186,7 @@ function normalizeWorkspaceDescriptor(payload: unknown, apiUrl: string): ActiveW
     ?? '';
   const relayfileWorkspaceId = readString(record, 'relayfileWorkspaceId') ?? '';
   const relayauthWorkspaceId = readString(record, 'relayauthWorkspaceId') ?? '';
-  if (!relaycastWorkspaceId || !relayfileWorkspaceId || !relayauthWorkspaceId) {
+  if (!key || !relaycastWorkspaceId || !relayfileWorkspaceId || !relayauthWorkspaceId) {
     throw new Error('workspace resolve returned an incomplete descriptor');
   }
   return {
@@ -252,6 +252,9 @@ function workspaceAuthError(error: unknown): Error {
       case 'AUTH_REFRESH_EXPIRED':
       case 'AUTH_BROWSER_REQUIRED':
       case 'AUTH_ENV_REPROVISION_REQUIRED':
+        if (/agent-relay login/i.test(error.message)) {
+          return new Error(error.message);
+        }
         return new Error(`${error.message}. Run \`agent-relay login\` and retry.`);
     }
   }
