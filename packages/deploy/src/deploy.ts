@@ -25,7 +25,6 @@ import {
 } from './connect.js';
 import { createTerminalIO } from './io.js';
 import {
-  readActiveWorkspace,
   resolveWorkspaceToken,
   type WorkspaceAuth
 } from './login.js';
@@ -178,10 +177,8 @@ export async function deploy(opts: DeployOptions, resolvers: DeployResolvers = {
     };
   }
 
-  const active = await readActiveWorkspace().catch(() => null);
   const cloudUrl = resolveCloudUrl({
-    ...(opts.cloudUrl ? { flag: opts.cloudUrl } : {}),
-    active
+    ...(opts.cloudUrl ? { flag: opts.cloudUrl } : {})
   });
 
   // Auth resolution: an explicit `resolvers.workspaceAuth` (used by tests
@@ -306,6 +303,7 @@ export async function deploy(opts: DeployOptions, resolvers: DeployResolvers = {
     agent: preflight.agent,
     workspace,
     workspaceToken: activeToken,
+    ...(resolvedAuth.relayfileWorkspaceId ? { relayfileWorkspaceId: resolvedAuth.relayfileWorkspaceId } : {}),
     cloudUrl,
     byoSandbox: opts.byoSandbox === true,
     enabled: resolvers.integrations === undefined,
@@ -426,6 +424,7 @@ async function resolveRuntimeCredentialEnv(args: {
   agent: AgentSpec;
   workspace: string;
   workspaceToken: string;
+  relayfileWorkspaceId?: string;
   cloudUrl?: string;
   byoSandbox: boolean;
   enabled: boolean;
@@ -474,6 +473,14 @@ async function resolveRuntimeCredentialEnv(args: {
   });
   if (credentials.relayfileToken !== null && !credentials.relayfileToken.startsWith('relay_pa_')) {
     throw new Error('runtime-credentials returned a token without expected relay_pa_ prefix');
+  }
+  if (
+    args.relayfileWorkspaceId
+    && credentials.relayfileWorkspaceId !== args.relayfileWorkspaceId
+  ) {
+    throw new Error(
+      `runtime-credentials returned relayfile workspace ${credentials.relayfileWorkspaceId}, expected ${args.relayfileWorkspaceId}`
+    );
   }
   if (credentials.relayfileToken !== null && credentials.relayfileMountPaths.length === 0) {
     throw new Error('runtime-credentials returned a token without relayfile mount paths');

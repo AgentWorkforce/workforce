@@ -1,7 +1,6 @@
 import {
   createTerminalIO,
   formatHttpErrorBody,
-  readActiveWorkspace,
   resolveCloudUrl,
   resolveWorkspaceToken
 } from '@agentworkforce/deploy';
@@ -68,10 +67,8 @@ export async function runDeploymentList(args: readonly string[]): Promise<void> 
   try {
     const opts = parseDeploymentListArgs(args);
     const io = createTerminalIO();
-    const active = await readActiveWorkspace().catch(() => null);
     const cloudUrl = resolveCloudUrl({
-      ...(opts.cloudUrl ? { flag: opts.cloudUrl } : {}),
-      active
+      ...(opts.cloudUrl ? { flag: opts.cloudUrl } : {})
     });
     const auth = await resolveWorkspaceToken({
       ...(opts.workspace ? { workspace: opts.workspace } : {}),
@@ -350,10 +347,8 @@ export async function resolveDeploymentRequestContext(opts: {
   noPrompt?: boolean;
 }): Promise<{ cloudUrl: string; workspace: string; token: string }> {
   const io = createTerminalIO();
-  const active = await readActiveWorkspace().catch(() => null);
   const cloudUrl = resolveCloudUrl({
-    ...(opts.cloudUrl ? { flag: opts.cloudUrl } : {}),
-    active
+    ...(opts.cloudUrl ? { flag: opts.cloudUrl } : {})
   });
   const auth = await resolveWorkspaceToken({
     ...(opts.workspace ? { workspace: opts.workspace } : {}),

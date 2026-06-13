@@ -147,6 +147,46 @@ async function withWorkspaceEnv<T>(
   }
 }
 
+async function withCloudSessionEnv<T>(fn: () => Promise<T>): Promise<T> {
+  const previous = {
+    CLOUD_API_URL: process.env.CLOUD_API_URL,
+    CLOUD_API_ACCESS_TOKEN: process.env.CLOUD_API_ACCESS_TOKEN,
+    CLOUD_API_REFRESH_TOKEN: process.env.CLOUD_API_REFRESH_TOKEN,
+    CLOUD_API_ACCESS_TOKEN_EXPIRES_AT: process.env.CLOUD_API_ACCESS_TOKEN_EXPIRES_AT
+  };
+  process.env.CLOUD_API_URL = 'https://cloud.example.test';
+  process.env.CLOUD_API_ACCESS_TOKEN = 'cloud-access';
+  process.env.CLOUD_API_REFRESH_TOKEN = 'cloud-refresh';
+  process.env.CLOUD_API_ACCESS_TOKEN_EXPIRES_AT = '2999-01-01T00:00:00.000Z';
+  try {
+    return await fn();
+  } finally {
+    for (const [key, value] of Object.entries(previous)) {
+      if (value === undefined) {
+        delete process.env[key as keyof typeof previous];
+      } else {
+        process.env[key as keyof typeof previous] = value;
+      }
+    }
+  }
+}
+
+async function withAgentRelayHome<T>(fn: () => Promise<T>): Promise<T> {
+  const previous = process.env.AGENT_RELAY_HOME;
+  const dir = await mkdtemp(path.join(os.tmpdir(), 'wf-agent-relay-home-'));
+  process.env.AGENT_RELAY_HOME = dir;
+  try {
+    return await fn();
+  } finally {
+    if (previous === undefined) {
+      delete process.env.AGENT_RELAY_HOME;
+    } else {
+      process.env.AGENT_RELAY_HOME = previous;
+    }
+    await rm(dir, { recursive: true, force: true });
+  }
+}
+
 function successfulBundleStager(): BundleStager {
   return {
     async stage(input) {
@@ -1092,6 +1132,67 @@ test('deploy dev mode rejects malformed runtime credential tokens before launch'
   }
 });
 
+test('deploy dev mode rejects mismatched relayfile workspace ids before launch', async () => {
+  const { personaPath, cleanup } = await withTempPersona(
+    basePersonaJson({
+      integrations: {
+        github: {}
+      }
+    })
+  );
+  const io = createBufferedIO();
+  const originalFetch = globalThis.fetch;
+  let launched = false;
+
+  globalThis.fetch = (async (input) => {
+    const url = String(input);
+    if (url.includes('/api/v1/workspaces/rw-test/integrations/github/status')) {
+      return jsonResponse({ provider: 'github', status: 'ready' });
+    }
+    if (url.includes('/api/v1/workspaces/rw-test/runtime-credentials')) {
+      return jsonResponse({
+        relayfileUrl: 'https://relayfile.test',
+        relayfileWorkspaceId: 'rf-stale',
+        relayfileToken: 'relay_pa_scoped',
+        relayfileMountPaths: ['/github/repos/**/**/pulls/**']
+      });
+    }
+    throw new Error(`unexpected URL ${url}`);
+  }) as typeof fetch;
+
+  try {
+    await assert.rejects(
+      deploy(
+        {
+          personaPath,
+          mode: 'dev',
+          noPrompt: true,
+          cloudUrl: 'https://cloud.example.test',
+          io
+        },
+        {
+          workspaceAuth: {
+            async resolveWorkspace() {
+              return {
+                workspace: 'rw-test',
+                relayfileWorkspaceId: 'rf-canonical',
+                token: 'relay_ws_workspace'
+              };
+            }
+          },
+          bundle: successfulBundleStager(),
+          modes: { dev: successfulDevLauncher(() => { launched = true; }) }
+        }
+      ),
+      /runtime-credentials returned relayfile workspace rf-stale, expected rf-canonical/
+    );
+    assert.equal(launched, false);
+  } finally {
+    globalThis.fetch = originalFetch;
+    await cleanup();
+  }
+});
+
 test('deploy dev mode rejects runtime credential tokens without mount paths before launch', async () => {
   const { personaPath, cleanup } = await withTempPersona(
     basePersonaJson({
@@ -1683,8 +1784,8 @@ test('deploy: default auth resolver honors env credentials without a workspaceAu
   // previous default (`envWorkspaceAuth()`) only consulted env vars and a
   // long-dead keychain; the new default delegates to `resolveWorkspaceToken`,
   // which still honors WORKFORCE_WORKSPACE_TOKEN + WORKFORCE_WORKSPACE_ID
-  // as Tier 1 but additionally falls through to the shared cloud-auth +
-  // active.json pointer. This test exercises the Tier 1 path end-to-end
+  // as Tier 1 but additionally falls through to the shared cloud session and
+  // canonical Agent Relay workspace store. This test exercises the Tier 1 path end-to-end
   // through `deploy()` with no resolver injection — proving the wiring is
   // intact for CI users while the filesystem-fallback paths stay covered
   // by `login.test.ts`.
@@ -1710,48 +1811,24 @@ test('deploy: default auth resolver honors env credentials without a workspaceAu
 
 test('deploy: clear error when nothing resolves and noPrompt is set', async () => {
   // Without env or an explicit resolver, the orchestrator must surface
-  // an actionable error rather than wedging in a prompt loop. Setting
-  // `noPrompt` forces `resolveWorkspaceToken` to use the non-interactive
-  // canonical agent-relay session path, so a missing active workspace
-  // produces deterministic SDK guidance instead of a prompt loop.
+  // an actionable error rather than wedging in a prompt loop. The temp
+  // AGENT_RELAY_HOME gives the SDK an empty canonical workspace store.
   const { personaPath, cleanup } = await withTempPersona(
     basePersonaJson({ integrations: {} })
   );
 
   await withWorkspaceEnv({ workspace: undefined, token: undefined }, async () => {
-    // Point filesystem-backed auth at definitely-missing/disabled paths so the
-    // test doesn't accidentally pick up host credentials.
-    const previousActiveFile = process.env.WORKFORCE_ACTIVE_WORKSPACE_FILE;
-    const previousLoginFile = process.env.WORKFORCE_LOGIN_FILE;
-    const previousDisableShared = process.env.WORKFORCE_DISABLE_SHARED_AUTH;
-    process.env.WORKFORCE_ACTIVE_WORKSPACE_FILE = path.join(os.tmpdir(), 'wf-deploy-test-missing-active.json');
-    process.env.WORKFORCE_LOGIN_FILE = path.join(os.tmpdir(), 'wf-deploy-test-missing-login.json');
-    process.env.WORKFORCE_DISABLE_SHARED_AUTH = '1';
-    try {
+    await withCloudSessionEnv(async () => {
+      await withAgentRelayHome(async () => {
       await assert.rejects(
         deploy(
           { personaPath, mode: 'dev', noConnect: true, noPrompt: true, io: createBufferedIO() },
           { bundle: successfulBundleStager(), modes: { dev: successfulDevLauncher() } }
         ),
-        /No active Agent Relay workspace found|Cloud login required|workspace is required for deploy/
+        /No active Agent Relay workspace found/
       );
-    } finally {
-      if (previousActiveFile === undefined) {
-        delete process.env.WORKFORCE_ACTIVE_WORKSPACE_FILE;
-      } else {
-        process.env.WORKFORCE_ACTIVE_WORKSPACE_FILE = previousActiveFile;
-      }
-      if (previousLoginFile === undefined) {
-        delete process.env.WORKFORCE_LOGIN_FILE;
-      } else {
-        process.env.WORKFORCE_LOGIN_FILE = previousLoginFile;
-      }
-      if (previousDisableShared === undefined) {
-        delete process.env.WORKFORCE_DISABLE_SHARED_AUTH;
-      } else {
-        process.env.WORKFORCE_DISABLE_SHARED_AUTH = previousDisableShared;
-      }
-    }
+      });
+    });
   });
 
   await cleanup();

@@ -5,7 +5,7 @@ import {
 } from '@agentworkforce/persona-kit';
 import { resolveCloudUrl } from './cloud-url.js';
 import { createBufferedIO } from './io.js';
-import { readActiveWorkspace, resolveWorkspaceToken, type ActiveWorkspacePointer } from './login.js';
+import { resolveWorkspaceToken, type ActiveWorkspacePointer } from './login.js';
 
 export type AuthState = 'authenticated' | 'unauthenticated';
 export type TriggerSource = 'catalog' | 'none';
@@ -47,7 +47,6 @@ export interface ListIntegrationsOptions {
   fetch?: typeof fetch;
   env?: NodeJS.ProcessEnv;
   activeWorkspace?: ActiveWorkspacePointer | null;
-  readActiveWorkspace?: typeof readActiveWorkspace;
   resolveWorkspaceToken?: typeof resolveWorkspaceToken;
   provider?: string;
   includeTriggers?: boolean;
@@ -89,9 +88,7 @@ export async function listIntegrations(
   options: ListIntegrationsOptions = {}
 ): Promise<IntegrationsDocument> {
   const env = options.env ?? process.env;
-  const active = options.activeWorkspace !== undefined
-    ? options.activeWorkspace
-    : await (options.readActiveWorkspace ?? readActiveWorkspace)().catch(() => null);
+  const active = options.activeWorkspace ?? null;
   const cloudUrl = resolveCloudUrl({ env, active, ...(options.cloudUrl ? { flag: options.cloudUrl } : {}) });
   const auth = await resolveAuth(options, cloudUrl, active, env);
 

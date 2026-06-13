@@ -16,6 +16,7 @@ export interface WorkspaceAuth {
   /** Resolve the active workspace, prompting the user to pick one if needed. */
   resolveWorkspace(args: { override?: string; io: DeployIO }): Promise<{
     workspace: string;
+    relayfileWorkspaceId?: string;
     /** Workspace-scoped token usable for gateway + cloud API calls. */
     token: string;
   }>;
@@ -169,7 +170,8 @@ async function resolveWorkspaceDescriptor(args: {
     const text = await response.text().catch(() => '');
     throw new Error(`workspace resolve failed for ${workspace}: ${response.status} ${text}`.trim());
   }
-  return normalizeWorkspaceDescriptor(await response.json(), session.auth.apiUrl || args.apiUrl);
+  const payload = await response.json().catch(() => null);
+  return normalizeWorkspaceDescriptor(payload, session.auth.apiUrl || args.apiUrl);
 }
 
 function normalizeWorkspaceDescriptor(payload: unknown, apiUrl: string): ActiveWorkspaceDescriptor {

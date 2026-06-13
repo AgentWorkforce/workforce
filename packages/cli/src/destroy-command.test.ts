@@ -73,7 +73,7 @@ function trapFetch(handler: (call: FetchCall) => Response | Promise<Response>): 
 }
 
 function withTokenEnv(token: string, workspace: string): () => void {
-  const restoreIsolate = isolateAuthFiles();
+  const restoreIsolate = isolateAgentRelayWorkspace();
   const prevToken = process.env.WORKFORCE_WORKSPACE_TOKEN;
   const prevWs = process.env.WORKFORCE_WORKSPACE_ID;
   const prevCloudA = process.env.WORKFORCE_DEPLOY_CLOUD_URL;
@@ -95,25 +95,15 @@ function withTokenEnv(token: string, workspace: string): () => void {
   };
 }
 
-/**
- * Pin every filesystem-backed auth source to definitely-missing/disabled
- * paths so the destroy CLI tests don't accidentally pick up the host
- * developer's legacy `~/.agentworkforce/active.json` or cloud-auth state.
- */
-function isolateAuthFiles(): () => void {
-  const prevActive = process.env.WORKFORCE_ACTIVE_WORKSPACE_FILE;
-  const prevLogin = process.env.WORKFORCE_LOGIN_FILE;
-  const prevDisable = process.env.WORKFORCE_DISABLE_SHARED_AUTH;
-  process.env.WORKFORCE_ACTIVE_WORKSPACE_FILE = path.join(os.tmpdir(), 'wf-destroy-test-active-MISSING.json');
-  process.env.WORKFORCE_LOGIN_FILE = path.join(os.tmpdir(), 'wf-destroy-test-login-MISSING.json');
-  process.env.WORKFORCE_DISABLE_SHARED_AUTH = '1';
+function isolateAgentRelayWorkspace(): () => void {
+  const prevHome = process.env.AGENT_RELAY_HOME;
+  process.env.AGENT_RELAY_HOME = path.join(
+    os.tmpdir(),
+    `wf-destroy-agent-relay-${process.pid}-${Date.now()}-${Math.random()}`
+  );
   return () => {
-    if (prevActive === undefined) delete process.env.WORKFORCE_ACTIVE_WORKSPACE_FILE;
-    else process.env.WORKFORCE_ACTIVE_WORKSPACE_FILE = prevActive;
-    if (prevLogin === undefined) delete process.env.WORKFORCE_LOGIN_FILE;
-    else process.env.WORKFORCE_LOGIN_FILE = prevLogin;
-    if (prevDisable === undefined) delete process.env.WORKFORCE_DISABLE_SHARED_AUTH;
-    else process.env.WORKFORCE_DISABLE_SHARED_AUTH = prevDisable;
+    if (prevHome === undefined) delete process.env.AGENT_RELAY_HOME;
+    else process.env.AGENT_RELAY_HOME = prevHome;
   };
 }
 
@@ -253,17 +243,21 @@ test('runDestroy: 401 maps to exit 1 with a login hint', async () => {
 });
 
 test('runDestroy: missing workspace exits 1', async () => {
-  // No WORKFORCE_WORKSPACE_ID, no --workspace, and no on-disk auth state
-  // — destroy should fail fast with an actionable error and never reach
-  // the network. We isolate the filesystem sources because the new code
-  // path also consults `~/.agentworkforce/active.json` and the shared
-  // cloud-auth file, which would otherwise leak from the host machine
-  // running the test.
-  const restoreIsolate = isolateAuthFiles();
+  // A token without a workspace plus an empty canonical Agent Relay workspace
+  // store must fail before any network call.
+  const restoreIsolate = isolateAgentRelayWorkspace();
   const prevToken = process.env.WORKFORCE_WORKSPACE_TOKEN;
   const prevWs = process.env.WORKFORCE_WORKSPACE_ID;
+  const prevCloudUrl = process.env.CLOUD_API_URL;
+  const prevCloudAccess = process.env.CLOUD_API_ACCESS_TOKEN;
+  const prevCloudRefresh = process.env.CLOUD_API_REFRESH_TOKEN;
+  const prevCloudExpires = process.env.CLOUD_API_ACCESS_TOKEN_EXPIRES_AT;
   process.env.WORKFORCE_WORKSPACE_TOKEN = 'tok-1';
   delete process.env.WORKFORCE_WORKSPACE_ID;
+  process.env.CLOUD_API_URL = CLOUD;
+  process.env.CLOUD_API_ACCESS_TOKEN = 'cloud-access';
+  process.env.CLOUD_API_REFRESH_TOKEN = 'cloud-refresh';
+  process.env.CLOUD_API_ACCESS_TOKEN_EXPIRES_AT = '2999-01-01T00:00:00.000Z';
   const fetchTrap = trapFetch(async () => {
     throw new Error('fetch must not be called when workspace is missing');
   });
@@ -280,6 +274,14 @@ test('runDestroy: missing workspace exits 1', async () => {
     if (prevToken === undefined) delete process.env.WORKFORCE_WORKSPACE_TOKEN;
     else process.env.WORKFORCE_WORKSPACE_TOKEN = prevToken;
     if (prevWs !== undefined) process.env.WORKFORCE_WORKSPACE_ID = prevWs;
+    if (prevCloudUrl === undefined) delete process.env.CLOUD_API_URL;
+    else process.env.CLOUD_API_URL = prevCloudUrl;
+    if (prevCloudAccess === undefined) delete process.env.CLOUD_API_ACCESS_TOKEN;
+    else process.env.CLOUD_API_ACCESS_TOKEN = prevCloudAccess;
+    if (prevCloudRefresh === undefined) delete process.env.CLOUD_API_REFRESH_TOKEN;
+    else process.env.CLOUD_API_REFRESH_TOKEN = prevCloudRefresh;
+    if (prevCloudExpires === undefined) delete process.env.CLOUD_API_ACCESS_TOKEN_EXPIRES_AT;
+    else process.env.CLOUD_API_ACCESS_TOKEN_EXPIRES_AT = prevCloudExpires;
     restoreIsolate();
   }
 });
@@ -474,10 +476,8 @@ test('runDestroy: HTML 404 body is replaced with a hint, not dumped verbatim', a
   }
 });
 
-test('runDestroy: ignores legacy active.json cloudUrl when no flag and no env is set', async () => {
-  // The canonical Agent Relay session owns the active workspace now.
-  // Legacy active.json state must not choose the cloud URL.
-  const restoreIsolate = isolateAuthFiles();
+test('runDestroy: uses the canonical default cloud URL when no flag or env is set', async () => {
+  const restoreIsolate = isolateAgentRelayWorkspace();
   const prevToken = process.env.WORKFORCE_WORKSPACE_TOKEN;
   const prevWs = process.env.WORKFORCE_WORKSPACE_ID;
   const prevCloudA = process.env.WORKFORCE_DEPLOY_CLOUD_URL;
@@ -486,19 +486,6 @@ test('runDestroy: ignores legacy active.json cloudUrl when no flag and no env is
   process.env.WORKFORCE_WORKSPACE_ID = WORKSPACE;
   delete process.env.WORKFORCE_DEPLOY_CLOUD_URL;
   delete process.env.WORKFORCE_CLOUD_URL;
-
-  const legacyDir = await mkdtemp(path.join(os.tmpdir(), 'aw-destroy-active-'));
-  process.env.WORKFORCE_ACTIVE_WORKSPACE_FILE = path.join(legacyDir, 'active.json');
-  await writeFile(
-    process.env.WORKFORCE_ACTIVE_WORKSPACE_FILE,
-    JSON.stringify({
-      workspace: WORKSPACE,
-      workspaceId: WORKSPACE,
-      cloudUrl: 'https://active.example.test/cloud',
-      setAt: new Date().toISOString()
-    }),
-    'utf8'
-  );
 
   const fetchTrap = trapFetch(
     async () =>
@@ -514,8 +501,7 @@ test('runDestroy: ignores legacy active.json cloudUrl when no flag and no env is
   );
   const trap = trapIO();
   try {
-    // No `--cloud-url` flag. The command must use the canonical default,
-    // not the stale active.json value.
+    // No `--cloud-url` flag and no env override: use the canonical default.
     await assert.rejects(runDestroy([AGENT_UUID]), /__exit_trap__:0/);
     assert.equal(fetchTrap.calls.length, 1);
     assert.equal(
@@ -532,6 +518,5 @@ test('runDestroy: ignores legacy active.json cloudUrl when no flag and no env is
     if (prevCloudA !== undefined) process.env.WORKFORCE_DEPLOY_CLOUD_URL = prevCloudA;
     if (prevCloudB !== undefined) process.env.WORKFORCE_CLOUD_URL = prevCloudB;
     restoreIsolate();
-    await rm(legacyDir, { recursive: true, force: true });
   }
 });

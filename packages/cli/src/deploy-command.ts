@@ -114,6 +114,7 @@ export async function runDeploy(args: readonly string[]): Promise<void> {
 function createDeployAuthRecovery(opts: DeployOptions): CloudAuthRecoveryResolver {
   return {
     async recover({ workspace, cloudUrl, io, reason }) {
+      if (opts.noPrompt) return false;
       const ok = await io.confirm(
         'Cloud login is required before deploy can check integrations. Log in now? (opens browser)',
         { defaultValue: true }
