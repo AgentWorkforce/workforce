@@ -253,12 +253,9 @@ test('runDestroy: 401 maps to exit 1 with a login hint', async () => {
 });
 
 test('runDestroy: missing workspace exits 1', async () => {
-  // No WORKFORCE_WORKSPACE_ID, no --workspace, and no on-disk auth state
-  // — destroy should fail fast with an actionable error and never reach
-  // the network. We isolate the filesystem sources because the new code
-  // path also consults `~/.agentworkforce/active.json` and the shared
-  // cloud-auth file, which would otherwise leak from the host machine
-  // running the test.
+  // No complete WORKFORCE env override, no --workspace, and no canonical
+  // cloud session — destroy should fail fast with actionable login guidance
+  // and never reach the network.
   const restoreIsolate = isolateAuthFiles();
   const prevToken = process.env.WORKFORCE_WORKSPACE_TOKEN;
   const prevWs = process.env.WORKFORCE_WORKSPACE_ID;
@@ -271,8 +268,10 @@ test('runDestroy: missing workspace exits 1', async () => {
   try {
     await assert.rejects(runDestroy([AGENT_UUID, '--no-prompt']), /__exit_trap__:1/);
     assert.deepEqual(trap.exits, [1]);
-    assert.match(trap.stderr, /No active Agent Relay workspace found/);
-    assert.match(trap.stderr, /agent-relay workspace/);
+    assert.match(
+      trap.stderr,
+      /^\nagentworkforce destroy failed: Cloud login required\. Run `agent-relay login`\.\n$/
+    );
     assert.equal(fetchTrap.calls.length, 0);
   } finally {
     trap.restore();

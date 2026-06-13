@@ -2,7 +2,8 @@ import {
   CloudAuthError,
   ensureCloudSession,
   resolveActiveWorkspace,
-  type ActiveWorkspaceDescriptor
+  type ActiveWorkspaceDescriptor,
+  type CloudSession
 } from '@agent-relay/cloud';
 import { canonicalizeCloudUrl } from './cloud-url.js';
 import type { DeployIO } from './types.js';
@@ -134,7 +135,8 @@ export async function resolveWorkspaceToken(args: {
   });
   const descriptor = await resolveWorkspaceDescriptor({
     requestedWorkspace: requestedWorkspace || envWorkspace,
-    apiUrl: session.auth.apiUrl || cloudUrl
+    apiUrl: session.auth.apiUrl || cloudUrl,
+    session
   });
 
   return {
@@ -148,6 +150,7 @@ export async function resolveWorkspaceToken(args: {
 async function resolveWorkspaceDescriptor(args: {
   requestedWorkspace?: string;
   apiUrl: string;
+  session: CloudSession;
 }): Promise<ActiveWorkspaceDescriptor> {
   const workspace = args.requestedWorkspace?.trim();
   if (!workspace) {
@@ -157,11 +160,7 @@ async function resolveWorkspaceDescriptor(args: {
     });
   }
 
-  const session = await ensureCloudSession({
-    apiUrl: args.apiUrl,
-    interactive: false
-  });
-  const response = await session.client.fetch(
+  const response = await args.session.client.fetch(
     `/api/v1/workspaces/${encodeURIComponent(workspace)}/resolve`,
     { method: 'GET' }
   );
@@ -169,7 +168,8 @@ async function resolveWorkspaceDescriptor(args: {
     const text = await response.text().catch(() => '');
     throw new Error(`workspace resolve failed for ${workspace}: ${response.status} ${text}`.trim());
   }
-  return normalizeWorkspaceDescriptor(await response.json(), session.auth.apiUrl || args.apiUrl);
+  const payload = await response.json().catch(() => null);
+  return normalizeWorkspaceDescriptor(payload, args.session.auth.apiUrl || args.apiUrl);
 }
 
 function normalizeWorkspaceDescriptor(payload: unknown, apiUrl: string): ActiveWorkspaceDescriptor {
@@ -186,7 +186,7 @@ function normalizeWorkspaceDescriptor(payload: unknown, apiUrl: string): ActiveW
     ?? '';
   const relayfileWorkspaceId = readString(record, 'relayfileWorkspaceId') ?? '';
   const relayauthWorkspaceId = readString(record, 'relayauthWorkspaceId') ?? '';
-  if (!relaycastWorkspaceId || !relayfileWorkspaceId || !relayauthWorkspaceId) {
+  if (!key || !relaycastWorkspaceId || !relayfileWorkspaceId || !relayauthWorkspaceId) {
     throw new Error('workspace resolve returned an incomplete descriptor');
   }
   return {
@@ -246,13 +246,16 @@ export async function clearStoredWorkspaceToken(_workspace?: string): Promise<vo
 
 function workspaceAuthError(error: unknown): Error {
   if (error instanceof CloudAuthError) {
+    const message = error.message.includes('Run `agent-relay login`')
+      ? error.message
+      : `${error.message}. Run \`agent-relay login\` and retry.`;
     switch (error.code) {
       case 'AUTH_REFRESH_TIMEOUT':
         return new Error(`cloud auth refresh timed out: ${error.message}`);
       case 'AUTH_REFRESH_EXPIRED':
       case 'AUTH_BROWSER_REQUIRED':
       case 'AUTH_ENV_REPROVISION_REQUIRED':
-        return new Error(`${error.message}. Run \`agent-relay login\` and retry.`);
+        return new Error(message);
     }
   }
   return error instanceof Error ? error : new Error(String(error));

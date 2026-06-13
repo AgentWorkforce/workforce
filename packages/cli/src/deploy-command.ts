@@ -31,7 +31,7 @@ type DeployCommandDeps = {
   clearStoredAuth: typeof clearStoredAuth;
   clearStoredWorkspaceToken: typeof clearStoredWorkspaceToken;
   clearActiveWorkspace: typeof clearActiveWorkspace;
-  setWorkspaceKey(name: string, key: string): unknown;
+  setWorkspaceKey(name: string, key: string): unknown | Promise<unknown>;
   createTerminalIO: typeof createTerminalIO;
   createCloudApiClient(auth: StoredAuth, apiUrl: string): LoginApiClient;
 };
@@ -127,6 +127,12 @@ function createDeployAuthRecovery(opts: DeployOptions): CloudAuthRecoveryResolve
         interactive: true
       });
       const activeWorkspace = opts.workspace ?? workspace;
+      if (activeWorkspace) {
+        const apiUrl = canonicalizeCloudUrl(normalizeCloudUrl(session.auth.apiUrl || cloudUrl));
+        const descriptor = await resolveWorkspaceForLogin(session.auth, apiUrl, activeWorkspace);
+        const workspaceName = descriptor.name ?? descriptor.slug ?? activeWorkspace;
+        await deployCommandDeps.setWorkspaceKey(workspaceName, descriptor.key);
+      }
       io.info(`cloud: logged in for workspace ${activeWorkspace}; retrying integration check`);
       return {
         token: session.auth.accessToken
@@ -176,7 +182,7 @@ export async function runLogin(args: readonly string[]): Promise<void> {
     const match = findWorkspace(workspaces, chosen);
     const descriptor = await resolveWorkspaceForLogin(auth, apiUrl, match?.id ?? chosen);
     const workspaceName = descriptor.name ?? descriptor.slug ?? match?.slug ?? match?.name ?? chosen;
-    deployCommandDeps.setWorkspaceKey(workspaceName, descriptor.key);
+    await deployCommandDeps.setWorkspaceKey(workspaceName, descriptor.key);
     process.stdout.write(`\nlogged in: ${workspaceName}\n`);
     process.exit(0);
   } catch (err) {
@@ -413,7 +419,7 @@ function expectChoice<T extends string>(flag: string, value: string, allowed: re
 }
 
 function parseLoginArgs(args: readonly string[]): { workspace?: string; cloudUrl?: string } {
-  let workspace: string | undefined;
+  let workspace = process.env.WORKFORCE_WORKSPACE_ID?.trim() || undefined;
   let cloudUrl: string | undefined;
 
   for (let i = 0; i < args.length; i += 1) {
@@ -473,6 +479,8 @@ type LoginWorkspace = {
 type LoginWorkspaceDescriptor = {
   key: string;
   relaycastWorkspaceId: string;
+  relayfileWorkspaceId: string;
+  relayauthWorkspaceId: string;
   name?: string;
   slug?: string;
 };
@@ -517,12 +525,16 @@ async function resolveWorkspaceForLogin(
   const relaycastWorkspaceId = readString(record, 'relaycastWorkspaceId')
     ?? readString(record, 'workspaceId')
     ?? '';
-  if (!key || !relaycastWorkspaceId) {
+  const relayfileWorkspaceId = readString(record, 'relayfileWorkspaceId') ?? '';
+  const relayauthWorkspaceId = readString(record, 'relayauthWorkspaceId') ?? '';
+  if (!key || !relaycastWorkspaceId || !relayfileWorkspaceId || !relayauthWorkspaceId) {
     throw new Error('workspace resolve returned an incomplete descriptor');
   }
   return {
     key,
     relaycastWorkspaceId,
+    relayfileWorkspaceId,
+    relayauthWorkspaceId,
     ...(readString(record, 'name') ? { name: readString(record, 'name') } : {}),
     ...(readString(record, 'slug') ? { slug: readString(record, 'slug') } : {})
   };

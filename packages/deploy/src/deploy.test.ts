@@ -1712,8 +1712,8 @@ test('deploy: clear error when nothing resolves and noPrompt is set', async () =
   // Without env or an explicit resolver, the orchestrator must surface
   // an actionable error rather than wedging in a prompt loop. Setting
   // `noPrompt` forces `resolveWorkspaceToken` to use the non-interactive
-  // canonical agent-relay session path, so a missing active workspace
-  // produces deterministic SDK guidance instead of a prompt loop.
+  // canonical agent-relay session path, so a missing cloud login produces
+  // deterministic SDK guidance instead of a prompt loop.
   const { personaPath, cleanup } = await withTempPersona(
     basePersonaJson({ integrations: {} })
   );
@@ -1733,7 +1733,7 @@ test('deploy: clear error when nothing resolves and noPrompt is set', async () =
           { personaPath, mode: 'dev', noConnect: true, noPrompt: true, io: createBufferedIO() },
           { bundle: successfulBundleStager(), modes: { dev: successfulDevLauncher() } }
         ),
-        /No active Agent Relay workspace found|workspace is required for deploy/
+        { message: /^Cloud login required\. Run `agent-relay login`\.$/ }
       );
     } finally {
       if (previousActiveFile === undefined) {

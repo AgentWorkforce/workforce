@@ -54,9 +54,19 @@ function trapExit(throwOnExit = true): ExitTrap {
   return trap;
 }
 
+function clearLoginWorkspaceEnvForTest(): () => void {
+  const previous = process.env.WORKFORCE_WORKSPACE_ID;
+  delete process.env.WORKFORCE_WORKSPACE_ID;
+  return () => {
+    if (previous === undefined) delete process.env.WORKFORCE_WORKSPACE_ID;
+    else process.env.WORKFORCE_WORKSPACE_ID = previous;
+  };
+}
+
 test('runLogin uses cloud SDK auth, picks a workspace, and pins the canonical relay workspace key', async () => {
   const calls: string[] = [];
   const pinned: unknown[] = [];
+  const restoreWorkspaceEnv = clearLoginWorkspaceEnvForTest();
   const restoreDeps = configureDeployCommandForTest({
     createTerminalIO: () => createBufferedIO(),
     ensureCloudSession: async (options?: { apiUrl?: string }) => {
@@ -115,6 +125,7 @@ test('runLogin uses cloud SDK auth, picks a workspace, and pins the canonical re
   } finally {
     trap.restore();
     restoreDeps();
+    restoreWorkspaceEnv();
   }
 });
 
@@ -183,7 +194,117 @@ test('runLogin with --workspace skips the workspaces list and pins the resolved 
   }
 });
 
+test('runLogin uses WORKFORCE_WORKSPACE_ID as the default workspace', async () => {
+  const prevWorkspace = process.env.WORKFORCE_WORKSPACE_ID;
+  process.env.WORKFORCE_WORKSPACE_ID = 'rw_from_env';
+  const calls: string[] = [];
+  const pinned: unknown[] = [];
+  const restoreDeps = configureDeployCommandForTest({
+    createTerminalIO: () => createBufferedIO(),
+    ensureCloudSession: async (options?: { apiUrl?: string }) => {
+      const apiUrl = options?.apiUrl ?? 'https://cloud.example.test';
+      calls.push(`ensure:${apiUrl}`);
+      return {
+        auth: {
+          apiUrl,
+          accessToken: 'access',
+          refreshToken: 'refresh',
+          accessTokenExpiresAt: '2999-01-01T00:00:00.000Z'
+        },
+        client: { fetch: async () => new Response(null, { status: 500 }) }
+      };
+    },
+    createCloudApiClient() {
+      calls.push('createCloudApiClient');
+      return {
+        async fetch(pathname: string) {
+          calls.push(`fetch:${pathname}`);
+          return new Response(JSON.stringify({
+            key: 'rk_live_env',
+            relaycastWorkspaceId: 'rw_from_env',
+            relayfileWorkspaceId: 'rf_from_env',
+            relayauthWorkspaceId: 'ra_from_env',
+            name: 'Env Workspace'
+          }), {
+            status: 200,
+            headers: { 'content-type': 'application/json' }
+          });
+        }
+      };
+    },
+    setWorkspaceKey: (name: string, key: string) => {
+      pinned.push({ name, key });
+    }
+  });
+  const trap = trapExit(false);
+  try {
+    await runLogin(['--cloud-url', 'https://cloud.example.test/']);
+    assert.deepEqual(trap.exits, [0]);
+    assert.deepEqual(calls, [
+      'ensure:https://cloud.example.test',
+      'createCloudApiClient',
+      'fetch:/api/v1/workspaces/rw_from_env/resolve'
+    ]);
+    assert.deepEqual(pinned, [{ name: 'Env Workspace', key: 'rk_live_env' }]);
+    assert.match(trap.stdout, /logged in: Env Workspace/);
+  } finally {
+    trap.restore();
+    restoreDeps();
+    if (prevWorkspace === undefined) delete process.env.WORKFORCE_WORKSPACE_ID;
+    else process.env.WORKFORCE_WORKSPACE_ID = prevWorkspace;
+  }
+});
+
+test('runLogin rejects workspace resolve descriptors missing relay service ids', async () => {
+  const restoreDeps = configureDeployCommandForTest({
+    createTerminalIO: () => createBufferedIO(),
+    ensureCloudSession: async (options?: { apiUrl?: string }) => {
+      const apiUrl = options?.apiUrl ?? 'https://cloud.example.test';
+      return {
+        auth: {
+          apiUrl,
+          accessToken: 'access',
+          refreshToken: 'refresh',
+          accessTokenExpiresAt: '2999-01-01T00:00:00.000Z'
+        },
+        client: { fetch: async () => new Response(null, { status: 500 }) }
+      };
+    },
+    createCloudApiClient() {
+      return {
+        async fetch(_pathname: string) {
+          return new Response(JSON.stringify({
+            key: 'rk_live_partial',
+            relaycastWorkspaceId: 'rw_partial'
+          }), {
+            status: 200,
+            headers: { 'content-type': 'application/json' }
+          });
+        }
+      };
+    },
+    setWorkspaceKey: () => {
+      throw new Error('setWorkspaceKey should not be called for incomplete descriptors');
+    }
+  });
+  const trap = trapExit(false);
+  try {
+    await runLogin([
+      '--cloud-url',
+      'https://cloud.example.test/',
+      '--workspace',
+      'rw_partial'
+    ]);
+    assert.deepEqual(trap.exits, [1]);
+    assert.match(trap.stderr, /workspace resolve returned an incomplete descriptor/);
+  } finally {
+    trap.restore();
+    restoreDeps();
+  }
+});
+
 test('runLogin without --workspace surfaces a --workspace hint when the workspaces list returns 403', async () => {
+  const restoreWorkspaceEnv = clearLoginWorkspaceEnvForTest();
   const restoreDeps = configureDeployCommandForTest({
     createTerminalIO: () => createBufferedIO(),
     ensureCloudSession: async (options?: { apiUrl?: string }) => ({
@@ -218,10 +339,12 @@ test('runLogin without --workspace surfaces a --workspace hint when the workspac
   } finally {
     trap.restore();
     restoreDeps();
+    restoreWorkspaceEnv();
   }
 });
 
 test('runLogin without --workspace surfaces a no-workspaces message when the list comes back empty', async () => {
+  const restoreWorkspaceEnv = clearLoginWorkspaceEnvForTest();
   const restoreDeps = configureDeployCommandForTest({
     createTerminalIO: () => createBufferedIO(),
     ensureCloudSession: async (options?: { apiUrl?: string }) => ({
@@ -256,6 +379,7 @@ test('runLogin without --workspace surfaces a no-workspaces message when the lis
   } finally {
     trap.restore();
     restoreDeps();
+    restoreWorkspaceEnv();
   }
 });
 
@@ -382,6 +506,7 @@ test('parseDeployArgs: malformed --input exits with clean error', () => {
 
 test('runLogin canonicalizes origin.agentrelay.cloud apiUrl before resolving the workspace', async () => {
   const calls: string[] = [];
+  const restoreWorkspaceEnv = clearLoginWorkspaceEnvForTest();
   const restoreDeps = configureDeployCommandForTest({
     createTerminalIO: () => createBufferedIO(),
     ensureCloudSession: async () => ({
@@ -428,5 +553,6 @@ test('runLogin canonicalizes origin.agentrelay.cloud apiUrl before resolving the
   } finally {
     trap.restore();
     restoreDeps();
+    restoreWorkspaceEnv();
   }
 });
