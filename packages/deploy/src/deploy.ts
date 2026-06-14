@@ -225,7 +225,8 @@ export async function deploy(opts: DeployOptions, resolvers: DeployResolvers = {
       io,
       noPrompt: opts.noPrompt === true || opts.noConnect === true,
       ...(opts.harnessSource ? { harnessSource: opts.harnessSource } : {}),
-      ...(opts.byokKey ? { byokKey: opts.byokKey } : {})
+      ...(opts.byokKey ? { byokKey: opts.byokKey } : {}),
+      ...(opts.reconnectProviders ? { reconnectProviders: opts.reconnectProviders } : {})
     });
     credentialSelections = result.credentialSelections;
     subscription = alreadyConnectedSubscriptionResolver(result.provider);
@@ -326,6 +327,7 @@ export async function deploy(opts: DeployOptions, resolvers: DeployResolvers = {
     ...(opts.noPrompt ? { noPrompt: true } : {}),
     ...(opts.harnessSource ? { harnessSource: opts.harnessSource } : {}),
     ...(opts.byokKey ? { byokKey: opts.byokKey } : {}),
+    ...(opts.reconnectProviders ? { reconnectProviders: opts.reconnectProviders } : {}),
     ...(opts.onExists ? { onExists: opts.onExists } : {}),
     ...(Object.keys(resolvedInputs).length > 0 ? { inputs: resolvedInputs } : {}),
     ...(credentialSelections ? { credentialSelections } : {}),

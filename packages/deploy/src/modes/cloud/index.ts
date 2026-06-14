@@ -146,7 +146,8 @@ export const cloudLauncher: ModeLauncher = {
       io: input.io,
       noPrompt,
       harnessSource: input.harnessSource,
-      byokKey: input.byokKey
+      byokKey: input.byokKey,
+      reconnectProviders: input.reconnectProviders
     });
 
     const existingPersona = await handleExistingPersona({
@@ -288,6 +289,7 @@ async function ensureHarnessReady(args: {
   noPrompt: boolean;
   harnessSource?: HarnessSource;
   byokKey?: string;
+  reconnectProviders?: readonly string[];
 }): Promise<Record<string, string>> {
   // Pure handler personas declare no harness (the bundled handler never calls
   // ctx.harness.run — it orchestrates via ctx.workflow.run / integration
@@ -488,22 +490,38 @@ async function ensureHarnessOauth(args: {
   persona: PersonaSpec;
   io: ModeLaunchInput['io'];
   noPrompt: boolean;
+  reconnectProviders?: readonly string[];
 }): Promise<void> {
-  if (await isHarnessOauthConnected(args)) {
+  const reconnect = harnessReconnectRequested(args.reconnectProviders, args.persona);
+  const connected = await isHarnessOauthConnected(args);
+  // Cloud reports a credential row as `connected` even when its stored OAuth
+  // token was revoked server-side (cloud never re-validates it), so a plain
+  // redeploy can never refresh a dead harness credential. `--reconnect
+  // <provider>` forces the connect flow to re-run and overwrite the stored
+  // token — the escape hatch for codex/ChatGPT refresh-token rotation.
+  if (connected && !reconnect) {
     args.io.info(`cloud: ${args.persona.harness} credentials already connected`);
     return;
   }
   if (args.noPrompt) {
     throw new Error(
-      `cloud: ${args.persona.harness} OAuth credentials are not connected. Run without --no-prompt or choose --harness-source plan/byok.`
+      connected
+        ? `cloud: --reconnect ${deriveModelProvider(args.persona)} opens a browser connect flow; re-run without --no-prompt.`
+        : `cloud: ${args.persona.harness} OAuth credentials are not connected. Run without --no-prompt or choose --harness-source plan/byok.`
     );
   }
-  const ok = await args.io.confirm(
-    `Connect ${args.persona.harness} credentials now? (opens browser)`,
-    { defaultValue: true }
-  );
-  if (!ok) {
-    throw new Error(`cloud: ${args.persona.harness} credentials are required for deploy`);
+  if (connected) {
+    args.io.info(
+      `cloud: reconnect requested; opening a fresh ${args.persona.harness} connection flow (replaces the stored credential)`
+    );
+  } else {
+    const ok = await args.io.confirm(
+      `Connect ${args.persona.harness} credentials now? (opens browser)`,
+      { defaultValue: true }
+    );
+    if (!ok) {
+      throw new Error(`cloud: ${args.persona.harness} credentials are required for deploy`);
+    }
   }
   const modelProvider = deriveModelProvider(args.persona);
   await cloudCredentialDeps.connectProvider({
@@ -522,6 +540,27 @@ async function ensureHarnessOauth(args: {
   args.io.info(`cloud: ${args.persona.harness} credentials connected`);
 }
 
+/**
+ * Whether the user asked (via `--reconnect <provider>`) to force a fresh
+ * connection for this persona's harness LLM credential even when cloud already
+ * reports one connected. Matches either the resolved model provider
+ * ("openai"/"anthropic") or the harness name ("codex"/"claude") so both
+ * `--reconnect openai` and `--reconnect codex` work.
+ */
+function harnessReconnectRequested(
+  reconnectProviders: readonly string[] | undefined,
+  persona: PersonaSpec
+): boolean {
+  if (!reconnectProviders?.length) return false;
+  const wanted = new Set(
+    reconnectProviders.map((p) => p.trim().toLowerCase()).filter(Boolean)
+  );
+  if (wanted.size === 0) return false;
+  return [deriveModelProvider(persona), persona.harness]
+    .filter((key): key is string => typeof key === 'string' && key.trim().length > 0)
+    .some((key) => wanted.has(key.trim().toLowerCase()));
+}
+
 export function validateCloudSubscriptionSupport(args: {
   persona: PersonaSpec;
   harnessSource?: HarnessSource;
@@ -538,6 +577,7 @@ export async function ensureCloudSubscriptionReady(args: {
   noPrompt: boolean;
   harnessSource?: HarnessSource;
   byokKey?: string;
+  reconnectProviders?: readonly string[];
 }): Promise<CloudSubscriptionReadyResult> {
   const source = resolveSubscriptionHarnessSource(args);
   const provider = deriveModelProvider(args.persona);
@@ -588,24 +628,37 @@ async function ensureSubscriptionOauth(args: {
   persona: PersonaSpec;
   io: ModeLaunchInput['io'];
   noPrompt: boolean;
+  reconnectProviders?: readonly string[];
 }): Promise<void> {
   const provider = deriveModelProvider(args.persona);
-  if (await isHarnessOauthConnected(args)) {
+  const reconnect = harnessReconnectRequested(args.reconnectProviders, args.persona);
+  const connected = await isHarnessOauthConnected(args);
+  // See ensureHarnessOauth: a `connected` row can hold a revoked token, so
+  // `--reconnect <provider>` forces a fresh connect that overwrites it.
+  if (connected && !reconnect) {
     args.io.info(`subscription: ${provider} credentials already connected`);
     return;
   }
   if (args.noPrompt) {
     throw new Error(
-      `persona "${args.persona.id}" sets useSubscription:true but ${provider} credentials are not connected. ` +
-        'Run without --no-prompt to connect them, pass --harness-source byok with --byok-key, or remove useSubscription to use workforce-billed inference.'
+      connected
+        ? `cloud: --reconnect ${provider} opens a browser connect flow; re-run without --no-prompt.`
+        : `persona "${args.persona.id}" sets useSubscription:true but ${provider} credentials are not connected. ` +
+            'Run without --no-prompt to connect them, pass --harness-source byok with --byok-key, or remove useSubscription to use workforce-billed inference.'
     );
   }
-  const ok = await args.io.confirm(
-    `Connect ${provider} credentials for useSubscription now? (opens browser)`,
-    { defaultValue: true }
-  );
-  if (!ok) {
-    throw new Error('user declined the subscription provider connect; deploy aborted');
+  if (connected) {
+    args.io.info(
+      `subscription: reconnect requested; opening a fresh ${provider} connection flow (replaces the stored credential)`
+    );
+  } else {
+    const ok = await args.io.confirm(
+      `Connect ${provider} credentials for useSubscription now? (opens browser)`,
+      { defaultValue: true }
+    );
+    if (!ok) {
+      throw new Error('user declined the subscription provider connect; deploy aborted');
+    }
   }
   await cloudCredentialDeps.connectProvider({
     provider,
