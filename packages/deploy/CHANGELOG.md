@@ -7,6 +7,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [4.0.4] - 2026-06-14
+
+### Added
+
+- **Surface daytona connect + gate in agentworkforce deploy** (#232)
+
+### Changed
+
+- Unify workforce cloud auth session (#234)
+
+### Reliability
+
+- Characterize cloud subscription credential flow (#196)
+
 ## [4.0.3] - 2026-06-11
 
 ### Fixed

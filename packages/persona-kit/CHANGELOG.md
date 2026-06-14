@@ -7,6 +7,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [4.0.4] - 2026-06-14
+
+### Changed
+
+- Preserve trigger maxConcurrency in persona-kit (#230)
+
+### Dependencies
+
+- Refresh relayfile trigger catalog for daytona (#231)
+
 ## [4.0.0] - 2026-06-10
 
 ### Breaking Changes
