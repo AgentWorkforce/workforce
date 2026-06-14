@@ -221,7 +221,9 @@ Flags:
   --mode dev|sandbox|cloud    Pick a run mode (prompts in an interactive terminal)
   --workspace <name>           Workforce workspace; defaults to the active workspace
   --no-connect                 Skip integration-connect prompts; fail if any are missing
-  --reconnect <provider>       Force a fresh integration connect flow (repeatable)
+  --reconnect <provider>       Force a fresh connect flow even if already connected,
+                               for an integration or the harness LLM credential
+                               (e.g. openai/codex, anthropic/claude). Repeatable.
   --byo-sandbox                Force BYO Daytona auth even when logged in
   --detach                     Background the runner instead of streaming logs
   --bundle-out <dir>           Emit the bundle to <dir> and exit (no launch)

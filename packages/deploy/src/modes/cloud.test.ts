@@ -597,6 +597,108 @@ test('cloud harness OAuth starts auth and polls /cloud-agents until the harness 
   assert.deepEqual(connected, ['openai']);
 });
 
+// Cloud marks a credential row `connected` even after its OAuth token is
+// revoked server-side, so a plain redeploy short-circuits and never refreshes
+// a dead harness credential. `--reconnect <provider>` is the escape hatch.
+test('cloud --reconnect forces a fresh harness connect even when already connected', async () => {
+  const connected: string[] = [];
+  const restoreDeps = configureCloudCredentialDepsForTest({
+    readStoredAuth: async () => ({
+      apiUrl: 'https://cloud.example.test',
+      accessToken: 'access',
+      refreshToken: 'refresh',
+      accessTokenExpiresAt: '2999-01-01T00:00:00.000Z'
+    }),
+    connectProvider: async (options: { provider: string }) => {
+      connected.push(options.provider);
+      return { provider: options.provider, success: true };
+    },
+    createCloudApiClient() {
+      return {
+        async fetch(pathname: string) {
+          assert.equal(pathname, '/api/v1/cloud-agents');
+          return okJson({
+            agents: [{ id: 'cloud-agent-openai', harness: 'openai', status: 'connected' }]
+          });
+        }
+      };
+    }
+  });
+  const io = createBufferedIO();
+  const { bundle, cleanup } = await withBundle();
+  const fetchMock = installFetch((url, init) => {
+    if (init?.method === 'GET' && url.endsWith('/deployments')) return okJson({ agents: [] });
+    if (url.endsWith('/deployments')) {
+      return okJson({ agentId: 'agent-reconnect', deploymentId: 'dep-reconnect', status: 'active' }, 201);
+    }
+    throw new Error(`unexpected URL ${url}`);
+  });
+  try {
+    const handle = await withEnv({
+      WORKFORCE_WORKSPACE_TOKEN: 'tok',
+      WORKFORCE_DEPLOY_CLOUD_URL: 'https://cloud.example.test',
+      WORKFORCE_DEPLOY_HARNESS_SOURCE: 'oauth',
+      WORKFORCE_DEPLOY_POLL_INTERVAL_MS: '0',
+      WORKFORCE_DEPLOY_POLL_TIMEOUT_MS: '50',
+      WORKFORCE_DEPLOY_RETRY_BACKOFF_MS: '0'
+    }, () => cloudLauncher.launch({
+      persona: persona(),
+      agent: agentSpec,
+      bundle,
+      workspace: 'ws-test',
+      io,
+      // The harness name ("codex") resolves to provider "openai"; pass the
+      // harness alias to prove both spellings trigger the reconnect.
+      reconnectProviders: ['codex']
+    }));
+    assert.equal(handle.id, 'agent-reconnect');
+  } finally {
+    fetchMock.restore();
+    restoreDeps();
+    await cleanup();
+  }
+  // Despite cloud reporting the harness already connected, the reconnect flag
+  // forced a fresh connectProvider call that overwrites the stored token.
+  assert.deepEqual(connected, ['openai']);
+});
+
+test('cloud --reconnect with --no-prompt fails with actionable guidance', async () => {
+  const restoreDeps = configureCloudCredentialDepsForTest({
+    readStoredAuth: async () => ({
+      apiUrl: 'https://cloud.example.test',
+      accessToken: 'access',
+      refreshToken: 'refresh',
+      accessTokenExpiresAt: '2999-01-01T00:00:00.000Z'
+    }),
+    connectProvider: async () => {
+      throw new Error('connectProvider must not run under --no-prompt');
+    },
+    createCloudApiClient() {
+      return {
+        async fetch() {
+          return okJson({
+            agents: [{ id: 'cloud-agent-openai', harness: 'openai', status: 'connected' }]
+          });
+        }
+      };
+    }
+  });
+  await assert.rejects(
+    launch({
+      defaultPlanCredential: false,
+      env: {
+        WORKFORCE_DEPLOY_CLOUD_URL: 'https://cloud.example.test',
+        WORKFORCE_DEPLOY_NO_PROMPT: '1'
+      },
+      input: { harnessSource: 'oauth', reconnectProviders: ['openai'] },
+      fetch(url) {
+        throw new Error(`unexpected URL ${url}`);
+      }
+    }),
+    /re-run without --no-prompt/
+  ).finally(restoreDeps);
+});
+
 test('cloud launcher maps 401 deploy responses to the workforce login guidance', async () => {
   await assert.rejects(
     launch({

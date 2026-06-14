@@ -145,6 +145,13 @@ export interface ModeLaunchInput {
   harnessSource?: 'plan' | 'byok' | 'oauth';
   /** BYOK API key used when `harnessSource` is `byok`. */
   byokKey?: string;
+  /**
+   * Force a fresh OAuth connect flow for specific providers even when cloud
+   * already reports one connected. Covers the harness LLM credential (matched
+   * by model provider or harness name), so a revoked harness token can be
+   * refreshed without first disconnecting it in the dashboard.
+   */
+  reconnectProviders?: string[];
   /** Existing cloud persona behavior. Defaults to `cancel`. */
   onExists?: 'update' | 'destroy' | 'cancel';
   /** Runtime inputs forwarded to launchers that support them. */
