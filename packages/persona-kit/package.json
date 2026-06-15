@@ -10,6 +10,10 @@
       "types": "./dist/index.d.ts",
       "default": "./dist/index.js"
     },
+    "./spec": {
+      "types": "./dist/spec.d.ts",
+      "default": "./dist/spec.js"
+    },
     "./package.json": "./package.json",
     "./schemas/persona.schema.json": "./schemas/persona.schema.json",
     "./schemas/agent.schema.json": "./schemas/agent.schema.json"
