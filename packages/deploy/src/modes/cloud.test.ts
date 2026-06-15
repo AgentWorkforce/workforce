@@ -482,6 +482,63 @@ test('cloud harness OAuth probe treats a matching connected entry as ready (skip
   assert.ok(!calls.some((c) => c.url.includes('/cli/auth')));
 });
 
+test('cloud harness OAuth probe maps a grok persona to the connected xai credential', async () => {
+  // Regression: a grok persona declares `model: "grok-build"`, but the
+  // connected credential `relay cloud connect xai` stores is keyed
+  // `harness: "grok"` (modelProvider "xai"). deriveModelProvider used to
+  // return the literal model string "grok-build" — which matched neither
+  // "grok" nor "xai" — so the probe reported "not connected", re-prompted
+  // for a browser reconnect that never matched, and the deploy looped.
+  // With grok/xai mapped to provider "xai" (alias "grok"), the connected
+  // entry is recognized and the deploy proceeds.
+  const restoreDeps = configureCloudCredentialDepsForTest({
+    readStoredAuth: async () => ({
+      apiUrl: 'https://cloud.example.test',
+      accessToken: 'access',
+      refreshToken: 'refresh',
+      accessTokenExpiresAt: '2999-01-01T00:00:00.000Z'
+    }),
+    createCloudApiClient() {
+      return {
+        async fetch(pathname: string) {
+          assert.equal(pathname, '/api/v1/cloud-agents');
+          return okJson({
+            agents: [
+              {
+                id: 'cloud-agent-grok',
+                harness: 'grok', // xai credential is stored under the grok harness alias
+                status: 'connected',
+                credentialStoredAt: '2026-06-15T19:15:44.561Z'
+              }
+            ]
+          });
+        }
+      };
+    }
+  });
+
+  const { calls, handle } = await launch({
+    defaultPlanCredential: false,
+    env: {
+      WORKFORCE_DEPLOY_CLOUD_URL: 'https://cloud.example.test',
+      WORKFORCE_DEPLOY_NO_PROMPT: '1'
+    },
+    input: { harnessSource: 'oauth' },
+    persona: persona({ harness: 'grok', model: 'grok-build' }),
+    fetch(url, init) {
+      if (init?.method === 'GET' && url.endsWith('/deployments')) return okJson({ agents: [] });
+      if (url.endsWith('/deployments')) {
+        return okJson({ agentId: 'agent-grok', deploymentId: 'dep-grok', status: 'active' }, 201);
+      }
+      throw new Error(`unexpected URL ${url}`);
+    }
+  }).finally(restoreDeps);
+
+  assert.equal(handle.id, 'agent-grok');
+  // The connected entry was recognized, so no browser reconnect fired.
+  assert.ok(!calls.some((c) => c.url.includes('/cli/auth')));
+});
+
 test('cloud harness OAuth probe ignores entries with the wrong harness', async () => {
   // If the user has openai connected but the persona's provider is
   // anthropic, the probe must NOT treat that as readiness — otherwise
