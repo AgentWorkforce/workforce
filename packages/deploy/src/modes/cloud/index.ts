@@ -965,6 +965,7 @@ function deriveModelProvider(persona: PersonaSpec): string {
   if (matchesProviderToken(lower, ['openai', 'codex', 'gpt'])) return 'openai';
   if (matchesProviderToken(lower, ['google', 'gemini'])) return 'google';
   if (matchesProviderToken(lower, ['openrouter', 'opencode'])) return 'openrouter';
+  if (matchesProviderToken(lower, ['grok', 'xai', 'x-ai'])) return 'xai';
   const [provider] = model.split(/[/:]/, 1);
   if (provider?.trim()) return provider.trim().toLowerCase();
   return harnessFallback;
@@ -1070,6 +1071,8 @@ function harnessAliasForModelProvider(modelProvider: string): string {
       return 'gemini';
     case 'openrouter':
       return 'opencode';
+    case 'xai':
+      return 'grok';
     default:
       return modelProvider;
   }
