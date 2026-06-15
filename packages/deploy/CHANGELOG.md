@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [4.0.6] - 2026-06-15
+
+### Fixed
+
+- Map grok/xai models to the xai provider for credential matching
+
 ## [4.0.5] - 2026-06-14
 
 ### Fixed
