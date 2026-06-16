@@ -668,6 +668,23 @@ test('parseIntegrations preserves scope (connection-only); rejects persona-level
           }
         }
       },
+      gitlab: {
+        scope: { projectPath: 'org/r' },
+        config: {
+          materialization: {
+            default: 'lazy',
+            webhookWritesForLazyProjects: true,
+            rules: [
+              {
+                projects: ['org/r'],
+                resources: ['issues', 'merge_requests'],
+                issues: { mode: 'eager', filter: { state: 'opened', labels: ['p0'] } },
+                merge_requests: 'eager'
+              }
+            ]
+          }
+        }
+      },
       linear: {} // no scope — still a declared connection
     },
     'integrations'
@@ -682,6 +699,18 @@ test('parseIntegrations preserves scope (connection-only); rejects persona-level
         resources: ['issues', 'pulls'],
         issues: { mode: 'eager', filter: { state: 'open', labels: ['p0'] } },
         pulls: 'eager'
+      }
+    ]
+  });
+  assert.deepEqual(i?.gitlab.config?.materialization, {
+    default: 'lazy',
+    webhookWritesForLazyProjects: true,
+    rules: [
+      {
+        projects: ['org/r'],
+        resources: ['issues', 'merge_requests'],
+        issues: { mode: 'eager', filter: { state: 'opened', labels: ['p0'] } },
+        merge_requests: 'eager'
       }
     ]
   });

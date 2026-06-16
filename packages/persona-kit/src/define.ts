@@ -14,6 +14,7 @@ import type {
 import type { KnownProviderName, KnownTriggerName } from './triggers.js';
 import type { ScopeKey, ScopeKeyProvider } from './scope-keys.js';
 import type { KnownPersonaTag } from './constants.js';
+import type { AdapterMaterializationMode } from '@relayfile/adapter-core';
 
 export type TriggerNameFor<P extends string> = P extends KnownProviderName
   ? KnownTriggerName<P> | (string & {})
@@ -62,35 +63,62 @@ export type TypedScopeMap<P extends string> = {
   [key: string]: string;
 };
 
-export type GitHubMaterializationMode = 'lazy' | 'eager';
-export type GitHubMaterializationResource = 'issues' | 'pulls';
-
-export interface GitHubMaterializationFilter {
-  state?: 'open' | 'closed' | 'all';
+export interface TypedAdapterMaterializationFilter<State extends string = string> {
+  state?: State;
   labels?: readonly string[];
+  since?: string;
 }
 
-export type GitHubMaterializationResourcePolicy =
-  | GitHubMaterializationMode
+export type TypedAdapterResourceMaterializationPolicy<State extends string = string> =
+  | AdapterMaterializationMode
   | {
-      mode?: GitHubMaterializationMode;
-      filter?: GitHubMaterializationFilter;
+      mode?: AdapterMaterializationMode;
+      filter?: TypedAdapterMaterializationFilter<State>;
       since?: string;
+      incremental?: boolean;
     };
 
-export interface GitHubMaterializationRule {
-  repos?: readonly string[];
-  resources?: readonly GitHubMaterializationResource[];
+export type TypedAdapterMaterializationRule<
+  Resource extends string,
+  State extends string = string,
+  TargetKey extends string = 'targets'
+> = {
+  resources?: readonly Resource[];
+  filter?: TypedAdapterMaterializationFilter<State>;
+  since?: string;
+  incremental?: boolean;
   eager?: boolean;
-  issues?: GitHubMaterializationResourcePolicy;
-  pulls?: GitHubMaterializationResourcePolicy;
-}
+} & Partial<Record<Resource, TypedAdapterResourceMaterializationPolicy<State>>>
+  & Partial<Record<TargetKey, readonly string[]>>;
 
-export interface GitHubMaterializationPolicy {
-  default: GitHubMaterializationMode;
-  webhookWritesForLazyRepos?: boolean;
-  rules?: readonly GitHubMaterializationRule[];
-}
+export type TypedAdapterMaterializationPolicy<
+  Resource extends string,
+  State extends string = string,
+  TargetKey extends string = 'targets',
+  WebhookWritesKey extends string = 'webhookWritesForLazyTargets'
+> = {
+  default?: AdapterMaterializationMode;
+  rules?: readonly TypedAdapterMaterializationRule<Resource, State, TargetKey>[];
+} & Partial<Record<WebhookWritesKey, boolean>>;
+
+export type GitHubMaterializationMode = AdapterMaterializationMode;
+export type GitHubMaterializationResource = 'issues' | 'pulls';
+export type GitHubMaterializationState = 'open' | 'closed' | 'all';
+export type GitHubMaterializationFilter =
+  TypedAdapterMaterializationFilter<GitHubMaterializationState>;
+export type GitHubMaterializationResourcePolicy =
+  TypedAdapterResourceMaterializationPolicy<GitHubMaterializationState>;
+export type GitHubMaterializationRule = TypedAdapterMaterializationRule<
+  GitHubMaterializationResource,
+  GitHubMaterializationState,
+  'repos'
+>;
+export type GitHubMaterializationPolicy = TypedAdapterMaterializationPolicy<
+  GitHubMaterializationResource,
+  GitHubMaterializationState,
+  'repos',
+  'webhookWritesForLazyRepos'
+>;
 
 export interface GitHubAdapterConfig {
   /**
@@ -101,8 +129,47 @@ export interface GitHubAdapterConfig {
   [key: string]: unknown;
 }
 
+export type GitLabMaterializationMode = AdapterMaterializationMode;
+export type GitLabMaterializationResource =
+  | 'merge_requests'
+  | 'issues'
+  | 'pipelines'
+  | 'commits';
+export type GitLabMaterializationState =
+  | 'opened'
+  | 'closed'
+  | 'locked'
+  | 'merged'
+  | 'all';
+export type GitLabMaterializationFilter =
+  TypedAdapterMaterializationFilter<GitLabMaterializationState>;
+export type GitLabMaterializationResourcePolicy =
+  TypedAdapterResourceMaterializationPolicy<GitLabMaterializationState>;
+export type GitLabMaterializationRule = TypedAdapterMaterializationRule<
+  GitLabMaterializationResource,
+  GitLabMaterializationState,
+  'projects'
+>;
+export type GitLabMaterializationPolicy = TypedAdapterMaterializationPolicy<
+  GitLabMaterializationResource,
+  GitLabMaterializationState,
+  'projects',
+  'webhookWritesForLazyProjects'
+>;
+
+export interface GitLabAdapterConfig {
+  /**
+   * Relayfile GitLab adapter materialization policy. Persona-kit exposes the
+   * shared canonical lazy/eager modes; adapter-side aliases remain an adapter detail.
+   */
+  materialization?: GitLabMaterializationPolicy;
+  [key: string]: unknown;
+}
+
 export type AdapterConfigFor<P extends string> = P extends 'github'
   ? GitHubAdapterConfig
+  : P extends 'gitlab'
+    ? GitLabAdapterConfig
   : Record<string, unknown>;
 
 /**

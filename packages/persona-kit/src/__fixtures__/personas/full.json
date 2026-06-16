@@ -58,6 +58,38 @@
         }
       }
     },
+    "gitlab": {
+      "scope": {
+        "projectPath": "AgentWorkforce/workforce"
+      },
+      "config": {
+        "materialization": {
+          "default": "lazy",
+          "webhookWritesForLazyProjects": true,
+          "rules": [
+            {
+              "projects": [
+                "AgentWorkforce/workforce"
+              ],
+              "resources": [
+                "issues",
+                "merge_requests"
+              ],
+              "issues": {
+                "mode": "eager",
+                "filter": {
+                  "state": "opened",
+                  "labels": [
+                    "bug"
+                  ]
+                }
+              },
+              "merge_requests": "eager"
+            }
+          ]
+        }
+      }
+    },
     "linear": {},
     "slack": {},
     "notion": {

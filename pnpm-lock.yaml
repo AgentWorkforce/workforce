@@ -109,8 +109,8 @@ importers:
   packages/persona-kit:
     dependencies:
       '@relayfile/adapter-core':
-        specifier: ^0.3.44
-        version: 0.3.44(@relayfile/sdk@0.7.40)
+        specifier: ^0.3.50
+        version: 0.3.50(@relayfile/sdk@0.7.40)
       '@relayfile/local-mount':
         specifier: ^0.7.24
         version: 0.7.24
@@ -955,6 +955,13 @@ packages:
 
   '@relayfile/adapter-core@0.3.44':
     resolution: {integrity: sha512-+JnsFg23VME6r91LsPOSwUwHH1K7du1dz58vhd3LVWvZVk6tiyoPpDIF3SfmU7rmd/x2/mwSb+FBGJkPOUsYhA==}
+    engines: {node: '>=18'}
+    hasBin: true
+    peerDependencies:
+      '@relayfile/sdk': '>=0.6.0 <1'
+
+  '@relayfile/adapter-core@0.3.50':
+    resolution: {integrity: sha512-f1ksE475M4D5yQvvW9MCuCM+wCZqI+ynUaTQdvctaw16vgHenxq89mm+p4ZLauhbr/J4JmNvjz3RmK2n031T4Q==}
     engines: {node: '>=18'}
     hasBin: true
     peerDependencies:
@@ -3275,6 +3282,14 @@ snapshots:
       '@relayburn/sdk-linux-x64-gnu': 2.5.2
 
   '@relayfile/adapter-core@0.3.44(@relayfile/sdk@0.7.40)':
+    dependencies:
+      '@relayfile/sdk': 0.7.40
+      '@scalar/postman-to-openapi': 0.6.3
+      cheerio: 1.2.0
+      minimatch: 10.2.5
+      yaml: 2.9.0
+
+  '@relayfile/adapter-core@0.3.50(@relayfile/sdk@0.7.40)':
     dependencies:
       '@relayfile/sdk': 0.7.40
       '@scalar/postman-to-openapi': 0.6.3
