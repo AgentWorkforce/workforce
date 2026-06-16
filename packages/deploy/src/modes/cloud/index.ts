@@ -953,22 +953,33 @@ async function saveProviderCredential(args: {
   return readCredentialId(body);
 }
 
+const HARNESS_TO_PROVIDER: Record<string, string> = {
+  opencode: 'opencode',
+  claude: 'anthropic',
+  codex: 'openai',
+  grok: 'xai'
+};
+
 function deriveModelProvider(persona: PersonaSpec): string {
-  // Callers gate on `persona.harness` being set before reaching here, so the
-  // harness fallback is always a defined string in practice; default to
-  // 'anthropic' to keep the return type total.
-  const harnessFallback = persona.harness ?? 'anthropic';
+  // When the harness explicitly maps to a known provider, use it directly.
+  // The model string is the model ID within that provider's catalog (e.g.
+  // "deepseek-v4-flash-free" for opencode), not a provider name.
+  const harness = typeof persona.harness === 'string' ? persona.harness.trim().toLowerCase() : '';
+  const harnessProvider = HARNESS_TO_PROVIDER[harness];
+  if (harnessProvider) return harnessProvider;
+
   const model = typeof persona.model === 'string' ? persona.model.trim() : '';
-  if (!model) return harnessFallback;
+  if (!model) return harness || 'anthropic';
   const lower = model.toLowerCase();
   if (matchesProviderToken(lower, ['anthropic', 'claude'])) return 'anthropic';
   if (matchesProviderToken(lower, ['openai', 'codex', 'gpt'])) return 'openai';
   if (matchesProviderToken(lower, ['google', 'gemini'])) return 'google';
-  if (matchesProviderToken(lower, ['openrouter', 'opencode'])) return 'openrouter';
+  if (matchesProviderToken(lower, ['openrouter'])) return 'openrouter';
+  if (matchesProviderToken(lower, ['opencode'])) return 'opencode';
   if (matchesProviderToken(lower, ['grok', 'xai', 'x-ai'])) return 'xai';
   const [provider] = model.split(/[/:]/, 1);
   if (provider?.trim()) return provider.trim().toLowerCase();
-  return harnessFallback;
+  return harness || 'anthropic';
 }
 
 function matchesProviderToken(model: string, tokens: readonly string[]): boolean {
@@ -1069,7 +1080,7 @@ function harnessAliasForModelProvider(modelProvider: string): string {
       return 'codex';
     case 'google':
       return 'gemini';
-    case 'openrouter':
+    case 'opencode':
       return 'opencode';
     case 'xai':
       return 'grok';
