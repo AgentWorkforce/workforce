@@ -7,6 +7,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [4.1.2] - 2026-06-16
+
+### Fixed
+
+- Catch sync resolver failures
+- Skip catalog key for CLI-captured providers
+
 ## [4.0.6] - 2026-06-15
 
 ### Fixed

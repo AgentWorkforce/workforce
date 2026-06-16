@@ -7,6 +7,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [4.1.2] - 2026-06-16
+
+### Added
+
+- **Type gitlab materialization config**
+- **Add adapter config passthrough**
+
 ## [4.1.0] - 2026-06-15
 
 ### Added
