@@ -52,6 +52,12 @@ export function isObject(value: unknown): value is Record<string, unknown> {
   return typeof value === 'object' && value !== null;
 }
 
+export function isPlainObject(value: unknown): value is Record<string, unknown> {
+  if (!isObject(value) || Array.isArray(value)) return false;
+  const proto = Object.getPrototypeOf(value);
+  return proto === Object.prototype || proto === null;
+}
+
 export function isHarness(value: unknown): value is Harness {
   return typeof value === 'string' && HARNESS_VALUES.includes(value as Harness);
 }
@@ -640,7 +646,7 @@ export function parseIntegrationConfig(
   if (!isObject(value)) {
     throw new Error(`${context} must be an object`);
   }
-  const { source, scope } = value;
+  const { source, scope, config } = value;
 
   // Hard cut: triggers moved from the persona to the agent. A persona
   // integration is connection-config only (source + scope). Fail loudly so
@@ -673,6 +679,13 @@ export function parseIntegrationConfig(
     if (parsedScope && Object.keys(parsedScope).length > 0) {
       out.scope = parsedScope;
     }
+  }
+
+  if (config !== undefined) {
+    if (!isPlainObject(config)) {
+      throw new Error(`${context}.config must be a plain object if provided`);
+    }
+    out.config = config;
   }
 
   return out;

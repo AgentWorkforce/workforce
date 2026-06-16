@@ -425,9 +425,13 @@
           "additionalProperties": {
             "type": "string"
           }
+        },
+        "config": {
+          "type": "object",
+          "additionalProperties": {}
         }
       },
-      "description": "Per-provider **connection** configuration for a RelayFile provider. The map key is the provider slug (`github`, `linear`, `slack`, `notion`, `jira`). `scope` is provider-specific filter metadata (e.g. `{ repo: \"org/repo\" }` for github, `{ database: \"<id>\" }` for notion).\n\nThis declares only *that the persona connects to the provider* and how the connection resolves — **not** which events fire it. Event triggers live on the agent ( {@link  AgentSpec.triggers } ); the deploy CLI requires every provider in `agent.triggers` to also appear here so the connection is set up.\n\n`source` discriminates the cloud-side resolver between `user_integrations` and `workspace_integrations`; defaults to `{ kind: 'deployer_user' }` when omitted so existing personas keep their pre-discriminator behavior."
+      "description": "Per-provider **connection** configuration for a RelayFile provider. The map key is the provider slug (`github`, `linear`, `slack`, `notion`, `jira`). `scope` is provider-specific filter metadata (e.g. `{ repo: \"org/repo\" }` for github, `{ database: \"<id>\" }` for notion).\n\nThis declares only *that the persona connects to the provider* and how the connection resolves — **not** which events fire it. Event triggers live on the agent ( {@link  AgentSpec.triggers } ); the deploy CLI requires every provider in `agent.triggers` to also appear here so the connection is set up.\n\n`source` discriminates the cloud-side resolver between `user_integrations` and `workspace_integrations`; defaults to `{ kind: 'deployer_user' }` when omitted so existing personas keep their pre-discriminator behavior.\n\n`config` is a forward-compatible adapter passthrough. Persona-kit validates only that it is an object; provider adapters own the nested schema (for example GitHub materialization policy)."
     },
     "IntegrationSource": {
       "anyOf": [

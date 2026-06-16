@@ -651,12 +651,69 @@ test('parseSchedules validates cron, requires unique names, preserves tz when se
 test('parseIntegrations preserves scope (connection-only); rejects persona-level triggers', () => {
   const i = parseIntegrations(
     {
-      github: { scope: { repo: 'org/r' } },
+      github: {
+        scope: { repo: 'org/r' },
+        config: {
+          materialization: {
+            default: 'lazy',
+            webhookWritesForLazyRepos: true,
+            rules: [
+              {
+                repos: ['org/r'],
+                resources: ['issues', 'pulls'],
+                issues: { mode: 'eager', filter: { state: 'open', labels: ['p0'] } },
+                pulls: 'eager'
+              }
+            ]
+          }
+        }
+      },
+      gitlab: {
+        scope: { projectPath: 'org/r' },
+        config: {
+          materialization: {
+            default: 'lazy',
+            webhookWritesForLazyProjects: true,
+            rules: [
+              {
+                projects: ['org/r'],
+                resources: ['issues', 'merge_requests'],
+                issues: { mode: 'eager', filter: { state: 'opened', labels: ['p0'] } },
+                merge_requests: 'eager'
+              }
+            ]
+          }
+        }
+      },
       linear: {} // no scope — still a declared connection
     },
     'integrations'
   );
   assert.equal(i?.github.scope?.repo, 'org/r');
+  assert.deepEqual(i?.github.config?.materialization, {
+    default: 'lazy',
+    webhookWritesForLazyRepos: true,
+    rules: [
+      {
+        repos: ['org/r'],
+        resources: ['issues', 'pulls'],
+        issues: { mode: 'eager', filter: { state: 'open', labels: ['p0'] } },
+        pulls: 'eager'
+      }
+    ]
+  });
+  assert.deepEqual(i?.gitlab.config?.materialization, {
+    default: 'lazy',
+    webhookWritesForLazyProjects: true,
+    rules: [
+      {
+        projects: ['org/r'],
+        resources: ['issues', 'merge_requests'],
+        issues: { mode: 'eager', filter: { state: 'opened', labels: ['p0'] } },
+        merge_requests: 'eager'
+      }
+    ]
+  });
   // Default-injected source keeps existing personas resolving against
   // the deploying user's `user_integrations` row.
   assert.deepEqual(i?.github.source, { kind: 'deployer_user' });
@@ -666,6 +723,17 @@ test('parseIntegrations preserves scope (connection-only); rejects persona-level
   assert.throws(
     () => parseIntegrations({ github: { triggers: [{ on: 'pull_request.opened' }] } }, 'integrations'),
     /integrations\.github\.triggers is no longer allowed/
+  );
+});
+
+test('parseIntegrations rejects non-plain adapter config values', () => {
+  assert.throws(
+    () => parseIntegrations({ github: { config: null } }, 'integrations'),
+    /integrations\.github\.config must be a plain object/
+  );
+  assert.throws(
+    () => parseIntegrations({ github: { config: ['materialization'] } }, 'integrations'),
+    /integrations\.github\.config must be a plain object/
   );
 });
 
