@@ -616,10 +616,16 @@ function createProcessHarnessRunner(args: CloudDefaultOptions & {
         : undefined
     });
     const parsed = extractUsage(result.output, result.stderr);
+    const trimmedStderr = result.stderr.trim();
     const harnessResult: HarnessRunResult = {
-      output: parsed.output.trimEnd(),
+      output: foldHarnessFailureOutput({
+        output: parsed.output,
+        stderr: result.stderr,
+        exitCode: result.exitCode
+      }),
       exitCode: result.exitCode,
       durationMs: Date.now() - startedAt,
+      ...(trimmedStderr ? { stderr: trimmedStderr } : {}),
       ...(parsed.usage ? { usage: parsed.usage } : {})
     };
     await reportHarnessUsage({
@@ -778,6 +784,28 @@ function signalCode(name: string): number | undefined {
     TERM: 15
   };
   return signals[name];
+}
+
+/**
+ * Build the caller-facing `output` for a harness run. On a non-zero exit the
+ * failure reason almost always lands on stderr — CLI auth/usage errors, and
+ * spawn failures like `spawn grok ENOENT`, which leave stdout empty. Since
+ * `HarnessRunResult.output` carries only stdout, a caller that builds an error
+ * from `run.output` (e.g. `grok harness failed (exit 1): ${run.output}`) would
+ * otherwise see nothing. Fold trimmed stderr into the output on failure so the
+ * cause is visible; on success, stderr is left out and the output stays clean.
+ */
+export function foldHarnessFailureOutput(args: {
+  output: string;
+  stderr: string;
+  exitCode: number;
+}): string {
+  const base = args.output.trimEnd();
+  const err = args.stderr.trim();
+  if (args.exitCode !== 0 && err) {
+    return [base, err].filter(Boolean).join('\n');
+  }
+  return base;
 }
 
 function extractUsage(output: string, stderr: string): { output: string; usage?: HarnessUsage } {
