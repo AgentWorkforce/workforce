@@ -44,6 +44,7 @@ const OPENAI_BASE_URL = 'https://api.openai.com';
 // expect maintenance if chatgpt.com/backend-api/codex changes.
 const CODEX_BACKEND_BASE_URL = 'https://chatgpt.com/backend-api/codex';
 const CODEX_BACKEND_ORIGINATOR = 'codex_cli_rs';
+const OPENROUTER_BASE_URL = 'https://openrouter.ai/api';
 
 export interface CloudLlmOptions {
   persona: PersonaSpec;
@@ -51,8 +52,8 @@ export interface CloudLlmOptions {
   log: WorkforceCtx['log'];
 }
 
-type PersonaModelFamily = 'anthropic' | 'openai' | 'codex';
-type LlmProviderFamily = 'anthropic' | 'openai' | 'codex-backend';
+type PersonaModelFamily = 'anthropic' | 'openai' | 'codex' | 'openrouter';
+type LlmProviderFamily = 'anthropic' | 'openai' | 'codex-backend' | 'openrouter';
 
 interface LlmCredential {
   family: LlmProviderFamily;
@@ -92,6 +93,9 @@ export function createDefaultLlm(options: CloudLlmOptions): LlmContext | undefin
   if (credential.family === 'codex-backend') {
     return codexBackendLlm(credential, model, options.log);
   }
+  if (credential.family === 'openrouter') {
+    return openrouterLlm(credential, model, options.log);
+  }
   return openaiLlm(credential, model, options.log);
 }
 
@@ -103,6 +107,7 @@ function selectCredential(
   const anthropicApiKey = nonEmpty(env.ANTHROPIC_API_KEY);
   const claudeOauth = nonEmpty(env.CLAUDE_CODE_OAUTH_TOKEN);
   const openaiApiKey = nonEmpty(env.OPENAI_API_KEY);
+  const openrouterApiKey = nonEmpty(env.OPENROUTER_API_KEY);
   const codexOauth = codexOauthCredential(env);
 
   // Exactly one auth header per request: an OAuth bearer must go on
@@ -142,6 +147,13 @@ function selectCredential(
       source: 'OPENAI_API_KEY'
     });
   }
+  if (openrouterApiKey) {
+    candidates.push({
+      family: 'openrouter',
+      headers: { authorization: `Bearer ${openrouterApiKey}` },
+      source: 'OPENROUTER_API_KEY'
+    });
+  }
 
   if (candidates.length === 0) return null;
   if (preferred) {
@@ -161,6 +173,9 @@ function preferredCredential(
   if (preferred === 'anthropic') {
     return candidates.find((candidate) => candidate.family === 'anthropic');
   }
+  if (preferred === 'openrouter') {
+    return candidates.find((candidate) => candidate.family === 'openrouter');
+  }
   if (preferred === 'codex') {
     return (
       candidates.find((candidate) => candidate.family === 'codex-backend') ??
@@ -175,13 +190,16 @@ function preferredCredential(
 
 function personaModelFamily(persona: PersonaSpec): PersonaModelFamily | null {
   const model = nonEmpty(persona.model);
-  if (!model) return null;
-  const normalized = model.toLowerCase();
-  if (normalized.startsWith('anthropic/') || normalized.includes('claude')) return 'anthropic';
-  if (normalized.startsWith('openai-codex/') || normalized.includes('codex')) return 'codex';
-  if (normalized.startsWith('openai/') || normalized.includes('gpt-')) {
-    return 'openai';
+  const harness = nonEmpty(persona.harness);
+  if (!model && !harness) return null;
+  if (model) {
+    const normalized = model.toLowerCase();
+    if (normalized.startsWith('anthropic/') || normalized.includes('claude')) return 'anthropic';
+    if (normalized.startsWith('openai-codex/') || normalized.includes('codex')) return 'codex';
+    if (normalized.startsWith('openai/') || normalized.includes('gpt-')) return 'openai';
+    if (normalized.startsWith('openrouter/') || normalized.startsWith('opencode/')) return 'openrouter';
   }
+  if (harness === 'opencode') return 'openrouter';
   return null;
 }
 
@@ -205,6 +223,7 @@ function resolveModel(persona: PersonaSpec, family: LlmProviderFamily): string {
   }
   if (family === 'anthropic') return DEFAULT_ANTHROPIC_MODEL;
   if (family === 'codex-backend') return DEFAULT_CODEX_BACKEND_MODEL;
+  if (family === 'openrouter') return personaModel ?? DEFAULT_OPENAI_MODEL;
   return DEFAULT_OPENAI_MODEL;
 }
 
@@ -214,6 +233,7 @@ function credentialMatchesPersonaFamily(
 ): boolean {
   if (!personaFamily) return false;
   if (credentialFamily === 'anthropic') return personaFamily === 'anthropic';
+  if (credentialFamily === 'openrouter') return personaFamily === 'openrouter';
   if (credentialFamily === 'codex-backend') {
     return personaFamily === 'codex' || personaFamily === 'openai';
   }
@@ -302,6 +322,41 @@ function openaiLlm(
           : '';
       if (!text) {
         throw new Error('ctx.llm: OpenAI response contained no message content');
+      }
+      return text;
+    }
+  };
+}
+
+function openrouterLlm(
+  credential: LlmCredential,
+  model: string,
+  log: WorkforceCtx['log']
+): LlmContext {
+  return {
+    async complete(prompt, opts) {
+      const body = {
+        model,
+        max_tokens: opts?.maxTokens ?? DEFAULT_MAX_TOKENS,
+        messages: [{ role: 'user', content: prompt }]
+      };
+      const payload = await postJson(
+        `${OPENROUTER_BASE_URL}/v1/chat/completions`,
+        {
+          ...credential.headers,
+          'content-type': 'application/json'
+        },
+        body,
+        log
+      );
+      const choices = (payload as { choices?: unknown }).choices;
+      const first = Array.isArray(choices) ? choices[0] : undefined;
+      const text =
+        isRecord(first) && isRecord(first.message) && typeof first.message.content === 'string'
+          ? first.message.content
+          : '';
+      if (!text) {
+        throw new Error('ctx.llm: OpenRouter response contained no message content');
       }
       return text;
     }

@@ -966,8 +966,14 @@ function deriveModelProvider(persona: PersonaSpec): string {
   if (matchesProviderToken(lower, ['google', 'gemini'])) return 'google';
   if (matchesProviderToken(lower, ['openrouter', 'opencode'])) return 'openrouter';
   if (matchesProviderToken(lower, ['grok', 'xai', 'x-ai'])) return 'xai';
-  const [provider] = model.split(/[/:]/, 1);
-  if (provider?.trim()) return provider.trim().toLowerCase();
+  // Only treat the prefix as a provider when the model contains an explicit
+  // separator (e.g. "openai/gpt-5-nano").  Bare model names like
+  // "deepseek-v4-flash-free" are not provider-qualified — fall through to the
+  // harness-derived provider so normalizeModelProvider can resolve it.
+  if (/[/:]/.test(model)) {
+    const [provider] = model.split(/[/:]/, 1);
+    if (provider?.trim()) return provider.trim().toLowerCase();
+  }
   return harnessFallback;
 }
 

@@ -367,9 +367,32 @@ test('cloud harness plan and BYOK save provider credentials through the cloud co
 });
 
 test('cloud BYOK provider detection avoids substring false positives', async () => {
+  // A bare model name without a provider separator (/) should not match
+  // "openai" via substring — it falls back to the harness-derived provider.
+  // The default test persona has harness: 'codex' → provider 'codex'.
   await launch({
     defaultPlanCredential: false,
     persona: persona({ model: 'my-openai-alternative' }),
+    env: { WORKFORCE_DEPLOY_CLOUD_URL: 'https://cloud.example.test' },
+    input: { harnessSource: 'byok', byokKey: 'sk-test' },
+    fetch(url, init) {
+      if (url.endsWith('/provider-credentials/byok')) {
+        assert.equal(JSON.parse(String(init?.body)).modelProvider, 'codex');
+        return okJson({ providerCredentialId: 'cred-byok' });
+      }
+      if (init?.method === 'GET' && url.endsWith('/deployments')) return okJson({ agents: [] });
+      if (url.endsWith('/deployments')) {
+        return okJson({ agentId: 'agent-byok', deploymentId: 'dep-byok', status: 'active' }, 201);
+      }
+      throw new Error(`unexpected URL ${url}`);
+    }
+  });
+});
+
+test('cloud BYOK with explicit provider/model separator uses model prefix', async () => {
+  await launch({
+    defaultPlanCredential: false,
+    persona: persona({ model: 'my-openai-alternative/fancy-model' }),
     env: { WORKFORCE_DEPLOY_CLOUD_URL: 'https://cloud.example.test' },
     input: { harnessSource: 'byok', byokKey: 'sk-test' },
     fetch(url, init) {
