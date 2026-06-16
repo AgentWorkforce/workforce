@@ -7,6 +7,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [4.1.3] - 2026-06-16
+
+### Added
+
+- **Add OpenRouter/opencode LLM provider support**
+
+### Changed
+
+- Opencode is its own provider, not an alias for openrouter
+- Harness-first provider derivation in deriveModelProvider
+
 ## [4.1.2] - 2026-06-16
 
 ### Fixed
