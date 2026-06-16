@@ -62,15 +62,59 @@ export type TypedScopeMap<P extends string> = {
   [key: string]: string;
 };
 
+export type GitHubMaterializationMode = 'lazy' | 'eager';
+export type GitHubMaterializationResource = 'issues' | 'pulls';
+
+export interface GitHubMaterializationFilter {
+  state?: 'open' | 'closed' | 'all';
+  labels?: readonly string[];
+}
+
+export type GitHubMaterializationResourcePolicy =
+  | GitHubMaterializationMode
+  | {
+      mode?: GitHubMaterializationMode;
+      filter?: GitHubMaterializationFilter;
+      since?: string;
+    };
+
+export interface GitHubMaterializationRule {
+  repos?: readonly string[];
+  resources?: readonly GitHubMaterializationResource[];
+  eager?: boolean;
+  issues?: GitHubMaterializationResourcePolicy;
+  pulls?: GitHubMaterializationResourcePolicy;
+}
+
+export interface GitHubMaterializationPolicy {
+  default: GitHubMaterializationMode;
+  webhookWritesForLazyRepos?: boolean;
+  rules?: readonly GitHubMaterializationRule[];
+}
+
+export interface GitHubAdapterConfig {
+  /**
+   * Relayfile GitHub adapter materialization policy. Persona-kit exposes the
+   * canonical lazy/eager modes; adapter-side aliases remain an adapter detail.
+   */
+  materialization?: GitHubMaterializationPolicy;
+  [key: string]: unknown;
+}
+
+export type AdapterConfigFor<P extends string> = P extends 'github'
+  ? GitHubAdapterConfig
+  : Record<string, unknown>;
+
 /**
  * Per-provider integration **connection** config in typed persona authoring.
  * Connection-only (source + scope) — event triggers live on the agent
  * ({@link TypedTriggerMap}), not here. `scope` keys are typed per provider via
- * {@link TypedScopeMap}.
+ * {@link TypedScopeMap}. `config` is forwarded to the provider adapter.
  */
 export interface TypedIntegrationConfig<P extends string = string> {
   source?: IntegrationSource;
   scope?: TypedScopeMap<P>;
+  config?: AdapterConfigFor<P>;
 }
 
 export type TypedIntegrations = {

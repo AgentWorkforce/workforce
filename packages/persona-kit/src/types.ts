@@ -242,10 +242,15 @@ export type IntegrationSource =
  * `source` discriminates the cloud-side resolver between `user_integrations`
  * and `workspace_integrations`; defaults to `{ kind: 'deployer_user' }` when
  * omitted so existing personas keep their pre-discriminator behavior.
+ *
+ * `config` is a forward-compatible adapter passthrough. Persona-kit validates
+ * only that it is an object; provider adapters own the nested schema
+ * (for example GitHub materialization policy).
  */
 export interface PersonaIntegrationConfig {
   source?: IntegrationSource;
   scope?: Record<string, string>;
+  config?: Record<string, unknown>;
 }
 
 /**

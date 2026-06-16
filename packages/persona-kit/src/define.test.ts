@@ -5,6 +5,7 @@ import {
   KNOWN_SCOPE_KEY_CATALOG,
   definePersona,
   parsePersonaSpec,
+  type GitHubMaterializationPolicy,
   type ScopeKeysFor,
   type TypedScopeMap,
   type TypedTriggerMap
@@ -23,9 +24,25 @@ test('definePersona returns authored specs that parse successfully', () => {
       }
     },
     // Personas declare integration *connections* only — event triggers moved
-    // to the agent (defineAgent). Connection config = source + scope.
+    // to the agent (defineAgent). Connection config = source + scope + adapter config.
     integrations: {
-      github: { scope: { repo: 'AgentWorkforce/workforce' } },
+      github: {
+        scope: { repo: 'AgentWorkforce/workforce' },
+        config: {
+          materialization: {
+            default: 'lazy',
+            webhookWritesForLazyRepos: true,
+            rules: [
+              {
+                repos: ['AgentWorkforce/workforce'],
+                resources: ['issues', 'pulls'],
+                issues: { mode: 'eager', filter: { state: 'open', labels: ['bug'] } },
+                pulls: 'eager'
+              }
+            ]
+          }
+        }
+      },
       linear: {},
       slack: {},
       confluence: {},
@@ -46,6 +63,18 @@ test('definePersona returns authored specs that parse successfully', () => {
   assert.equal(parsed.skills.length, 0);
   assert.equal(parsed.inputs?.TOPIC.default, 'pull requests');
   assert.equal(parsed.integrations?.github.scope?.repo, 'AgentWorkforce/workforce');
+  assert.deepEqual(parsed.integrations?.github.config?.materialization, {
+    default: 'lazy',
+    webhookWritesForLazyRepos: true,
+    rules: [
+      {
+        repos: ['AgentWorkforce/workforce'],
+        resources: ['issues', 'pulls'],
+        issues: { mode: 'eager', filter: { state: 'open', labels: ['bug'] } },
+        pulls: 'eager'
+      }
+    ]
+  });
   assert.equal(parsed.integrations?.customProvider.source?.kind, 'deployer_user');
   assert.deepEqual(parsed.capabilities, {
     review: true,
@@ -73,6 +102,64 @@ test('TypedTriggerMap gives per-provider event autocomplete; arbitrary providers
   assert.equal(triggers.github?.[1]?.on, 'off_registry.github_event');
   assert.equal(triggers.slack?.[0]?.maxConcurrency, 1);
   assert.equal(triggers.customProvider?.[0]?.on, 'custom.event');
+});
+
+test('definePersona types github materialization config but keeps unknown provider config generic', () => {
+  const materialization: GitHubMaterializationPolicy = {
+    default: 'lazy',
+    rules: [
+      {
+        repos: ['AgentWorkforce/workforce'],
+        eager: true,
+        issues: { mode: 'eager', since: '2026-01-01T00:00:00.000Z' },
+        pulls: { mode: 'lazy', filter: { state: 'all' } }
+      }
+    ]
+  };
+
+  const persona = definePersona({
+    id: 'adapter-config-author',
+    intent: 'review',
+    description: 'Adapter config typing fixture.',
+    integrations: {
+      github: {
+        scope: { repo: 'AgentWorkforce/workforce' },
+        config: { materialization }
+      },
+      customProvider: {
+        config: { anyFutureAdapterField: { stays: true } }
+      }
+    },
+    onEvent: './agent.ts',
+    harnessSettings: { reasoning: 'low', timeoutSeconds: 60 }
+  });
+
+  const issuesPolicy = persona.integrations?.github?.config?.materialization?.rules?.[0]?.issues;
+  assert.equal(
+    issuesPolicy && typeof issuesPolicy === 'object' ? issuesPolicy.mode : undefined,
+    'eager'
+  );
+  assert.deepEqual(persona.integrations?.customProvider?.config, {
+    anyFutureAdapterField: { stays: true }
+  });
+
+  definePersona({
+    id: 'bad-github-materialization-mode',
+    intent: 'review',
+    description: 'GitHub materialization aliases are adapter-runtime inputs, not typed authoring.',
+    integrations: {
+      github: {
+        config: {
+          materialization: {
+            // @ts-expect-error persona-kit authoring exposes canonical lazy/eager modes
+            default: 'all'
+          }
+        }
+      }
+    },
+    onEvent: './agent.ts',
+    harnessSettings: { reasoning: 'low', timeoutSeconds: 60 }
+  });
 });
 
 test('TypedScopeMap gives per-provider scope key autocomplete while allowing future keys', () => {

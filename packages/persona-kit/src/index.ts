@@ -59,6 +59,14 @@ export type {
 // Typed persona authoring
 export {
   definePersona,
+  type AdapterConfigFor,
+  type GitHubAdapterConfig,
+  type GitHubMaterializationFilter,
+  type GitHubMaterializationMode,
+  type GitHubMaterializationPolicy,
+  type GitHubMaterializationResource,
+  type GitHubMaterializationResourcePolicy,
+  type GitHubMaterializationRule,
   type PersonaDefinition,
   type ScopeKeysFor,
   type TriggerNameFor,
@@ -87,6 +95,7 @@ export {
   isHarness,
   isIntent,
   isObject,
+  isPlainObject,
   isSidecarMode,
   isTag,
   parseAgentSpec,

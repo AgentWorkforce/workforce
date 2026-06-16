@@ -29,6 +29,33 @@
     "github": {
       "scope": {
         "repo": "AgentWorkforce/workforce"
+      },
+      "config": {
+        "materialization": {
+          "default": "lazy",
+          "webhookWritesForLazyRepos": true,
+          "rules": [
+            {
+              "repos": [
+                "AgentWorkforce/workforce"
+              ],
+              "resources": [
+                "issues",
+                "pulls"
+              ],
+              "issues": {
+                "mode": "eager",
+                "filter": {
+                  "state": "open",
+                  "labels": [
+                    "bug"
+                  ]
+                }
+              },
+              "pulls": "eager"
+            }
+          ]
+        }
       }
     },
     "linear": {},
