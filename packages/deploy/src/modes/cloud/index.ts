@@ -954,7 +954,7 @@ async function saveProviderCredential(args: {
 }
 
 const HARNESS_TO_PROVIDER: Record<string, string> = {
-  opencode: 'openrouter',
+  opencode: 'opencode',
   claude: 'anthropic',
   codex: 'openai',
   grok: 'xai'
@@ -963,7 +963,7 @@ const HARNESS_TO_PROVIDER: Record<string, string> = {
 function deriveModelProvider(persona: PersonaSpec): string {
   // When the harness explicitly maps to a known provider, use it directly.
   // The model string is the model ID within that provider's catalog (e.g.
-  // "deepseek-v4-flash-free" for opencode/openrouter), not a provider name.
+  // "deepseek-v4-flash-free" for opencode), not a provider name.
   const harness = typeof persona.harness === 'string' ? persona.harness.trim().toLowerCase() : '';
   const harnessProvider = HARNESS_TO_PROVIDER[harness];
   if (harnessProvider) return harnessProvider;
@@ -974,7 +974,8 @@ function deriveModelProvider(persona: PersonaSpec): string {
   if (matchesProviderToken(lower, ['anthropic', 'claude'])) return 'anthropic';
   if (matchesProviderToken(lower, ['openai', 'codex', 'gpt'])) return 'openai';
   if (matchesProviderToken(lower, ['google', 'gemini'])) return 'google';
-  if (matchesProviderToken(lower, ['openrouter', 'opencode'])) return 'openrouter';
+  if (matchesProviderToken(lower, ['openrouter'])) return 'openrouter';
+  if (matchesProviderToken(lower, ['opencode'])) return 'opencode';
   if (matchesProviderToken(lower, ['grok', 'xai', 'x-ai'])) return 'xai';
   const [provider] = model.split(/[/:]/, 1);
   if (provider?.trim()) return provider.trim().toLowerCase();
@@ -1079,7 +1080,7 @@ function harnessAliasForModelProvider(modelProvider: string): string {
       return 'codex';
     case 'google':
       return 'gemini';
-    case 'openrouter':
+    case 'opencode':
       return 'opencode';
     case 'xai':
       return 'grok';

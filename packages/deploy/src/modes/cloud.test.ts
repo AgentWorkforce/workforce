@@ -389,7 +389,7 @@ test('cloud BYOK provider detection avoids substring false positives', async () 
   });
 });
 
-test('cloud BYOK opencode harness derives openrouter provider', async () => {
+test('cloud BYOK opencode harness derives opencode provider', async () => {
   await launch({
     defaultPlanCredential: false,
     persona: persona({ harness: 'opencode', model: 'deepseek-v4-flash-free' }),
@@ -397,7 +397,7 @@ test('cloud BYOK opencode harness derives openrouter provider', async () => {
     input: { harnessSource: 'byok', byokKey: 'sk-or-test' },
     fetch(url, init) {
       if (url.endsWith('/provider-credentials/byok')) {
-        assert.equal(JSON.parse(String(init?.body)).modelProvider, 'openrouter');
+        assert.equal(JSON.parse(String(init?.body)).modelProvider, 'opencode');
         return okJson({ providerCredentialId: 'cred-byok' });
       }
       if (init?.method === 'GET' && url.endsWith('/deployments')) return okJson({ agents: [] });
