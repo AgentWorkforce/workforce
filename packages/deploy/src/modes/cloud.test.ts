@@ -368,8 +368,8 @@ test('cloud harness plan and BYOK save provider credentials through the cloud co
 
 test('cloud BYOK provider detection avoids substring false positives', async () => {
   // A bare model name without a provider separator (/) should not match
-  // "openai" via substring — it falls back to the harness-derived provider.
-  // The default test persona has harness: 'codex' → provider 'codex'.
+  // "openai" via substring — the harness-derived provider wins.
+  // The default test persona has harness: 'codex' → HARNESS_TO_PROVIDER → 'openai'.
   await launch({
     defaultPlanCredential: false,
     persona: persona({ model: 'my-openai-alternative' }),
@@ -377,7 +377,7 @@ test('cloud BYOK provider detection avoids substring false positives', async () 
     input: { harnessSource: 'byok', byokKey: 'sk-test' },
     fetch(url, init) {
       if (url.endsWith('/provider-credentials/byok')) {
-        assert.equal(JSON.parse(String(init?.body)).modelProvider, 'codex');
+        assert.equal(JSON.parse(String(init?.body)).modelProvider, 'openai');
         return okJson({ providerCredentialId: 'cred-byok' });
       }
       if (init?.method === 'GET' && url.endsWith('/deployments')) return okJson({ agents: [] });
@@ -389,15 +389,15 @@ test('cloud BYOK provider detection avoids substring false positives', async () 
   });
 });
 
-test('cloud BYOK with explicit provider/model separator uses model prefix', async () => {
+test('cloud BYOK opencode harness derives openrouter provider', async () => {
   await launch({
     defaultPlanCredential: false,
-    persona: persona({ model: 'my-openai-alternative/fancy-model' }),
+    persona: persona({ harness: 'opencode', model: 'deepseek-v4-flash-free' }),
     env: { WORKFORCE_DEPLOY_CLOUD_URL: 'https://cloud.example.test' },
-    input: { harnessSource: 'byok', byokKey: 'sk-test' },
+    input: { harnessSource: 'byok', byokKey: 'sk-or-test' },
     fetch(url, init) {
       if (url.endsWith('/provider-credentials/byok')) {
-        assert.equal(JSON.parse(String(init?.body)).modelProvider, 'my-openai-alternative');
+        assert.equal(JSON.parse(String(init?.body)).modelProvider, 'openrouter');
         return okJson({ providerCredentialId: 'cred-byok' });
       }
       if (init?.method === 'GET' && url.endsWith('/deployments')) return okJson({ agents: [] });
