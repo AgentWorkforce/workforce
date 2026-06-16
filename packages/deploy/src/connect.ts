@@ -614,7 +614,11 @@ export async function resolveExpectedProviderConfigKey(
   if (!providerConfigKeys || isCliCapturedProvider(provider)) {
     return undefined;
   }
-  return providerConfigKeys.resolve(provider).catch(() => undefined);
+  try {
+    return await providerConfigKeys.resolve(provider);
+  } catch {
+    return undefined;
+  }
 }
 
 /**
