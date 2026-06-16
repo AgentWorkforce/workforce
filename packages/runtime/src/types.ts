@@ -149,10 +149,20 @@ function isRecord(value: unknown): value is Record<string, unknown> {
  * underlying harness streamed into this minimal shape.
  */
 export interface HarnessRunResult {
-  /** Final stdout/output from the harness. */
+  /**
+   * Final stdout/output from the harness. On a non-zero {@link exitCode} the
+   * trimmed {@link stderr} is appended so the failure reason (CLI errors,
+   * `spawn ... ENOENT`, etc.) is visible to callers that only read `output`.
+   */
   output: string;
   /** Process exit code; 0 on success. */
   exitCode: number;
+  /**
+   * Trimmed stderr from the harness process, when non-empty. Carries the
+   * failure reason on a non-zero {@link exitCode}; also folded into
+   * {@link output} on failure for callers that only inspect stdout.
+   */
+  stderr?: string;
   /** Wall-clock duration in milliseconds. */
   durationMs: number;
   /** Optional usage metadata emitted by a harness or launcher. */
