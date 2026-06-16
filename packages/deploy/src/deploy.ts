@@ -16,6 +16,7 @@ import {
   relayfileCatalogConfigKeyResolver,
   relayfileIntegrationResolver,
   relayfileOptionsResolver,
+  resolveExpectedProviderConfigKey,
   type ConnectAllInput,
   type IntegrationAuthRecoveryResolver,
   type IntegrationConnectResolver,
@@ -449,9 +450,10 @@ async function resolveRuntimeCredentialEnv(args: {
     workspaceToken: args.workspaceToken
   });
   for (const [provider, integration] of Object.entries(integrations)) {
-    const expectedConfigKey = args.providerConfigKeys
-      ? await args.providerConfigKeys.resolve(provider).catch(() => undefined)
-      : undefined;
+    const expectedConfigKey = await resolveExpectedProviderConfigKey(
+      provider,
+      args.providerConfigKeys
+    );
     const connected = await relayfile
       .isConnected({
         workspace: args.workspace,

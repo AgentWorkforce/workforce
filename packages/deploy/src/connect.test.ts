@@ -1892,6 +1892,44 @@ test('connectIntegrations treats a connected daytona integration as already-conn
   assert.ok(io.messages.some((m) => m.level === 'info' && /daytona: already connected/.test(m.message)));
 });
 
+test('connectIntegrations ignores catalog config keys for CLI-captured daytona credentials', async () => {
+  const io = createBufferedIO();
+  let catalogLookupCalled = false;
+
+  const result = await connectIntegrations({
+    persona: {
+      id: 'daytona-monitor',
+      intent: 'relay-orchestrator',
+      description: 'test persona',
+      tags: ['discovery'],
+      integrations: { daytona: {} }
+    } as never,
+    workspace: 'ws-1',
+    noConnect: false,
+    io,
+    providerConfigKeys: {
+      async resolve(provider) {
+        catalogLookupCalled = true;
+        assert.equal(provider, 'daytona');
+        return 'daytona-relay';
+      }
+    },
+    integrations: {
+      async isConnected(args) {
+        assert.equal(args.provider, 'daytona');
+        assert.equal(args.expectedConfigKey, undefined);
+        return true;
+      },
+      async connect() {
+        throw new Error('should not connect when daytona is already connected');
+      }
+    }
+  });
+
+  assert.equal(catalogLookupCalled, false);
+  assert.deepEqual(result.outcomes, [{ provider: 'daytona', status: 'already-connected' }]);
+});
+
 test('connectIntegrations gates the deploy when daytona is not connected under --no-prompt', async () => {
   const io = createBufferedIO();
   let connectCalled = false;

@@ -1075,6 +1075,111 @@ test('deploy dev mode runtime credential eligibility preserves expected provider
   }
 });
 
+test('deploy dev mode ignores catalog config keys for CLI-captured daytona runtime credentials', async () => {
+  const { personaPath, cleanup } = await withTempPersona(
+    basePersonaJson({
+      integrations: {
+        daytona: {}
+      }
+    })
+  );
+  const io = createBufferedIO();
+  const originalFetch = globalThis.fetch;
+  const originalProviderToken = process.env.WORKFORCE_INTEGRATION_DAYTONA_TOKEN;
+  const urls: string[] = [];
+  let catalogLookupCount = 0;
+  let launchedEnv: Record<string, string> | undefined;
+
+  process.env.WORKFORCE_INTEGRATION_DAYTONA_TOKEN = 'WORKFORCE_DAYTONA_CONNECT_SENTINEL';
+  globalThis.fetch = (async (input, init) => {
+    const url = String(input);
+    urls.push(url);
+    if (url.includes('/api/v1/workspaces/ws-test/integrations/daytona/status')) {
+      return jsonResponse({
+        provider: 'daytona',
+        configKey: 'daytona',
+        backend: 'provider-credential',
+        ready: true,
+        connectionMatched: true,
+        oauth: { connected: true }
+      });
+    }
+    if (url.includes('/api/v1/workspaces/ws-test/runtime-credentials')) {
+      const body = init?.body ? JSON.parse(String(init.body)) : undefined;
+      assert.deepEqual(body, {
+        personaId: 'demo',
+        agentId: 'demo',
+        integrations: {
+          daytona: { source: { kind: 'deployer_user' } }
+        },
+        ttlSeconds: 3600
+      });
+      return jsonResponse({
+        relayfileUrl: 'https://relayfile.test',
+        relayfileWorkspaceId: 'ws-test',
+        relayfileToken: 'relay_pa_daytona',
+        relayfileMountPaths: ['/daytona/sandboxes/**']
+      });
+    }
+    throw new Error(`unexpected URL ${url}`);
+  }) as typeof fetch;
+
+  try {
+    await deploy(
+      {
+        personaPath,
+        mode: 'dev',
+        noPrompt: true,
+        cloudUrl: 'https://cloud.example.test',
+        io
+      },
+      {
+        workspaceAuth: {
+          async resolveWorkspace() {
+            return { workspace: 'ws-test', token: 'relay_ws_workspace' };
+          }
+        },
+        providerConfigKeys: {
+          async resolve(provider) {
+            catalogLookupCount += 1;
+            assert.equal(provider, 'daytona');
+            return 'daytona-relay';
+          }
+        },
+        bundle: successfulBundleStager(),
+        modes: {
+          dev: {
+            async launch(input) {
+              launchedEnv = input.env;
+              return {
+                id: 'dev-1',
+                async stop() {
+                  /* no-op */
+                },
+                done: Promise.resolve({ code: 0 })
+              };
+            }
+          }
+        }
+      }
+    );
+
+    assert.equal(catalogLookupCount, 0);
+    assert.equal(launchedEnv?.RELAYFILE_TOKEN, 'relay_pa_daytona');
+    assert.equal(launchedEnv?.WORKFORCE_INTEGRATION_DAYTONA_TOKEN, '');
+    assert.ok(urls.find((url) => url.includes('/integrations/daytona/status')));
+    assert.ok(urls.find((url) => url.endsWith('/runtime-credentials')));
+  } finally {
+    if (originalProviderToken === undefined) {
+      delete process.env.WORKFORCE_INTEGRATION_DAYTONA_TOKEN;
+    } else {
+      process.env.WORKFORCE_INTEGRATION_DAYTONA_TOKEN = originalProviderToken;
+    }
+    globalThis.fetch = originalFetch;
+    await cleanup();
+  }
+});
+
 test('deploy dev mode rejects malformed runtime credential tokens before launch', async () => {
   const { personaPath, cleanup } = await withTempPersona(
     basePersonaJson({

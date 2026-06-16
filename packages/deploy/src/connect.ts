@@ -607,6 +607,16 @@ function isCliCapturedProvider(provider: string): boolean {
   return CLI_CAPTURED_PROVIDERS.has(provider);
 }
 
+export async function resolveExpectedProviderConfigKey(
+  provider: string,
+  providerConfigKeys?: ProviderConfigKeyResolver
+): Promise<string | undefined> {
+  if (!providerConfigKeys || isCliCapturedProvider(provider)) {
+    return undefined;
+  }
+  return providerConfigKeys.resolve(provider).catch(() => undefined);
+}
+
 /**
  * Walk the persona's declared integrations and ensure each is connected.
  * Per the deploy-v1 spec, the orchestrator prompts before each provider's
@@ -638,9 +648,10 @@ export async function connectIntegrations(input: ConnectAllInput): Promise<Conne
     const integrationEntry = integrations[provider] ?? {};
     const source: IntegrationSource = integrationEntry.source ?? { kind: 'deployer_user' };
     const forceReconnect = input.reconnectProviders?.includes(provider) ?? false;
-    const expectedConfigKey = input.providerConfigKeys
-      ? await input.providerConfigKeys.resolve(provider).catch(() => undefined)
-      : undefined;
+    const expectedConfigKey = await resolveExpectedProviderConfigKey(
+      provider,
+      input.providerConfigKeys
+    );
 
     let statusCheckFailure: string | undefined;
     let connected = await checkProviderConnected(
