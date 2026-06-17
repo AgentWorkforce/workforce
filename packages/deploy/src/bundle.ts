@@ -13,7 +13,6 @@ const RUNNER_FORMAT_VERSION = 2;
 
 const NODE_EXTERNALS = [
   ...builtinModules,
-  ...builtinModules.map((name) => `node:${name}`),
   'node:*'
 ];
 
