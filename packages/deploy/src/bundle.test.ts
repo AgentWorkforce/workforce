@@ -1,8 +1,9 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
+import { mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import path from 'node:path';
 import os from 'node:os';
+import { pathToFileURL } from 'node:url';
 import { bundleStager } from './bundle.js';
 import { runtimeContextEnv } from './runtime-context.js';
 import type { PersonaSpec } from '@agentworkforce/persona-kit';
@@ -78,6 +79,56 @@ test('bundleStager produces an executable, importable bundle from a real onEvent
     const bundleSource = await readFile(result.bundlePath, 'utf8');
     assert.match(bundleSource, /^import /m);
     assert.match(bundleSource, /from\s+['"]@agentworkforce\/runtime['"]/);
+  } finally {
+    await rm(dir, { recursive: true, force: true });
+  }
+});
+
+test('bundleStager leaves bare Node builtins external for transitive CommonJS deps', async () => {
+  const dir = await mkdtemp(path.join(os.tmpdir(), 'wf-bundle-'));
+  try {
+    const personaPath = path.join(dir, 'persona.json');
+    const personaSpec = persona();
+    await writeFile(personaPath, JSON.stringify(personaSpec, null, 2), 'utf8');
+
+    const packageDir = path.join(dir, 'node_modules', 'cjs-process-user');
+    await mkdir(packageDir, { recursive: true });
+    await writeFile(
+      path.join(packageDir, 'package.json'),
+      JSON.stringify({ name: 'cjs-process-user', version: '1.0.0', main: 'index.cjs' }, null, 2),
+      'utf8'
+    );
+    await writeFile(
+      path.join(packageDir, 'index.cjs'),
+      [
+        "const process = require('process');",
+        'module.exports = process.release.name;',
+        ''
+      ].join('\n'),
+      'utf8'
+    );
+    await writeFile(
+      path.join(dir, 'agent.ts'),
+      [
+        "import runtimeName from 'cjs-process-user';",
+        '',
+        'export default async function handler() {',
+        '  return runtimeName;',
+        '}',
+        ''
+      ].join('\n'),
+      'utf8'
+    );
+
+    const result = await bundleStager.stage({
+      personaPath,
+      persona: personaSpec,
+      outDir: path.join(dir, 'build')
+    });
+
+    const mod = await import(pathToFileURL(result.bundlePath).href);
+    assert.equal(typeof mod.default, 'function');
+    assert.equal(await mod.default(), 'node');
   } finally {
     await rm(dir, { recursive: true, force: true });
   }
