@@ -1,4 +1,5 @@
 import { mkdir, writeFile, stat } from 'node:fs/promises';
+import { builtinModules } from 'node:module';
 import path from 'node:path';
 import { build } from 'esbuild';
 import type { BundleStageInput, BundleResult, BundleStager } from './types.js';
@@ -9,6 +10,12 @@ import type { BundleStageInput, BundleResult, BundleStager } from './types.js';
  * shape changes incompatibly.
  */
 const RUNNER_FORMAT_VERSION = 2;
+
+const NODE_EXTERNALS = [
+  ...builtinModules,
+  ...builtinModules.map((name) => `node:${name}`),
+  'node:*'
+];
 
 /**
  * Stage a deploy-ready bundle to `input.outDir`. Output layout:
@@ -23,8 +30,8 @@ const RUNNER_FORMAT_VERSION = 2;
  * the four files cleanly. Auxiliary files left behind from earlier runs
  * are not touched (callers control the directory lifecycle).
  *
- * Externals: every `node:*` builtin and `@agentworkforce/runtime` itself
- * are left external so the runner can resolve them at execution time.
+ * Externals: every bare and `node:` builtin and `@agentworkforce/runtime`
+ * itself are left external so the runner can resolve them at execution time.
  * Bundling the runtime in would require shipping the runtime sources into
  * every sandbox; the chosen split keeps the bundle small and lets ops
  * patch the runtime without rebuilding every persona.
@@ -56,6 +63,12 @@ export const bundleStager: BundleStager = {
       sourcemap: 'inline',
       logLevel: 'silent',
       minify: input.bundlerOptions?.minify ?? false,
+      banner: {
+        js: [
+          'import { createRequire as __agentworkforceCreateRequire } from "node:module";',
+          'const require = __agentworkforceCreateRequire(import.meta.url);'
+        ].join('\n')
+      },
       // Resolve TypeScript / JS extensions without forcing the user to
       // write `.ts`-suffixed imports in their handler file.
       resolveExtensions: ['.ts', '.mts', '.cts', '.tsx', '.js', '.mjs', '.cjs', '.jsx', '.json'],
@@ -64,7 +77,7 @@ export const bundleStager: BundleStager = {
         '@agentworkforce/runtime',
         '@agentworkforce/runtime/raw',
         // Node builtins must never be bundled.
-        'node:*'
+        ...NODE_EXTERNALS
       ]
     });
 
