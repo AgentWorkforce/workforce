@@ -52,6 +52,19 @@ test('lintTriggers accepts cloud provider aliases backed by adapter trigger cata
   assert.deepEqual(issues, []);
 });
 
+test('lintTriggers accepts Neon sync-delta trigger events', () => {
+  const issues = lintTriggers(
+    agentWithTriggers({
+      neon: [
+        { on: 'operation.failed' },
+        { on: 'endpoint.state_changed' },
+        { on: 'advisor.issue_raised' }
+      ]
+    })
+  );
+  assert.deepEqual(issues, []);
+});
+
 test('lintTriggers warns per unknown trigger for aliased cloud providers', () => {
   const issues = lintTriggers(
     agentWithTriggers({
