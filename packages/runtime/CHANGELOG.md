@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [4.1.6] - 2026-06-18
+
 ### Fixed
 
 - Treat Relayfile writebacks that time out without receipts as first-class `WritebackError`s from the runtime client helpers.

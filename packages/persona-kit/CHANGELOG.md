@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [4.1.6] - 2026-06-18
+
+### Dependencies
+
+- Consume adapter-core writeback normalizer
+
 ## [4.1.5] - 2026-06-18
 
 ### Dependencies
