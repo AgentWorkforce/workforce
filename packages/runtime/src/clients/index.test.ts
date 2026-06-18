@@ -42,7 +42,7 @@ test('writeJsonFile treats missing receipts as first-class writeback errors', as
   await assert.rejects(
     () =>
       writeJsonFile(
-        { relayfileMountRoot: root, writebackTimeoutMs: 0 },
+        { relayfileMountRoot: root, writebackTimeoutMs: 1, writebackPollMs: 1 },
         'slack',
         'postMessage',
         '/slack/channels/C123/messages/msg.json',
@@ -56,6 +56,25 @@ test('writeJsonFile treats missing receipts as first-class writeback errors', as
       return true;
     }
   );
+});
+
+test('writeJsonFile preserves explicit fire-and-forget writebacks', async () => {
+  const root = await mkdtemp(path.join(tmpdir(), 'workforce-writeback-fire-and-forget-'));
+  const relayPath = '/slack/channels/C123/messages/msg.json';
+
+  const result = await writeJsonFile(
+    { relayfileMountRoot: root, writebackTimeoutMs: 0 },
+    'slack',
+    'postMessage',
+    relayPath,
+    { text: 'hello' }
+  );
+
+  assert.equal(result.path, relayPath);
+  assert.equal(result.receipt, undefined);
+  assert.deepEqual(JSON.parse(await readFile(path.join(root, relayPath.slice(1)), 'utf8')), {
+    text: 'hello'
+  });
 });
 
 async function waitForDraft(filePath: string): Promise<void> {

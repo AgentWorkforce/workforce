@@ -142,6 +142,9 @@ export async function writeJsonFile(
   const result = await coreWriteJsonFile(client, provider, operation, relayPath, body);
   const normalized = normalizeWritebackStatus(result);
   if (normalized.state !== 'succeeded') {
+    if (client.writebackTimeoutMs === 0 && normalized.state === 'no_receipt') {
+      return result;
+    }
     throw new WritebackError(normalized);
   }
   return result;
