@@ -7,6 +7,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- Treat Relayfile writebacks without receipts as first-class `WritebackError`s from the runtime client helpers.
+
 ## [4.1.5] - 2026-06-18
 
 ### Dependencies
