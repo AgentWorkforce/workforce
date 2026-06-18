@@ -109,8 +109,8 @@ importers:
   packages/persona-kit:
     dependencies:
       '@relayfile/adapter-core':
-        specifier: ^0.3.50
-        version: 0.3.50(@relayfile/sdk@0.7.40)
+        specifier: ^0.3.59
+        version: 0.3.59(@relayfile/sdk@0.7.40)
       '@relayfile/local-mount':
         specifier: ^0.7.24
         version: 0.7.24
@@ -143,8 +143,8 @@ importers:
         specifier: workspace:*
         version: link:../persona-kit
       '@relayfile/adapter-core':
-        specifier: ^0.3.44
-        version: 0.3.44(@relayfile/sdk@0.7.40)
+        specifier: ^0.3.59
+        version: 0.3.59(@relayfile/sdk@0.7.40)
       agent-trajectories:
         specifier: ^0.5.3
         version: 0.5.3
@@ -380,6 +380,7 @@ packages:
 
   '@daytonaio/sdk@0.185.0':
     resolution: {integrity: sha512-yVOzRShA9fmoGSG+wlSq6JrRLmc4h9yUTAjjfGonD6f2NjzwQuu1FadUCYlyVOmasKEn/Du9w27NgmXdMQp6JA==}
+    deprecated: 'Moved to @daytona/sdk, same API, no breaking changes. Please update: npm uninstall @daytonaio/sdk && npm i @daytona/sdk'
 
   '@esbuild/aix-ppc64@0.25.12':
     resolution: {integrity: sha512-Hhmwd6CInZ3dwpuGTF8fJG6yoWmsToE+vYgD4nytZVxcu1ulHpUQRAB1UJ8+N1Am3Mz4+xOByoQoSZf4D+CpkA==}
@@ -953,15 +954,8 @@ packages:
     resolution: {integrity: sha512-C5eVSepGrlQY5b1yg+LfROLYhDW/w1WFVsuitRzvbXMr+qpFYFHLoMNxa9R0Q6ZiP02r6EXSazii2VNo2LZ0Vg==}
     engines: {node: '>=22'}
 
-  '@relayfile/adapter-core@0.3.44':
-    resolution: {integrity: sha512-+JnsFg23VME6r91LsPOSwUwHH1K7du1dz58vhd3LVWvZVk6tiyoPpDIF3SfmU7rmd/x2/mwSb+FBGJkPOUsYhA==}
-    engines: {node: '>=18'}
-    hasBin: true
-    peerDependencies:
-      '@relayfile/sdk': '>=0.6.0 <1'
-
-  '@relayfile/adapter-core@0.3.50':
-    resolution: {integrity: sha512-f1ksE475M4D5yQvvW9MCuCM+wCZqI+ynUaTQdvctaw16vgHenxq89mm+p4ZLauhbr/J4JmNvjz3RmK2n031T4Q==}
+  '@relayfile/adapter-core@0.3.59':
+    resolution: {integrity: sha512-lJG/trIkLr79+R6JVlWSf+DoF8fyAvl7x4KmgeGcaaTKK0PkQgjseDHm3NWsKan6WlfVjiw91jJrwZBIvJ9kJw==}
     engines: {node: '>=18'}
     hasBin: true
     peerDependencies:
@@ -3281,15 +3275,7 @@ snapshots:
       '@relayburn/sdk-linux-arm64-gnu': 2.5.2
       '@relayburn/sdk-linux-x64-gnu': 2.5.2
 
-  '@relayfile/adapter-core@0.3.44(@relayfile/sdk@0.7.40)':
-    dependencies:
-      '@relayfile/sdk': 0.7.40
-      '@scalar/postman-to-openapi': 0.6.3
-      cheerio: 1.2.0
-      minimatch: 10.2.5
-      yaml: 2.9.0
-
-  '@relayfile/adapter-core@0.3.50(@relayfile/sdk@0.7.40)':
+  '@relayfile/adapter-core@0.3.59(@relayfile/sdk@0.7.40)':
     dependencies:
       '@relayfile/sdk': 0.7.40
       '@scalar/postman-to-openapi': 0.6.3
