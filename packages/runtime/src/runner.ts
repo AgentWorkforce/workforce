@@ -3,6 +3,7 @@ import { createCloudRuntimeDefaults } from './cloud-defaults.js';
 import { buildCtx, type CtxBuildOptions } from './ctx.js';
 import { getTrajectoryRecorder, type TrajectoryRecorder } from './trajectory.js';
 import { isWorkforceHandler } from './handler.js';
+import { startCloudApiTokenRefresher } from './cloud-api-token-refresh.js';
 import { type RawGatewayEnvelope } from './shim.js';
 import { envelopeToAgentEvent } from './to-agent-event.js';
 import { isCronTickEvent } from '@agent-relay/events';
@@ -141,18 +142,38 @@ export async function startRunner(options: StartRunnerOptions): Promise<void> {
     integrations: options.persona.integrations ? Object.keys(options.persona.integrations) : []
   });
 
-  const recorder = getTrajectoryRecorder(ctx);
-  const stream = options.envelopes ?? readEnvelopesFromStdin();
-  for await (const raw of stream) {
-    const event = envelopeToAgentEvent(raw);
-    if (!event) {
-      ctx.log('warn', 'runner.envelope.unsupported', { rawId: raw.id, rawType: raw.type });
-      continue;
-    }
-    await dispatch(ctx, handlerFn, event, recorder);
-  }
+  // Keep the cloud API bearer fresh for the lifetime of this runner subprocess.
+  // The persona's Slack client (relayflows) is rebuilt per step in THIS process
+  // and reads `process.env.CLOUD_API_TOKEN`, so rotating it in place here keeps
+  // long-running proactive posts authenticated (cloud#2307). No-op when the
+  // refresh material is absent (local/dev), so guard on the refresh URL.
+  const tokenRefresher = process.env.CLOUD_API_REFRESH_URL
+    ? startCloudApiTokenRefresher({
+        onHorizonElapsed: (err) =>
+          ctx.log('warn', 'runner.cloud-api-token.horizon-elapsed', { error: err.message }),
+        onError: (err) =>
+          ctx.log('warn', 'runner.cloud-api-token.refresh-failed', {
+            error: err instanceof Error ? err.message : String(err)
+          })
+      })
+    : null;
 
-  ctx.log('info', 'runner.envelope-stream.ended', { persona: options.persona.id });
+  try {
+    const recorder = getTrajectoryRecorder(ctx);
+    const stream = options.envelopes ?? readEnvelopesFromStdin();
+    for await (const raw of stream) {
+      const event = envelopeToAgentEvent(raw);
+      if (!event) {
+        ctx.log('warn', 'runner.envelope.unsupported', { rawId: raw.id, rawType: raw.type });
+        continue;
+      }
+      await dispatch(ctx, handlerFn, event, recorder);
+    }
+
+    ctx.log('info', 'runner.envelope-stream.ended', { persona: options.persona.id });
+  } finally {
+    tokenRefresher?.stop();
+  }
 }
 
 function defaultRunnerLog(level: 'debug' | 'info' | 'warn' | 'error', message: string, attrs?: Record<string, unknown>): void {
