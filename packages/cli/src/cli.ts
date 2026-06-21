@@ -105,6 +105,7 @@ import { installPersonas, type PersonaInstallResult } from './persona-install.js
 import { runPersonaCompileCommand } from './persona-compile.js';
 import { pickPersona, type PickCandidate, type PickResult } from './persona-picker.js';
 import { recordRecent, loadRecents, runPersonaPickerTui, type TuiCandidate } from './persona-tui.js';
+import { runTrigger } from './trigger-command.js';
 
 const launchMetadataLog = createLogger('launch-metadata');
 
@@ -230,6 +231,15 @@ Commands:
   integrations [provider] [--all] [--json]
                       Discover workspace integrations, connection status, and
                       known trigger events.
+  trigger <agent-name-or-id> [flags]
+                      Manually fire an active deployed persona for testing.
+                      The selector accepts agent id, compact agent id,
+                      deployed name, persona slug, or persona id. Flags:
+                        --workspace <name>  Workforce workspace; defaults to
+                                            the active workspace
+                        --cloud-url <url>   Override the cloud base URL
+                        --json              Emit JSON
+                        --no-prompt         Fail instead of prompting for login
   harness check       Probe which harnesses (${HARNESS_VALUES.join(', ')}) are
                       installed and runnable on this machine.
   pick "<task>"       Pick the best-fit persona for a free-text task description
@@ -4510,10 +4520,15 @@ export async function main(): Promise<void> {
     return;
   }
 
+  if (subcommand === 'trigger') {
+    await runTrigger(rest);
+    return;
+  }
+
   if (subcommand === 'deployments') {
     const [action, ...extra] = rest;
     if (!action || action === '-h' || action === '--help') {
-      process.stdout.write('Usage: agentworkforce deployments <list|logs> [flags]\n');
+      process.stdout.write('Usage: agentworkforce deployments <list|logs|trigger> [flags]\n');
       process.exit(action ? 0 : 1);
     }
     if (action === 'list') {
@@ -4524,7 +4539,11 @@ export async function main(): Promise<void> {
       await runDeploymentLogs(extra);
       return;
     }
-    die(`deployments: unknown action "${action}". Expected: list, logs`);
+    if (action === 'trigger') {
+      await runTrigger(extra);
+      return;
+    }
+    die(`deployments: unknown action "${action}". Expected: list, logs, trigger`);
   }
 
   if (subcommand === 'destroy') {
