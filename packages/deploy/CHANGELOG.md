@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [4.1.8] - 2026-06-21
+
+### Fixed
+
+- Explain trigger auth source on 403
+
 ## [4.1.4] - 2026-06-17
 
 ### Fixed
