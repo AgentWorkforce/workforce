@@ -101,7 +101,7 @@ test('resolveWorkspaceToken preserves complete WORKFORCE env credentials for CI'
         io: createBufferedIO(),
         noPrompt: true
       }),
-      { token: 'ci-token', workspace: 'rw_1234abcd' }
+      { token: 'ci-token', workspace: 'rw_1234abcd', authSource: 'env' }
     );
   });
 });
@@ -115,7 +115,7 @@ test('resolveWorkspaceToken lets --workspace pair with WORKFORCE_WORKSPACE_TOKEN
         io: createBufferedIO(),
         noPrompt: true
       }),
-      { token: 'ci-token', workspace: 'rw_5678abcd' }
+      { token: 'ci-token', workspace: 'rw_5678abcd', authSource: 'env' }
     );
   });
 });

@@ -158,10 +158,33 @@ export async function triggerDeployment(opts: TriggerOptions): Promise<TriggerRe
   if (!res.ok) {
     const body = await res.text().catch(() => '');
     const hint = formatHttpErrorBody(body, { url: url.toString() });
-    throw new Error(`manual trigger failed: ${res.status}${hint ? ` ${hint}` : ''}`);
+    const authHint = res.status === 403 ? ` ${formatTriggerAuthHint(ctx)}` : '';
+    throw new Error(`manual trigger failed: ${res.status}${hint ? ` ${hint}` : ''}${authHint}`);
   }
 
   return parseTriggerResponse(await res.json(), opts.selector);
+}
+
+export function formatTriggerAuthHint(ctx: {
+  authSource?: 'env' | 'cloud-session';
+  workspace: string;
+}): string {
+  if (ctx.authSource === 'env') {
+    return (
+      `Auth source: WORKFORCE_WORKSPACE_TOKEN for workspace ${ctx.workspace}. ` +
+      'If this token is stale or lacks trigger scope, unset WORKFORCE_WORKSPACE_TOKEN and WORKFORCE_WORKSPACE_ID, then run `agentworkforce login`.'
+    );
+  }
+  if (ctx.authSource === 'cloud-session') {
+    return (
+      `Auth source: Agent Relay cloud session for workspace ${ctx.workspace}. ` +
+      'Run `agentworkforce login` to refresh the session, or confirm this account has workspace access.'
+    );
+  }
+  return (
+    `Auth source: unknown for workspace ${ctx.workspace}. ` +
+    'Run `agentworkforce login`, or set WORKFORCE_WORKSPACE_ID and WORKFORCE_WORKSPACE_TOKEN explicitly.'
+  );
 }
 
 export function formatTriggerResult(result: TriggerResponse): string {
