@@ -27,6 +27,7 @@ export interface WorkspaceAuthToken {
   workspace?: string;
   relayfileWorkspaceId?: string;
   workspaceDescriptor?: ActiveWorkspaceDescriptor;
+  authSource?: 'env' | 'cloud-session';
 }
 
 export interface StoredWorkspaceLogin {
@@ -123,7 +124,8 @@ export async function resolveWorkspaceToken(args: {
   if (envToken && (requestedWorkspace || envWorkspace)) {
     return {
       token: envToken,
-      workspace: requestedWorkspace || envWorkspace
+      workspace: requestedWorkspace || envWorkspace,
+      authSource: "env"
     };
   }
 
@@ -142,7 +144,8 @@ export async function resolveWorkspaceToken(args: {
     token: session.auth.accessToken,
     workspace: descriptor.relaycastWorkspaceId,
     relayfileWorkspaceId: descriptor.relayfileWorkspaceId,
-    workspaceDescriptor: descriptor
+    workspaceDescriptor: descriptor,
+    authSource: "cloud-session"
   };
 }
 

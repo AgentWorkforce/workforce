@@ -2,6 +2,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import {
   buildTriggerUrl,
+  formatTriggerAuthHint,
   formatTriggerResult,
   parseTriggerArgs,
   parseTriggerResponse
@@ -79,6 +80,28 @@ test('formatTriggerResult prints a concise human summary', () => {
       status: 'starting'
     }),
     'triggered: agent-1\ndeployment: deployment-1\nworkspace: rw_123\nstatus: starting\n'
+  );
+});
+
+test('formatTriggerAuthHint identifies env-token 403s', () => {
+  assert.match(
+    formatTriggerAuthHint({ authSource: 'env', workspace: 'rw_123' }),
+    /WORKFORCE_WORKSPACE_TOKEN.*rw_123/
+  );
+  assert.match(
+    formatTriggerAuthHint({ authSource: 'env', workspace: 'rw_123' }),
+    /unset WORKFORCE_WORKSPACE_TOKEN/
+  );
+});
+
+test('formatTriggerAuthHint identifies cloud-session 403s', () => {
+  assert.match(
+    formatTriggerAuthHint({ authSource: 'cloud-session', workspace: 'rw_123' }),
+    /Agent Relay cloud session.*rw_123/
+  );
+  assert.match(
+    formatTriggerAuthHint({ authSource: 'cloud-session', workspace: 'rw_123' }),
+    /agentworkforce login/
   );
 });
 
