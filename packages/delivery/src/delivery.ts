@@ -33,9 +33,14 @@ const WRITEBACK_TIMEOUT_MS = 45_000;
  */
 export function createDelivery(
   ctx: WorkforceCtx,
-  transports?: DeliveryTransports
+  transports?: DeliveryTransports,
+  /** Override which transports to target (defaults to all configured). */
+  onlyTargets?: ReadonlyArray<'slack' | 'telegram'>
 ): DeliveryClient {
-  const targets = resolveDeliveryTargets(ctx);
+  const allTargets = resolveDeliveryTargets(ctx);
+  const targets = onlyTargets
+    ? allTargets.filter((t) => (onlyTargets as readonly string[]).includes(t))
+    : allTargets;
 
   // Injected transports take priority. When not injected, construct real
   // clients with appropriate timeouts.
