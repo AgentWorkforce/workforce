@@ -68,6 +68,15 @@ importers:
         specifier: ^0.185.0
         version: 0.185.0
 
+  packages/delivery:
+    dependencies:
+      '@agentworkforce/runtime':
+        specifier: workspace:*
+        version: link:../runtime
+      '@relayfile/relay-helpers':
+        specifier: ^0.4.2
+        version: 0.4.2(@relayfile/sdk@0.7.40)
+
   packages/deploy:
     dependencies:
       '@agent-relay/cloud':
@@ -961,6 +970,19 @@ packages:
     peerDependencies:
       '@relayfile/sdk': '>=0.6.0 <1'
 
+  '@relayfile/adapter-core@0.4.3':
+    resolution: {integrity: sha512-VoGco3xYab+Ij9v2wSi6qsYg15gDfYWlZsdbiKrqM/YN+t0IhPS8Shy5dRA18kYCBKEr7bH7QdFfa8PCXj6LFg==}
+    engines: {node: '>=18'}
+    hasBin: true
+    peerDependencies:
+      '@relayfile/sdk': '>=0.6.0 <1'
+
+  '@relayfile/adapter-linear@0.4.2':
+    resolution: {integrity: sha512-Yg0hv/RqEB5WJ4RA4LX9JinCxxT/01GSdd+0HeT0L9P36EX27kEEuzWmNwWEpjDHQMcYykEocruEJHuV4XXGCQ==}
+    engines: {node: '>=18'}
+    peerDependencies:
+      '@relayfile/sdk': '>=0.6.0 <1'
+
   '@relayfile/core@0.7.40':
     resolution: {integrity: sha512-vY48SxZgahnvE0CHDyy/iny17ypnfbX5myVPtocZVNpMiz4dS1iabO70WR+uYVgSiIZR7MpKTPFSs3SxEjQWag==}
     engines: {node: '>=18'}
@@ -968,6 +990,9 @@ packages:
   '@relayfile/local-mount@0.7.24':
     resolution: {integrity: sha512-h2ac/frfSFgjrKDSBCkmMHjphx19XZrHrSjaI29wlTzSblfiE65MQST47lS6Fm1+K9yap+W+msUi8JRIYYWFEw==}
     engines: {node: '>=18'}
+
+  '@relayfile/relay-helpers@0.4.2':
+    resolution: {integrity: sha512-/SnZW5vEtNBJkYslLOuw8JIMU1edYmY9AXEJF52k4H3Q1Z/I3GPAShXCbQmCry07Q42CM/+1SEk1mLzDaU5cVw==}
 
   '@relayfile/sdk@0.7.40':
     resolution: {integrity: sha512-9qPQ/qSexD11x/CKZlbZUFC7KDdxJ2yYBQd1nuzcoHNqnvErplq5bDBy5Dqr1AXID9i1Q7sMxnY8M1raMTQsAg==}
@@ -3283,12 +3308,32 @@ snapshots:
       minimatch: 10.2.5
       yaml: 2.9.0
 
+  '@relayfile/adapter-core@0.4.3(@relayfile/sdk@0.7.40)':
+    dependencies:
+      '@relayfile/sdk': 0.7.40
+      '@scalar/postman-to-openapi': 0.6.3
+      cheerio: 1.2.0
+      minimatch: 10.2.5
+      yaml: 2.9.0
+
+  '@relayfile/adapter-linear@0.4.2(@relayfile/sdk@0.7.40)':
+    dependencies:
+      '@relayfile/adapter-core': 0.4.3(@relayfile/sdk@0.7.40)
+      '@relayfile/sdk': 0.7.40
+
   '@relayfile/core@0.7.40': {}
 
   '@relayfile/local-mount@0.7.24':
     dependencies:
       '@parcel/watcher': 2.5.6
       ignore: 7.0.5
+
+  '@relayfile/relay-helpers@0.4.2(@relayfile/sdk@0.7.40)':
+    dependencies:
+      '@relayfile/adapter-core': 0.4.3(@relayfile/sdk@0.7.40)
+      '@relayfile/adapter-linear': 0.4.2(@relayfile/sdk@0.7.40)
+    transitivePeerDependencies:
+      - '@relayfile/sdk'
 
   '@relayfile/sdk@0.7.40':
     dependencies:
