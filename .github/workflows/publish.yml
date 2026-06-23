@@ -88,6 +88,7 @@ jobs:
           # Dependency order (topological):
           #   persona-kit     (leaf — consumed by everyone)
           #   runtime         (→ persona-kit; consumed by deploy + mcp-workforce)
+          #   delivery        (→ runtime; consumed by external agents)
           #   workload-router (→ persona-kit; consumed by cli)
           #   deploy          (→ persona-kit + runtime; consumed by cli)
           #   mcp-workforce   (→ persona-kit + runtime)
@@ -95,7 +96,7 @@ jobs:
           #   cli             (→ persona-kit + workload-router + deploy)
           #   agentworkforce  (→ cli — umbrella wrapper, must publish last)
           # personas-core publishes via the separate publish-personas.yml workflow.
-          echo "packages=persona-kit runtime workload-router deploy mcp-workforce daytona-runner cli agentworkforce" >> "$GITHUB_OUTPUT"
+          echo "packages=persona-kit runtime delivery workload-router deploy mcp-workforce daytona-runner cli agentworkforce" >> "$GITHUB_OUTPUT"
 
       # Lockstep baseline heal. The workspace publishes every package at the
       # same version, so if any package's local version lags either its own
@@ -707,6 +708,7 @@ jobs:
           const packageOrder = [
             'persona-kit',
             'runtime',
+            'delivery',
             'workload-router',
             'deploy',
             'mcp-workforce',
