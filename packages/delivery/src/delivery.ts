@@ -13,7 +13,7 @@ import {
   type TelegramRef
 } from './types.js';
 
-const WRITEBACK_TIMEOUT_MS = 15_000;
+const WRITEBACK_TIMEOUT_MS = 45_000;
 
 /**
  * Create a delivery client that auto-discovers configured transports from
