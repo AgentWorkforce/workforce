@@ -1,6 +1,7 @@
 import type { WorkforceCtx } from '@agentworkforce/runtime';
 import type { SlackClient } from '@relayfile/relay-helpers';
 import type { TelegramClient } from '@relayfile/relay-helpers';
+import { input } from './helpers.js';
 
 // ── message reference (returned by send, accepted by reply) ──────────────
 
@@ -51,7 +52,9 @@ export interface DeliveryOptions {
 // ── injectable transport seam (for tests) ────────────────────────────────
 
 export interface DeliveryTransports {
+  /** Injected Slack client (used for both blocking and non-blocking paths). */
   slack?: SlackClient;
+  /** Injected Telegram client (used for both blocking and non-blocking paths). */
   telegram?: TelegramClient;
 }
 
@@ -87,24 +90,29 @@ export interface DeliveryClient {
 
 /**
  * Resolve which transport targets are configured for the given persona ctx.
- * Checks ctx.persona.inputs for SLACK_CHANNEL and TELEGRAM_CHAT.
+ * Uses input() helper for proper resolution order (ctx → env → default).
  */
 export function resolveDeliveryTargets(ctx: WorkforceCtx): Array<'slack' | 'telegram'> {
-  const inputs = ctx.persona.inputs ?? {};
   const targets: Array<'slack' | 'telegram'> = [];
-  if (inputs['SLACK_CHANNEL']?.trim()) targets.push('slack');
-  if (inputs['TELEGRAM_CHAT']?.trim()) targets.push('telegram');
+  if (input(ctx, 'SLACK_CHANNEL')) targets.push('slack');
+  if (input(ctx, 'TELEGRAM_CHAT')) targets.push('telegram');
   return targets;
 }
 
-/** Get the configured slack channel id (bare, without `__name` suffix). */
+/**
+ * Get the configured slack channel id (bare, without `__name` suffix).
+ * Uses input() for proper resolution.
+ */
 export function slackChannel(ctx: WorkforceCtx): string | undefined {
-  const raw = ctx.persona.inputs?.['SLACK_CHANNEL'];
+  const raw = input(ctx, 'SLACK_CHANNEL');
   return raw?.split('__')[0]?.trim() || undefined;
 }
 
-/** Get the configured telegram chat id (bare, without `__title` suffix). */
+/**
+ * Get the configured telegram chat id (bare, without `__title` suffix).
+ * Uses input() for proper resolution.
+ */
 export function telegramChat(ctx: WorkforceCtx): string | undefined {
-  const raw = ctx.persona.inputs?.['TELEGRAM_CHAT'];
+  const raw = input(ctx, 'TELEGRAM_CHAT');
   return raw?.split('__')[0]?.trim() || undefined;
 }

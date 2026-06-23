@@ -26,6 +26,10 @@ const WRITEBACK_TIMEOUT_MS = 15_000;
  * Non-blocking parentRef mode (zero receipt round-trips):
  *   const heads = await delivery.publish(header);
  *   await delivery.send(body, { replyTo: heads, nonBlocking: true });
+ *
+ * Pass `transports` to inject mock clients for testing — the same injected
+ * client is used for both blocking and non-blocking paths (tests supply
+ * their own mock that short-circuits the writeback).
  */
 export function createDelivery(
   ctx: WorkforceCtx,
@@ -33,20 +37,23 @@ export function createDelivery(
 ): DeliveryClient {
   const targets = resolveDeliveryTargets(ctx);
 
-  // Two sets of clients: blocking (waits for receipt) and non-blocking
-  // (0ms timeout, returns draft refs immediately for parentRef threading).
-  const slackBlocking = transports?.slack ?? (targets.includes('slack')
+  // Injected transports take priority. When not injected, construct real
+  // clients with appropriate timeouts.
+  const injectedSlack = transports?.slack;
+  const injectedTelegram = transports?.telegram;
+
+  const slackBlocking = injectedSlack ?? (targets.includes('slack')
     ? slackClient({ writebackTimeoutMs: WRITEBACK_TIMEOUT_MS })
     : undefined);
-  const slackNonBlocking = targets.includes('slack')
+  const slackNonBlocking = injectedSlack ?? (targets.includes('slack')
     ? slackClient({ writebackTimeoutMs: 0 })
-    : undefined;
-  const telegramBlocking = transports?.telegram ?? (targets.includes('telegram')
+    : undefined);
+  const telegramBlocking = injectedTelegram ?? (targets.includes('telegram')
     ? telegramClient({ writebackTimeoutMs: WRITEBACK_TIMEOUT_MS })
     : undefined);
-  const telegramNonBlocking = targets.includes('telegram')
+  const telegramNonBlocking = injectedTelegram ?? (targets.includes('telegram')
     ? telegramClient({ writebackTimeoutMs: 0 })
-    : undefined;
+    : undefined);
 
   return new DeliveryClientImpl(ctx, targets, {
     slackBlocking,
@@ -107,7 +114,7 @@ class DeliveryClientImpl implements DeliveryClient {
     await Promise.all(tasks);
 
     // In non-blocking mode, draft refs always succeed (no receipt wait to fail).
-    // Treat any ref as success.
+    // Treat any ref as success. In blocking mode, require all targets to succeed.
     const ok = nonBlocking
       ? refs.length > 0
       : errors.length === 0 && refs.length === this.targets.length;
@@ -116,7 +123,8 @@ class DeliveryClientImpl implements DeliveryClient {
       this.ctx.log?.('warn', 'delivery.partial-failure', { errors, nonBlocking });
     }
     if (!ok && refs.length === 0) {
-      throw new Error(`Delivery failed to all targets: ${errors.join('; ')}`);
+      const detail = errors.length > 0 ? errors.join('; ') : 'all sends returned null (no configured targets)';
+      throw new Error(`Delivery failed to all targets: ${detail}`);
     }
 
     return { ok, refs };
@@ -224,7 +232,7 @@ class DeliveryClientImpl implements DeliveryClient {
 
     return {
       provider: 'telegram',
-      chatId: String(result.chatId),
+      chatId: result.chatId != null ? String(result.chatId) : chatId,
       messageId: result.ok ? result.messageId : ''
     };
   }
