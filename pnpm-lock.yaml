@@ -71,8 +71,8 @@ importers:
   packages/delivery:
     dependencies:
       '@agentworkforce/runtime':
-        specifier: workspace:*
-        version: link:../runtime
+        specifier: ^4.0.0
+        version: 4.1.9(@relayfile/sdk@0.7.40)
       '@relayfile/relay-helpers':
         specifier: ^0.4.2
         version: 0.4.2(@relayfile/sdk@0.7.40)
@@ -203,6 +203,12 @@ packages:
         optional: true
       '@relayfile/adapter-slack':
         optional: true
+
+  '@agentworkforce/persona-kit@4.1.9':
+    resolution: {integrity: sha512-jflJFk+e8bhpI0TBMGZSHmmjhBCnwZq/pdCvzpfgHQGMYCjwJtULNyjqTPs0I1nFsxzL9Rf3pACZi6nxUdJJFA==}
+
+  '@agentworkforce/runtime@4.1.9':
+    resolution: {integrity: sha512-HQc7ugQ+xty+NTpclPsG1sANDTsHvvO6eX5oduF19fQmomPdYQ+BdvwxoJWAqmitILFcKJEvgPgHe/PolYbxGA==}
 
   '@aws-crypto/crc32@5.2.0':
     resolution: {integrity: sha512-nLbCWqQNgUiwwtFsen1AdzAtvuLRsQS8rYgMuxCrdKf9kOssamGLuPwyTY9wyYblNr9+1XM8v6zoDTPPSIeANg==}
@@ -2176,6 +2182,28 @@ snapshots:
       '@opentelemetry/sdk-trace-base': 2.7.1(@opentelemetry/api@1.9.1)
       '@opentelemetry/sdk-trace-node': 2.7.1(@opentelemetry/api@1.9.1)
       '@opentelemetry/semantic-conventions': 1.40.0
+
+  '@agentworkforce/persona-kit@4.1.9(@relayfile/sdk@0.7.40)':
+    dependencies:
+      '@relayfile/adapter-core': 0.3.60(@relayfile/sdk@0.7.40)
+      '@relayfile/local-mount': 0.7.24
+    transitivePeerDependencies:
+      - '@relayfile/sdk'
+
+  '@agentworkforce/runtime@4.1.9(@relayfile/sdk@0.7.40)':
+    dependencies:
+      '@agent-assistant/proactive': 0.4.32
+      '@agent-relay/events': 6.3.6
+      '@agentworkforce/persona-kit': 4.1.9(@relayfile/sdk@0.7.40)
+      '@relayfile/adapter-core': 0.3.60(@relayfile/sdk@0.7.40)
+      agent-trajectories: 0.5.3
+    transitivePeerDependencies:
+      - '@relayfile/adapter-github'
+      - '@relayfile/adapter-jira'
+      - '@relayfile/adapter-linear'
+      - '@relayfile/adapter-notion'
+      - '@relayfile/adapter-slack'
+      - '@relayfile/sdk'
 
   '@aws-crypto/crc32@5.2.0':
     dependencies:

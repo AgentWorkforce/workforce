@@ -32,7 +32,7 @@
     "lint": "tsc -p tsconfig.json --noEmit"
   },
   "dependencies": {
-    "@agentworkforce/runtime": "workspace:*",
+    "@agentworkforce/runtime": "^4.0.0",
     "@relayfile/relay-helpers": "^0.4.2"
   }
 }
