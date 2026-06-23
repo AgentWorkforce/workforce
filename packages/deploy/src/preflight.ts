@@ -104,6 +104,16 @@ export async function preflightPersona(personaPath: string): Promise<DeployPrefl
     }
   }
 
+  for (const [provider, integration] of Object.entries(persona.integrations ?? {})) {
+    const enabledByInput = integration.enabledByInput;
+    if (enabledByInput && !Object.prototype.hasOwnProperty.call(persona.inputs ?? {}, enabledByInput)) {
+      throw new Error(
+        `persona "${persona.id}" integration "${provider}" is enabled by input "${enabledByInput}", ` +
+          `but persona.inputs does not declare ${enabledByInput}`
+      );
+    }
+  }
+
   // Normalize trigger provider aliases to canonical names so the cloud API
   // receives e.g. 'gmail' instead of 'google-mail'. The integration-provider
   // check above runs against the raw (alias) form — the persona and agent can

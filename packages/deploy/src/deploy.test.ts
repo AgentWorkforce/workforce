@@ -77,6 +77,16 @@ export default defineAgent({
 `;
 }
 
+const SLACK_TELEGRAM_AGENT_SRC = `import { defineAgent } from '@agentworkforce/runtime';
+export default defineAgent({
+  triggers: {
+    slack: [{ on: 'message.created' }],
+    telegram: [{ on: 'message.created' }]
+  },
+  handler: async () => {}
+});
+`;
+
 async function withTempPersona(
   persona: Record<string, unknown>,
   agentSource = SCHEDULE_AGENT_SRC
@@ -365,6 +375,24 @@ test('preflightPersona refuses when the agent triggers a provider the persona do
   }
 });
 
+test('preflightPersona refuses optional integrations enabled by undeclared inputs', async () => {
+  const { personaPath, cleanup } = await withTempPersona(
+    basePersonaJson({
+      integrations: {
+        slack: { optional: true, enabledByInput: 'SLACK_CHANNEL' }
+      }
+    })
+  );
+  try {
+    await assert.rejects(
+      preflightPersona(personaPath),
+      /integration "slack" is enabled by input "SLACK_CHANNEL".*persona\.inputs does not declare SLACK_CHANNEL/
+    );
+  } finally {
+    await cleanup();
+  }
+});
+
 test('preflightPersona refuses when onEvent file is missing', async () => {
   const { personaPath, cleanup } = await withTempPersona(basePersonaJson({ onEvent: './does-not-exist.ts' }));
   try {
@@ -638,6 +666,112 @@ test('deploy connects each missing persona integration before launch', async () 
     assert.deepEqual(connected, ['github', 'notion']);
     assert.deepEqual(result.connectedIntegrations, ['github', 'notion']);
     assert.equal(launched, true);
+  } finally {
+    await cleanup();
+  }
+});
+
+test('deploy activates optional integrations from supplied persona inputs', async () => {
+  const { personaPath, cleanup } = await withTempPersona(
+    basePersonaJson({
+      integrations: {
+        slack: { optional: true, enabledByInput: 'SLACK_CHANNEL' },
+        telegram: { optional: true, enabledByInput: 'TELEGRAM_CHAT' }
+      },
+      inputs: {
+        SLACK_CHANNEL: { description: 'Slack channel', optional: true },
+        TELEGRAM_CHAT: { description: 'Telegram chat', optional: true }
+      }
+    }),
+    SLACK_TELEGRAM_AGENT_SRC
+  );
+  const io = createBufferedIO();
+  const checked: string[] = [];
+  const connected: string[] = [];
+  let stagedIntegrationKeys: string[] = [];
+  let launchedTriggerKeys: string[] = [];
+  const workspaceAuth: WorkspaceAuth = {
+    async resolveWorkspace() {
+      return { workspace: 'ws-test', token: 'tok' };
+    }
+  };
+  const integrations: IntegrationConnectResolver = {
+    async isConnected({ provider }) {
+      checked.push(provider);
+      return false;
+    },
+    async connect({ provider }) {
+      connected.push(provider);
+      return { connectionId: `conn-${provider}` };
+    }
+  };
+  const bundle: BundleStager = {
+    async stage(input) {
+      stagedIntegrationKeys = Object.keys(input.persona.integrations ?? {});
+      return successfulBundleStager().stage(input);
+    }
+  };
+  const devLauncher: ModeLauncher = {
+    async launch(input: ModeLaunchInput) {
+      launchedTriggerKeys = Object.keys(input.agent.triggers ?? {});
+      return {
+        id: 'pid-optional',
+        async stop() {
+          /* no-op */
+        },
+        done: Promise.resolve({ code: 0 })
+      };
+    }
+  };
+
+  try {
+    const result = await deploy(
+      {
+        personaPath,
+        mode: 'dev',
+        io,
+        inputs: { SLACK_CHANNEL: 'C1' }
+      },
+      {
+        workspaceAuth,
+        integrations,
+        bundle,
+        modes: { dev: devLauncher }
+      }
+    );
+
+    assert.deepEqual(checked, ['slack']);
+    assert.deepEqual(connected, ['slack']);
+    assert.deepEqual(result.connectedIntegrations, ['slack']);
+    assert.deepEqual(stagedIntegrationKeys, ['slack']);
+    assert.deepEqual(launchedTriggerKeys, ['slack']);
+    assert.ok(
+      io.messages.find((m) => m.message.includes('integrations.telegram: optional; skipped'))
+    );
+  } finally {
+    await cleanup();
+  }
+});
+
+test('deploy refuses an agent whose optional integration inputs leave no active listeners', async () => {
+  const { personaPath, cleanup } = await withTempPersona(
+    basePersonaJson({
+      integrations: {
+        slack: { optional: true, enabledByInput: 'SLACK_CHANNEL' },
+        telegram: { optional: true, enabledByInput: 'TELEGRAM_CHAT' }
+      },
+      inputs: {
+        SLACK_CHANNEL: { description: 'Slack channel', optional: true },
+        TELEGRAM_CHAT: { description: 'Telegram chat', optional: true }
+      }
+    }),
+    SLACK_TELEGRAM_AGENT_SRC
+  );
+  try {
+    await assert.rejects(
+      deploy({ personaPath, mode: 'dev', io: createBufferedIO() }),
+      /no active listeners after optional integrations were applied/
+    );
   } finally {
     await cleanup();
   }

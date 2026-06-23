@@ -112,6 +112,20 @@ test('persona schema keeps mount.enabled but drops the moved listener fields', a
   assert.equal('schedules' in (personaSpec.properties ?? {}), false);
   // Integration connection config no longer exposes triggers.
   assert.equal('triggers' in (definitions.PersonaIntegrationConfig.properties ?? {}), false);
+  assert.equal(
+    definitions.PersonaIntegrationConfig.properties?.optional &&
+      definitions.PersonaIntegrationConfig.properties.optional !== true
+      ? definitions.PersonaIntegrationConfig.properties.optional.type
+      : undefined,
+    'boolean'
+  );
+  assert.equal(
+    definitions.PersonaIntegrationConfig.properties?.enabledByInput &&
+      definitions.PersonaIntegrationConfig.properties.enabledByInput !== true
+      ? definitions.PersonaIntegrationConfig.properties.enabledByInput.type
+      : undefined,
+    'string'
+  );
   const integrationConfig = definitions.PersonaIntegrationConfig.properties?.config;
   assert.equal(integrationConfig && integrationConfig !== true
     ? integrationConfig.type

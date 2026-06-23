@@ -4,9 +4,11 @@ import { defaultApiUrl } from '@agent-relay/cloud';
 import type {
   AgentSpec,
   IntegrationSource,
+  PersonaInputSpec,
   PersonaIntegrationTrigger,
   PersonaSpec
 } from '@agentworkforce/persona-kit';
+import { KNOWN_TRIGGER_PROVIDER_ALIASES as TRIGGER_PROVIDER_ALIASES } from '@agentworkforce/persona-kit';
 import { bundleStager } from './bundle.js';
 import { resolveCloudUrl } from './cloud-url.js';
 import {
@@ -42,6 +44,7 @@ import type {
   DeployIO,
   DeployMode,
   DeployOptions,
+  DeployPreflight,
   DeployResult,
   ModeLauncher
 } from './types.js';
@@ -129,12 +132,20 @@ export async function deploy(opts: DeployOptions, resolvers: DeployResolvers = {
   const mode: DeployMode = opts.mode ?? pickMode(opts);
   warnings.push(...preflight.warnings);
   for (const w of preflight.warnings) io.warn(w);
+  const activePreflight = selectActiveOptionalIntegrations(preflight, opts.inputs ?? {});
+  for (const skipped of activePreflight.skippedOptionalIntegrations) {
+    io.info(
+      `integrations.${skipped.provider}: optional; skipped because input ${skipped.enabledByInput} is unset`
+    );
+  }
 
   io.info(
-    `persona ${preflight.persona.id}: ${preflight.integrations.length} integration(s), ${preflight.schedules.length} schedule(s)`
+    `persona ${activePreflight.persona.id}: ${activePreflight.integrations.length} integration(s), ${activePreflight.schedules.length} schedule(s)`
   );
 
-  validateSubscriptionSupport(preflight.persona, {
+  validateActiveAgent(activePreflight);
+
+  validateSubscriptionSupport(activePreflight.persona, {
     mode,
     subscription: resolvers.subscription,
     ...(opts.harnessSource ? { harnessSource: opts.harnessSource } : {})
@@ -143,12 +154,12 @@ export async function deploy(opts: DeployOptions, resolvers: DeployResolvers = {
   if (opts.dryRun) {
     io.info('--dry-run: persona validated; exiting before any side effects');
     return {
-      deploymentId: preflight.persona.id,
+      deploymentId: activePreflight.persona.id,
       mode,
       workspace: opts.workspace ?? '(dry-run)',
       bundleDir: '(dry-run)',
       connectedIntegrations: [],
-      schedules: preflight.schedules,
+      schedules: activePreflight.schedules,
       warnings
     };
   }
@@ -161,19 +172,19 @@ export async function deploy(opts: DeployOptions, resolvers: DeployResolvers = {
     await mkdir(bundleDir, { recursive: true });
     const stager = resolvers.bundle ?? bundleStager;
     const bundle = await stager.stage({
-      personaPath: preflight.personaPath,
-      persona: preflight.persona,
+      personaPath: activePreflight.personaPath,
+      persona: activePreflight.persona,
       outDir: bundleDir
     });
     io.info(`bundle: staged to ${bundle.runnerPath} (${formatBytes(bundle.sizeBytes)})`);
     io.info(`--bundle-out: bundle ready at ${bundleDir}; skipping launch`);
     return {
-      deploymentId: preflight.persona.id,
+      deploymentId: activePreflight.persona.id,
       mode,
       workspace: opts.workspace ?? '(bundle-only)',
       bundleDir,
       connectedIntegrations: [],
-      schedules: preflight.schedules,
+      schedules: activePreflight.schedules,
       warnings
     };
   }
@@ -217,12 +228,12 @@ export async function deploy(opts: DeployOptions, resolvers: DeployResolvers = {
         })
       : undefined);
 
-  if (preflight.persona.useSubscription && !subscription) {
+  if (activePreflight.persona.useSubscription && !subscription) {
     const result = await ensureCloudSubscriptionReady({
       cloudUrl: normalizeCloudUrl(cloudUrl ?? defaultApiUrl()),
       workspaceId: workspace,
       token: activeToken,
-      persona: preflight.persona,
+      persona: activePreflight.persona,
       io,
       noPrompt: opts.noPrompt === true || opts.noConnect === true,
       ...(opts.harnessSource ? { harnessSource: opts.harnessSource } : {}),
@@ -234,7 +245,7 @@ export async function deploy(opts: DeployOptions, resolvers: DeployResolvers = {
   }
 
   const connectedIntegrations = await connectAndCollectIntegrations({
-    persona: preflight.persona,
+    persona: activePreflight.persona,
     workspace,
     noConnect: opts.noConnect === true,
     ...(opts.noPrompt ? { noPrompt: true } : {}),
@@ -275,9 +286,9 @@ export async function deploy(opts: DeployOptions, resolvers: DeployResolvers = {
           workspaceToken: () => activeToken
         })
       : undefined);
-  if (optionsResolver && opts.noPrompt !== true && (preflight.persona.inputs !== undefined)) {
+  if (optionsResolver && opts.noPrompt !== true && (activePreflight.persona.inputs !== undefined)) {
     resolvedInputs = await collectPickerInputs({
-      persona: preflight.persona,
+      persona: activePreflight.persona,
       workspace,
       io,
       resolver: optionsResolver,
@@ -288,21 +299,21 @@ export async function deploy(opts: DeployOptions, resolvers: DeployResolvers = {
   }
 
   const bundleDir = path.resolve(
-    path.join(preflight.personaDir, '.workforce', 'build', preflight.persona.id)
+    path.join(activePreflight.personaDir, '.workforce', 'build', activePreflight.persona.id)
   );
   await mkdir(bundleDir, { recursive: true });
   const stager = resolvers.bundle ?? bundleStager;
   const bundle = await stager.stage({
-    personaPath: preflight.personaPath,
-    persona: preflight.persona,
+    personaPath: activePreflight.personaPath,
+    persona: activePreflight.persona,
     outDir: bundleDir
   });
   io.info(`bundle: staged to ${bundle.runnerPath} (${formatBytes(bundle.sizeBytes)})`);
 
   const runtimeEnv = await resolveRuntimeCredentialEnv({
     mode,
-    persona: preflight.persona,
-    agent: preflight.agent,
+    persona: activePreflight.persona,
+    agent: activePreflight.agent,
     workspace,
     workspaceToken: activeToken,
     ...(resolvedAuth.relayfileWorkspaceId ? { relayfileWorkspaceId: resolvedAuth.relayfileWorkspaceId } : {}),
@@ -315,8 +326,8 @@ export async function deploy(opts: DeployOptions, resolvers: DeployResolvers = {
   io.info(`mode: ${mode}`);
   const launcher = resolveLauncher(mode, resolvers);
   const handle = await launcher.launch({
-    persona: preflight.persona,
-    agent: preflight.agent,
+    persona: activePreflight.persona,
+    agent: activePreflight.agent,
     bundle,
     workspace,
     io,
@@ -337,15 +348,124 @@ export async function deploy(opts: DeployOptions, resolvers: DeployResolvers = {
   io.info(`launched: ${mode}/${handle.id}`);
 
   return {
-    deploymentId: preflight.persona.id,
+    deploymentId: activePreflight.persona.id,
     mode,
     workspace,
     bundleDir,
     connectedIntegrations,
-    schedules: preflight.schedules,
+    schedules: activePreflight.schedules,
     runHandle: handle,
     warnings
   };
+}
+
+type ActiveDeployPreflight = DeployPreflight & {
+  skippedOptionalIntegrations: Array<{ provider: string; enabledByInput: string }>;
+};
+
+function selectActiveOptionalIntegrations(
+  preflight: DeployPreflight,
+  inputs: Record<string, string>,
+  env: NodeJS.ProcessEnv = process.env
+): ActiveDeployPreflight {
+  const integrations = preflight.persona.integrations ?? {};
+  const entries = Object.entries(integrations);
+  if (!entries.some(([, cfg]) => cfg?.optional === true)) {
+    return { ...preflight, skippedOptionalIntegrations: [] };
+  }
+
+  const activeIntegrations: NonNullable<PersonaSpec['integrations']> = {};
+  const inactiveTriggerProviders = new Set<string>();
+  const skippedOptionalIntegrations: ActiveDeployPreflight['skippedOptionalIntegrations'] = [];
+
+  for (const [provider, cfg] of entries) {
+    if (cfg?.optional !== true) {
+      activeIntegrations[provider] = cfg;
+      continue;
+    }
+
+    const enabledByInput = cfg.enabledByInput;
+    if (enabledByInput && personaInputIsSet(preflight.persona.inputs?.[enabledByInput], enabledByInput, inputs, env)) {
+      activeIntegrations[provider] = cfg;
+      continue;
+    }
+
+    inactiveTriggerProviders.add(provider);
+    const alias = triggerProviderAlias(provider);
+    if (alias) inactiveTriggerProviders.add(alias);
+    skippedOptionalIntegrations.push({
+      provider,
+      enabledByInput: enabledByInput ?? '(missing)'
+    });
+  }
+
+  const activeIntegrationKeys = Object.keys(activeIntegrations);
+  const persona: PersonaSpec = {
+    ...preflight.persona,
+    ...(activeIntegrationKeys.length > 0
+      ? { integrations: activeIntegrations }
+      : { integrations: undefined })
+  };
+  const agent = filterInactiveTriggers(preflight.agent, inactiveTriggerProviders);
+
+  return {
+    ...preflight,
+    persona,
+    agent,
+    integrations: activeIntegrationKeys,
+    skippedOptionalIntegrations
+  };
+}
+
+function personaInputIsSet(
+  spec: PersonaInputSpec | undefined,
+  inputName: string,
+  inputs: Record<string, string>,
+  env: NodeJS.ProcessEnv
+): boolean {
+  const explicit = inputs[inputName];
+  if (typeof explicit === 'string') return explicit.trim().length > 0;
+
+  const envName = spec?.env ?? inputName;
+  const envValue = env[envName];
+  if (typeof envValue === 'string') return envValue.trim().length > 0;
+
+  return typeof spec?.default === 'string' && spec.default.trim().length > 0;
+}
+
+function filterInactiveTriggers(
+  agent: AgentSpec,
+  inactiveProviders: ReadonlySet<string>
+): AgentSpec {
+  if (!agent.triggers || inactiveProviders.size === 0) return agent;
+
+  const nextTriggers: NonNullable<AgentSpec['triggers']> = {};
+  for (const [provider, triggers] of Object.entries(agent.triggers)) {
+    if (!inactiveProviders.has(provider)) {
+      nextTriggers[provider] = triggers;
+    }
+  }
+
+  return {
+    ...agent,
+    ...(Object.keys(nextTriggers).length > 0 ? { triggers: nextTriggers } : { triggers: undefined })
+  };
+}
+
+function triggerProviderAlias(provider: string): string | undefined {
+  return (TRIGGER_PROVIDER_ALIASES as Record<string, string>)[provider];
+}
+
+function validateActiveAgent(preflight: ActiveDeployPreflight): void {
+  const hasTriggers = !!preflight.agent.triggers && Object.values(preflight.agent.triggers).some((t) => (t?.length ?? 0) > 0);
+  const hasSchedules = (preflight.agent.schedules?.length ?? 0) > 0;
+  const hasWatch = (preflight.agent.watch?.length ?? 0) > 0;
+  const hasDispatcherLaunch = preflight.agent.launchedBy === 'team-dispatcher';
+  if (hasTriggers || hasSchedules || hasWatch || hasDispatcherLaunch) return;
+
+  throw new Error(
+    `agent "${preflight.persona.id}" has no active listeners after optional integrations were applied`
+  );
 }
 
 function resolveLauncher(mode: DeployMode, resolvers: DeployResolvers): ModeLauncher {

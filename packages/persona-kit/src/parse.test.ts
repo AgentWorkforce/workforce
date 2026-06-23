@@ -726,6 +726,37 @@ test('parseIntegrations preserves scope (connection-only); rejects persona-level
   );
 });
 
+test('parseIntegrations accepts optional integrations enabled by persona input', () => {
+  const i = parseIntegrations(
+    {
+      slack: { optional: true, enabledByInput: 'SLACK_CHANNEL' }
+    },
+    'integrations'
+  );
+
+  assert.equal(i?.slack.optional, true);
+  assert.equal(i?.slack.enabledByInput, 'SLACK_CHANNEL');
+});
+
+test('parseIntegrations validates optional integration activation shape', () => {
+  assert.throws(
+    () => parseIntegrations({ slack: { optional: 'yes' } }, 'integrations'),
+    /integrations\.slack\.optional must be a boolean/
+  );
+  assert.throws(
+    () => parseIntegrations({ slack: { optional: true } }, 'integrations'),
+    /integrations\.slack\.enabledByInput is required when optional is true/
+  );
+  assert.throws(
+    () => parseIntegrations({ slack: { enabledByInput: 'SLACK_CHANNEL' } }, 'integrations'),
+    /integrations\.slack\.optional must be true when enabledByInput is set/
+  );
+  assert.throws(
+    () => parseIntegrations({ slack: { optional: true, enabledByInput: 'slack_channel' } }, 'integrations'),
+    /integrations\.slack\.enabledByInput must be an env-style name/
+  );
+});
+
 test('parseIntegrations rejects non-plain adapter config values', () => {
   assert.throws(
     () => parseIntegrations({ github: { config: null } }, 'integrations'),
