@@ -7,6 +7,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [4.1.12] - 2026-06-24
+
+### Added
+
+- **Support optional integrations**
+
+### Fixed
+
+- Fix optional integration activation inputs
+
 ## [4.1.11] - 2026-06-24
 
 ### Fixed
