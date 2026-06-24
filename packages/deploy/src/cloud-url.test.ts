@@ -16,10 +16,32 @@ test('canonicalizeCloudUrl: origin.agentrelay.cloud/cloud → public canonical',
   );
 });
 
-test('canonicalizeCloudUrl: staging.agentrelay.cloud → public canonical', () => {
+test('canonicalizeCloudUrl: staging.agentrelay.cloud is preserved for staging deploys', () => {
   assert.equal(
     canonicalizeCloudUrl('https://staging.agentrelay.cloud'),
-    'https://agentrelay.com/cloud'
+    'https://staging.agentrelay.cloud/cloud'
+  );
+  assert.equal(
+    canonicalizeCloudUrl('https://staging.agentrelay.cloud/cloud'),
+    'https://staging.agentrelay.cloud/cloud'
+  );
+  assert.equal(
+    canonicalizeCloudUrl('https://staging.agentrelay.cloud/cloud/'),
+    'https://staging.agentrelay.cloud/cloud'
+  );
+});
+
+test('canonicalizeCloudUrl: origin preview host → public canonical', () => {
+  assert.equal(
+    canonicalizeCloudUrl('https://origin-preview-pr-113.agentrelay.cloud/cloud'),
+    'https://preview-pr-113.agentrelay.cloud/cloud'
+  );
+});
+
+test('canonicalizeCloudUrl: preview public host gets cloud base path', () => {
+  assert.equal(
+    canonicalizeCloudUrl('https://preview-pr-113.agentrelay.cloud'),
+    'https://preview-pr-113.agentrelay.cloud/cloud'
   );
 });
 

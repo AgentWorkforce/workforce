@@ -17,8 +17,12 @@ import type { ActiveWorkspacePointer } from './login.js';
  * (the handler should emit a configured public URL, never `request.url`).
  *
  * Rules:
- *   - Map known-bypass hostnames (`origin.agentrelay.cloud`,
- *     `*.agentrelay.cloud`) → canonical `https://agentrelay.com/cloud`.
+ *   - Map known-bypass hostnames back to their public cloud host:
+ *     `origin.agentrelay.cloud` → `https://agentrelay.com/cloud` and
+ *     `origin-<stage>.agentrelay.cloud` → `https://<stage>.agentrelay.cloud/cloud`.
+ *   - Preserve stage-labeled public hosts such as `staging.agentrelay.cloud`
+ *     so explicit staging deploys do not silently talk to production.
+ *   - Add the `/cloud` base path for bare stage-labeled public hosts.
  *   - Map the apex `agentrelay.com` (no `/cloud` basePath) → canonical
  *     `https://agentrelay.com/cloud` so callers that hardcoded the apex
  *     don't land on the Next.js marketing 404 page.
@@ -40,8 +44,17 @@ export function canonicalizeCloudUrl(input: string): string {
     return trimmed;
   }
   const host = url.hostname.toLowerCase();
-  if (host === 'agentrelay.cloud' || host.endsWith('.agentrelay.cloud')) {
+  if (host === 'agentrelay.cloud' || host === 'origin.agentrelay.cloud') {
     return 'https://agentrelay.com/cloud';
+  }
+  if (host.startsWith('origin-') && host.endsWith('.agentrelay.cloud')) {
+    return `https://${host.slice('origin-'.length)}/cloud`;
+  }
+  if (
+    host.endsWith('.agentrelay.cloud') &&
+    (url.pathname === '' || url.pathname === '/')
+  ) {
+    return `https://${host}/cloud`;
   }
   if (
     host === 'agentrelay.com'
