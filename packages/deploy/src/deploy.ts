@@ -132,12 +132,14 @@ export async function deploy(opts: DeployOptions, resolvers: DeployResolvers = {
   const mode: DeployMode = opts.mode ?? pickMode(opts);
   warnings.push(...preflight.warnings);
   for (const w of preflight.warnings) io.warn(w);
-  const activePreflight = selectActiveOptionalIntegrations(preflight, opts.inputs ?? {});
-  for (const skipped of activePreflight.skippedOptionalIntegrations) {
-    io.info(
-      `integrations.${skipped.provider}: optional; skipped because input ${skipped.enabledByInput} is unset`
-    );
-  }
+  const canCollectPickerInputs =
+    opts.dryRun !== true
+    && !opts.bundleOut
+    && opts.noPrompt !== true
+    && (mode === 'cloud' || resolvers.integrationOptions !== undefined);
+  let activePreflight = selectActiveOptionalIntegrations(preflight, opts.inputs ?? {}, process.env, {
+    deferPickerBacked: canCollectPickerInputs
+  });
 
   io.info(
     `persona ${activePreflight.persona.id}: ${activePreflight.integrations.length} integration(s), ${activePreflight.schedules.length} schedule(s)`
@@ -277,7 +279,10 @@ export async function deploy(opts: DeployOptions, resolvers: DeployResolvers = {
   // into a choose-from-a-list prompt, now that the backing integrations are
   // connected. Cloud mode gets a cloud-backed resolver by default; callers can
   // inject their own (or a fake for tests) via `resolvers.integrationOptions`.
-  let resolvedInputs: Record<string, string> = { ...(opts.inputs ?? {}) };
+  let resolvedInputs: Record<string, string> = {
+    ...(opts.inputs ?? {}),
+    ...activePreflight.resolvedInputValues
+  };
   const optionsResolver =
     resolvers.integrationOptions ??
     (mode === 'cloud'
@@ -297,6 +302,20 @@ export async function deploy(opts: DeployOptions, resolvers: DeployResolvers = {
       ...(opts.noPrompt ? { noPrompt: true } : {})
     });
   }
+  activePreflight = selectActiveOptionalIntegrations(preflight, resolvedInputs);
+  for (const skipped of activePreflight.skippedOptionalIntegrations) {
+    io.info(
+      `integrations.${skipped.provider}: optional; skipped because input ${skipped.enabledByInput} is unset`
+    );
+  }
+  validateActiveAgent(activePreflight);
+  resolvedInputs = {
+    ...resolvedInputs,
+    ...activePreflight.resolvedInputValues
+  };
+  const activeConnectedIntegrations = connectedIntegrations.filter((provider) =>
+    activePreflight.integrations.includes(provider)
+  );
 
   const bundleDir = path.resolve(
     path.join(activePreflight.personaDir, '.workforce', 'build', activePreflight.persona.id)
@@ -322,6 +341,11 @@ export async function deploy(opts: DeployOptions, resolvers: DeployResolvers = {
     enabled: resolvers.integrations === undefined,
     ...(providerConfigKeys ? { providerConfigKeys } : {})
   });
+  const inputEnv = toInputEnv(resolvedInputs);
+  const launchEnv = {
+    ...(runtimeEnv ?? {}),
+    ...inputEnv
+  };
 
   io.info(`mode: ${mode}`);
   const launcher = resolveLauncher(mode, resolvers);
@@ -331,7 +355,7 @@ export async function deploy(opts: DeployOptions, resolvers: DeployResolvers = {
     bundle,
     workspace,
     io,
-    ...(runtimeEnv ? { env: runtimeEnv } : {}),
+    ...(Object.keys(launchEnv).length > 0 ? { env: launchEnv } : {}),
     ...(activeToken ? { workspaceToken: activeToken } : {}),
     ...(opts.detach ? { detach: true } : {}),
     ...(opts.byoSandbox ? { byoSandbox: true } : {}),
@@ -352,7 +376,7 @@ export async function deploy(opts: DeployOptions, resolvers: DeployResolvers = {
     mode,
     workspace,
     bundleDir,
-    connectedIntegrations,
+    connectedIntegrations: activeConnectedIntegrations,
     schedules: activePreflight.schedules,
     runHandle: handle,
     warnings
@@ -361,22 +385,25 @@ export async function deploy(opts: DeployOptions, resolvers: DeployResolvers = {
 
 type ActiveDeployPreflight = DeployPreflight & {
   skippedOptionalIntegrations: Array<{ provider: string; enabledByInput: string }>;
+  resolvedInputValues: Record<string, string>;
 };
 
 function selectActiveOptionalIntegrations(
   preflight: DeployPreflight,
   inputs: Record<string, string>,
-  env: NodeJS.ProcessEnv = process.env
+  env: NodeJS.ProcessEnv = process.env,
+  options: { deferPickerBacked?: boolean } = {}
 ): ActiveDeployPreflight {
   const integrations = preflight.persona.integrations ?? {};
   const entries = Object.entries(integrations);
   if (!entries.some(([, cfg]) => cfg?.optional === true)) {
-    return { ...preflight, skippedOptionalIntegrations: [] };
+    return { ...preflight, skippedOptionalIntegrations: [], resolvedInputValues: {} };
   }
 
   const activeIntegrations: NonNullable<PersonaSpec['integrations']> = {};
   const inactiveTriggerProviders = new Set<string>();
   const skippedOptionalIntegrations: ActiveDeployPreflight['skippedOptionalIntegrations'] = [];
+  const resolvedInputValues: Record<string, string> = {};
 
   for (const [provider, cfg] of entries) {
     if (cfg?.optional !== true) {
@@ -385,7 +412,18 @@ function selectActiveOptionalIntegrations(
     }
 
     const enabledByInput = cfg.enabledByInput;
-    if (enabledByInput && personaInputIsSet(preflight.persona.inputs?.[enabledByInput], enabledByInput, inputs, env)) {
+    const inputSpec = enabledByInput ? preflight.persona.inputs?.[enabledByInput] : undefined;
+    const resolved = enabledByInput
+      ? resolvePersonaInputValue(inputSpec, enabledByInput, inputs, env)
+      : undefined;
+    if (enabledByInput && resolved !== undefined) {
+      activeIntegrations[provider] = cfg;
+      if (!Object.prototype.hasOwnProperty.call(inputs, enabledByInput)) {
+        resolvedInputValues[enabledByInput] = resolved;
+      }
+      continue;
+    }
+    if (options.deferPickerBacked && enabledByInput && isPickerBackedByProvider(inputSpec, provider)) {
       activeIntegrations[provider] = cfg;
       continue;
     }
@@ -413,24 +451,39 @@ function selectActiveOptionalIntegrations(
     persona,
     agent,
     integrations: activeIntegrationKeys,
-    skippedOptionalIntegrations
+    skippedOptionalIntegrations,
+    resolvedInputValues
   };
 }
 
-function personaInputIsSet(
+function resolvePersonaInputValue(
   spec: PersonaInputSpec | undefined,
   inputName: string,
   inputs: Record<string, string>,
   env: NodeJS.ProcessEnv
-): boolean {
+): string | undefined {
   const explicit = inputs[inputName];
-  if (typeof explicit === 'string') return explicit.trim().length > 0;
+  if (typeof explicit === 'string') return explicit.trim().length > 0 ? explicit : undefined;
 
   const envName = spec?.env ?? inputName;
   const envValue = env[envName];
-  if (typeof envValue === 'string') return envValue.trim().length > 0;
+  if (typeof envValue === 'string' && envValue.trim().length > 0) return envValue;
 
-  return typeof spec?.default === 'string' && spec.default.trim().length > 0;
+  return typeof spec?.default === 'string' && spec.default.trim().length > 0
+    ? spec.default
+    : undefined;
+}
+
+function isPickerBackedByProvider(spec: PersonaInputSpec | undefined, provider: string): boolean {
+  return spec?.picker?.provider === provider;
+}
+
+const INPUT_ENV_PREFIX = 'WORKFORCE_INPUT_';
+
+function toInputEnv(inputs: Record<string, string>): Record<string, string> {
+  return Object.fromEntries(
+    Object.entries(inputs).map(([key, value]) => [`${INPUT_ENV_PREFIX}${key}`, value])
+  );
 }
 
 function filterInactiveTriggers(

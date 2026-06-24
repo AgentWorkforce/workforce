@@ -157,6 +157,34 @@ async function withWorkspaceEnv<T>(
   }
 }
 
+async function withProcessEnv<T>(
+  env: Record<string, string | undefined>,
+  fn: () => Promise<T>
+): Promise<T> {
+  const previous = new Map<string, string | undefined>();
+  for (const key of Object.keys(env)) {
+    previous.set(key, process.env[key]);
+    const next = env[key];
+    if (next === undefined) {
+      delete process.env[key];
+    } else {
+      process.env[key] = next;
+    }
+  }
+
+  try {
+    return await fn();
+  } finally {
+    for (const [key, value] of previous) {
+      if (value === undefined) {
+        delete process.env[key];
+      } else {
+        process.env[key] = value;
+      }
+    }
+  }
+}
+
 async function withCloudSessionEnv<T>(fn: () => Promise<T>): Promise<T> {
   const previous = {
     CLOUD_API_URL: process.env.CLOUD_API_URL,
@@ -725,29 +753,213 @@ test('deploy activates optional integrations from supplied persona inputs', asyn
   };
 
   try {
-    const result = await deploy(
-      {
-        personaPath,
-        mode: 'dev',
-        io,
-        inputs: { SLACK_CHANNEL: 'C1' }
-      },
-      {
-        workspaceAuth,
-        integrations,
-        bundle,
-        modes: { dev: devLauncher }
-      }
-    );
+    await withProcessEnv({ TELEGRAM_CHAT: undefined }, async () => {
+      const result = await deploy(
+        {
+          personaPath,
+          mode: 'dev',
+          io,
+          inputs: { SLACK_CHANNEL: 'C1' }
+        },
+        {
+          workspaceAuth,
+          integrations,
+          bundle,
+          modes: { dev: devLauncher }
+        }
+      );
 
-    assert.deepEqual(checked, ['slack']);
-    assert.deepEqual(connected, ['slack']);
-    assert.deepEqual(result.connectedIntegrations, ['slack']);
-    assert.deepEqual(stagedIntegrationKeys, ['slack']);
-    assert.deepEqual(launchedTriggerKeys, ['slack']);
-    assert.ok(
-      io.messages.find((m) => m.message.includes('integrations.telegram: optional; skipped'))
-    );
+      assert.deepEqual(checked, ['slack']);
+      assert.deepEqual(connected, ['slack']);
+      assert.deepEqual(result.connectedIntegrations, ['slack']);
+      assert.deepEqual(stagedIntegrationKeys, ['slack']);
+      assert.deepEqual(launchedTriggerKeys, ['slack']);
+      assert.ok(
+        io.messages.find((m) => m.message.includes('integrations.telegram: optional; skipped'))
+      );
+    });
+  } finally {
+    await cleanup();
+  }
+});
+
+test('deploy collects picker-backed input before pruning an optional integration', async () => {
+  const { personaPath, cleanup } = await withTempPersona(
+    basePersonaJson({
+      integrations: {
+        slack: { optional: true, enabledByInput: 'SLACK_CHANNEL' },
+        telegram: { optional: true, enabledByInput: 'TELEGRAM_CHAT' }
+      },
+      inputs: {
+        SLACK_CHANNEL: {
+          description: 'Slack channel',
+          optional: true,
+          picker: { provider: 'slack', resource: 'channels' }
+        },
+        TELEGRAM_CHAT: { description: 'Telegram chat', optional: true }
+      }
+    }),
+    SLACK_TELEGRAM_AGENT_SRC
+  );
+  const io = createBufferedIO();
+  io.scriptAnswers(['1']);
+  const checked: string[] = [];
+  const connected: string[] = [];
+  let stagedIntegrationKeys: string[] = [];
+  let launchedTriggerKeys: string[] = [];
+  let launchedInputs: Record<string, string> | undefined;
+  let launchedEnv: Record<string, string> | undefined;
+  const workspaceAuth: WorkspaceAuth = {
+    async resolveWorkspace() {
+      return { workspace: 'ws-test', token: 'tok' };
+    }
+  };
+  const integrations: IntegrationConnectResolver = {
+    async isConnected({ provider }) {
+      checked.push(provider);
+      return false;
+    },
+    async connect({ provider }) {
+      connected.push(provider);
+      return { connectionId: `conn-${provider}` };
+    }
+  };
+  const integrationOptions: IntegrationOptionsResolver = {
+    async list({ provider, resource }) {
+      assert.equal(provider, 'slack');
+      assert.equal(resource, 'channels');
+      return [
+        { value: 'C1', label: 'general' },
+        { value: 'C2', label: 'deploys' }
+      ];
+    }
+  };
+  const bundle: BundleStager = {
+    async stage(input) {
+      stagedIntegrationKeys = Object.keys(input.persona.integrations ?? {});
+      return successfulBundleStager().stage(input);
+    }
+  };
+  const devLauncher: ModeLauncher = {
+    async launch(input: ModeLaunchInput) {
+      launchedTriggerKeys = Object.keys(input.agent.triggers ?? {});
+      launchedInputs = input.inputs;
+      launchedEnv = input.env;
+      return {
+        id: 'pid-optional-picker',
+        async stop() {
+          /* no-op */
+        },
+        done: Promise.resolve({ code: 0 })
+      };
+    }
+  };
+
+  try {
+    await withProcessEnv({ SLACK_CHANNEL: undefined, TELEGRAM_CHAT: undefined }, async () => {
+      const result = await deploy(
+        { personaPath, mode: 'dev', io },
+        {
+          workspaceAuth,
+          integrations,
+          integrationOptions,
+          bundle,
+          modes: { dev: devLauncher }
+        }
+      );
+
+      assert.deepEqual(checked, ['slack']);
+      assert.deepEqual(connected, ['slack']);
+      assert.deepEqual(result.connectedIntegrations, ['slack']);
+      assert.deepEqual(stagedIntegrationKeys, ['slack']);
+      assert.deepEqual(launchedTriggerKeys, ['slack']);
+      assert.deepEqual(launchedInputs, { SLACK_CHANNEL: 'C1' });
+      assert.equal(launchedEnv?.WORKFORCE_INPUT_SLACK_CHANNEL, 'C1');
+      assert.ok(
+        io.messages.find((m) => m.message.includes('integrations.telegram: optional; skipped'))
+      );
+    });
+  } finally {
+    await cleanup();
+  }
+});
+
+test('deploy forwards env-resolved optional activation input values to launchers', async () => {
+  const { personaPath, cleanup } = await withTempPersona(
+    basePersonaJson({
+      integrations: {
+        slack: { optional: true, enabledByInput: 'SLACK_CHANNEL' }
+      },
+      inputs: {
+        SLACK_CHANNEL: {
+          description: 'Slack channel',
+          optional: true,
+          env: 'AW_SLACK_CHANNEL'
+        }
+      }
+    }),
+    `import { defineAgent } from '@agentworkforce/runtime';
+export default defineAgent({
+  triggers: { slack: [{ on: 'message.created' }] },
+  handler: async () => {}
+});
+`
+  );
+  const io = createBufferedIO();
+  const checked: string[] = [];
+  let launchedInputs: Record<string, string> | undefined;
+  let launchedEnv: Record<string, string> | undefined;
+  const workspaceAuth: WorkspaceAuth = {
+    async resolveWorkspace() {
+      return { workspace: 'ws-test', token: 'tok' };
+    }
+  };
+  const integrations: IntegrationConnectResolver = {
+    async isConnected({ provider }) {
+      checked.push(provider);
+      return true;
+    },
+    async connect() {
+      throw new Error('should not connect when already connected');
+    }
+  };
+
+  try {
+    await withProcessEnv({ AW_SLACK_CHANNEL: 'C-env' }, async () => {
+      const result = await deploy(
+        { personaPath, mode: 'cloud', io },
+        {
+          workspaceAuth,
+          integrations,
+          providerConfigKeys: {
+            async resolve() {
+              return undefined;
+            }
+          },
+          bundle: successfulBundleStager(),
+          modes: {
+            cloud: {
+              async launch(input: ModeLaunchInput) {
+                launchedInputs = input.inputs;
+                launchedEnv = input.env;
+                return {
+                  id: 'cloud-env-input',
+                  async stop() {
+                    /* no-op */
+                  },
+                  done: Promise.resolve({ code: 0 })
+                };
+              }
+            }
+          }
+        }
+      );
+
+      assert.deepEqual(checked, ['slack']);
+      assert.deepEqual(result.connectedIntegrations, ['slack']);
+      assert.deepEqual(launchedInputs, { SLACK_CHANNEL: 'C-env' });
+      assert.equal(launchedEnv?.WORKFORCE_INPUT_SLACK_CHANNEL, 'C-env');
+    });
   } finally {
     await cleanup();
   }
@@ -768,9 +980,11 @@ test('deploy refuses an agent whose optional integration inputs leave no active 
     SLACK_TELEGRAM_AGENT_SRC
   );
   try {
-    await assert.rejects(
-      deploy({ personaPath, mode: 'dev', io: createBufferedIO() }),
-      /no active listeners after optional integrations were applied/
+    await withProcessEnv({ SLACK_CHANNEL: undefined, TELEGRAM_CHAT: undefined }, async () =>
+      assert.rejects(
+        deploy({ personaPath, mode: 'dev', io: createBufferedIO() }),
+        /no active listeners after optional integrations were applied/
+      )
     );
   } finally {
     await cleanup();
