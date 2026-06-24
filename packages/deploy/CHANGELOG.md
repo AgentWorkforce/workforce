@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [4.1.11] - 2026-06-24
+
+### Fixed
+
+- Fix staging cloud URL canonicalization
+
 ## [4.1.8] - 2026-06-21
 
 ### Fixed
