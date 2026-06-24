@@ -109,6 +109,8 @@ import { runTrigger } from './trigger-command.js';
 
 const launchMetadataLog = createLogger('launch-metadata');
 
+const launchMetadataLog = createLogger('launch-metadata');
+
 const USAGE = `Usage: agentworkforce <command> [args...]
 
 Run with no arguments inside a TTY to open an interactive persona picker —
