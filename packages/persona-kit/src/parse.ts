@@ -646,7 +646,7 @@ export function parseIntegrationConfig(
   if (!isObject(value)) {
     throw new Error(`${context} must be an object`);
   }
-  const { source, scope, config } = value;
+  const { source, scope, config, optional, enabledByInput } = value;
 
   // Hard cut: triggers moved from the persona to the agent. A persona
   // integration is connection-config only (source + scope). Fail loudly so
@@ -686,6 +686,28 @@ export function parseIntegrationConfig(
       throw new Error(`${context}.config must be a plain object if provided`);
     }
     out.config = config;
+  }
+
+  if (optional !== undefined) {
+    if (typeof optional !== 'boolean') {
+      throw new Error(`${context}.optional must be a boolean if provided`);
+    }
+    out.optional = optional;
+  }
+
+  if (enabledByInput !== undefined) {
+    if (typeof enabledByInput !== 'string' || !enabledByInput.trim()) {
+      throw new Error(`${context}.enabledByInput must be a non-empty string if provided`);
+    }
+    assertInputName(enabledByInput, `${context}.enabledByInput`);
+    out.enabledByInput = enabledByInput;
+  }
+
+  if (out.optional === true && out.enabledByInput === undefined) {
+    throw new Error(`${context}.enabledByInput is required when optional is true`);
+  }
+  if (out.enabledByInput !== undefined && out.optional !== true) {
+    throw new Error(`${context}.optional must be true when enabledByInput is set`);
   }
 
   return out;

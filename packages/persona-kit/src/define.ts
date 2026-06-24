@@ -182,6 +182,8 @@ export interface TypedIntegrationConfig<P extends string = string> {
   source?: IntegrationSource;
   scope?: TypedScopeMap<P>;
   config?: AdapterConfigFor<P>;
+  optional?: boolean;
+  enabledByInput?: string;
 }
 
 export type TypedIntegrations = {

@@ -246,11 +246,19 @@ export type IntegrationSource =
  * `config` is a forward-compatible adapter passthrough. Persona-kit validates
  * only that it is an object; provider adapters own the nested schema
  * (for example GitHub materialization policy).
+ *
+ * Optional integrations are deploy-time choices controlled by persona inputs:
+ * set `optional: true` and `enabledByInput: "SLACK_CHANNEL"` to include this
+ * provider only when that input resolves to a non-empty value. Inactive
+ * optional providers are skipped before deploy connects integrations or
+ * registers provider triggers.
  */
 export interface PersonaIntegrationConfig {
   source?: IntegrationSource;
   scope?: Record<string, string>;
   config?: Record<string, unknown>;
+  optional?: boolean;
+  enabledByInput?: string;
 }
 
 /**
