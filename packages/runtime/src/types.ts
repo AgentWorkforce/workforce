@@ -378,6 +378,28 @@ export interface TrajectoryContext {
   done(summary: string, confidence: number): Promise<void>;
 }
 
+/** Result of a relay send (DM or channel post). */
+export interface RelaySendResult {
+  ok: boolean;
+  /** Delivered relaycast message id, when the gateway returns one. */
+  messageId?: string;
+}
+
+/**
+ * Agent-to-agent messaging over the relay (relaycast). Lets a handler DM a peer
+ * agent or post to a relay channel using the box's injected agent token —
+ * the inbound counterpart to the relay `inbox` trigger. Never throws: returns
+ * `{ ok: false }` (logged) on missing token / timeout / non-2xx, so a relay
+ * reply degrades gracefully. To reply to whoever messaged this agent, read the
+ * sender off the inbound relay event and pass it as `to`.
+ */
+export interface RelayContext {
+  /** DM a peer agent by registered name. */
+  dm(to: string, text: string): Promise<RelaySendResult>;
+  /** Post a message to a relay channel by name. */
+  post(channel: string, text: string): Promise<RelaySendResult>;
+}
+
 /**
  * The context object handlers receive on every event invocation.
  * Provider data is accessed via the VFS helpers exported from the runtime
@@ -413,6 +435,8 @@ export interface WorkforceCtx {
   workflow: WorkflowContext;
   /** Schedule one-off follow-up ticks. */
   schedule: ScheduleContext;
+  /** Agent-to-agent messaging over the relay (DM a peer / post to a channel). */
+  relay: RelayContext;
   /**
    * Auto-recorded decision trajectory (the WHY). No-op when recording is
    * disabled (no `persona.memory.trajectories` opt-in or no resolvable

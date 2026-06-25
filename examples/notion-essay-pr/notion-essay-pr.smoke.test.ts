@@ -252,6 +252,10 @@ class MockNotionEssayRuntime {
         async error() {},
         async done() {}
       },
+      relay: {
+        async dm() { return { ok: false }; },
+        async post() { return { ok: false }; }
+      },
       log: () => undefined
     };
   }
