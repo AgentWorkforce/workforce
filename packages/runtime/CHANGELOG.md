@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [4.1.14] - 2026-06-25
+
+### Added
+
+- **Ctx.relay — agent-to-agent messaging over the relay (#254 pt.2)** (#254)
+
 ## [4.1.6] - 2026-06-18
 
 ### Fixed
