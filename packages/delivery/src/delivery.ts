@@ -133,7 +133,13 @@ class DeliveryClientImpl implements DeliveryClient {
         );
       }
       if (target === 'relaycast') {
-        // Relaycast DMs are a single API call — no separate non-blocking path.
+        // Relaycast replies are a single blocking DM — there's no draft-ref /
+        // server-ordered threading pattern, so they don't participate in
+        // publish()/non-blocking sends (which promise no receipt wait).
+        if (nonBlocking) {
+          this.ctx.log?.('debug', 'delivery.relaycast.skip-nonblocking', { to: this.t.relaycast?.to });
+          continue;
+        }
         tasks.push(
           this.sendRelaycast(text)
             .then((ref) => { if (ref) refs.push(ref); })
@@ -245,11 +251,14 @@ class DeliveryClientImpl implements DeliveryClient {
     const rc = this.t.relaycast;
     if (!rc) return null;
     const res = await rc.sender.dm(rc.to, text);
-    if (!res.ok) {
+    // Treat a missing message id as a failed delivery (matches slack/telegram,
+    // which return null on a missing receipt) — don't report success with an
+    // unusable ref.
+    if (!res.ok || !res.messageId) {
       this.ctx.log?.('warn', 'delivery.relaycast.no-receipt', { to: rc.to });
       return null;
     }
-    return { provider: 'relaycast', to: rc.to, messageId: res.messageId ?? '' };
+    return { provider: 'relaycast', to: rc.to, messageId: res.messageId };
   }
 
   // ── Telegram ───────────────────────────────────────────────────────────

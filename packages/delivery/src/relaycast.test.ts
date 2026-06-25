@@ -70,3 +70,19 @@ test('relaycast-only send failure surfaces (matches slack/telegram all-targets-f
   const delivery = createDelivery(makeCtx(), { relaycast: { to: 'peer', sender } });
   await assert.rejects(() => delivery.send('x'), /Delivery failed to all targets/);
 });
+
+test('relaycast ok:true with no messageId is treated as a failed delivery', async () => {
+  const sender: RelaycastSender = { async dm() { return { ok: true }; } }; // no messageId
+  const delivery = createDelivery(makeCtx(), { relaycast: { to: 'peer', sender } });
+  await assert.rejects(() => delivery.send('x'), /Delivery failed to all targets/);
+});
+
+test('publish()/non-blocking does not invoke the relaycast sender', async () => {
+  let calls = 0;
+  const sender: RelaycastSender = { async dm() { calls++; return { ok: true, messageId: 'm' }; } };
+  const delivery = createDelivery(makeCtx(), { relaycast: { to: 'peer', sender } });
+  // relaycast is the only target → nothing delivered in non-blocking mode → throws,
+  // and crucially the sender is never called (no draft-ref/threading path for relay).
+  await assert.rejects(() => delivery.publish('x'), /Delivery failed to all targets/);
+  assert.equal(calls, 0);
+});
