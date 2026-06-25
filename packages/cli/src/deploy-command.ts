@@ -230,7 +230,8 @@ Flags:
   --dry-run                    Validate the persona and exit before any side effects
   --cloud-url <url>            Override the workforce cloud base URL
   --no-prompt                  Fail instead of prompting for cloud setup
-  --harness-source <source>    Cloud harness source: plan, byok, or oauth
+  --harness-source <source>    Cloud harness source: managed, byok, or oauth
+                               (legacy alias: plan)
   --byok-key <key>             API key for --harness-source byok
   --on-exists <choice>         Existing cloud persona behavior: cancel, update, or destroy
   --input <key>=<value>        Override a declared persona input (repeatable)
@@ -262,7 +263,6 @@ Flags:
   -h, --help                  Print this message
 `;
 
-const HARNESS_SOURCES = ['plan', 'byok', 'oauth'] as const;
 const ON_EXISTS_CHOICES = ['update', 'destroy', 'cancel'] as const;
 
 export function parseDeployArgs(args: readonly string[]): DeployOptions {
@@ -317,9 +317,9 @@ export function parseDeployArgs(args: readonly string[]): DeployOptions {
       noPrompt = true;
       noConnect = true;
     } else if (a === '--harness-source') {
-      harnessSource = expectChoice('--harness-source', expectValue('--harness-source', args[++i]), HARNESS_SOURCES);
+      harnessSource = expectHarnessSourceFlag(expectValue('--harness-source', args[++i]));
     } else if (a.startsWith('--harness-source=')) {
-      harnessSource = expectChoice('--harness-source', expectInlineValue('--harness-source', a.slice('--harness-source='.length)), HARNESS_SOURCES);
+      harnessSource = expectHarnessSourceFlag(expectInlineValue('--harness-source', a.slice('--harness-source='.length)));
     } else if (a === '--byok-key') {
       byokKey = expectValue('--byok-key', args[++i]);
     } else if (a.startsWith('--byok-key=')) {
@@ -413,6 +413,13 @@ function expectChoice<T extends string>(flag: string, value: string, allowed: re
     die(`${flag}: expected one of ${allowed.join('|')}; got "${value}"`);
   }
   return value as T;
+}
+
+function expectHarnessSourceFlag(value: string): DeployOptions['harnessSource'] {
+  const normalized = value.trim().toLowerCase();
+  if (normalized === 'plan') return 'managed';
+  if (normalized === 'managed' || normalized === 'byok' || normalized === 'oauth') return normalized;
+  die(`--harness-source: expected one of managed|byok|oauth (legacy alias: plan); got "${value}"`);
 }
 
 function parseLoginArgs(args: readonly string[]): { workspace?: string; cloudUrl?: string } {

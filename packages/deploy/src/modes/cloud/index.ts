@@ -25,7 +25,8 @@ const POLL_TIMEOUT_MS = 60_000;
 const POLL_INTERVAL_MS = 2_000;
 
 type CloudDeployStatus = 'ready' | 'starting' | 'active' | 'failed' | 'cancelled';
-export type HarnessSource = 'plan' | 'byok' | 'oauth';
+export type HarnessSource = 'managed' | 'plan' | 'byok' | 'oauth';
+type CanonicalHarnessSource = Exclude<HarnessSource, 'plan'>;
 type OnExistsChoice = 'update' | 'destroy' | 'cancel';
 
 export interface CloudSubscriptionReadyResult {
@@ -301,7 +302,7 @@ async function ensureHarnessReady(args: {
   }
   const source = await resolveHarnessSource(args);
   const modelProvider = deriveModelProvider(args.persona);
-  if (source === 'plan') {
+  if (source === 'managed') {
     const credentialId = await saveProviderCredential({
       cloudUrl: args.cloudUrl,
       workspaceId: args.workspaceId,
@@ -309,7 +310,7 @@ async function ensureHarnessReady(args: {
       modelProvider,
       authType: 'relay_managed'
     });
-    args.io.info(`cloud: using workforce plan credentials for ${args.persona.harness}`);
+    args.io.info(`cloud: using workforce managed credentials for ${args.persona.harness}`);
     return { [modelProvider]: credentialId };
   }
 
@@ -340,8 +341,8 @@ async function resolveHarnessSource(args: {
   noPrompt: boolean;
   harnessSource?: HarnessSource;
   byokKey?: string;
-}): Promise<HarnessSource> {
-  if (args.harnessSource) return args.harnessSource;
+}): Promise<CanonicalHarnessSource> {
+  if (args.harnessSource) return normalizeHarnessSource(args.harnessSource);
   const fromEnv = process.env.WORKFORCE_DEPLOY_HARNESS_SOURCE?.trim();
   if (fromEnv) return expectHarnessSource(fromEnv);
 
@@ -350,13 +351,13 @@ async function resolveHarnessSource(args: {
 
   if (args.noPrompt) {
     throw new Error(
-      `cloud: ${args.persona.harness} credentials are not connected. Re-run with --harness-source plan|byok|oauth, set WORKFORCE_DEPLOY_HARNESS_SOURCE, or run without --no-prompt.`
+      `cloud: ${args.persona.harness} credentials are not connected. Re-run with --harness-source managed|byok|oauth, set WORKFORCE_DEPLOY_HARNESS_SOURCE, or run without --no-prompt.`
     );
   }
 
   const answer = await args.io.prompt(
-    `${args.persona.harness} credentials are not connected. Choose harness source (plan/byok/oauth)`,
-    { defaultValue: 'plan' }
+    `${args.persona.harness} credentials are not connected. Choose harness source (managed/byok/oauth)`,
+    { defaultValue: 'managed' }
   );
   return expectHarnessSource(answer);
 }
@@ -408,7 +409,7 @@ async function fetchCloudAgents(cloudUrl: string): Promise<CloudAgentsListRespon
 
 /**
  * Stamp `credentialSelections` for the oauth harness source so cloud's
- * runtime can configure `ctx.llm` from the deployment. The byok/plan legs
+ * runtime can configure `ctx.llm` from the deployment. The byok/managed legs
  * already stamp the credential they create; an oauth deploy without a
  * selection leaves the deployment with empty selections and every fire
  * stubs ctx.llm — workforce#196.
@@ -507,7 +508,7 @@ async function ensureHarnessOauth(args: {
     throw new Error(
       connected
         ? `cloud: --reconnect ${deriveModelProvider(args.persona)} opens a browser connect flow; re-run without --no-prompt.`
-        : `cloud: ${args.persona.harness} OAuth credentials are not connected. Run without --no-prompt or choose --harness-source plan/byok.`
+        : `cloud: ${args.persona.harness} OAuth credentials are not connected. Run without --no-prompt or choose --harness-source managed/byok.`
     );
   }
   if (connected) {
@@ -609,10 +610,10 @@ export async function ensureCloudSubscriptionReady(args: {
 function resolveSubscriptionHarnessSource(args: {
   persona: PersonaSpec;
   harnessSource?: HarnessSource;
-}): Exclude<HarnessSource, 'plan'> {
+}): Exclude<CanonicalHarnessSource, 'managed'> {
   const rawSource = args.harnessSource ?? process.env.WORKFORCE_DEPLOY_HARNESS_SOURCE?.trim();
   const source = rawSource ? expectHarnessSource(rawSource) : 'oauth';
-  if (source === 'plan') {
+  if (source === 'managed') {
     throw new Error(
       `persona "${args.persona.id}" sets useSubscription:true; use --harness-source oauth to connect your LLM provider, ` +
         'use --harness-source byok with --byok-key, or remove useSubscription to use workforce-billed inference.'
@@ -1089,12 +1090,16 @@ function harnessAliasForModelProvider(modelProvider: string): string {
   }
 }
 
-function expectHarnessSource(value: string): HarnessSource {
+function expectHarnessSource(value: string): CanonicalHarnessSource {
   const normalized = value.trim().toLowerCase();
-  if (normalized === 'plan' || normalized === 'byok' || normalized === 'oauth') {
-    return normalized;
+  if (normalized === 'managed' || normalized === 'plan' || normalized === 'byok' || normalized === 'oauth') {
+    return normalizeHarnessSource(normalized);
   }
-  throw new Error(`cloud: harness source must be one of plan|byok|oauth; got "${value}"`);
+  throw new Error(`cloud: harness source must be one of managed|byok|oauth; got "${value}"`);
+}
+
+function normalizeHarnessSource(source: HarnessSource): CanonicalHarnessSource {
+  return source === 'plan' ? 'managed' : source;
 }
 
 function expectOnExistsChoice(value: string): OnExistsChoice {

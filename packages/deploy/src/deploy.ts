@@ -797,7 +797,7 @@ function validateSubscriptionSupport(
   args: {
     mode: DeployMode;
     subscription?: ProviderSubscriptionResolver;
-    harnessSource?: 'plan' | 'byok' | 'oauth';
+    harnessSource?: 'managed' | 'plan' | 'byok' | 'oauth';
   }
 ): void {
   if (!persona.useSubscription || args.subscription) return;

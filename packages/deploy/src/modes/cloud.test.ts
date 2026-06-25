@@ -131,13 +131,13 @@ async function launch(overrides: {
   persona?: PersonaSpec;
   env?: Partial<Record<(typeof ENV_KEYS)[number], string | undefined>>;
   input?: Partial<ModeLaunchInput>;
-  defaultPlanCredential?: boolean;
+  defaultManagedCredential?: boolean;
   fetch: (url: string, init: RequestInit | undefined, calls: FetchCall[]) => Response | Promise<Response>;
 }) {
   const { bundle, cleanup } = await withBundle();
   const io = createBufferedIO();
   const fetchMock = installFetch((url, init, calls) => {
-    if (overrides.defaultPlanCredential !== false && url.includes('/provider-credentials/managed')) {
+    if (overrides.defaultManagedCredential !== false && url.includes('/provider-credentials/managed')) {
       assert.equal(init?.method, 'POST');
       return okJson({ providerCredentialId: 'cred-1' });
     }
@@ -146,7 +146,7 @@ async function launch(overrides: {
   try {
     const handle = await withEnv({
       WORKFORCE_WORKSPACE_TOKEN: 'tok',
-      WORKFORCE_DEPLOY_HARNESS_SOURCE: 'plan',
+      WORKFORCE_DEPLOY_HARNESS_SOURCE: 'managed',
       WORKFORCE_DEPLOY_POLL_INTERVAL_MS: '0',
       WORKFORCE_DEPLOY_POLL_TIMEOUT_MS: '50',
       WORKFORCE_DEPLOY_RETRY_BACKOFF_MS: '0',
@@ -321,28 +321,28 @@ test('cloud URL precedence is flag env, cloud env, persona deployUrl, then defau
   );
 });
 
-test('cloud harness plan and BYOK save provider credentials through the cloud contract', async () => {
-  const plan = await launch({
-    defaultPlanCredential: false,
+test('cloud harness managed and BYOK save provider credentials through the cloud contract', async () => {
+  const managed = await launch({
+    defaultManagedCredential: false,
     env: { WORKFORCE_DEPLOY_CLOUD_URL: 'https://cloud.example.test' },
-    input: { harnessSource: 'plan' },
+    input: { harnessSource: 'managed' },
     fetch(url, init) {
       if (url.endsWith('/provider-credentials/managed?provider=openai')) {
         assert.equal(init?.method, 'POST');
         assert.equal(init?.body, undefined);
-        return okJson({ providerCredentialId: 'cred-plan' });
+        return okJson({ providerCredentialId: 'cred-managed' });
       }
       if (init?.method === 'GET' && url.endsWith('/deployments')) return okJson({ agents: [] });
       if (url.endsWith('/deployments')) {
-        return okJson({ agentId: 'agent-plan', deploymentId: 'dep-plan', status: 'active' }, 201);
+        return okJson({ agentId: 'agent-managed', deploymentId: 'dep-managed', status: 'active' }, 201);
       }
       throw new Error(`unexpected URL ${url}`);
     }
   });
-  assert.equal(plan.handle.id, 'agent-plan');
+  assert.equal(managed.handle.id, 'agent-managed');
 
   const byok = await launch({
-    defaultPlanCredential: false,
+    defaultManagedCredential: false,
     env: { WORKFORCE_DEPLOY_CLOUD_URL: 'https://cloud.example.test' },
     input: { harnessSource: 'byok', byokKey: 'sk-test' },
     fetch(url, init) {
@@ -366,12 +366,87 @@ test('cloud harness plan and BYOK save provider credentials through the cloud co
   assert.equal(byok.handle.id, 'agent-byok');
 });
 
+test('cloud harness legacy plan alias maps to managed provider credentials', async () => {
+  const planAlias = await launch({
+    defaultManagedCredential: false,
+    env: { WORKFORCE_DEPLOY_CLOUD_URL: 'https://cloud.example.test' },
+    input: { harnessSource: 'plan' },
+    fetch(url, init) {
+      if (url.endsWith('/provider-credentials/managed?provider=openai')) {
+        assert.equal(init?.method, 'POST');
+        assert.equal(init?.body, undefined);
+        return okJson({ providerCredentialId: 'cred-managed' });
+      }
+      if (init?.method === 'GET' && url.endsWith('/deployments')) return okJson({ agents: [] });
+      if (url.endsWith('/deployments')) {
+        const body = JSON.parse(String(init?.body));
+        assert.deepEqual(body.credentialSelections, { openai: 'cred-managed' });
+        return okJson({ agentId: 'agent-managed', deploymentId: 'dep-managed', status: 'active' }, 201);
+      }
+      throw new Error(`unexpected URL ${url}`);
+    }
+  });
+
+  assert.equal(planAlias.handle.id, 'agent-managed');
+});
+
+test('cloud harness legacy plan env alias maps to managed provider credentials', async () => {
+  const planAlias = await launch({
+    defaultManagedCredential: false,
+    env: {
+      WORKFORCE_DEPLOY_CLOUD_URL: 'https://cloud.example.test',
+      WORKFORCE_DEPLOY_HARNESS_SOURCE: 'plan'
+    },
+    fetch(url, init) {
+      if (url.endsWith('/provider-credentials/managed?provider=openai')) {
+        assert.equal(init?.method, 'POST');
+        return okJson({ providerCredentialId: 'cred-managed-env' });
+      }
+      if (init?.method === 'GET' && url.endsWith('/deployments')) return okJson({ agents: [] });
+      if (url.endsWith('/deployments')) {
+        const body = JSON.parse(String(init?.body));
+        assert.deepEqual(body.credentialSelections, { openai: 'cred-managed-env' });
+        return okJson({ agentId: 'agent-managed-env', deploymentId: 'dep-managed-env', status: 'active' }, 201);
+      }
+      throw new Error(`unexpected URL ${url}`);
+    }
+  });
+
+  assert.equal(planAlias.handle.id, 'agent-managed-env');
+});
+
+test('cloud harness prompt default chooses managed provider credentials', async () => {
+  const prompted = await launch({
+    defaultManagedCredential: false,
+    env: {
+      WORKFORCE_DEPLOY_CLOUD_URL: 'https://cloud.example.test',
+      WORKFORCE_DEPLOY_HARNESS_SOURCE: undefined
+    },
+    fetch(url, init) {
+      if (init?.method === 'GET' && url.endsWith('/cloud-agents')) return okJson({ agents: [] });
+      if (url.endsWith('/provider-credentials/managed?provider=openai')) {
+        assert.equal(init?.method, 'POST');
+        return okJson({ providerCredentialId: 'cred-managed-prompt' });
+      }
+      if (init?.method === 'GET' && url.endsWith('/deployments')) return okJson({ agents: [] });
+      if (url.endsWith('/deployments')) {
+        const body = JSON.parse(String(init?.body));
+        assert.deepEqual(body.credentialSelections, { openai: 'cred-managed-prompt' });
+        return okJson({ agentId: 'agent-managed-prompt', deploymentId: 'dep-managed-prompt', status: 'active' }, 201);
+      }
+      throw new Error(`unexpected URL ${url}`);
+    }
+  });
+
+  assert.equal(prompted.handle.id, 'agent-managed-prompt');
+});
+
 test('cloud BYOK provider detection avoids substring false positives', async () => {
   // A bare model name without a provider separator (/) should not match
   // "openai" via substring — the harness-derived provider wins.
   // The default test persona has harness: 'codex' → HARNESS_TO_PROVIDER → 'openai'.
   await launch({
-    defaultPlanCredential: false,
+    defaultManagedCredential: false,
     persona: persona({ model: 'my-openai-alternative' }),
     env: { WORKFORCE_DEPLOY_CLOUD_URL: 'https://cloud.example.test' },
     input: { harnessSource: 'byok', byokKey: 'sk-test' },
@@ -391,7 +466,7 @@ test('cloud BYOK provider detection avoids substring false positives', async () 
 
 test('cloud BYOK opencode harness derives opencode provider', async () => {
   await launch({
-    defaultPlanCredential: false,
+    defaultManagedCredential: false,
     persona: persona({ harness: 'opencode', model: 'deepseek-v4-flash-free' }),
     env: { WORKFORCE_DEPLOY_CLOUD_URL: 'https://cloud.example.test' },
     input: { harnessSource: 'byok', byokKey: 'sk-or-test' },
@@ -435,7 +510,7 @@ test('cloud harness OAuth probe hits /api/v1/cloud-agents and honors no-prompt f
   });
   await assert.rejects(
     launch({
-      defaultPlanCredential: false,
+      defaultManagedCredential: false,
       env: {
         WORKFORCE_DEPLOY_CLOUD_URL: 'https://cloud.example.test',
         WORKFORCE_DEPLOY_NO_PROMPT: '1'
@@ -541,7 +616,7 @@ test('cloud harness OAuth probe maps a grok persona to the connected xai credent
   });
 
   const { calls, handle } = await launch({
-    defaultPlanCredential: false,
+    defaultManagedCredential: false,
     env: {
       WORKFORCE_DEPLOY_CLOUD_URL: 'https://cloud.example.test',
       WORKFORCE_DEPLOY_NO_PROMPT: '1'
@@ -592,7 +667,7 @@ test('cloud harness OAuth probe ignores entries with the wrong harness', async (
   // Override the persona to claude/anthropic so the expected provider mismatches.
   await assert.rejects(
     launch({
-      defaultPlanCredential: false,
+      defaultManagedCredential: false,
       env: {
         WORKFORCE_DEPLOY_CLOUD_URL: 'https://cloud.example.test',
         WORKFORCE_DEPLOY_NO_PROMPT: '1'
@@ -765,7 +840,7 @@ test('cloud --reconnect with --no-prompt fails with actionable guidance', async 
   });
   await assert.rejects(
     launch({
-      defaultPlanCredential: false,
+      defaultManagedCredential: false,
       env: {
         WORKFORCE_DEPLOY_CLOUD_URL: 'https://cloud.example.test',
         WORKFORCE_DEPLOY_NO_PROMPT: '1'
@@ -836,7 +911,7 @@ test('cloud polling resolves done with code 0 on active and 1 on failed', async 
       const handle = await withEnv({
         WORKFORCE_WORKSPACE_TOKEN: 'tok',
         WORKFORCE_DEPLOY_CLOUD_URL: `https://${finalStatus}.example.test`,
-        WORKFORCE_DEPLOY_HARNESS_SOURCE: 'plan',
+        WORKFORCE_DEPLOY_HARNESS_SOURCE: 'managed',
         WORKFORCE_DEPLOY_POLL_INTERVAL_MS: '0',
         WORKFORCE_DEPLOY_POLL_TIMEOUT_MS: '50',
         WORKFORCE_DEPLOY_RETRY_BACKOFF_MS: '0'
@@ -875,7 +950,7 @@ test('cloud stop calls the destroy agent endpoint', async () => {
     const handle = await withEnv({
       WORKFORCE_WORKSPACE_TOKEN: 'tok',
       WORKFORCE_DEPLOY_CLOUD_URL: 'https://cloud.example.test',
-      WORKFORCE_DEPLOY_HARNESS_SOURCE: 'plan',
+      WORKFORCE_DEPLOY_HARNESS_SOURCE: 'managed',
       WORKFORCE_DEPLOY_POLL_INTERVAL_MS: '0',
       WORKFORCE_DEPLOY_POLL_TIMEOUT_MS: '50'
     }, () => cloudLauncher.launch({
@@ -909,7 +984,7 @@ test('cloud launcher leaves integration preflight to the deploy orchestrator', a
     await withEnv({
       WORKFORCE_WORKSPACE_TOKEN: 'tok',
       WORKFORCE_DEPLOY_CLOUD_URL: 'https://cloud.example.test',
-      WORKFORCE_DEPLOY_HARNESS_SOURCE: 'plan',
+      WORKFORCE_DEPLOY_HARNESS_SOURCE: 'managed',
       WORKFORCE_DEPLOY_POLL_INTERVAL_MS: '0',
       WORKFORCE_DEPLOY_POLL_TIMEOUT_MS: '50'
     }, () => cloudLauncher.launch({
@@ -1211,7 +1286,7 @@ function callsForUrl(calls: FetchCall[], suffix: string): number {
 }
 
 test('cloud oauth deploy stamps anthropic credentialSelections from the connected row', async () => {
-  // workforce#196: the byok/plan legs stamp the credential they create, but
+  // workforce#196: the byok/managed legs stamp the credential they create, but
   // the oauth leg deployed with empty selections, so ctx.llm stubbed on
   // every fire. The connected row id comes back through
   // /api/v1/cloud-agents (cloud selects it straight from
@@ -1241,7 +1316,7 @@ test('cloud oauth deploy stamps anthropic credentialSelections from the connecte
   try {
     const { handle, io } = await launch({
       persona: persona({ harness: 'claude', model: 'claude-sonnet-4-6' }),
-      defaultPlanCredential: false,
+      defaultManagedCredential: false,
       env: {
         WORKFORCE_DEPLOY_CLOUD_URL: 'https://cloud.example.test',
         WORKFORCE_DEPLOY_HARNESS_SOURCE: 'oauth',
@@ -1295,7 +1370,7 @@ test('cloud oauth deploy does NOT stamp openai selections and prints the harness
   });
   try {
     const { io } = await launch({
-      defaultPlanCredential: false,
+      defaultManagedCredential: false,
       env: {
         WORKFORCE_DEPLOY_CLOUD_URL: 'https://cloud.example.test',
         WORKFORCE_DEPLOY_HARNESS_SOURCE: 'oauth',
@@ -1347,7 +1422,7 @@ test('cloud oauth deploy falls back to unstamped when the connected row has no i
   try {
     const { handle, io } = await launch({
       persona: persona({ harness: 'claude', model: 'claude-sonnet-4-6' }),
-      defaultPlanCredential: false,
+      defaultManagedCredential: false,
       env: {
         WORKFORCE_DEPLOY_CLOUD_URL: 'https://cloud.example.test',
         WORKFORCE_DEPLOY_HARNESS_SOURCE: 'oauth',
@@ -1403,7 +1478,7 @@ test('cloud oauth deploy stamps the ACTIVE anthropic row over a newer inactive o
   try {
     await launch({
       persona: persona({ harness: 'claude', model: 'claude-sonnet-4-6' }),
-      defaultPlanCredential: false,
+      defaultManagedCredential: false,
       env: {
         WORKFORCE_DEPLOY_CLOUD_URL: 'https://cloud.example.test',
         WORKFORCE_DEPLOY_HARNESS_SOURCE: 'oauth',
@@ -1452,7 +1527,7 @@ test('cloud oauth deploy cross-stamps a connected anthropic credential for an op
   });
   try {
     const { io } = await launch({
-      defaultPlanCredential: false,
+      defaultManagedCredential: false,
       env: {
         WORKFORCE_DEPLOY_CLOUD_URL: 'https://cloud.example.test',
         WORKFORCE_DEPLOY_HARNESS_SOURCE: 'oauth',

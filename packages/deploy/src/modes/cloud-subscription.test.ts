@@ -120,9 +120,9 @@ function subscriptionArgs(
 // Step 2 — subscription-source tests (tests 1–3)
 // ---------------------------------------------------------------------------
 
-test('validateCloudSubscriptionSupport throws when harnessSource is plan', () => {
+test('validateCloudSubscriptionSupport throws when harnessSource is managed', () => {
   assert.throws(
-    () => validateCloudSubscriptionSupport({ persona: persona(), harnessSource: 'plan' }),
+    () => validateCloudSubscriptionSupport({ persona: persona(), harnessSource: 'managed' }),
     (err: Error) => {
       assert.ok(
         err.message.includes('useSubscription:true'),
@@ -137,8 +137,24 @@ test('validateCloudSubscriptionSupport throws when harnessSource is plan', () =>
   );
 });
 
+test('validateCloudSubscriptionSupport throws when harnessSource is legacy plan alias', () => {
+  assert.throws(
+    () => validateCloudSubscriptionSupport({ persona: persona(), harnessSource: 'plan' }),
+    /useSubscription:true/
+  );
+});
+
 test('validateCloudSubscriptionSupport throws when WORKFORCE_DEPLOY_HARNESS_SOURCE=plan', async () => {
   await withEnv({ WORKFORCE_DEPLOY_HARNESS_SOURCE: 'plan' }, async () => {
+    assert.throws(
+      () => validateCloudSubscriptionSupport({ persona: persona() }),
+      /useSubscription:true/
+    );
+  });
+});
+
+test('validateCloudSubscriptionSupport throws when WORKFORCE_DEPLOY_HARNESS_SOURCE=managed', async () => {
+  await withEnv({ WORKFORCE_DEPLOY_HARNESS_SOURCE: 'managed' }, async () => {
     assert.throws(
       () => validateCloudSubscriptionSupport({ persona: persona() }),
       /useSubscription:true/

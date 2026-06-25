@@ -491,7 +491,23 @@ test('deploy --dry-run rejects useSubscription when cloud mode is not selected',
   }
 });
 
-test('deploy --dry-run rejects useSubscription with workforce plan credentials', async () => {
+test('deploy --dry-run rejects useSubscription with workforce managed credentials', async () => {
+  const { personaPath, cleanup } = await withTempPersona(
+    basePersonaJson({ useSubscription: true })
+  );
+  const io = createBufferedIO();
+  try {
+    await assert.rejects(
+      deploy({ personaPath, mode: 'cloud', dryRun: true, harnessSource: 'managed', io }),
+      /use --harness-source oauth/
+    );
+    assert.ok(!io.messages.find((m) => m.message.startsWith('workspace:')));
+  } finally {
+    await cleanup();
+  }
+});
+
+test('deploy --dry-run rejects useSubscription with legacy plan alias', async () => {
   const { personaPath, cleanup } = await withTempPersona(
     basePersonaJson({ useSubscription: true })
   );
