@@ -366,6 +366,18 @@ test('parseDeployArgs: --reconnect is repeatable and comma-aware', () => {
   assert.deepEqual(parsed.reconnectProviders, ['slack', 'github', 'linear']);
 });
 
+test('parseDeployArgs: --harness-source managed is accepted', () => {
+  const parsed = parseDeployArgs(['./persona.json', '--harness-source', 'managed']);
+
+  assert.equal(parsed.harnessSource, 'managed');
+});
+
+test('parseDeployArgs: legacy --harness-source plan normalizes to managed', () => {
+  const parsed = parseDeployArgs(['./persona.json', '--harness-source=plan']);
+
+  assert.equal(parsed.harnessSource, 'managed');
+});
+
 test('parseDeployArgs: malformed --input exits with clean error', () => {
   const trap = trapExit();
   try {

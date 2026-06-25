@@ -26,7 +26,7 @@ export interface DeployOptions {
   /** Fail instead of prompting for cloud auth/integration setup. */
   noPrompt?: boolean;
   /** Cloud harness credential source. */
-  harnessSource?: 'plan' | 'byok' | 'oauth';
+  harnessSource?: 'managed' | 'plan' | 'byok' | 'oauth';
   /** BYOK API key used when `harnessSource` is `byok`. */
   byokKey?: string;
   /** Existing cloud persona behavior. Defaults to `cancel`. */
@@ -142,7 +142,7 @@ export interface ModeLaunchInput {
   /** Fail instead of prompting for cloud setup. */
   noPrompt?: boolean;
   /** Cloud harness credential source. */
-  harnessSource?: 'plan' | 'byok' | 'oauth';
+  harnessSource?: 'managed' | 'plan' | 'byok' | 'oauth';
   /** BYOK API key used when `harnessSource` is `byok`. */
   byokKey?: string;
   /**
