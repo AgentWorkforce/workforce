@@ -21,7 +21,18 @@ export interface TelegramRef {
   messageId: string;
 }
 
-export type MessageRef = SlackRef | TelegramRef;
+export interface RelaycastRef {
+  provider: 'relaycast';
+  /** The agent the reply was DM'd to (the inbound message's sender). */
+  to: string;
+  /** Delivered relaycast message id, when the send returns one. */
+  messageId: string;
+}
+
+export type MessageRef = SlackRef | TelegramRef | RelaycastRef;
+
+/** A delivery target provider. */
+export type DeliveryProvider = 'slack' | 'telegram' | 'relaycast';
 
 // ── delivery result ─────────────────────────────────────────────────────
 
@@ -49,6 +60,29 @@ export interface DeliveryOptions {
   nonBlocking?: boolean;
 }
 
+// ── relaycast (agent-to-agent) transport ──────────────────────────────────
+
+/**
+ * Minimal seam for sending a relaycast DM back to a peer agent. The default
+ * implementation posts `POST /v1/dm` with the box's injected `RELAY_API_KEY`;
+ * tests inject a mock. Unlike Slack/Telegram (config-driven via persona
+ * inputs), the relaycast reply address is EVENT-driven — `to` is the inbound
+ * message's sender, supplied by the caller.
+ */
+export interface RelaycastSender {
+  dm(to: string, text: string): Promise<{ ok: boolean; messageId?: string }>;
+}
+
+/**
+ * Relaycast target config. Present iff the agent is replying to a relay DM:
+ * `to` is the inbound sender to reply to; `sender` overrides the default
+ * env-backed client (for tests).
+ */
+export interface RelaycastTarget {
+  to: string;
+  sender?: RelaycastSender;
+}
+
 // ── injectable transport seam (for tests) ────────────────────────────────
 
 export interface DeliveryTransports {
@@ -56,6 +90,13 @@ export interface DeliveryTransports {
   slack?: SlackClient;
   /** Injected Telegram client (used for both blocking and non-blocking paths). */
   telegram?: TelegramClient;
+  /**
+   * Relaycast reply target. When set, `relaycast` becomes a delivery target
+   * and `send()`/`publish()` DM the inbound sender over the relay. Event-driven
+   * (the `to` address comes from the inbound message), so it is NOT discovered
+   * by `resolveDeliveryTargets(ctx)`.
+   */
+  relaycast?: RelaycastTarget;
 }
 
 // ── delivery client ──────────────────────────────────────────────────────
@@ -83,7 +124,7 @@ export interface DeliveryClient {
   publish(text: string): Promise<DeliveryResult>;
 
   /** Which providers are configured. */
-  readonly targets: ReadonlyArray<'slack' | 'telegram'>;
+  readonly targets: ReadonlyArray<DeliveryProvider>;
 }
 
 // ── configuration discovery ──────────────────────────────────────────────

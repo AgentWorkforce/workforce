@@ -7,11 +7,15 @@ import {
   telegramChat,
   type DeliveryClient,
   type DeliveryOptions,
+  type DeliveryProvider,
   type DeliveryResult,
   type DeliveryTransports,
+  type RelaycastRef,
+  type RelaycastSender,
   type SlackRef,
   type TelegramRef
 } from './types.js';
+import { defaultRelaycastSender } from './relaycast.js';
 
 const WRITEBACK_TIMEOUT_MS = 45_000;
 
@@ -35,9 +39,12 @@ export function createDelivery(
   ctx: WorkforceCtx,
   transports?: DeliveryTransports,
   /** Override which transports to target (defaults to all configured). */
-  onlyTargets?: ReadonlyArray<'slack' | 'telegram'>
+  onlyTargets?: ReadonlyArray<DeliveryProvider>
 ): DeliveryClient {
-  const allTargets = resolveDeliveryTargets(ctx);
+  // Slack/Telegram are config-driven (persona inputs). Relaycast is event-driven
+  // — it's a target only when the caller supplies a reply address in transports.
+  const allTargets: DeliveryProvider[] = [...resolveDeliveryTargets(ctx)];
+  if (transports?.relaycast?.to) allTargets.push('relaycast');
   const targets = onlyTargets
     ? allTargets.filter((t) => (onlyTargets as readonly string[]).includes(t))
     : allTargets;
@@ -60,11 +67,21 @@ export function createDelivery(
     ? telegramClient({ writebackTimeoutMs: 0 })
     : undefined);
 
+  // Relaycast reply: address from the inbound event, client from the injected
+  // sender or the default env-backed one (POST /v1/dm with RELAY_API_KEY).
+  const relaycast = targets.includes('relaycast') && transports?.relaycast?.to
+    ? {
+        to: transports.relaycast.to,
+        sender: transports.relaycast.sender ?? defaultRelaycastSender(ctx)
+      }
+    : undefined;
+
   return new DeliveryClientImpl(ctx, targets, {
     slackBlocking,
     slackNonBlocking,
     telegramBlocking,
-    telegramNonBlocking
+    telegramNonBlocking,
+    relaycast
   });
 }
 
@@ -73,17 +90,18 @@ interface DeliveryTransportsInternal {
   slackNonBlocking?: SlackClient;
   telegramBlocking?: TelegramClient;
   telegramNonBlocking?: TelegramClient;
+  relaycast?: { to: string; sender: RelaycastSender };
 }
 
 class DeliveryClientImpl implements DeliveryClient {
-  readonly targets: ReadonlyArray<'slack' | 'telegram'>;
+  readonly targets: ReadonlyArray<DeliveryProvider>;
 
   private ctx: WorkforceCtx;
   private t: DeliveryTransportsInternal;
 
   constructor(
     ctx: WorkforceCtx,
-    targets: Array<'slack' | 'telegram'>,
+    targets: Array<DeliveryProvider>,
     transports: DeliveryTransportsInternal
   ) {
     this.ctx = ctx;
@@ -93,7 +111,7 @@ class DeliveryClientImpl implements DeliveryClient {
 
   async send(text: string, opts?: DeliveryOptions): Promise<DeliveryResult> {
     const nonBlocking = opts?.nonBlocking === true;
-    const refs: Array<SlackRef | TelegramRef> = [];
+    const refs: Array<SlackRef | TelegramRef | RelaycastRef> = [];
     const errors: string[] = [];
 
     const tasks: Promise<void>[] = [];
@@ -112,6 +130,14 @@ class DeliveryClientImpl implements DeliveryClient {
           this.sendTelegram(text, parentRef as TelegramRef | undefined, nonBlocking)
             .then((ref) => { if (ref) refs.push(ref); })
             .catch((err) => { errors.push(`telegram: ${String(err)}`); })
+        );
+      }
+      if (target === 'relaycast') {
+        // Relaycast DMs are a single API call — no separate non-blocking path.
+        tasks.push(
+          this.sendRelaycast(text)
+            .then((ref) => { if (ref) refs.push(ref); })
+            .catch((err) => { errors.push(`relaycast: ${String(err)}`); })
         );
       }
     }
@@ -211,6 +237,19 @@ class DeliveryClientImpl implements DeliveryClient {
       ts: '', // Not available yet (non-blocking)
       draftRef: result.path
     };
+  }
+
+  // ── Relaycast (agent-to-agent) ───────────────────────────────────────────
+
+  private async sendRelaycast(text: string): Promise<RelaycastRef | null> {
+    const rc = this.t.relaycast;
+    if (!rc) return null;
+    const res = await rc.sender.dm(rc.to, text);
+    if (!res.ok) {
+      this.ctx.log?.('warn', 'delivery.relaycast.no-receipt', { to: rc.to });
+      return null;
+    }
+    return { provider: 'relaycast', to: rc.to, messageId: res.messageId ?? '' };
   }
 
   // ── Telegram ───────────────────────────────────────────────────────────

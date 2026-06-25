@@ -5,11 +5,17 @@ export {
   telegramChat,
   type DeliveryClient,
   type DeliveryOptions,
+  type DeliveryProvider,
   type DeliveryResult,
   type DeliveryTransports,
   type MessageRef,
+  type RelaycastRef,
+  type RelaycastSender,
+  type RelaycastTarget,
   type SlackRef,
   type TelegramRef
 } from './types.js';
+
+export { DEFAULT_RELAYCAST_URL, resolveRelaycastUrl, defaultRelaycastSender } from './relaycast.js';
 
 export { input, list, withTimeout, fetchWithTimeout } from './helpers.js';
