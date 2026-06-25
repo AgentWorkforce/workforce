@@ -25,6 +25,8 @@ export type {
   MemoryItem,
   MemoryRecallOptions,
   MemorySaveOptions,
+  RelayContext,
+  RelaySendResult,
   RelayfileCredentials,
   RequiredRuntimeCredentials,
   SandboxContext,
@@ -55,6 +57,10 @@ export {
   isRelayfileChangeEvent,
   isStartupEvent
 } from './types.js';
+
+// Relay (agent-to-agent) client used by ctx.relay; exported for external ctx
+// builders and tests.
+export { buildRelayContext, DEFAULT_RELAYCAST_URL } from './relay.js';
 
 // Runtime envelope helpers shared by provider-triggered agents.
 export {

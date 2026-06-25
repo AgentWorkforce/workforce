@@ -5,6 +5,7 @@ import type {
   FilesContext,
   CredentialsContext,
   MemoryItem,
+  RelayContext,
   RequiredRuntimeCredentials,
   ScheduleContext,
   SandboxContext,
@@ -14,6 +15,7 @@ import type {
   WorkflowContext
 } from './types.js';
 import { attachTrajectoryRecorder, createTrajectoryRecorder } from './trajectory.js';
+import { buildRelayContext } from './relay.js';
 
 type AgentInputValue = string | number | boolean | null | undefined;
 
@@ -53,6 +55,7 @@ export interface CtxBuildOptions {
   memory?: MemoryContext;
   workflow?: WorkflowContext;
   schedule?: ScheduleContext;
+  relay?: RelayContext;
   integrations?: Record<string, unknown>;
   log?: WorkforceCtx['log'];
   harnessRunner: WorkforceCtx['harness']['run'];
@@ -166,6 +169,7 @@ export function buildCtx(options: CtxBuildOptions): WorkforceCtx {
     memory: options.memory ?? defaultMemoryFor(options.persona.memory, options.workspaceId, log),
     workflow: options.workflow ?? UNAVAILABLE_WORKFLOW,
     schedule: options.schedule ?? UNAVAILABLE_SCHEDULE,
+    relay: options.relay ?? buildRelayContext(log),
     trajectory: trajectoryRecorder.context,
     log
   };
@@ -212,6 +216,7 @@ const CORE_CTX_FIELDS: ReadonlySet<string> = new Set([
   'memory',
   'workflow',
   'schedule',
+  'relay',
   'trajectory',
   'log'
 ]);
