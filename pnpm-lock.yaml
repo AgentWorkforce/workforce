@@ -56,8 +56,8 @@ importers:
         specifier: ^2.5.2
         version: 2.5.2
       '@relayfile/local-mount':
-        specifier: ^0.7.24
-        version: 0.7.24
+        specifier: ^0.10.23
+        version: 0.10.23
       ora:
         specifier: ^9.4.0
         version: 9.4.0
@@ -121,8 +121,8 @@ importers:
         specifier: ^0.3.60
         version: 0.3.60(@relayfile/sdk@0.7.40)
       '@relayfile/local-mount':
-        specifier: ^0.7.24
-        version: 0.7.24
+        specifier: ^0.10.23
+        version: 0.10.23
     devDependencies:
       ts-json-schema-generator:
         specifier: ^2.3.0
@@ -987,8 +987,8 @@ packages:
     resolution: {integrity: sha512-vY48SxZgahnvE0CHDyy/iny17ypnfbX5myVPtocZVNpMiz4dS1iabO70WR+uYVgSiIZR7MpKTPFSs3SxEjQWag==}
     engines: {node: '>=18'}
 
-  '@relayfile/local-mount@0.7.24':
-    resolution: {integrity: sha512-h2ac/frfSFgjrKDSBCkmMHjphx19XZrHrSjaI29wlTzSblfiE65MQST47lS6Fm1+K9yap+W+msUi8JRIYYWFEw==}
+  '@relayfile/local-mount@0.10.23':
+    resolution: {integrity: sha512-eWy52O7Dt1Vwy162IJCbGAoSFFejNVVOy4eMrNEmIWld+YMdpR0hEvuplKP0O75xwD8be4PJcADoedi3X1R9Ng==}
     engines: {node: '>=18'}
 
   '@relayfile/relay-helpers@0.4.2':
@@ -3323,7 +3323,7 @@ snapshots:
 
   '@relayfile/core@0.7.40': {}
 
-  '@relayfile/local-mount@0.7.24':
+  '@relayfile/local-mount@0.10.23':
     dependencies:
       '@parcel/watcher': 2.5.6
       ignore: 7.0.5
