@@ -3564,6 +3564,18 @@ export async function resumeFastSession(fast: FastLaunch): Promise<never> {
   process.on('SIGINT', sigintHandler);
 
   const exitCodePromise = new Promise<number>((resolve) => {
+    // The child was spawned before this module even loaded; if it already
+    // exited (its 'close' fired while the import was in flight), the settled
+    // state is on the object — waiting for an event that already happened
+    // would hang the teardown forever.
+    if (child.exitCode !== null) {
+      resolve(child.exitCode);
+      return;
+    }
+    if (child.signalCode) {
+      resolve(signalExitCode(child.signalCode));
+      return;
+    }
     child.on('error', () => resolve(127));
     child.on('close', (code, signal) => {
       if (typeof code === 'number') resolve(code);
