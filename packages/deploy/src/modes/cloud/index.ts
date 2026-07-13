@@ -25,7 +25,8 @@ const POLL_TIMEOUT_MS = 60_000;
 const POLL_INTERVAL_MS = 2_000;
 
 type CloudDeployStatus = 'ready' | 'starting' | 'active' | 'failed' | 'cancelled';
-export type HarnessSource = 'plan' | 'byok' | 'oauth';
+export type HarnessSource = 'managed' | 'plan' | 'byok' | 'oauth';
+type CanonicalHarnessSource = Exclude<HarnessSource, 'plan'>;
 type OnExistsChoice = 'update' | 'destroy' | 'cancel';
 
 export interface CloudSubscriptionReadyResult {
@@ -146,7 +147,8 @@ export const cloudLauncher: ModeLauncher = {
       io: input.io,
       noPrompt,
       harnessSource: input.harnessSource,
-      byokKey: input.byokKey
+      byokKey: input.byokKey,
+      reconnectProviders: input.reconnectProviders
     });
 
     const existingPersona = await handleExistingPersona({
@@ -288,6 +290,7 @@ async function ensureHarnessReady(args: {
   noPrompt: boolean;
   harnessSource?: HarnessSource;
   byokKey?: string;
+  reconnectProviders?: readonly string[];
 }): Promise<Record<string, string>> {
   // Pure handler personas declare no harness (the bundled handler never calls
   // ctx.harness.run — it orchestrates via ctx.workflow.run / integration
@@ -299,7 +302,7 @@ async function ensureHarnessReady(args: {
   }
   const source = await resolveHarnessSource(args);
   const modelProvider = deriveModelProvider(args.persona);
-  if (source === 'plan') {
+  if (source === 'managed') {
     const credentialId = await saveProviderCredential({
       cloudUrl: args.cloudUrl,
       workspaceId: args.workspaceId,
@@ -307,7 +310,7 @@ async function ensureHarnessReady(args: {
       modelProvider,
       authType: 'relay_managed'
     });
-    args.io.info(`cloud: using workforce plan credentials for ${args.persona.harness}`);
+    args.io.info(`cloud: using workforce managed credentials for ${args.persona.harness}`);
     return { [modelProvider]: credentialId };
   }
 
@@ -338,8 +341,8 @@ async function resolveHarnessSource(args: {
   noPrompt: boolean;
   harnessSource?: HarnessSource;
   byokKey?: string;
-}): Promise<HarnessSource> {
-  if (args.harnessSource) return args.harnessSource;
+}): Promise<CanonicalHarnessSource> {
+  if (args.harnessSource) return normalizeHarnessSource(args.harnessSource);
   const fromEnv = process.env.WORKFORCE_DEPLOY_HARNESS_SOURCE?.trim();
   if (fromEnv) return expectHarnessSource(fromEnv);
 
@@ -348,13 +351,13 @@ async function resolveHarnessSource(args: {
 
   if (args.noPrompt) {
     throw new Error(
-      `cloud: ${args.persona.harness} credentials are not connected. Re-run with --harness-source plan|byok|oauth, set WORKFORCE_DEPLOY_HARNESS_SOURCE, or run without --no-prompt.`
+      `cloud: ${args.persona.harness} credentials are not connected. Re-run with --harness-source managed|byok|oauth, set WORKFORCE_DEPLOY_HARNESS_SOURCE, or run without --no-prompt.`
     );
   }
 
   const answer = await args.io.prompt(
-    `${args.persona.harness} credentials are not connected. Choose harness source (plan/byok/oauth)`,
-    { defaultValue: 'plan' }
+    `${args.persona.harness} credentials are not connected. Choose harness source (managed/byok/oauth)`,
+    { defaultValue: 'managed' }
   );
   return expectHarnessSource(answer);
 }
@@ -406,7 +409,7 @@ async function fetchCloudAgents(cloudUrl: string): Promise<CloudAgentsListRespon
 
 /**
  * Stamp `credentialSelections` for the oauth harness source so cloud's
- * runtime can configure `ctx.llm` from the deployment. The byok/plan legs
+ * runtime can configure `ctx.llm` from the deployment. The byok/managed legs
  * already stamp the credential they create; an oauth deploy without a
  * selection leaves the deployment with empty selections and every fire
  * stubs ctx.llm — workforce#196.
@@ -488,22 +491,38 @@ async function ensureHarnessOauth(args: {
   persona: PersonaSpec;
   io: ModeLaunchInput['io'];
   noPrompt: boolean;
+  reconnectProviders?: readonly string[];
 }): Promise<void> {
-  if (await isHarnessOauthConnected(args)) {
+  const reconnect = harnessReconnectRequested(args.reconnectProviders, args.persona);
+  const connected = await isHarnessOauthConnected(args);
+  // Cloud reports a credential row as `connected` even when its stored OAuth
+  // token was revoked server-side (cloud never re-validates it), so a plain
+  // redeploy can never refresh a dead harness credential. `--reconnect
+  // <provider>` forces the connect flow to re-run and overwrite the stored
+  // token — the escape hatch for codex/ChatGPT refresh-token rotation.
+  if (connected && !reconnect) {
     args.io.info(`cloud: ${args.persona.harness} credentials already connected`);
     return;
   }
   if (args.noPrompt) {
     throw new Error(
-      `cloud: ${args.persona.harness} OAuth credentials are not connected. Run without --no-prompt or choose --harness-source plan/byok.`
+      connected
+        ? `cloud: --reconnect ${deriveModelProvider(args.persona)} opens a browser connect flow; re-run without --no-prompt.`
+        : `cloud: ${args.persona.harness} OAuth credentials are not connected. Run without --no-prompt or choose --harness-source managed/byok.`
     );
   }
-  const ok = await args.io.confirm(
-    `Connect ${args.persona.harness} credentials now? (opens browser)`,
-    { defaultValue: true }
-  );
-  if (!ok) {
-    throw new Error(`cloud: ${args.persona.harness} credentials are required for deploy`);
+  if (connected) {
+    args.io.info(
+      `cloud: reconnect requested; opening a fresh ${args.persona.harness} connection flow (replaces the stored credential)`
+    );
+  } else {
+    const ok = await args.io.confirm(
+      `Connect ${args.persona.harness} credentials now? (opens browser)`,
+      { defaultValue: true }
+    );
+    if (!ok) {
+      throw new Error(`cloud: ${args.persona.harness} credentials are required for deploy`);
+    }
   }
   const modelProvider = deriveModelProvider(args.persona);
   await cloudCredentialDeps.connectProvider({
@@ -522,6 +541,27 @@ async function ensureHarnessOauth(args: {
   args.io.info(`cloud: ${args.persona.harness} credentials connected`);
 }
 
+/**
+ * Whether the user asked (via `--reconnect <provider>`) to force a fresh
+ * connection for this persona's harness LLM credential even when cloud already
+ * reports one connected. Matches either the resolved model provider
+ * ("openai"/"anthropic") or the harness name ("codex"/"claude") so both
+ * `--reconnect openai` and `--reconnect codex` work.
+ */
+function harnessReconnectRequested(
+  reconnectProviders: readonly string[] | undefined,
+  persona: PersonaSpec
+): boolean {
+  if (!reconnectProviders?.length) return false;
+  const wanted = new Set(
+    reconnectProviders.map((p) => p.trim().toLowerCase()).filter(Boolean)
+  );
+  if (wanted.size === 0) return false;
+  return [deriveModelProvider(persona), persona.harness]
+    .filter((key): key is string => typeof key === 'string' && key.trim().length > 0)
+    .some((key) => wanted.has(key.trim().toLowerCase()));
+}
+
 export function validateCloudSubscriptionSupport(args: {
   persona: PersonaSpec;
   harnessSource?: HarnessSource;
@@ -538,6 +578,7 @@ export async function ensureCloudSubscriptionReady(args: {
   noPrompt: boolean;
   harnessSource?: HarnessSource;
   byokKey?: string;
+  reconnectProviders?: readonly string[];
 }): Promise<CloudSubscriptionReadyResult> {
   const source = resolveSubscriptionHarnessSource(args);
   const provider = deriveModelProvider(args.persona);
@@ -569,10 +610,10 @@ export async function ensureCloudSubscriptionReady(args: {
 function resolveSubscriptionHarnessSource(args: {
   persona: PersonaSpec;
   harnessSource?: HarnessSource;
-}): Exclude<HarnessSource, 'plan'> {
+}): Exclude<CanonicalHarnessSource, 'managed'> {
   const rawSource = args.harnessSource ?? process.env.WORKFORCE_DEPLOY_HARNESS_SOURCE?.trim();
   const source = rawSource ? expectHarnessSource(rawSource) : 'oauth';
-  if (source === 'plan') {
+  if (source === 'managed') {
     throw new Error(
       `persona "${args.persona.id}" sets useSubscription:true; use --harness-source oauth to connect your LLM provider, ` +
         'use --harness-source byok with --byok-key, or remove useSubscription to use workforce-billed inference.'
@@ -588,24 +629,37 @@ async function ensureSubscriptionOauth(args: {
   persona: PersonaSpec;
   io: ModeLaunchInput['io'];
   noPrompt: boolean;
+  reconnectProviders?: readonly string[];
 }): Promise<void> {
   const provider = deriveModelProvider(args.persona);
-  if (await isHarnessOauthConnected(args)) {
+  const reconnect = harnessReconnectRequested(args.reconnectProviders, args.persona);
+  const connected = await isHarnessOauthConnected(args);
+  // See ensureHarnessOauth: a `connected` row can hold a revoked token, so
+  // `--reconnect <provider>` forces a fresh connect that overwrites it.
+  if (connected && !reconnect) {
     args.io.info(`subscription: ${provider} credentials already connected`);
     return;
   }
   if (args.noPrompt) {
     throw new Error(
-      `persona "${args.persona.id}" sets useSubscription:true but ${provider} credentials are not connected. ` +
-        'Run without --no-prompt to connect them, pass --harness-source byok with --byok-key, or remove useSubscription to use workforce-billed inference.'
+      connected
+        ? `cloud: --reconnect ${provider} opens a browser connect flow; re-run without --no-prompt.`
+        : `persona "${args.persona.id}" sets useSubscription:true but ${provider} credentials are not connected. ` +
+            'Run without --no-prompt to connect them, pass --harness-source byok with --byok-key, or remove useSubscription to use workforce-billed inference.'
     );
   }
-  const ok = await args.io.confirm(
-    `Connect ${provider} credentials for useSubscription now? (opens browser)`,
-    { defaultValue: true }
-  );
-  if (!ok) {
-    throw new Error('user declined the subscription provider connect; deploy aborted');
+  if (connected) {
+    args.io.info(
+      `subscription: reconnect requested; opening a fresh ${provider} connection flow (replaces the stored credential)`
+    );
+  } else {
+    const ok = await args.io.confirm(
+      `Connect ${provider} credentials for useSubscription now? (opens browser)`,
+      { defaultValue: true }
+    );
+    if (!ok) {
+      throw new Error('user declined the subscription provider connect; deploy aborted');
+    }
   }
   await cloudCredentialDeps.connectProvider({
     provider,
@@ -900,21 +954,33 @@ async function saveProviderCredential(args: {
   return readCredentialId(body);
 }
 
+const HARNESS_TO_PROVIDER: Record<string, string> = {
+  opencode: 'opencode',
+  claude: 'anthropic',
+  codex: 'openai',
+  grok: 'xai'
+};
+
 function deriveModelProvider(persona: PersonaSpec): string {
-  // Callers gate on `persona.harness` being set before reaching here, so the
-  // harness fallback is always a defined string in practice; default to
-  // 'anthropic' to keep the return type total.
-  const harnessFallback = persona.harness ?? 'anthropic';
+  // When the harness explicitly maps to a known provider, use it directly.
+  // The model string is the model ID within that provider's catalog (e.g.
+  // "deepseek-v4-flash-free" for opencode), not a provider name.
+  const harness = typeof persona.harness === 'string' ? persona.harness.trim().toLowerCase() : '';
+  const harnessProvider = HARNESS_TO_PROVIDER[harness];
+  if (harnessProvider) return harnessProvider;
+
   const model = typeof persona.model === 'string' ? persona.model.trim() : '';
-  if (!model) return harnessFallback;
+  if (!model) return harness || 'anthropic';
   const lower = model.toLowerCase();
   if (matchesProviderToken(lower, ['anthropic', 'claude'])) return 'anthropic';
   if (matchesProviderToken(lower, ['openai', 'codex', 'gpt'])) return 'openai';
   if (matchesProviderToken(lower, ['google', 'gemini'])) return 'google';
-  if (matchesProviderToken(lower, ['openrouter', 'opencode'])) return 'openrouter';
+  if (matchesProviderToken(lower, ['openrouter'])) return 'openrouter';
+  if (matchesProviderToken(lower, ['opencode'])) return 'opencode';
+  if (matchesProviderToken(lower, ['grok', 'xai', 'x-ai'])) return 'xai';
   const [provider] = model.split(/[/:]/, 1);
   if (provider?.trim()) return provider.trim().toLowerCase();
-  return harnessFallback;
+  return harness || 'anthropic';
 }
 
 function matchesProviderToken(model: string, tokens: readonly string[]): boolean {
@@ -1015,19 +1081,25 @@ function harnessAliasForModelProvider(modelProvider: string): string {
       return 'codex';
     case 'google':
       return 'gemini';
-    case 'openrouter':
+    case 'opencode':
       return 'opencode';
+    case 'xai':
+      return 'grok';
     default:
       return modelProvider;
   }
 }
 
-function expectHarnessSource(value: string): HarnessSource {
+function expectHarnessSource(value: string): CanonicalHarnessSource {
   const normalized = value.trim().toLowerCase();
-  if (normalized === 'plan' || normalized === 'byok' || normalized === 'oauth') {
-    return normalized;
+  if (normalized === 'managed' || normalized === 'plan' || normalized === 'byok' || normalized === 'oauth') {
+    return normalizeHarnessSource(normalized);
   }
-  throw new Error(`cloud: harness source must be one of plan|byok|oauth; got "${value}"`);
+  throw new Error(`cloud: harness source must be one of managed|byok|oauth; got "${value}"`);
+}
+
+function normalizeHarnessSource(source: HarnessSource): CanonicalHarnessSource {
+  return source === 'plan' ? 'managed' : source;
 }
 
 function expectOnExistsChoice(value: string): OnExistsChoice {

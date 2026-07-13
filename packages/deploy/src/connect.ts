@@ -194,7 +194,10 @@ const fallbackSource = workspaceFallbackSource(
       // dispatcher reads at tick time.
       const sessionBody = {
         allowedIntegrations: [provider],
-        scope: scopeRequest(effectiveSource)
+        scope: scopeRequest(effectiveSource),
+        ...(provider === 'github' && effectiveSource.kind === 'deployer_user'
+          ? { githubInstallationFlow: true }
+          : {})
       };
       let session: unknown;
       try {
@@ -226,14 +229,46 @@ const fallbackSource = workspaceFallbackSource(
       const sessionUrl = readString(session, 'sessionUrl')
         ?? readString(session, 'connectLink')
         ?? readString(session, 'url');
-      if (!sessionUrl) {
+      const githubFlow = readGithubInstallationFlow(session);
+      if (provider === 'github' && githubFlow?.enabled === true) {
+        const inherited = await tryConnectExistingGithubInstallation({
+          fetchImpl,
+          apiUrl,
+          workspaceToken: opts.workspaceToken,
+          workspaceId,
+          session,
+          sessionUrl,
+          flow: githubFlow,
+          io,
+          openUrl: opts.openUrl,
+          sleep: sleepImpl,
+          pollIntervalMs: opts.pollIntervalMs,
+          timeoutMs: opts.timeoutMs
+        });
+        if (inherited) return inherited;
+
+        const installToken = await resolveWorkspaceToken(opts.workspaceToken);
+        session = await requestJson(fetchImpl, `${apiUrl}/api/v1/workspaces/${encodeURIComponent(
+          workspaceId
+        )}/integrations/connect-session`, installToken, {
+          method: 'POST',
+          body: JSON.stringify({
+            allowedIntegrations: [githubFlow.installProviderConfigKey || provider],
+            scope: scopeRequest(effectiveSource)
+          })
+        });
+      }
+      const installSessionUrl = readString(session, 'sessionUrl')
+        ?? readString(session, 'connectLink')
+        ?? readString(session, 'url');
+      if (!installSessionUrl) {
         throw new Error(`integration ${provider} connect-session did not return a session URL`);
       }
       const sessionId = readString(session, 'sessionId') ?? readString(session, 'connectionId');
       const sessionConfigKey = readProviderConfigKey(session);
-      io?.info(`Connecting ${provider}: opening ${sessionUrl}`);
+      io?.info(`Connecting ${provider}: opening ${installSessionUrl}`);
       try {
-        await (opts.openUrl ?? openBrowser)(sessionUrl);
+        await (opts.openUrl ?? openBrowser)(installSessionUrl);
       } catch (err) {
         io?.warn?.(`Could not open browser automatically: ${err instanceof Error ? err.message : String(err)}`);
       }
@@ -357,6 +392,150 @@ function scopeRequest(
   return { kind: source.kind };
 }
 
+interface GithubInstallationFlow {
+  enabled: true;
+  oauthProviderConfigKey?: string;
+  installProviderConfigKey?: string;
+}
+
+interface GithubInstallationMatch {
+  installationId: string;
+  accountLogin?: string | null;
+  accountType?: string | null;
+  suspended?: boolean;
+}
+
+interface GithubReconcileResponse {
+  matches?: GithubInstallationMatch[];
+}
+
+interface GithubJoinResponse {
+  outcome?: string;
+  landingWorkspace?: { id?: string; slug?: string | null; name?: string | null } | null;
+}
+
+function readGithubInstallationFlow(session: unknown): GithubInstallationFlow | undefined {
+  if (!session || typeof session !== 'object' || Array.isArray(session)) return undefined;
+  const flow = (session as { githubInstallationFlow?: unknown }).githubInstallationFlow;
+  if (!flow || typeof flow !== 'object' || Array.isArray(flow)) return undefined;
+  if ((flow as { enabled?: unknown }).enabled !== true) return undefined;
+  return {
+    enabled: true,
+    oauthProviderConfigKey: readString(flow, 'oauthProviderConfigKey'),
+    installProviderConfigKey: readString(flow, 'installProviderConfigKey')
+  };
+}
+
+async function tryConnectExistingGithubInstallation(args: {
+  fetchImpl: typeof fetch;
+  apiUrl: string;
+  workspaceToken: string | (() => string | Promise<string>);
+  workspaceId: string;
+  session: unknown;
+  sessionUrl: string | undefined;
+  flow: GithubInstallationFlow;
+  io?: Pick<DeployIO, 'info' | 'warn'>;
+  openUrl?: (url: string) => void | Promise<void>;
+  sleep: (ms: number) => Promise<void>;
+  pollIntervalMs?: number;
+  timeoutMs?: number;
+}): Promise<{ connectionId: string } | undefined> {
+  if (!args.sessionUrl) {
+    throw new Error('GitHub user authorization session did not return a session URL');
+  }
+  const oauthConnectionId = readString(args.session, 'connectionId') ?? readString(args.session, 'sessionId');
+  if (!oauthConnectionId) {
+    throw new Error('GitHub user authorization session did not return a connection id');
+  }
+
+  args.io?.info(`Connecting github: opening ${args.sessionUrl}`);
+  try {
+    await (args.openUrl ?? openBrowser)(args.sessionUrl);
+  } catch (err) {
+    args.io?.warn?.(`Could not open browser automatically: ${err instanceof Error ? err.message : String(err)}`);
+  }
+
+  const deadline = Date.now() + (args.timeoutMs ?? 5 * 60_000);
+  while (Date.now() < deadline) {
+    await args.sleep(args.pollIntervalMs ?? 2_000);
+    const token = await resolveWorkspaceToken(args.workspaceToken);
+    const reconcile = await readGithubReconcile({ ...args, token }, oauthConnectionId);
+    if (!reconcile) continue;
+
+    const match = reconcile.matches?.find((candidate) => (
+      candidate.accountType === 'Organization' && candidate.suspended !== true
+    ));
+    if (!match) return undefined;
+
+    const joinToken = await resolveWorkspaceToken(args.workspaceToken);
+    const join = await postGithubJoin(
+      { ...args, token: joinToken },
+      {
+        installationId: match.installationId,
+        oauthConnectionId
+      }
+    );
+    if (join.outcome === 'joined' || join.outcome === 'already_member') {
+      const destination = join.landingWorkspace?.name
+        ?? join.landingWorkspace?.slug
+        ?? join.landingWorkspace?.id
+        ?? 'the organization workspace';
+      args.io?.info(
+        `integrations.github: already connected via ${match.accountLogin ?? 'GitHub'}; using ${destination}`
+      );
+      return { connectionId: `github-installation:${match.installationId}` };
+    }
+    if (join.outcome === 'pending_approval') {
+      throw new Error(
+        `GitHub App is already installed for ${match.accountLogin ?? 'this organization'}, but joining is pending owner/admin approval.`
+      );
+    }
+    return undefined;
+  }
+
+  throw new Error('Timed out waiting for GitHub user authorization to complete.');
+}
+
+async function readGithubReconcile(
+  args: { fetchImpl: typeof fetch; apiUrl: string; token: string; workspaceId: string },
+  oauthConnectionId: string
+): Promise<GithubReconcileResponse | undefined> {
+  try {
+    return await requestJson(
+      args.fetchImpl,
+      `${args.apiUrl}/api/v1/workspaces/${encodeURIComponent(args.workspaceId)}/integrations/github/reconcile`,
+      args.token,
+      {
+        method: 'POST',
+        body: JSON.stringify({ oauthConnectionId })
+      }
+    ) as GithubReconcileResponse;
+  } catch (err) {
+    if (
+      isCloudRequestError(err) &&
+      (err.status === 409 || err.status === 502)
+    ) {
+      return undefined;
+    }
+    throw err;
+  }
+}
+
+async function postGithubJoin(
+  args: { fetchImpl: typeof fetch; apiUrl: string; token: string; workspaceId: string },
+  body: { installationId: string; oauthConnectionId: string }
+): Promise<GithubJoinResponse> {
+  return await requestJson(
+    args.fetchImpl,
+    `${args.apiUrl}/api/v1/workspaces/${encodeURIComponent(args.workspaceId)}/integrations/github/join`,
+    args.token,
+    {
+      method: 'POST',
+      body: JSON.stringify(body)
+    }
+  ) as GithubJoinResponse;
+}
+
 function providerHasEnvCredentials(provider: string): boolean {
   const upper = provider.toUpperCase();
   return Boolean(
@@ -408,6 +587,41 @@ export interface ConnectAllResult {
 }
 
 /**
+ * Providers whose credential is captured out-of-band by the relay CLI
+ * (`agent-relay cloud connect <provider>` → local `daytona login` →
+ * normalized token uploaded to the cloud credential-store) rather than the
+ * browser `connect-session` OAuth flow.
+ *
+ * For these, deploy cannot drive the connect inline: there is no Nango/OAuth
+ * session URL to open (the cloud returns `409 unknown_provider` for them).
+ * The walker instead instructs the user to run the capture command and gates
+ * the deploy until the credential exists. Status is still reported through the
+ * same `/integrations/status` check every other provider uses, so the
+ * `already-connected` path is identical to slack/github.
+ *
+ * Keep this in sync with the relay CLI's `CLI_AUTH_CONFIG` capture providers.
+ */
+const CLI_CAPTURED_PROVIDERS = new Set<string>(['daytona']);
+
+function isCliCapturedProvider(provider: string): boolean {
+  return CLI_CAPTURED_PROVIDERS.has(provider);
+}
+
+export async function resolveExpectedProviderConfigKey(
+  provider: string,
+  providerConfigKeys?: ProviderConfigKeyResolver
+): Promise<string | undefined> {
+  if (!providerConfigKeys || isCliCapturedProvider(provider)) {
+    return undefined;
+  }
+  try {
+    return await providerConfigKeys.resolve(provider);
+  } catch {
+    return undefined;
+  }
+}
+
+/**
  * Walk the persona's declared integrations and ensure each is connected.
  * Per the deploy-v1 spec, the orchestrator prompts before each provider's
  * connect flow ("Connect github now? (Y/n)") so users running on a shared
@@ -438,9 +652,10 @@ export async function connectIntegrations(input: ConnectAllInput): Promise<Conne
     const integrationEntry = integrations[provider] ?? {};
     const source: IntegrationSource = integrationEntry.source ?? { kind: 'deployer_user' };
     const forceReconnect = input.reconnectProviders?.includes(provider) ?? false;
-    const expectedConfigKey = input.providerConfigKeys
-      ? await input.providerConfigKeys.resolve(provider).catch(() => undefined)
-      : undefined;
+    const expectedConfigKey = await resolveExpectedProviderConfigKey(
+      provider,
+      input.providerConfigKeys
+    );
 
     let statusCheckFailure: string | undefined;
     let connected = await checkProviderConnected(
@@ -528,6 +743,25 @@ export async function connectIntegrations(input: ConnectAllInput): Promise<Conne
         provider,
         status: 'failed',
         message: 'not connected (prompts are disabled)'
+      });
+      continue;
+    }
+
+    if (isCliCapturedProvider(provider)) {
+      // No browser OAuth flow exists for relay-CLI-captured providers — the
+      // credential is captured out-of-band. Don't show a misleading "(opens
+      // browser)" prompt or call connect-session (which 409s); instruct the
+      // user to run the capture command and gate the deploy. This covers both
+      // the interactive not-connected path and `--reconnect <provider>` (which
+      // reaches here when forceReconnect is set).
+      const command = `agent-relay cloud connect ${provider}`;
+      input.io.error(
+        `integrations.${provider}: not connected. Run \`${command}\` to capture the credential, then re-deploy.`
+      );
+      outcomes.push({
+        provider,
+        status: 'failed',
+        message: `not connected (run \`${command}\`)`
       });
       continue;
     }
@@ -1127,8 +1361,17 @@ export interface PickerOption {
 
 /** Resolves the candidate list for a persona input's `picker`. */
 export interface IntegrationOptionsResolver {
-  list(args: { workspace: string; provider: string; resource: string }): Promise<PickerOption[]>;
+  list(args: {
+    workspace: string;
+    provider: string;
+    resource: string;
+    query?: string;
+    cursor?: string;
+    limit?: number;
+  }): Promise<PickerOption[]>;
 }
+
+export const RELAYFILE_OPTIONS_MAX_PAGES = 200;
 
 /**
  * Cloud-backed options resolver: `GET /api/v1/workspaces/<ws>/integrations/<provider>/options/<resource>`.
@@ -1140,25 +1383,53 @@ export function relayfileOptionsResolver(opts: {
   apiUrl: string;
   workspaceToken: string | (() => string | Promise<string>);
   fetch?: typeof fetch;
+  io?: Pick<DeployIO, 'warn'>;
 }): IntegrationOptionsResolver {
   const fetchImpl = opts.fetch ?? fetch;
   const apiUrl = opts.apiUrl.replace(/\/+$/, '');
   return {
-    async list({ workspace, provider, resource }) {
+    async list({ workspace, provider, resource, query, cursor, limit }) {
       const token = await resolveWorkspaceToken(opts.workspaceToken);
-      const url =
+      const baseUrl =
         `${apiUrl}/api/v1/workspaces/${encodeURIComponent(workspace)}` +
         `/integrations/${encodeURIComponent(provider)}/options/${encodeURIComponent(resource)}`;
-      const body = await requestJson(fetchImpl, url, token);
-      const raw = body && typeof body === 'object' ? (body as { options?: unknown }).options : undefined;
-      if (!Array.isArray(raw)) return [];
       const options: PickerOption[] = [];
-      for (const entry of raw) {
-        const value = readString(entry, 'value');
-        if (!value) continue;
-        const label = readString(entry, 'label') ?? value;
-        const hint = readString(entry, 'hint');
-        options.push({ value, label, ...(hint ? { hint } : {}) });
+      const trimmedQuery = typeof query === 'string' && query.trim() ? query.trim() : undefined;
+      let pageCursor = typeof cursor === 'string' && cursor.trim() ? cursor.trim() : undefined;
+      let pages = 0;
+
+      while (true) {
+        const params = new URLSearchParams();
+        if (trimmedQuery) params.set('query', trimmedQuery);
+        if (typeof limit === 'number' && Number.isInteger(limit) && limit > 0) {
+          params.set('limit', String(limit));
+        }
+        if (pageCursor) params.set('cursor', pageCursor);
+        const queryString = params.toString();
+        const url = queryString ? `${baseUrl}?${queryString}` : baseUrl;
+        const body = await requestJson(fetchImpl, url, token);
+        const raw = body && typeof body === 'object' ? (body as { options?: unknown }).options : undefined;
+        if (Array.isArray(raw)) {
+          for (const entry of raw) {
+            const value = readString(entry, 'value');
+            if (!value) continue;
+            const label = readString(entry, 'label') ?? value;
+            const hint = readString(entry, 'hint');
+            options.push({ value, label, ...(hint ? { hint } : {}) });
+          }
+        }
+
+        pages += 1;
+        const next = readString(body, 'nextCursor');
+        if (!next) break;
+        if (next === pageCursor) break;
+        if (pages >= RELAYFILE_OPTIONS_MAX_PAGES) {
+          opts.io?.warn?.(
+            `cloud options list for ${provider}/${resource} exceeded ${RELAYFILE_OPTIONS_MAX_PAGES} pages; returning a truncated picker list`
+          );
+          break;
+        }
+        pageCursor = next;
       }
       return options;
     }

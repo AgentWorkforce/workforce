@@ -112,6 +112,27 @@ test('persona schema keeps mount.enabled but drops the moved listener fields', a
   assert.equal('schedules' in (personaSpec.properties ?? {}), false);
   // Integration connection config no longer exposes triggers.
   assert.equal('triggers' in (definitions.PersonaIntegrationConfig.properties ?? {}), false);
+  assert.equal(
+    definitions.PersonaIntegrationConfig.properties?.optional &&
+      definitions.PersonaIntegrationConfig.properties.optional !== true
+      ? definitions.PersonaIntegrationConfig.properties.optional.type
+      : undefined,
+    'boolean'
+  );
+  assert.equal(
+    definitions.PersonaIntegrationConfig.properties?.enabledByInput &&
+      definitions.PersonaIntegrationConfig.properties.enabledByInput !== true
+      ? definitions.PersonaIntegrationConfig.properties.enabledByInput.type
+      : undefined,
+    'string'
+  );
+  const integrationConfig = definitions.PersonaIntegrationConfig.properties?.config;
+  assert.equal(integrationConfig && integrationConfig !== true
+    ? integrationConfig.type
+    : undefined, 'object');
+  assert.deepEqual(integrationConfig && integrationConfig !== true
+    ? integrationConfig.additionalProperties
+    : undefined, {});
   assert.equal(personaMount.properties?.enabled && personaMount.properties.enabled !== true
     ? personaMount.properties.enabled.type
     : undefined, 'boolean');
@@ -138,6 +159,24 @@ test('agent schema exposes launchedBy/triggers/schedules/watch', async () => {
   assert.equal(watchRule.properties?.paths && watchRule.properties.paths !== true
     ? watchRule.properties.paths.type
     : undefined, 'array');
+  const trigger = definitions.PersonaIntegrationTrigger;
+  const maxConcurrency = trigger.properties?.maxConcurrency;
+  assert.equal(maxConcurrency && maxConcurrency !== true
+    ? maxConcurrency.type
+    : undefined, 'integer');
+  assert.equal(maxConcurrency && maxConcurrency !== true
+    ? maxConcurrency.minimum
+    : undefined, 1);
+
+  assertSchema({ triggers: { slack: [{ on: 'message.created', maxConcurrency: 1 }] } }, schema, schema, 'agent');
+  assert.throws(
+    () => assertSchema({ triggers: { slack: [{ on: 'message.created', maxConcurrency: 0 }] } }, schema, schema, 'agent'),
+    /agent\.triggers\.slack\[0\]\.maxConcurrency must be >= 1/
+  );
+  assert.throws(
+    () => assertSchema({ triggers: { slack: [{ on: 'message.created', maxConcurrency: 1.5 }] } }, schema, schema, 'agent'),
+    /agent\.triggers\.slack\[0\]\.maxConcurrency must be integer/
+  );
 });
 
 type SchemaNode = Record<string, unknown> & {
@@ -150,6 +189,7 @@ type SchemaNode = Record<string, unknown> & {
   enum?: unknown[];
   const?: unknown;
   type?: string | string[];
+  minimum?: number;
   properties?: Record<string, SchemaNode | boolean>;
   additionalProperties?: SchemaNode | boolean;
   required?: string[];
@@ -188,6 +228,9 @@ function assertSchema(value: unknown, schema: SchemaNode, root: SchemaNode, path
   }
   if (schema.type) {
     assertType(value, schema.type, path);
+  }
+  if (typeof schema.minimum === 'number' && typeof value === 'number' && value < schema.minimum) {
+    throw new Error(`${path} must be >= ${schema.minimum}`);
   }
   if (schema.type === 'object' || schema.properties || schema.additionalProperties || schema.required) {
     if (!isObject(value)) {

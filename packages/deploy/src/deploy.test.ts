@@ -77,6 +77,16 @@ export default defineAgent({
 `;
 }
 
+const SLACK_TELEGRAM_AGENT_SRC = `import { defineAgent } from '@agentworkforce/runtime';
+export default defineAgent({
+  triggers: {
+    slack: [{ on: 'message.created' }],
+    telegram: [{ on: 'message.created' }]
+  },
+  handler: async () => {}
+});
+`;
+
 async function withTempPersona(
   persona: Record<string, unknown>,
   agentSource = SCHEDULE_AGENT_SRC
@@ -144,6 +154,74 @@ async function withWorkspaceEnv<T>(
     } else {
       process.env.WORKFORCE_WORKSPACE_TOKEN = previousToken;
     }
+  }
+}
+
+async function withProcessEnv<T>(
+  env: Record<string, string | undefined>,
+  fn: () => Promise<T>
+): Promise<T> {
+  const previous = new Map<string, string | undefined>();
+  for (const key of Object.keys(env)) {
+    previous.set(key, process.env[key]);
+    const next = env[key];
+    if (next === undefined) {
+      delete process.env[key];
+    } else {
+      process.env[key] = next;
+    }
+  }
+
+  try {
+    return await fn();
+  } finally {
+    for (const [key, value] of previous) {
+      if (value === undefined) {
+        delete process.env[key];
+      } else {
+        process.env[key] = value;
+      }
+    }
+  }
+}
+
+async function withCloudSessionEnv<T>(fn: () => Promise<T>): Promise<T> {
+  const previous = {
+    CLOUD_API_URL: process.env.CLOUD_API_URL,
+    CLOUD_API_ACCESS_TOKEN: process.env.CLOUD_API_ACCESS_TOKEN,
+    CLOUD_API_REFRESH_TOKEN: process.env.CLOUD_API_REFRESH_TOKEN,
+    CLOUD_API_ACCESS_TOKEN_EXPIRES_AT: process.env.CLOUD_API_ACCESS_TOKEN_EXPIRES_AT
+  };
+  process.env.CLOUD_API_URL = 'https://cloud.example.test';
+  process.env.CLOUD_API_ACCESS_TOKEN = 'cloud-access';
+  process.env.CLOUD_API_REFRESH_TOKEN = 'cloud-refresh';
+  process.env.CLOUD_API_ACCESS_TOKEN_EXPIRES_AT = '2999-01-01T00:00:00.000Z';
+  try {
+    return await fn();
+  } finally {
+    for (const [key, value] of Object.entries(previous)) {
+      if (value === undefined) {
+        delete process.env[key as keyof typeof previous];
+      } else {
+        process.env[key as keyof typeof previous] = value;
+      }
+    }
+  }
+}
+
+async function withAgentRelayHome<T>(fn: () => Promise<T>): Promise<T> {
+  const previous = process.env.AGENT_RELAY_HOME;
+  const dir = await mkdtemp(path.join(os.tmpdir(), 'wf-agent-relay-home-'));
+  process.env.AGENT_RELAY_HOME = dir;
+  try {
+    return await fn();
+  } finally {
+    if (previous === undefined) {
+      delete process.env.AGENT_RELAY_HOME;
+    } else {
+      process.env.AGENT_RELAY_HOME = previous;
+    }
+    await rm(dir, { recursive: true, force: true });
   }
 }
 
@@ -254,6 +332,18 @@ test('preflightPersona refuses when cloud is not true', async () => {
   }
 });
 
+test('preflightPersona accepts a cloud persona that opts into memory facets', async () => {
+  const { personaPath, cleanup } = await withTempPersona(
+    basePersonaJson({ memory: { trajectories: true, aiMemory: true } })
+  );
+  try {
+    const pre = await preflightPersona(personaPath);
+    assert.deepEqual(pre.persona.memory, { trajectories: true, aiMemory: true });
+  } finally {
+    await cleanup();
+  }
+});
+
 test('preflightPersona refuses when the agent declares no listeners', async () => {
   const { personaPath, cleanup } = await withTempPersona(
     basePersonaJson({ integrations: undefined }),
@@ -308,6 +398,24 @@ test('preflightPersona refuses when the agent triggers a provider the persona do
   );
   try {
     await assert.rejects(preflightPersona(personaPath), /does not connect/);
+  } finally {
+    await cleanup();
+  }
+});
+
+test('preflightPersona refuses optional integrations enabled by undeclared inputs', async () => {
+  const { personaPath, cleanup } = await withTempPersona(
+    basePersonaJson({
+      integrations: {
+        slack: { optional: true, enabledByInput: 'SLACK_CHANNEL' }
+      }
+    })
+  );
+  try {
+    await assert.rejects(
+      preflightPersona(personaPath),
+      /integration "slack" is enabled by input "SLACK_CHANNEL".*persona\.inputs does not declare SLACK_CHANNEL/
+    );
   } finally {
     await cleanup();
   }
@@ -383,7 +491,23 @@ test('deploy --dry-run rejects useSubscription when cloud mode is not selected',
   }
 });
 
-test('deploy --dry-run rejects useSubscription with workforce plan credentials', async () => {
+test('deploy --dry-run rejects useSubscription with workforce managed credentials', async () => {
+  const { personaPath, cleanup } = await withTempPersona(
+    basePersonaJson({ useSubscription: true })
+  );
+  const io = createBufferedIO();
+  try {
+    await assert.rejects(
+      deploy({ personaPath, mode: 'cloud', dryRun: true, harnessSource: 'managed', io }),
+      /use --harness-source oauth/
+    );
+    assert.ok(!io.messages.find((m) => m.message.startsWith('workspace:')));
+  } finally {
+    await cleanup();
+  }
+});
+
+test('deploy --dry-run rejects useSubscription with legacy plan alias', async () => {
   const { personaPath, cleanup } = await withTempPersona(
     basePersonaJson({ useSubscription: true })
   );
@@ -586,6 +710,298 @@ test('deploy connects each missing persona integration before launch', async () 
     assert.deepEqual(connected, ['github', 'notion']);
     assert.deepEqual(result.connectedIntegrations, ['github', 'notion']);
     assert.equal(launched, true);
+  } finally {
+    await cleanup();
+  }
+});
+
+test('deploy activates optional integrations from supplied persona inputs', async () => {
+  const { personaPath, cleanup } = await withTempPersona(
+    basePersonaJson({
+      integrations: {
+        slack: { optional: true, enabledByInput: 'SLACK_CHANNEL' },
+        telegram: { optional: true, enabledByInput: 'TELEGRAM_CHAT' }
+      },
+      inputs: {
+        SLACK_CHANNEL: { description: 'Slack channel', optional: true },
+        TELEGRAM_CHAT: { description: 'Telegram chat', optional: true }
+      }
+    }),
+    SLACK_TELEGRAM_AGENT_SRC
+  );
+  const io = createBufferedIO();
+  const checked: string[] = [];
+  const connected: string[] = [];
+  let stagedIntegrationKeys: string[] = [];
+  let launchedTriggerKeys: string[] = [];
+  const workspaceAuth: WorkspaceAuth = {
+    async resolveWorkspace() {
+      return { workspace: 'ws-test', token: 'tok' };
+    }
+  };
+  const integrations: IntegrationConnectResolver = {
+    async isConnected({ provider }) {
+      checked.push(provider);
+      return false;
+    },
+    async connect({ provider }) {
+      connected.push(provider);
+      return { connectionId: `conn-${provider}` };
+    }
+  };
+  const bundle: BundleStager = {
+    async stage(input) {
+      stagedIntegrationKeys = Object.keys(input.persona.integrations ?? {});
+      return successfulBundleStager().stage(input);
+    }
+  };
+  const devLauncher: ModeLauncher = {
+    async launch(input: ModeLaunchInput) {
+      launchedTriggerKeys = Object.keys(input.agent.triggers ?? {});
+      return {
+        id: 'pid-optional',
+        async stop() {
+          /* no-op */
+        },
+        done: Promise.resolve({ code: 0 })
+      };
+    }
+  };
+
+  try {
+    await withProcessEnv({ TELEGRAM_CHAT: undefined }, async () => {
+      const result = await deploy(
+        {
+          personaPath,
+          mode: 'dev',
+          io,
+          inputs: { SLACK_CHANNEL: 'C1' }
+        },
+        {
+          workspaceAuth,
+          integrations,
+          bundle,
+          modes: { dev: devLauncher }
+        }
+      );
+
+      assert.deepEqual(checked, ['slack']);
+      assert.deepEqual(connected, ['slack']);
+      assert.deepEqual(result.connectedIntegrations, ['slack']);
+      assert.deepEqual(stagedIntegrationKeys, ['slack']);
+      assert.deepEqual(launchedTriggerKeys, ['slack']);
+      assert.ok(
+        io.messages.find((m) => m.message.includes('integrations.telegram: optional; skipped'))
+      );
+    });
+  } finally {
+    await cleanup();
+  }
+});
+
+test('deploy collects picker-backed input before pruning an optional integration', async () => {
+  const { personaPath, cleanup } = await withTempPersona(
+    basePersonaJson({
+      integrations: {
+        slack: { optional: true, enabledByInput: 'SLACK_CHANNEL' },
+        telegram: { optional: true, enabledByInput: 'TELEGRAM_CHAT' }
+      },
+      inputs: {
+        SLACK_CHANNEL: {
+          description: 'Slack channel',
+          optional: true,
+          picker: { provider: 'slack', resource: 'channels' }
+        },
+        TELEGRAM_CHAT: { description: 'Telegram chat', optional: true }
+      }
+    }),
+    SLACK_TELEGRAM_AGENT_SRC
+  );
+  const io = createBufferedIO();
+  io.scriptAnswers(['1']);
+  const checked: string[] = [];
+  const connected: string[] = [];
+  let stagedIntegrationKeys: string[] = [];
+  let launchedTriggerKeys: string[] = [];
+  let launchedInputs: Record<string, string> | undefined;
+  let launchedEnv: Record<string, string> | undefined;
+  const workspaceAuth: WorkspaceAuth = {
+    async resolveWorkspace() {
+      return { workspace: 'ws-test', token: 'tok' };
+    }
+  };
+  const integrations: IntegrationConnectResolver = {
+    async isConnected({ provider }) {
+      checked.push(provider);
+      return false;
+    },
+    async connect({ provider }) {
+      connected.push(provider);
+      return { connectionId: `conn-${provider}` };
+    }
+  };
+  const integrationOptions: IntegrationOptionsResolver = {
+    async list({ provider, resource }) {
+      assert.equal(provider, 'slack');
+      assert.equal(resource, 'channels');
+      return [
+        { value: 'C1', label: 'general' },
+        { value: 'C2', label: 'deploys' }
+      ];
+    }
+  };
+  const bundle: BundleStager = {
+    async stage(input) {
+      stagedIntegrationKeys = Object.keys(input.persona.integrations ?? {});
+      return successfulBundleStager().stage(input);
+    }
+  };
+  const devLauncher: ModeLauncher = {
+    async launch(input: ModeLaunchInput) {
+      launchedTriggerKeys = Object.keys(input.agent.triggers ?? {});
+      launchedInputs = input.inputs;
+      launchedEnv = input.env;
+      return {
+        id: 'pid-optional-picker',
+        async stop() {
+          /* no-op */
+        },
+        done: Promise.resolve({ code: 0 })
+      };
+    }
+  };
+
+  try {
+    await withProcessEnv({ SLACK_CHANNEL: undefined, TELEGRAM_CHAT: undefined }, async () => {
+      const result = await deploy(
+        { personaPath, mode: 'dev', io },
+        {
+          workspaceAuth,
+          integrations,
+          integrationOptions,
+          bundle,
+          modes: { dev: devLauncher }
+        }
+      );
+
+      assert.deepEqual(checked, ['slack']);
+      assert.deepEqual(connected, ['slack']);
+      assert.deepEqual(result.connectedIntegrations, ['slack']);
+      assert.deepEqual(stagedIntegrationKeys, ['slack']);
+      assert.deepEqual(launchedTriggerKeys, ['slack']);
+      assert.deepEqual(launchedInputs, { SLACK_CHANNEL: 'C1' });
+      assert.equal(launchedEnv?.WORKFORCE_INPUT_SLACK_CHANNEL, 'C1');
+      assert.ok(
+        io.messages.find((m) => m.message.includes('integrations.telegram: optional; skipped'))
+      );
+    });
+  } finally {
+    await cleanup();
+  }
+});
+
+test('deploy forwards env-resolved optional activation input values to launchers', async () => {
+  const { personaPath, cleanup } = await withTempPersona(
+    basePersonaJson({
+      integrations: {
+        slack: { optional: true, enabledByInput: 'SLACK_CHANNEL' }
+      },
+      inputs: {
+        SLACK_CHANNEL: {
+          description: 'Slack channel',
+          optional: true,
+          env: 'AW_SLACK_CHANNEL'
+        }
+      }
+    }),
+    `import { defineAgent } from '@agentworkforce/runtime';
+export default defineAgent({
+  triggers: { slack: [{ on: 'message.created' }] },
+  handler: async () => {}
+});
+`
+  );
+  const io = createBufferedIO();
+  const checked: string[] = [];
+  let launchedInputs: Record<string, string> | undefined;
+  let launchedEnv: Record<string, string> | undefined;
+  const workspaceAuth: WorkspaceAuth = {
+    async resolveWorkspace() {
+      return { workspace: 'ws-test', token: 'tok' };
+    }
+  };
+  const integrations: IntegrationConnectResolver = {
+    async isConnected({ provider }) {
+      checked.push(provider);
+      return true;
+    },
+    async connect() {
+      throw new Error('should not connect when already connected');
+    }
+  };
+
+  try {
+    await withProcessEnv({ AW_SLACK_CHANNEL: 'C-env' }, async () => {
+      const result = await deploy(
+        { personaPath, mode: 'cloud', io },
+        {
+          workspaceAuth,
+          integrations,
+          providerConfigKeys: {
+            async resolve() {
+              return undefined;
+            }
+          },
+          bundle: successfulBundleStager(),
+          modes: {
+            cloud: {
+              async launch(input: ModeLaunchInput) {
+                launchedInputs = input.inputs;
+                launchedEnv = input.env;
+                return {
+                  id: 'cloud-env-input',
+                  async stop() {
+                    /* no-op */
+                  },
+                  done: Promise.resolve({ code: 0 })
+                };
+              }
+            }
+          }
+        }
+      );
+
+      assert.deepEqual(checked, ['slack']);
+      assert.deepEqual(result.connectedIntegrations, ['slack']);
+      assert.deepEqual(launchedInputs, { SLACK_CHANNEL: 'C-env' });
+      assert.equal(launchedEnv?.WORKFORCE_INPUT_SLACK_CHANNEL, 'C-env');
+    });
+  } finally {
+    await cleanup();
+  }
+});
+
+test('deploy refuses an agent whose optional integration inputs leave no active listeners', async () => {
+  const { personaPath, cleanup } = await withTempPersona(
+    basePersonaJson({
+      integrations: {
+        slack: { optional: true, enabledByInput: 'SLACK_CHANNEL' },
+        telegram: { optional: true, enabledByInput: 'TELEGRAM_CHAT' }
+      },
+      inputs: {
+        SLACK_CHANNEL: { description: 'Slack channel', optional: true },
+        TELEGRAM_CHAT: { description: 'Telegram chat', optional: true }
+      }
+    }),
+    SLACK_TELEGRAM_AGENT_SRC
+  );
+  try {
+    await withProcessEnv({ SLACK_CHANNEL: undefined, TELEGRAM_CHAT: undefined }, async () =>
+      assert.rejects(
+        deploy({ personaPath, mode: 'dev', io: createBufferedIO() }),
+        /no active listeners after optional integrations were applied/
+      )
+    );
   } finally {
     await cleanup();
   }
@@ -1023,6 +1439,111 @@ test('deploy dev mode runtime credential eligibility preserves expected provider
   }
 });
 
+test('deploy dev mode ignores catalog config keys for CLI-captured daytona runtime credentials', async () => {
+  const { personaPath, cleanup } = await withTempPersona(
+    basePersonaJson({
+      integrations: {
+        daytona: {}
+      }
+    })
+  );
+  const io = createBufferedIO();
+  const originalFetch = globalThis.fetch;
+  const originalProviderToken = process.env.WORKFORCE_INTEGRATION_DAYTONA_TOKEN;
+  const urls: string[] = [];
+  let catalogLookupCount = 0;
+  let launchedEnv: Record<string, string> | undefined;
+
+  process.env.WORKFORCE_INTEGRATION_DAYTONA_TOKEN = 'WORKFORCE_DAYTONA_CONNECT_SENTINEL';
+  globalThis.fetch = (async (input, init) => {
+    const url = String(input);
+    urls.push(url);
+    if (url.includes('/api/v1/workspaces/ws-test/integrations/daytona/status')) {
+      return jsonResponse({
+        provider: 'daytona',
+        configKey: 'daytona',
+        backend: 'provider-credential',
+        ready: true,
+        connectionMatched: true,
+        oauth: { connected: true }
+      });
+    }
+    if (url.includes('/api/v1/workspaces/ws-test/runtime-credentials')) {
+      const body = init?.body ? JSON.parse(String(init.body)) : undefined;
+      assert.deepEqual(body, {
+        personaId: 'demo',
+        agentId: 'demo',
+        integrations: {
+          daytona: { source: { kind: 'deployer_user' } }
+        },
+        ttlSeconds: 3600
+      });
+      return jsonResponse({
+        relayfileUrl: 'https://relayfile.test',
+        relayfileWorkspaceId: 'ws-test',
+        relayfileToken: 'relay_pa_daytona',
+        relayfileMountPaths: ['/daytona/sandboxes/**']
+      });
+    }
+    throw new Error(`unexpected URL ${url}`);
+  }) as typeof fetch;
+
+  try {
+    await deploy(
+      {
+        personaPath,
+        mode: 'dev',
+        noPrompt: true,
+        cloudUrl: 'https://cloud.example.test',
+        io
+      },
+      {
+        workspaceAuth: {
+          async resolveWorkspace() {
+            return { workspace: 'ws-test', token: 'relay_ws_workspace' };
+          }
+        },
+        providerConfigKeys: {
+          async resolve(provider) {
+            catalogLookupCount += 1;
+            assert.equal(provider, 'daytona');
+            return 'daytona-relay';
+          }
+        },
+        bundle: successfulBundleStager(),
+        modes: {
+          dev: {
+            async launch(input) {
+              launchedEnv = input.env;
+              return {
+                id: 'dev-1',
+                async stop() {
+                  /* no-op */
+                },
+                done: Promise.resolve({ code: 0 })
+              };
+            }
+          }
+        }
+      }
+    );
+
+    assert.equal(catalogLookupCount, 0);
+    assert.equal(launchedEnv?.RELAYFILE_TOKEN, 'relay_pa_daytona');
+    assert.equal(launchedEnv?.WORKFORCE_INTEGRATION_DAYTONA_TOKEN, '');
+    assert.ok(urls.find((url) => url.includes('/integrations/daytona/status')));
+    assert.ok(urls.find((url) => url.endsWith('/runtime-credentials')));
+  } finally {
+    if (originalProviderToken === undefined) {
+      delete process.env.WORKFORCE_INTEGRATION_DAYTONA_TOKEN;
+    } else {
+      process.env.WORKFORCE_INTEGRATION_DAYTONA_TOKEN = originalProviderToken;
+    }
+    globalThis.fetch = originalFetch;
+    await cleanup();
+  }
+});
+
 test('deploy dev mode rejects malformed runtime credential tokens before launch', async () => {
   const { personaPath, cleanup } = await withTempPersona(
     basePersonaJson({
@@ -1072,6 +1593,67 @@ test('deploy dev mode rejects malformed runtime credential tokens before launch'
         }
       ),
       /runtime-credentials returned a token without expected relay_pa_ prefix/
+    );
+    assert.equal(launched, false);
+  } finally {
+    globalThis.fetch = originalFetch;
+    await cleanup();
+  }
+});
+
+test('deploy dev mode rejects mismatched relayfile workspace ids before launch', async () => {
+  const { personaPath, cleanup } = await withTempPersona(
+    basePersonaJson({
+      integrations: {
+        github: {}
+      }
+    })
+  );
+  const io = createBufferedIO();
+  const originalFetch = globalThis.fetch;
+  let launched = false;
+
+  globalThis.fetch = (async (input) => {
+    const url = String(input);
+    if (url.includes('/api/v1/workspaces/rw-test/integrations/github/status')) {
+      return jsonResponse({ provider: 'github', status: 'ready' });
+    }
+    if (url.includes('/api/v1/workspaces/rw-test/runtime-credentials')) {
+      return jsonResponse({
+        relayfileUrl: 'https://relayfile.test',
+        relayfileWorkspaceId: 'rf-stale',
+        relayfileToken: 'relay_pa_scoped',
+        relayfileMountPaths: ['/github/repos/**/**/pulls/**']
+      });
+    }
+    throw new Error(`unexpected URL ${url}`);
+  }) as typeof fetch;
+
+  try {
+    await assert.rejects(
+      deploy(
+        {
+          personaPath,
+          mode: 'dev',
+          noPrompt: true,
+          cloudUrl: 'https://cloud.example.test',
+          io
+        },
+        {
+          workspaceAuth: {
+            async resolveWorkspace() {
+              return {
+                workspace: 'rw-test',
+                relayfileWorkspaceId: 'rf-canonical',
+                token: 'relay_ws_workspace'
+              };
+            }
+          },
+          bundle: successfulBundleStager(),
+          modes: { dev: successfulDevLauncher(() => { launched = true; }) }
+        }
+      ),
+      /runtime-credentials returned relayfile workspace rf-stale, expected rf-canonical/
     );
     assert.equal(launched, false);
   } finally {
@@ -1671,8 +2253,8 @@ test('deploy: default auth resolver honors env credentials without a workspaceAu
   // previous default (`envWorkspaceAuth()`) only consulted env vars and a
   // long-dead keychain; the new default delegates to `resolveWorkspaceToken`,
   // which still honors WORKFORCE_WORKSPACE_TOKEN + WORKFORCE_WORKSPACE_ID
-  // as Tier 1 but additionally falls through to the shared cloud-auth +
-  // active.json pointer. This test exercises the Tier 1 path end-to-end
+  // as Tier 1 but additionally falls through to the shared cloud session and
+  // canonical Agent Relay workspace store. This test exercises the Tier 1 path end-to-end
   // through `deploy()` with no resolver injection — proving the wiring is
   // intact for CI users while the filesystem-fallback paths stay covered
   // by `login.test.ts`.
@@ -1698,47 +2280,24 @@ test('deploy: default auth resolver honors env credentials without a workspaceAu
 
 test('deploy: clear error when nothing resolves and noPrompt is set', async () => {
   // Without env or an explicit resolver, the orchestrator must surface
-  // an actionable error rather than wedging in a prompt loop. Setting
-  // `noPrompt` forces `resolveWorkspaceToken` to throw at Tier 3 instead
-  // of opening a browser, so we get a deterministic error path to assert.
+  // an actionable error rather than wedging in a prompt loop. The temp
+  // AGENT_RELAY_HOME gives the SDK an empty canonical workspace store.
   const { personaPath, cleanup } = await withTempPersona(
     basePersonaJson({ integrations: {} })
   );
 
   await withWorkspaceEnv({ workspace: undefined, token: undefined }, async () => {
-    // Point filesystem-backed auth at definitely-missing/disabled paths so the
-    // test doesn't accidentally pick up host credentials.
-    const previousActiveFile = process.env.WORKFORCE_ACTIVE_WORKSPACE_FILE;
-    const previousLoginFile = process.env.WORKFORCE_LOGIN_FILE;
-    const previousDisableShared = process.env.WORKFORCE_DISABLE_SHARED_AUTH;
-    process.env.WORKFORCE_ACTIVE_WORKSPACE_FILE = path.join(os.tmpdir(), 'wf-deploy-test-missing-active.json');
-    process.env.WORKFORCE_LOGIN_FILE = path.join(os.tmpdir(), 'wf-deploy-test-missing-login.json');
-    process.env.WORKFORCE_DISABLE_SHARED_AUTH = '1';
-    try {
+    await withCloudSessionEnv(async () => {
+      await withAgentRelayHome(async () => {
       await assert.rejects(
         deploy(
           { personaPath, mode: 'dev', noConnect: true, noPrompt: true, io: createBufferedIO() },
           { bundle: successfulBundleStager(), modes: { dev: successfulDevLauncher() } }
         ),
-        /no workspace credentials resolved|workspace is required for deploy/
+        /No active Agent Relay workspace found/
       );
-    } finally {
-      if (previousActiveFile === undefined) {
-        delete process.env.WORKFORCE_ACTIVE_WORKSPACE_FILE;
-      } else {
-        process.env.WORKFORCE_ACTIVE_WORKSPACE_FILE = previousActiveFile;
-      }
-      if (previousLoginFile === undefined) {
-        delete process.env.WORKFORCE_LOGIN_FILE;
-      } else {
-        process.env.WORKFORCE_LOGIN_FILE = previousLoginFile;
-      }
-      if (previousDisableShared === undefined) {
-        delete process.env.WORKFORCE_DISABLE_SHARED_AUTH;
-      } else {
-        process.env.WORKFORCE_DISABLE_SHARED_AUTH = previousDisableShared;
-      }
-    }
+      });
+    });
   });
 
   await cleanup();

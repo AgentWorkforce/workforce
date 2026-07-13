@@ -1,8 +1,11 @@
 import type { AgentSpec, PersonaSpec } from '@agentworkforce/persona-kit';
 import { createCloudRuntimeDefaults } from './cloud-defaults.js';
 import { buildCtx, type CtxBuildOptions } from './ctx.js';
+import { getTrajectoryRecorder, type TrajectoryRecorder } from './trajectory.js';
 import { isWorkforceHandler } from './handler.js';
-import { shimEnvelope, type RawGatewayEnvelope } from './shim.js';
+import { type RawGatewayEnvelope } from './shim.js';
+import { envelopeToAgentEvent } from './to-agent-event.js';
+import { isCronTickEvent } from '@agent-relay/events';
 import type {
   HarnessRunArgs,
   HarnessRunResult,
@@ -123,6 +126,10 @@ export async function startRunner(options: StartRunnerOptions): Promise<void> {
       : {}),
     ...(options.subsystems?.schedule ? { schedule: options.subsystems.schedule } : {}),
     ...(options.subsystems?.log ? { log: options.subsystems.log } : {}),
+    // Recorder write-root resolved once by cloud-defaults; identical to the
+    // value cloud-defaults passes to the ai-hist MCP. Undefined locally/in
+    // tests (recording stays opt-in via TRAJECTORY_ROOT).
+    ...(cloudDefaults.trajectoryRoot ? { trajectoryRoot: cloudDefaults.trajectoryRoot } : {}),
     ...(Object.keys(integrations).length > 0 ? { integrations } : {})
   });
 
@@ -134,14 +141,15 @@ export async function startRunner(options: StartRunnerOptions): Promise<void> {
     integrations: options.persona.integrations ? Object.keys(options.persona.integrations) : []
   });
 
+  const recorder = getTrajectoryRecorder(ctx);
   const stream = options.envelopes ?? readEnvelopesFromStdin();
   for await (const raw of stream) {
-    const event = shimEnvelope(raw);
+    const event = envelopeToAgentEvent(raw);
     if (!event) {
       ctx.log('warn', 'runner.envelope.unsupported', { rawId: raw.id, rawType: raw.type });
       continue;
     }
-    await dispatch(ctx, handlerFn, event);
+    await dispatch(ctx, handlerFn, event, recorder);
   }
 
   ctx.log('info', 'runner.envelope-stream.ended', { persona: options.persona.id });
@@ -155,27 +163,34 @@ function defaultRunnerLog(level: 'debug' | 'info' | 'warn' | 'error', message: s
 async function dispatch(
   ctx: Parameters<WorkforceHandler>[0],
   fn: WorkforceHandler,
-  event: WorkforceEvent
+  event: WorkforceEvent,
+  recorder: TrajectoryRecorder
 ): Promise<void> {
   const t0 = Date.now();
+  // Open a trajectory for this run. The handler narrates via ctx.trajectory.*;
+  // begin/complete/fail never throw (recording is best-effort observability).
+  await recorder.begin(event);
   try {
     await fn(ctx, event);
     ctx.log('info', 'runner.handler.ok', {
       eventId: event.id,
-      source: event.source,
-      type: event.source === 'cron' ? 'cron.tick' : event.type,
+      source: isCronTickEvent(event) ? 'cron' : event.resource.provider,
+      type: event.type,
       durationMs: Date.now() - t0
     });
+    // Auto-finalize (no-op if the handler already called ctx.trajectory.done).
+    await recorder.complete();
   } catch (err) {
     ctx.log('error', 'runner.handler.error', {
       eventId: event.id,
-      source: event.source,
-      type: event.source === 'cron' ? 'cron.tick' : event.type,
+      source: isCronTickEvent(event) ? 'cron' : event.resource.provider,
+      type: event.type,
       attempt: event.attempt,
       durationMs: Date.now() - t0,
       error: err instanceof Error ? err.message : String(err),
       stack: err instanceof Error ? err.stack : undefined
     });
+    await recorder.fail(err);
     // Surface the failure to the outer process so the deploy layer can
     // retry. Throwing here would tear down the for-await loop; the deploy
     // layer reads the structured log line above instead.

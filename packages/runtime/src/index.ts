@@ -10,7 +10,7 @@ export {
   defineAgent,
   isWorkforceAgent,
   type AgentDefinition,
-  type AgentEvent,
+  type WorkforceEventFor,
   type WorkforceAgentExport
 } from './define-agent.js';
 
@@ -25,6 +25,8 @@ export type {
   MemoryItem,
   MemoryRecallOptions,
   MemorySaveOptions,
+  RelayContext,
+  RelaySendResult,
   RelayfileCredentials,
   RequiredRuntimeCredentials,
   SandboxContext,
@@ -34,15 +36,31 @@ export type {
   WorkflowContext,
   WorkflowRunHandle,
   WorkforceAgentContext,
-  WorkforceCronEvent,
   WorkforceCtx,
   WorkforceDeploymentContext,
   WorkforceEvent,
-  WorkforceEventSource,
   WorkforceHandler,
   WorkforceHandlerExport,
-  WorkforceProviderEvent
+  AgentEvent,
+  EventType,
+  CronTickEvent,
+  RelaycastMessageEvent,
+  RelayfileChangeEvent,
+  StartupEvent
 } from './types.js';
+
+// Relay SDK event type guards, re-exported so persona handlers can narrow
+// `event` by type without importing `@agent-relay/events` directly.
+export {
+  isCronTickEvent,
+  isRelaycastMessageEvent,
+  isRelayfileChangeEvent,
+  isStartupEvent
+} from './types.js';
+
+// Relay (agent-to-agent) client used by ctx.relay; exported for external ctx
+// builders and tests.
+export { buildRelayContext, DEFAULT_RELAYCAST_URL } from './relay.js';
 
 // Runtime envelope helpers shared by provider-triggered agents.
 export {
@@ -50,8 +68,9 @@ export {
 } from './types.js';
 
 // Raw gateway envelope contract (the runner's stdin NDJSON line shape, and
-// the fixture format for invocation simulation).
-export { shimEnvelope, type RawGatewayEnvelope } from './shim.js';
+// the fixture format for invocation simulation) + the envelope→AgentEvent decoder.
+export { type RawGatewayEnvelope } from './shim.js';
+export { envelopeToAgentEvent } from './to-agent-event.js';
 
 export type {
   LinearAgentActivity,
@@ -97,15 +116,34 @@ export {
   readTextFile,
   resolveMountRoot,
   writeJsonFile,
+  normalizeWritebackStatus,
   type IntegrationClientOptions,
+  type NormalizedWritebackState,
+  type NormalizedWritebackStatus,
   type WritebackReceipt,
   type WritebackResult,
+  WritebackError,
   RelayfileWritebackError,
   type RelayfileWritebackErrorOptions,
   WorkforceIntegrationError,
   type WorkforceIntegrationErrorOptions,
   SandboxNotAvailableError
 } from './clients/index.js';
+
+// Broker-aware relay MCP resolution. Shared between the cloud harness runner
+// (cloud-defaults.ts) and the local CLI (packages/cli). Callers use these to
+// resolve pre-registered agent-relay MCP args from the broker binary, falling
+// back to the legacy @relaycast/mcp injection when the broker is unavailable.
+export {
+  claudeMcpConfigHasRelayOverride,
+  codexExistingArgs,
+  injectClaudeAgentRelayMcpConfig,
+  injectCodexSubcommandArgs,
+  relayOverrideServerNames,
+  resolveAgentRelayBrokerMcpArgs,
+  resolveRelayMcpFromEnv,
+  type RelayMcpLog
+} from './relay-mcp.js';
 
 // Re-export persona-kit types personas commonly reference at the handler
 // surface, so users don't need a second import for the shapes the ctx

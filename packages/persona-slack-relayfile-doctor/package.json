@@ -1,0 +1,51 @@
+{
+  "name": "@agentworkforce/persona-slack-relayfile-doctor",
+  "version": "0.1.2",
+  "description": "AgentWorkforce slack-relayfile-doctor persona pack — a debugging specialist for the Slack ↔ relayfile ↔ cloud sync/writeback stack. Localizes a symptom to the right layer, confirms root cause with concrete evidence (mount state, the ops API, logs), and prescribes the fix to the owning repo. Install with `agentworkforce install`.",
+  "type": "module",
+  "main": "index.js",
+  "types": "index.d.ts",
+  "agentworkforce": {
+    "personas": "personas"
+  },
+  "exports": {
+    ".": {
+      "types": "./index.d.ts",
+      "import": "./index.js",
+      "default": "./index.js"
+    },
+    "./persona.json": "./personas/slack-relayfile-doctor.json",
+    "./personas/slack-relayfile-doctor.json": "./personas/slack-relayfile-doctor.json",
+    "./package.json": "./package.json"
+  },
+  "files": [
+    "index.js",
+    "index.d.ts",
+    "personas"
+  ],
+  "scripts": {
+    "test": "node --test test/persona.test.mjs"
+  },
+  "keywords": [
+    "agentworkforce",
+    "persona",
+    "slack",
+    "relayfile",
+    "cloud",
+    "debugging",
+    "writeback",
+    "sync"
+  ],
+  "license": "MIT",
+  "engines": {
+    "node": ">=18"
+  },
+  "publishConfig": {
+    "access": "public"
+  },
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/AgentWorkforce/workforce",
+    "directory": "packages/persona-slack-relayfile-doctor"
+  }
+}

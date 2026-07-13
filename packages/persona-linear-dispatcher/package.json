@@ -1,0 +1,50 @@
+{
+  "name": "@agentworkforce/persona-linear-dispatcher",
+  "version": "0.1.2",
+  "description": "AgentWorkforce linear-dispatcher persona pack — autonomous Linear issue dispatcher that watches for Ready for Agent issues, triages them, dispatches codex implementer + claude reviewer agent teams in batches of 5, posts comments, and updates issue state. Install with `agentworkforce install`.",
+  "type": "module",
+  "main": "index.js",
+  "types": "index.d.ts",
+  "agentworkforce": {
+    "personas": "personas"
+  },
+  "exports": {
+    ".": {
+      "types": "./index.d.ts",
+      "import": "./index.js",
+      "default": "./index.js"
+    },
+    "./persona.json": "./personas/linear-dispatcher.json",
+    "./personas/linear-dispatcher.json": "./personas/linear-dispatcher.json",
+    "./package.json": "./package.json"
+  },
+  "files": [
+    "index.js",
+    "index.d.ts",
+    "personas",
+    "skills"
+  ],
+  "scripts": {
+    "test": "node --test test/persona.test.mjs"
+  },
+  "keywords": [
+    "agentworkforce",
+    "persona",
+    "linear",
+    "dispatch",
+    "orchestration",
+    "relayfile"
+  ],
+  "license": "MIT",
+  "engines": {
+    "node": ">=18"
+  },
+  "publishConfig": {
+    "access": "public"
+  },
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/AgentWorkforce/workforce",
+    "directory": "packages/persona-linear-dispatcher"
+  }
+}

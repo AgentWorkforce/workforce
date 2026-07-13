@@ -6,11 +6,23 @@ import path from 'node:path';
 import {
   buildNonInteractiveSpec,
   renderPersonaInputs,
+  resolveAiMemory,
   resolveMcpServersLenient,
   resolvePersonaInputs,
   resolveStringMapLenient,
-  type PersonaSpec
+  type AiHistMcpConfig,
+  type PersonaSpec,
+  type RelayMcpConfig
 } from '@agentworkforce/persona-kit';
+import {
+  claudeMcpConfigHasRelayOverride,
+  codexExistingArgs,
+  injectClaudeAgentRelayMcpConfig,
+  injectCodexSubcommandArgs,
+  relayOverrideServerNames,
+  resolveAgentRelayBrokerMcpArgs,
+  resolveRelayMcpFromEnv
+} from './relay-mcp.js';
 import { createDefaultLlm } from './cloud-llm.js';
 import { SandboxNotAvailableError } from './errors.js';
 import type {
@@ -61,11 +73,24 @@ export interface CloudRuntimeDefaults {
   workflow?: WorkflowContext;
   llm?: LlmContext;
   harnessRunner: (args: HarnessRunArgs) => Promise<HarnessRunResult>;
+  /**
+   * Resolved trajectory root for this deployment, or `undefined` when there is
+   * no cloud workspace and `TRAJECTORY_ROOT` is unset (local/tests stay opt-in,
+   * so the runtime never writes to a developer's cwd). The runner threads this
+   * into `buildCtx` as the recorder write-root; the harness spec passes the
+   * same value to the ai-hist MCP — that single source keeps write-root and
+   * MCP-root identical.
+   */
+  trajectoryRoot?: string;
 }
 
 export function createCloudRuntimeDefaults(options: CloudDefaultOptions): CloudRuntimeDefaults {
   const env = options.env ?? process.env;
   const root = resolveCloudWorkspaceRoot(env);
+  // Single source of truth for the trajectory root, computed once. Both the
+  // recorder write-root (threaded into buildCtx by the runner) and the ai-hist
+  // MCP env (in the harness spec) consume this exact value.
+  const trajectoryRoot = resolveCloudTrajectoryRoot(env, root);
   const isSandboxOptional = options.persona.sandbox === false;
   const baseSandbox = createProcessSandbox(root, env);
   const sandbox = isSandboxOptional
@@ -88,12 +113,34 @@ export function createCloudRuntimeDefaults(options: CloudDefaultOptions): CloudR
     files,
     ...(workflow ? { workflow } : {}),
     ...(llm ? { llm } : {}),
+    ...(trajectoryRoot ? { trajectoryRoot } : {}),
     harnessRunner: createProcessHarnessRunner({
       ...options,
       workspaceRoot: root,
-      env
+      env,
+      trajectoryRoot
     })
   };
+}
+
+/**
+ * Resolve the trajectory root for a cloud deployment. An explicit
+ * `TRAJECTORY_ROOT` always wins. Otherwise it defaults to
+ * `<workspaceRoot>/.trajectories` — but ONLY in a real cloud workspace
+ * (configured mount or an accessible `/workspace`), so local/test runs stay
+ * opt-in via env and never write to a developer's cwd.
+ */
+function resolveCloudTrajectoryRoot(env: NodeJS.ProcessEnv, workspaceRoot: string): string | undefined {
+  const explicit = env.TRAJECTORY_ROOT?.trim();
+  if (explicit) return explicit;
+  const hasCloudWorkspace =
+    firstNonEmpty(
+      env.WORKFORCE_SANDBOX_ROOT,
+      env.WORKFORCE_WORKSPACE_DIR,
+      env.RELAYFILE_MOUNT_ROOT,
+      env.RELAYFILE_ROOT
+    ) !== undefined || canAccessSync('/workspace');
+  return hasCloudWorkspace ? path.join(workspaceRoot, '.trajectories') : undefined;
 }
 
 function resolveCloudWorkspaceRoot(env: NodeJS.ProcessEnv): string {
@@ -412,6 +459,7 @@ function delay(ms: number): Promise<void> {
 function createProcessHarnessRunner(args: CloudDefaultOptions & {
   workspaceRoot: string;
   env: NodeJS.ProcessEnv;
+  trajectoryRoot?: string;
 }): (run: HarnessRunArgs) => Promise<HarnessRunResult> {
   return async (run) => {
     // harness/model/systemPrompt are optional on the persona spec (pure
@@ -452,14 +500,17 @@ function createProcessHarnessRunner(args: CloudDefaultOptions & {
     const renderedSystemPrompt = renderPersonaInputs(personaSystemPrompt, inputResolution.values);
     const cwd = resolveWorkspacePath(args.workspaceRoot, run.cwd ?? args.workspaceRoot);
     await assertDirectory(cwd);
-    await materializeSidecar({
-      persona: args.persona,
-      inputValues: inputResolution.values,
-      cwd,
-      log: args.log
-    });
     const task = run.prompt;
-    const spec = buildNonInteractiveSpec({
+    const relayMcp = resolveRelayMcpFromEnv(args.env);
+    // Inject the ai-hist MCP (the "why" + "how" retrieval surface) only when the
+    // persona opts into recall via `memory.aiMemory` (off by default).
+    // resolveAiHistFromEnv keys off the SAME TRAJECTORY_ROOT the runtime recorder
+    // writes to, so the MCP reads back exactly what this deployment wrote.
+    const aiMemory = resolveAiMemory(args.persona.memory);
+    const aiHist = aiMemory.enabled
+      ? resolveAiHistFromEnv(args.env, args.trajectoryRoot, aiMemory.dbPath)
+      : undefined;
+    const specInput = {
       harness,
       personaId: args.persona.id,
       model: personaModel,
@@ -469,14 +520,80 @@ function createProcessHarnessRunner(args: CloudDefaultOptions & {
       permissions: args.persona.permissions,
       task,
       name: args.persona.id,
-      workingDirectory: cwd
+      workingDirectory: cwd,
+      ...(aiHist ? { aiHist } : {})
+    };
+    const brokerRelayHarness = relayMcp && (harness === 'claude' || harness === 'codex');
+    let spec = buildNonInteractiveSpec({
+      ...specInput,
+      ...(relayMcp && !brokerRelayHarness ? { relayMcp } : {})
     });
+    let spawnArgs = [...spec.args];
+    if (relayMcp && harness === 'codex') {
+      const brokerMcpArgs = await resolveAgentRelayBrokerMcpArgs({
+        cli: 'codex',
+        env: args.env,
+        relayMcp,
+        cwd,
+        existingArgs: codexExistingArgs(spawnArgs),
+        log: args.log
+      });
+      if (brokerMcpArgs) {
+        spawnArgs = injectCodexSubcommandArgs(spawnArgs, brokerMcpArgs);
+      } else {
+        // Legacy compatibility fallback. The broker's `agent-relay` MCP server
+        // is preferred for Codex because `mcp-args --register` pre-mints
+        // RELAY_AGENT_TOKEN and sets RELAY_SKIP_BOOTSTRAP=1; the older
+        // `@relaycast/mcp` server self-registers during MCP initialize.
+        spec = buildNonInteractiveSpec({ ...specInput, relayMcp });
+        spawnArgs = [...spec.args];
+      }
+    } else if (relayMcp && harness === 'claude') {
+      if (claudeMcpConfigHasRelayOverride(spawnArgs)) {
+        args.log('debug', 'harness.relay_mcp.persona_override', {
+          harness,
+          serverNames: relayOverrideServerNames(spawnArgs)
+        });
+      } else {
+        const brokerMcpArgs = await resolveAgentRelayBrokerMcpArgs({
+          cli: 'claude',
+          env: args.env,
+          relayMcp,
+          cwd,
+          // Claude persona specs already contain --mcp-config; the broker
+          // treats that as user-managed MCP and returns no injection args.
+          // Ask for the canonical broker payload, then merge agent-relay into
+          // the persona's strict config below.
+          existingArgs: [],
+          log: args.log
+        });
+        const mergedArgs = brokerMcpArgs
+          ? injectClaudeAgentRelayMcpConfig(spawnArgs, brokerMcpArgs, args.log)
+          : undefined;
+        if (mergedArgs) {
+          spawnArgs = mergedArgs;
+        } else {
+          // Legacy compatibility fallback. The broker-generated `agent-relay`
+          // MCP server is preferred because it comes from the Relay SDK broker
+          // helper and carries the pre-registered token fast path; the older
+          // `@relaycast/mcp` server self-registers during MCP initialize.
+          spec = buildNonInteractiveSpec({ ...specInput, relayMcp });
+          spawnArgs = [...spec.args];
+        }
+      }
+    }
     for (const warning of spec.warnings) {
       args.log('warn', 'harness.spec.warning', { warning });
     }
     for (const file of spec.configFiles) {
       await writeWorkspaceRelativeFile(cwd, file.path, file.contents);
     }
+    await materializeSidecar({
+      persona: args.persona,
+      inputValues: inputResolution.values,
+      cwd,
+      log: args.log
+    });
     const startedAt = Date.now();
     const childEnv = {
       ...callerEnv,
@@ -491,7 +608,7 @@ function createProcessHarnessRunner(args: CloudDefaultOptions & {
     };
     const result = await spawnAndCapture({
       bin: spec.bin,
-      args: [...spec.args],
+      args: spawnArgs,
       cwd,
       env: childEnv,
       timeoutMs: args.persona.harnessSettings.timeoutSeconds
@@ -499,10 +616,16 @@ function createProcessHarnessRunner(args: CloudDefaultOptions & {
         : undefined
     });
     const parsed = extractUsage(result.output, result.stderr);
+    const trimmedStderr = result.stderr.trim();
     const harnessResult: HarnessRunResult = {
-      output: parsed.output.trimEnd(),
+      output: foldHarnessFailureOutput({
+        output: parsed.output,
+        stderr: result.stderr,
+        exitCode: result.exitCode
+      }),
       exitCode: result.exitCode,
       durationMs: Date.now() - startedAt,
+      ...(trimmedStderr ? { stderr: trimmedStderr } : {}),
       ...(parsed.usage ? { usage: parsed.usage } : {})
     };
     await reportHarnessUsage({
@@ -515,6 +638,28 @@ function createProcessHarnessRunner(args: CloudDefaultOptions & {
       log: args.log
     });
     return harnessResult;
+  };
+}
+
+/**
+ * Resolve the ai-hist MCP config. Only called when the persona opts into recall
+ * via `memory.aiMemory`. The "why" read-root mirrors the runtime recorder's
+ * write-root (env `TRAJECTORY_ROOT` wins, else the deployment default), so the
+ * MCP reads back exactly what the recorder wrote. The "how" DB comes from the
+ * persona's `memory.aiMemory.dbPath` override, else `AI_HIST_DB` env.
+ */
+function resolveAiHistFromEnv(
+  env: NodeJS.ProcessEnv,
+  defaultTrajectoryRoot?: string,
+  dbPathOverride?: string
+): AiHistMcpConfig | undefined {
+  // env.TRAJECTORY_ROOT wins; otherwise the deployment default (same value the
+  // recorder writes to) — keeps the MCP read-root identical to the write-root.
+  const trajectoryRoot = env.TRAJECTORY_ROOT?.trim() || defaultTrajectoryRoot;
+  const dbPath = dbPathOverride?.trim() || env.AI_HIST_DB?.trim();
+  return {
+    ...(trajectoryRoot ? { trajectoryRoot } : {}),
+    ...(dbPath ? { dbPath } : {})
   };
 }
 
@@ -551,7 +696,10 @@ function sidecarForPersona(
       mode: persona.claudeMdMode ?? 'overwrite'
     };
   }
-  if ((persona.harness === 'codex' || persona.harness === 'opencode') && persona.agentsMdContent) {
+  if (
+    (persona.harness === 'codex' || persona.harness === 'opencode' || persona.harness === 'grok') &&
+    persona.agentsMdContent
+  ) {
     return {
       file: 'AGENTS.md',
       content: renderPersonaInputs(persona.agentsMdContent, inputValues),
@@ -636,6 +784,28 @@ function signalCode(name: string): number | undefined {
     TERM: 15
   };
   return signals[name];
+}
+
+/**
+ * Build the caller-facing `output` for a harness run. On a non-zero exit the
+ * failure reason almost always lands on stderr — CLI auth/usage errors, and
+ * spawn failures like `spawn grok ENOENT`, which leave stdout empty. Since
+ * `HarnessRunResult.output` carries only stdout, a caller that builds an error
+ * from `run.output` (e.g. `grok harness failed (exit 1): ${run.output}`) would
+ * otherwise see nothing. Fold trimmed stderr into the output on failure so the
+ * cause is visible; on success, stderr is left out and the output stays clean.
+ */
+export function foldHarnessFailureOutput(args: {
+  output: string;
+  stderr: string;
+  exitCode: number;
+}): string {
+  const base = args.output.trimEnd();
+  const err = args.stderr.trim();
+  if (args.exitCode !== 0 && err) {
+    return [base, err].filter(Boolean).join('\n');
+  }
+  return base;
 }
 
 function extractUsage(output: string, stderr: string): { output: string; usage?: HarnessUsage } {

@@ -141,7 +141,13 @@ test('parsePersonaSpec accepts the Relayfile-VFS example personas', () => {
   // Triggers moved to agent.ts; persona declares the github/slack connections.
   assert.ok(reviewAgent.integrations?.github);
   assert.ok(reviewAgent.integrations?.slack);
-  assert.deepEqual(reviewAgent.memory, { enabled: true, scopes: ['workspace'] });
+  // Example opts into both memory facets (object form) alongside long-form memory.
+  assert.deepEqual(reviewAgent.memory, {
+    enabled: true,
+    scopes: ['workspace'],
+    trajectories: { enabled: true, autoCompact: true },
+    aiMemory: { enabled: true }
+  });
 
   const linearShipper = parsePersonaFixture('examples/linear-shipper/persona.json');
   assert.equal(linearShipper.id, 'linear-shipper');
@@ -645,12 +651,69 @@ test('parseSchedules validates cron, requires unique names, preserves tz when se
 test('parseIntegrations preserves scope (connection-only); rejects persona-level triggers', () => {
   const i = parseIntegrations(
     {
-      github: { scope: { repo: 'org/r' } },
+      github: {
+        scope: { repo: 'org/r' },
+        config: {
+          materialization: {
+            default: 'lazy',
+            webhookWritesForLazyRepos: true,
+            rules: [
+              {
+                repos: ['org/r'],
+                resources: ['issues', 'pulls'],
+                issues: { mode: 'eager', filter: { state: 'open', labels: ['p0'] } },
+                pulls: 'eager'
+              }
+            ]
+          }
+        }
+      },
+      gitlab: {
+        scope: { projectPath: 'org/r' },
+        config: {
+          materialization: {
+            default: 'lazy',
+            webhookWritesForLazyProjects: true,
+            rules: [
+              {
+                projects: ['org/r'],
+                resources: ['issues', 'merge_requests'],
+                issues: { mode: 'eager', filter: { state: 'opened', labels: ['p0'] } },
+                merge_requests: 'eager'
+              }
+            ]
+          }
+        }
+      },
       linear: {} // no scope — still a declared connection
     },
     'integrations'
   );
   assert.equal(i?.github.scope?.repo, 'org/r');
+  assert.deepEqual(i?.github.config?.materialization, {
+    default: 'lazy',
+    webhookWritesForLazyRepos: true,
+    rules: [
+      {
+        repos: ['org/r'],
+        resources: ['issues', 'pulls'],
+        issues: { mode: 'eager', filter: { state: 'open', labels: ['p0'] } },
+        pulls: 'eager'
+      }
+    ]
+  });
+  assert.deepEqual(i?.gitlab.config?.materialization, {
+    default: 'lazy',
+    webhookWritesForLazyProjects: true,
+    rules: [
+      {
+        projects: ['org/r'],
+        resources: ['issues', 'merge_requests'],
+        issues: { mode: 'eager', filter: { state: 'opened', labels: ['p0'] } },
+        merge_requests: 'eager'
+      }
+    ]
+  });
   // Default-injected source keeps existing personas resolving against
   // the deploying user's `user_integrations` row.
   assert.deepEqual(i?.github.source, { kind: 'deployer_user' });
@@ -663,13 +726,55 @@ test('parseIntegrations preserves scope (connection-only); rejects persona-level
   );
 });
 
+test('parseIntegrations accepts optional integrations enabled by persona input', () => {
+  const i = parseIntegrations(
+    {
+      slack: { optional: true, enabledByInput: 'SLACK_CHANNEL' }
+    },
+    'integrations'
+  );
+
+  assert.equal(i?.slack.optional, true);
+  assert.equal(i?.slack.enabledByInput, 'SLACK_CHANNEL');
+});
+
+test('parseIntegrations validates optional integration activation shape', () => {
+  assert.throws(
+    () => parseIntegrations({ slack: { optional: 'yes' } }, 'integrations'),
+    /integrations\.slack\.optional must be a boolean/
+  );
+  assert.throws(
+    () => parseIntegrations({ slack: { optional: true } }, 'integrations'),
+    /integrations\.slack\.enabledByInput is required when optional is true/
+  );
+  assert.throws(
+    () => parseIntegrations({ slack: { enabledByInput: 'SLACK_CHANNEL' } }, 'integrations'),
+    /integrations\.slack\.optional must be true when enabledByInput is set/
+  );
+  assert.throws(
+    () => parseIntegrations({ slack: { optional: true, enabledByInput: 'slack_channel' } }, 'integrations'),
+    /integrations\.slack\.enabledByInput must be an env-style name/
+  );
+});
+
+test('parseIntegrations rejects non-plain adapter config values', () => {
+  assert.throws(
+    () => parseIntegrations({ github: { config: null } }, 'integrations'),
+    /integrations\.github\.config must be a plain object/
+  );
+  assert.throws(
+    () => parseIntegrations({ github: { config: ['materialization'] } }, 'integrations'),
+    /integrations\.github\.config must be a plain object/
+  );
+});
+
 test('parseAgentSpec validates launchedBy plus provider-keyed triggers, schedules, and watch', () => {
   const agent = parseAgentSpec({
     launchedBy: 'team-dispatcher',
     triggers: {
       github: [
         { on: 'pull_request.opened' },
-        { on: 'issue_comment.created', match: '@mention' }
+        { on: 'issue_comment.created', match: '@mention', maxConcurrency: 1 }
       ],
       slack: [{ on: 'app_mention' }]
     },
@@ -678,10 +783,39 @@ test('parseAgentSpec validates launchedBy plus provider-keyed triggers, schedule
   });
   assert.equal(agent.triggers?.github.length, 2);
   assert.equal(agent.triggers?.github[1].match, '@mention');
+  assert.equal(agent.triggers?.github[1].maxConcurrency, 1);
   assert.equal(agent.triggers?.slack[0].on, 'app_mention');
   assert.equal(agent.schedules?.[0].name, 'nightly');
   assert.equal(agent.watch?.[0].paths[0], '/github/x.json');
   assert.equal(agent.launchedBy, 'team-dispatcher');
+});
+
+test('parseAgentSpec omits invalid trigger maxConcurrency values', () => {
+  const agent = parseAgentSpec({
+    triggers: {
+      github: [
+        { on: 'absent' },
+        { on: 'valid', maxConcurrency: 2 },
+        { on: 'zero', maxConcurrency: 0 },
+        { on: 'negative', maxConcurrency: -1 },
+        { on: 'fractional', maxConcurrency: 1.5 },
+        { on: 'nan', maxConcurrency: NaN },
+        { on: 'infinity', maxConcurrency: Infinity },
+        { on: 'string', maxConcurrency: '1' }
+      ]
+    }
+  });
+
+  assert.deepEqual(agent.triggers?.github, [
+    { on: 'absent' },
+    { on: 'valid', maxConcurrency: 2 },
+    { on: 'zero' },
+    { on: 'negative' },
+    { on: 'fractional' },
+    { on: 'nan' },
+    { on: 'infinity' },
+    { on: 'string' }
+  ]);
 });
 
 test('parseAgentSpec rejects malformed triggers maps with precise field paths', () => {
@@ -694,6 +828,14 @@ test('parseAgentSpec rejects malformed triggers maps with precise field paths', 
   assert.throws(
     () => parseAgentSpec({ triggers: { github: [{ on: '' }] } }),
     /triggers\.github\[0\]\.on must be a non-empty string/
+  );
+  assert.throws(
+    () => parseAgentSpec({ triggers: { github: [{ on: 'issue.opened', match: '' }] } }),
+    /triggers\.github\[0\]\.match must be a non-empty string if provided/
+  );
+  assert.throws(
+    () => parseAgentSpec({ triggers: { github: [{ on: 'issue.opened', where: 1 }] } }),
+    /triggers\.github\[0\]\.where must be a non-empty string if provided/
   );
   // An empty agent (no listeners) parses to {}; the deploy CLI enforces "at least one".
   assert.deepEqual(parseAgentSpec({}), {});

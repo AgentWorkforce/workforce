@@ -2,7 +2,8 @@ import type {
   Harness,
   HarnessSettings,
   McpServerSpec,
-  PersonaPermissions
+  PersonaPermissions,
+  PersonaRelay
 } from './types.js';
 
 /**
@@ -19,7 +20,7 @@ export interface InteractiveConfigFile {
 
 /** Result of translating a persona's runtime into a spawnable command. */
 export interface InteractiveSpec {
-  /** Binary to exec (e.g. `claude`, `codex`, `opencode`). */
+  /** Binary to exec (e.g. `claude`, `codex`, `opencode`, `grok`). */
   bin: string;
   /** Argv for the binary, in order. Callers should `spawn(bin, args)`. */
   args: readonly string[];
@@ -27,9 +28,9 @@ export interface InteractiveSpec {
    * If set, the caller should append this as the final positional argument
    * — used by harnesses that don't support a separate system-prompt flag
    * to carry the persona's system prompt as the initial user prompt.
-   * Currently only codex takes this path; claude uses `--append-system-prompt`
-   * and opencode writes the prompt into `opencode.json` (see `configFiles`),
-   * so both return `null` here.
+   * Currently only codex takes this path; claude uses `--append-system-prompt`,
+   * opencode writes the prompt into `opencode.json` (see `configFiles`), and
+   * grok writes the prompt into `AGENTS.md` (see `configFiles`).
    */
   initialPrompt: string | null;
   /**
@@ -41,7 +42,8 @@ export interface InteractiveSpec {
    * Config files the caller must write (relative to the harness cwd) before
    * launch. Opencode uses this to materialize an `opencode.json` carrying
    * the persona's agent definition (model + system prompt) so `--agent` can
-   * resolve it; claude and codex return an empty array.
+   * resolve it. Grok uses this to materialize `AGENTS.md` when `systemPrompt`
+   * is non-empty. Claude and codex return an empty array.
    */
   configFiles: InteractiveConfigFile[];
   /**
@@ -81,10 +83,26 @@ export interface RelayMcpConfig {
   defaultWorkspace?: string;
 }
 
+/**
+ * Resolved config for the `ai-hist` MCP server. Both fields are optional —
+ * the MCP defaults to its own discovery (`~/Projects/**​/.trajectories/**` for
+ * the "why" and `~/.local/share/ai-hist/ai-history.db` for the "how") when the
+ * caller supplies neither.
+ */
+export interface AiHistMcpConfig {
+  /**
+   * Root directory the MCP scans for per-run trajectory contract files
+   * (`$TRAJECTORY_ROOT/**​/compacted/*.json`). Passed through as `TRAJECTORY_ROOT`.
+   */
+  trajectoryRoot?: string;
+  /** Override the ai-hist SQLite DB path. Passed through as `AI_HIST_DB`. */
+  dbPath?: string;
+}
+
 export interface BuildInteractiveSpecInput {
   harness: Harness;
   /**
-   * Persona id — used as the opencode agent name. Claude and codex ignore
+   * Persona id — used as the opencode agent name. Claude, codex, and grok ignore
    * this field today; keeping it required here keeps call sites honest and
    * lets future harnesses consume it without another type change.
    */
@@ -97,18 +115,29 @@ export interface BuildInteractiveSpecInput {
    * When set, a `relaycast` MCP server is merged into {@link mcpServers} so a
    * persona running under an Agent Relay broker can talk to the team. A
    * persona-declared server literally named `relaycast` takes precedence (it
-   * is not overwritten). Wired for claude and codex; opencode still warns that
-   * MCP injection is unsupported.
+   * is not overwritten). Wired for claude and codex; opencode/grok still warn
+   * that MCP injection is unsupported.
    */
   relayMcp?: RelayMcpConfig;
+  /**
+   * When set, an `ai-hist` MCP server is merged into {@link mcpServers} so a
+   * persona has retrieval access to its own decision trajectories (the "why")
+   * and cross-tool prompt/session history (the "how"). A persona-declared
+   * server literally named `ai-hist` takes precedence (it is not overwritten).
+   * Callers resolve this from env + the persona's `memory.aiMemory` opt-in and
+   * pass it explicitly — this function reads no environment itself. Wired for
+   * claude and codex; opencode still warns that MCP injection is unsupported.
+   */
+  aiHist?: AiHistMcpConfig;
   permissions?: PersonaPermissions;
   harnessSettings?: HarnessSettings;
   /**
-   * Absolute paths of directories to load as Claude Code plugins for this
-   * session (`--plugin-dir <path>` per entry). Used to wire in out-of-repo
+   * Absolute paths of directories to load as harness plugins for this
+   * session (`--plugin-dir <path>` per entry where supported). Used to wire in out-of-repo
    * skill stages produced by
    * {@link SkillMaterializationOptions.installRoot}.
-   * Claude-only: other harnesses emit a warning and ignore the field.
+   * Currently supported by Claude and Grok. Codex/opencode emit a warning and
+   * ignore the field.
    */
   pluginDirs?: readonly string[];
 }
@@ -210,6 +239,11 @@ function appendCodexMcpServerArgs(
  * codex has no dedicated system-prompt flag today — callers append it as
  * the final positional `[PROMPT]`.
  *
+ * The grok branch launches the Grok Build CLI (`grok`) with the persona model.
+ * Grok reads AGENTS.md and .grok/skills from the working tree; interactive
+ * mode writes the persona system prompt into AGENTS.md when present, and
+ * one-shot mode uses `--single` because Grok has no separate system-prompt flag.
+ *
  * The opencode branch routes model + system prompt through opencode's
  * agent abstraction (see https://opencode.ai/config.json: `agent.<id>.{
  * model, prompt, mode }`). It emits an `opencode.json` via `configFiles`
@@ -223,11 +257,11 @@ function appendCodexMcpServerArgs(
  *
  * The codex branch translates persona `mcpServers` into repeated
  * `--config mcp_servers.<name>...` TOML overrides so codex sessions receive
- * the same declared MCP servers as the persona. Permission wiring remains
- * claude-only for now.
+ * the same declared MCP servers as the persona.
  *
- * The opencode branch emits a warning if the persona declares `mcpServers`
- * or `permissions` — those features aren't wired for opencode yet.
+ * The opencode/grok branches emit a warning if the persona declares `mcpServers`.
+ * Grok maps `permissions.mode: "bypassPermissions"` to `--always-approve`;
+ * other permission fields warn.
  */
 /**
  * Build the stdio MCP server spec for relaycast, mirroring the env block the
@@ -245,6 +279,75 @@ function buildRelaycastMcpServer(relay: RelayMcpConfig): McpServerSpec {
   if (relay.baseUrl) env.RELAY_BASE_URL = relay.baseUrl;
   if (relay.defaultWorkspace) env.RELAY_DEFAULT_WORKSPACE = relay.defaultWorkspace;
   return { type: 'stdio', command: 'npx', args: ['-y', '@relaycast/mcp'], env };
+}
+
+/** Outcome of resolving a persona's declared `relay` against the environment. */
+export type ResolveRelayMcpResult =
+  | { kind: 'disabled' }
+  | { kind: 'missing-secret'; reason: string }
+  | { kind: 'ready'; config: RelayMcpConfig };
+
+/**
+ * Resolve a persona's declarative {@link PersonaRelay} into a
+ * {@link RelayMcpConfig} the launcher can hand to {@link buildInteractiveSpec}
+ * as `relayMcp`. The persona declares **intent** (enabled, agentName, default
+ * workspace); the secret (`RELAY_API_KEY`) and base URL come from `env`.
+ *
+ * Returns a discriminated result so callers can distinguish "off" from
+ * "declared but the deploy env is missing `RELAY_API_KEY`" (worth a warning)
+ * rather than silently dropping relay. Pure — reads only the passed `env`.
+ */
+export function resolvePersonaRelayMcp(
+  relay: PersonaRelay | undefined,
+  env: Record<string, string | undefined>,
+  fallbackAgentName?: string
+): ResolveRelayMcpResult {
+  if (relay === undefined || relay === false) return { kind: 'disabled' };
+  const cfg = typeof relay === 'object' ? relay : {};
+  if (cfg.enabled === false) return { kind: 'disabled' };
+
+  const apiKey = env.RELAY_API_KEY?.trim();
+  const agentName = cfg.agentName?.trim() || env.RELAY_AGENT_NAME?.trim() || fallbackAgentName?.trim();
+  if (!apiKey) {
+    return { kind: 'missing-secret', reason: 'RELAY_API_KEY is not set in the deploy environment' };
+  }
+  if (!agentName) {
+    return {
+      kind: 'missing-secret',
+      reason: 'no relay agent name (set relay.agentName, RELAY_AGENT_NAME, or pass the persona id)'
+    };
+  }
+  const baseUrl = env.RELAY_BASE_URL?.trim();
+  const defaultWorkspace = cfg.defaultWorkspace?.trim() || env.RELAY_DEFAULT_WORKSPACE?.trim();
+  return {
+    kind: 'ready',
+    config: {
+      apiKey,
+      agentName,
+      ...(baseUrl ? { baseUrl } : {}),
+      ...(defaultWorkspace ? { defaultWorkspace } : {})
+    }
+  };
+}
+
+/**
+ * Build the stdio MCP server spec for ai-hist — the unified retrieval surface
+ * that serves both the "why" (this persona's compacted decision trajectories)
+ * and the "how" (cross-tool prompt/session history). Launched via
+ * `npx -y ai-hist-mcp` — the published, provenance-signed wrapper package that
+ * re-exports the server from `ai-hist`. Env carries the trajectory root +
+ * optional DB override.
+ */
+function buildAiHistMcpServer(cfg: AiHistMcpConfig): McpServerSpec {
+  const env: Record<string, string> = {};
+  if (cfg.trajectoryRoot) env.TRAJECTORY_ROOT = cfg.trajectoryRoot;
+  if (cfg.dbPath) env.AI_HIST_DB = cfg.dbPath;
+  return {
+    type: 'stdio',
+    command: 'npx',
+    args: ['-y', 'ai-hist-mcp'],
+    env
+  };
 }
 
 export function buildInteractiveSpec(input: BuildInteractiveSpecInput): InteractiveSpec {
@@ -267,10 +370,20 @@ export function buildInteractiveSpec(input: BuildInteractiveSpecInput): Interact
   const relayMcpServer = input.relayMcp
     ? buildRelaycastMcpServer(input.relayMcp)
     : undefined;
+  // ai-hist is injected only for personas that opt into recall
+  // (callers gate `input.aiHist` on `memory.aiMemory`). A persona-declared
+  // `ai-hist` server wins, same as relaycast.
+  const aiHistServer = input.aiHist ? buildAiHistMcpServer(input.aiHist) : undefined;
   const injectsRelaycast = relayMcpServer !== undefined && personaMcpServers?.relaycast === undefined;
-  const mcpServers = relayMcpServer
-    ? { relaycast: relayMcpServer, ...(personaMcpServers ?? {}) }
-    : personaMcpServers;
+  const injectsAiHist = aiHistServer !== undefined && personaMcpServers?.['ai-hist'] === undefined;
+  const mcpServers =
+    injectsRelaycast || injectsAiHist
+      ? {
+          ...(injectsRelaycast ? { relaycast: relayMcpServer as McpServerSpec } : {}),
+          ...(injectsAiHist ? { 'ai-hist': aiHistServer as McpServerSpec } : {}),
+          ...(personaMcpServers ?? {})
+        }
+      : personaMcpServers;
   const warnings: string[] = [];
   const hasPluginDirs = pluginDirs !== undefined && pluginDirs.length > 0;
 
@@ -320,7 +433,7 @@ export function buildInteractiveSpec(input: BuildInteractiveSpecInput): Interact
       }
       if (hasPluginDirs) {
         warnings.push(
-          'pluginDirs is currently claude-only; ignoring under the codex harness. Skills must be staged via codex conventions.'
+          'pluginDirs is currently supported only for claude and grok; ignoring under the codex harness. Skills must be staged via codex conventions.'
         );
       }
       const args = ['-m', stripProviderPrefix(model)];
@@ -369,17 +482,22 @@ export function buildInteractiveSpec(input: BuildInteractiveSpecInput): Interact
       };
     }
     case 'opencode': {
-      if (hasPersonaMcpServers && injectsRelaycast) {
+      const injectsDefaults = injectsRelaycast || injectsAiHist;
+      const defaultNames = [
+        ...(injectsRelaycast ? ['relaycast'] : []),
+        ...(injectsAiHist ? ['ai-hist'] : [])
+      ].join('/');
+      if (hasPersonaMcpServers && injectsDefaults) {
         warnings.push(
-          'persona declares mcpServers and broker requested relaycast MCP injection, but the opencode harness is not yet wired for runtime MCP injection; proceeding without MCP.'
+          `persona declares mcpServers and default ${defaultNames} MCP injection was requested, but the opencode harness is not yet wired for runtime MCP injection; proceeding without MCP.`
         );
       } else if (hasPersonaMcpServers) {
         warnings.push(
           'persona declares mcpServers but the opencode harness is not yet wired for runtime MCP injection; proceeding without MCP.'
         );
-      } else if (injectsRelaycast) {
+      } else if (injectsDefaults) {
         warnings.push(
-          'broker requested relaycast MCP injection but the opencode harness is not yet wired for runtime MCP injection; proceeding without MCP.'
+          `default ${defaultNames} MCP injection was requested but the opencode harness is not yet wired for runtime MCP injection; proceeding without MCP.`
         );
       }
       if (hasAnyPermission(permissions)) {
@@ -389,7 +507,7 @@ export function buildInteractiveSpec(input: BuildInteractiveSpecInput): Interact
       }
       if (hasPluginDirs) {
         warnings.push(
-          'pluginDirs is currently claude-only; ignoring under the opencode harness. Skills must be staged via opencode conventions.'
+          'pluginDirs is currently supported only for claude and grok; ignoring under the opencode harness. Skills must be staged via opencode conventions.'
         );
       }
       if (hasCodexLaunchSettings(harnessSettings)) {
@@ -461,6 +579,74 @@ export function buildInteractiveSpec(input: BuildInteractiveSpecInput): Interact
         mcpServers
       };
     }
+    case 'grok': {
+      if (hasPersonaMcpServers && injectsRelaycast) {
+        warnings.push(
+          'persona declares mcpServers and broker requested relaycast MCP injection, but the grok harness is not yet wired for runtime MCP injection; proceeding without MCP.'
+        );
+      } else if (hasPersonaMcpServers) {
+        warnings.push(
+          'persona declares mcpServers but the grok harness is not yet wired for runtime MCP injection; proceeding without MCP.'
+        );
+      } else if (injectsRelaycast) {
+        warnings.push(
+          'broker requested relaycast MCP injection but the grok harness is not yet wired for runtime MCP injection; proceeding without MCP.'
+        );
+      }
+      if (permissions?.allow?.length || permissions?.deny?.length) {
+        warnings.push(
+          'persona declares permission allow/deny lists but the grok harness is not wired for allow/deny injection; proceeding without allow/deny rules.'
+        );
+      }
+      const args = ['--no-auto-update', '--model', model];
+      if (permissions?.mode === 'bypassPermissions') {
+        args.push('--always-approve');
+      } else if (permissions?.mode && permissions.mode !== 'default') {
+        warnings.push(
+          `persona declares permissions.mode "${permissions.mode}" but the grok harness only supports bypassPermissions via --always-approve; proceeding with Grok defaults.`
+        );
+      }
+      if (hasPluginDirs) {
+        for (const dir of pluginDirs!) {
+          args.push('--plugin-dir', dir);
+        }
+      }
+      if (
+        harnessSettings?.dangerouslyBypassApprovalsAndSandbox &&
+        !args.includes('--always-approve')
+      ) {
+        args.push('--always-approve');
+      }
+      if (harnessSettings?.sandboxMode) {
+        warnings.push('grok harnessSettings.sandboxMode is not yet wired; proceeding with Grok defaults.');
+      }
+      if (harnessSettings?.approvalPolicy) {
+        warnings.push(
+          'grok harnessSettings.approvalPolicy is not supported; use permissions.mode "bypassPermissions" or dangerouslyBypassApprovalsAndSandbox for --always-approve.'
+        );
+      }
+      if (harnessSettings?.workspaceWriteNetworkAccess !== undefined) {
+        warnings.push('grok harnessSettings.workspaceWriteNetworkAccess is not yet wired; proceeding with Grok defaults.');
+      }
+      if (harnessSettings?.webSearch) {
+        warnings.push('grok harnessSettings.webSearch is not wired to a Grok CLI flag; proceeding with Grok defaults.');
+      }
+      return {
+        bin: 'grok',
+        args,
+        initialPrompt: null,
+        warnings,
+        configFiles: systemPrompt
+          ? [
+              {
+                path: 'AGENTS.md',
+                contents: systemPrompt.endsWith('\n') ? systemPrompt : `${systemPrompt}\n`
+              }
+            ]
+          : [],
+        mcpServers
+      };
+    }
     default: {
       // Exhaustiveness guard: if `Harness` gains a new variant, this
       // assertion will fail to compile and force the maintainer to handle
@@ -491,6 +677,9 @@ export interface NonInteractiveSpec {
  *   built from any `initialPrompt` joined with the user task.
  * - `opencode`: prefixes `run`, appends `--model <m> --format default
  *   [--dir <cwd>] [--title <n>] <task>`.
+ * - `grok`: appends `--output-format plain [--cwd <cwd>] --always-approve
+ *   --single <prompt>`, where prompt includes the persona system prompt plus
+ *   the one-shot task.
  */
 export function buildNonInteractiveSpec(
   input: BuildInteractiveSpecInput & {
@@ -527,6 +716,23 @@ export function buildNonInteractiveSpec(
       if (input.workingDirectory) args.push('--dir', input.workingDirectory);
       if (input.name) args.push('--title', input.name);
       args.push(input.task);
+      return {
+        bin: interactive.bin,
+        args,
+        configFiles: interactive.configFiles,
+        warnings: interactive.warnings
+      };
+    }
+    case 'grok': {
+      const prompt = input.systemPrompt
+        ? `${input.systemPrompt}\n\nUser task:\n${input.task}`
+        : input.task;
+      const args = [...interactive.args, '--output-format', 'plain'];
+      if (input.workingDirectory) args.push('--cwd', input.workingDirectory);
+      if (!args.includes('--always-approve')) {
+        args.push('--always-approve');
+      }
+      args.push('--single', prompt);
       return {
         bin: interactive.bin,
         args,

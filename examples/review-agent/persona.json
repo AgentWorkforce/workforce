@@ -15,7 +15,14 @@
     "enabled": true,
     "scopes": [
       "workspace"
-    ]
+    ],
+    "trajectories": {
+      "enabled": true,
+      "autoCompact": true
+    },
+    "aiMemory": {
+      "enabled": true
+    }
   },
   "onEvent": "./agent.ts",
   "harness": "codex",

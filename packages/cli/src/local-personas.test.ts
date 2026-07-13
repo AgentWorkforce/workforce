@@ -742,6 +742,90 @@ test('overlay claudeMdMode flips while inheriting the path from a lower layer', 
   });
 });
 
+test('relative local skill source resolves against the persona JSON directory', () => {
+  withLayers(({ cwd, homeDir }) => {
+    mkdirSync(join(homeDir, 'skills'), { recursive: true });
+    writeFileSync(join(homeDir, 'skills', 'mount-policy.md'), '# mount policy\n');
+    writeJson(join(homeDir, 'p.json'), {
+      id: 'p',
+      extends: 'persona-maker',
+      skills: [
+        {
+          id: 'mount-policy',
+          source: './skills/mount-policy.md',
+          description: 'local skill'
+        }
+      ]
+    });
+    const loaded = loadLocalPersonas({ cwd, homeDir });
+    assert.deepEqual(loaded.warnings, []);
+    const spec = loaded.byId.get('p');
+    assert.equal(spec?.skills[0]?.source, join(homeDir, 'skills', 'mount-policy.md'));
+  });
+});
+
+test('relative local skill source falls back to the package root above the persona dir', () => {
+  withLayers(({ cwd, home, homeDir }) => {
+    // Persona-pack layout: skills/ sits next to personas/, not inside it.
+    const packageSkillsDir = join(home, '.agentworkforce', 'workforce', 'skills');
+    mkdirSync(packageSkillsDir, { recursive: true });
+    writeFileSync(join(packageSkillsDir, 'pack-skill.md'), '# pack skill\n');
+    writeJson(join(homeDir, 'p.json'), {
+      id: 'p',
+      extends: 'persona-maker',
+      skills: [
+        { id: 'pack-skill', source: './skills/pack-skill.md', description: 'pack skill' }
+      ]
+    });
+    const loaded = loadLocalPersonas({ cwd, homeDir });
+    assert.deepEqual(loaded.warnings, []);
+    const spec = loaded.byId.get('p');
+    assert.equal(spec?.skills[0]?.source, join(packageSkillsDir, 'pack-skill.md'));
+  });
+});
+
+test('relative local skill source falls back to the loader cwd', () => {
+  withLayers(({ cwd, homeDir }) => {
+    // Installed packs can rewrite asset paths to cwd-relative locations.
+    const assetsDir = join(cwd, '__assets', 'skills');
+    mkdirSync(assetsDir, { recursive: true });
+    writeFileSync(join(assetsDir, 'asset-skill.md'), '# asset skill\n');
+    writeJson(join(homeDir, 'p.json'), {
+      id: 'p',
+      extends: 'persona-maker',
+      skills: [
+        { id: 'asset-skill', source: './__assets/skills/asset-skill.md', description: 'asset skill' }
+      ]
+    });
+    const loaded = loadLocalPersonas({ cwd, homeDir });
+    assert.deepEqual(loaded.warnings, []);
+    const spec = loaded.byId.get('p');
+    assert.equal(spec?.skills[0]?.source, join(assetsDir, 'asset-skill.md'));
+  });
+});
+
+test('missing local skill file produces a warning and drops the skill, not a throw', () => {
+  withLayers(({ cwd, homeDir }) => {
+    writeJson(join(homeDir, 'p.json'), {
+      id: 'p',
+      extends: 'persona-maker',
+      skills: [
+        { id: 'kept', source: '@agent-relay/workspace-layout', description: 'prpm skill' },
+        { id: 'gone', source: './skills/missing.md', description: 'broken pointer' }
+      ]
+    });
+    const loaded = loadLocalPersonas({ cwd, homeDir });
+    const spec = loaded.byId.get('p');
+    assert.ok(spec, 'persona still loads');
+    assert.deepEqual(
+      spec?.skills.map((s) => s.id),
+      ['kept'],
+      'missing local skill is dropped; remote skills survive'
+    );
+    assert.match(loaded.warnings.join('\n'), /local skill file not found/);
+  });
+});
+
 test('missing sidecar file produces a warning, not a throw', () => {
   withLayers(({ cwd, homeDir }) => {
     writeJson(join(homeDir, 'p.json'), {

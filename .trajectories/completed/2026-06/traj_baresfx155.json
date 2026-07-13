@@ -1,0 +1,38 @@
+{
+  "id": "traj_baresfx155",
+  "version": 1,
+  "task": { "title": "Characterize the bare-vs-suffixed Slack channel-id bug class" },
+  "status": "completed",
+  "startedAt": "2026-06-08T09:00:00.000Z",
+  "completedAt": "2026-06-08T09:18:00.000Z",
+  "agents": [ { "name": "default", "role": "lead", "joinedAt": "2026-06-08T09:00:00.000Z" } ],
+  "chapters": [ {
+    "id": "chap_baresfx155",
+    "title": "Work",
+    "agentName": "default",
+    "startedAt": "2026-06-08T09:00:00.000Z",
+    "endedAt": "2026-06-08T09:18:00.000Z",
+    "events": [ {
+      "ts": 1780909920000,
+      "type": "decision",
+      "content": "Generalize: events carry the BARE channel id, mounts use the SUFFIXED <id>__<slug> form; the mismatch is a recurring bug class fixed in two layers",
+      "raw": {
+        "question": "Is the bare-vs-suffixed channel id a one-off, or a systemic id mismatch?",
+        "chosen": "Treat it as a systemic class: bridge/dispatch layer (pear#155 + cloud#1995) AND fs/events layer (cloud#2010) each independently needed the suffixed form",
+        "alternatives": ["one-off fix at the preview renderer only", "normalize ids at read time inside Pear"],
+        "reasoning": "Slack integration events emit the BARE channel id, while the mount root and every alias subtree use the SUFFIXED <id>__<slug> form. Any consumer that joins event ids to mount paths by literal prefix breaks. This surfaced twice: (a) the 'content unavailable' preview bug + the original thread-routing bug, fixed at the bridge/dispatch layer via pear#155 + cloud#1995; and (b) thread reply events dropped by the daemon's literal-prefix filter, fixed at the fs/events emit layer via cloud#2010. Durable lesson: normalize to the suffixed path at EVERY event emit site; never compare bare vs suffixed by literal prefix."
+      },
+      "significance": "high"
+    } ]
+  } ],
+  "retrospective": {
+    "summary": "The bare-vs-suffixed channel-id mismatch (events bare, mounts suffixed <id>__<slug>) is a systemic class, not a one-off. Fixed at the bridge layer (pear#155/cloud#1995) and again at the fs/events layer (cloud#2010). Rule: emit the suffixed path at every source; never literal-prefix-compare bare vs suffixed.",
+    "approach": "When the same id-shape mismatch bites a second time, stop point-fixing and characterize the class + enumerate every emit/compare site.",
+    "confidence": 0.92
+  },
+  "commits": [],
+  "filesChanged": [],
+  "projectId": "/Users/khaliqgant/Projects/AgentWorkforce/pear",
+  "tags": ["slack", "relayfile", "channel-id", "bare-vs-suffixed", "bug-class"],
+  "_trace": { "startRef": "4f3a28e", "endRef": "4f3a28e" }
+}

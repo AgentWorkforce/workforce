@@ -30,7 +30,7 @@ test('persona JSON has an id (required by `agentworkforce install`)', () => {
 
 test('persona has the expected harness/model', () => {
   assert.equal(persona.harness, 'codex');
-  assert.equal(persona.model, 'openai-codex/gpt-5.3-codex');
+  assert.equal(persona.model, 'openai-codex/gpt-5.4');
 });
 
 test('manual is inlined as agentsMdContent (no external sidecar)', () => {

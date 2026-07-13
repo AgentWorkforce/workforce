@@ -7,6 +7,117 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [4.1.13] - 2026-06-25
+
+### Added
+
+- **Add managed harness source alias** (#257)
+
+## [4.1.12] - 2026-06-24
+
+### Added
+
+- **Support optional integrations**
+
+### Fixed
+
+- Fix optional integration activation inputs
+
+## [4.1.11] - 2026-06-24
+
+### Fixed
+
+- Fix staging cloud URL canonicalization
+
+## [4.1.8] - 2026-06-21
+
+### Fixed
+
+- Explain trigger auth source on 403
+
+## [4.1.4] - 2026-06-17
+
+### Fixed
+
+- Externalize bare Node builtins + add createRequire banner for CJS compat
+
+### Dependencies
+
+- Simplify NODE_EXTERNALS — node:* already covers prefixed forms
+
+## [4.1.3] - 2026-06-16
+
+### Added
+
+- **Add OpenRouter/opencode LLM provider support**
+
+### Changed
+
+- Opencode is its own provider, not an alias for openrouter
+- Harness-first provider derivation in deriveModelProvider
+
+## [4.1.2] - 2026-06-16
+
+### Fixed
+
+- Catch sync resolver failures
+- Skip catalog key for CLI-captured providers
+
+## [4.0.6] - 2026-06-15
+
+### Fixed
+
+- Map grok/xai models to the xai provider for credential matching
+
+## [4.0.5] - 2026-06-14
+
+### Fixed
+
+- Let --reconnect refresh a revoked harness LLM credential (#235)
+
+## [4.0.4] - 2026-06-14
+
+### Added
+
+- **Surface daytona connect + gate in agentworkforce deploy** (#232)
+
+### Changed
+
+- Unify workforce cloud auth session (#234)
+
+### Reliability
+
+- Characterize cloud subscription credential flow (#196)
+
+## [4.0.3] - 2026-06-11
+
+### Fixed
+
+- Normalize trigger provider aliases before cloud deploy (#227)
+
+## [4.0.2] - 2026-06-11
+
+### Fixed
+
+- Patch vulnerable transitive deps (shell-quote, protobufjs, hono) and align adapter-core
+
+## [3.0.52] - 2026-06-09
+
+### Added
+
+- **Drain paginated picker options (lockstep consumer for cloud#2018)** (#2018)
+- **Phase 5 — installation-centric connect flow in CLI** (#217)
+
+## [3.0.51] - 2026-06-08
+
+### Added
+
+- **Auto-inject ai-hist MCP + enforce trajectory recording**
+
+### Changed
+
+- Consolidate trajectories + ai-memory under memory (opt-in) (#210)
+
 ## [3.0.47] - 2026-06-04
 
 ### Added

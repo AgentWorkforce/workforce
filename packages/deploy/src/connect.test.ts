@@ -4,6 +4,7 @@ import type { PersonaSpec } from '@agentworkforce/persona-kit';
 import {
   collectPickerInputs,
   connectIntegrations,
+  RELAYFILE_OPTIONS_MAX_PAGES,
   relayfileCatalogConfigKeyResolver,
   relayfileIntegrationResolver,
   relayfileOptionsResolver,
@@ -498,6 +499,221 @@ test('relayfileIntegrationResolver connect opens a session and polls until conne
   assert.ok(io.messages.some((message) => message.message.includes('notion connected')));
 });
 
+test('relayfileIntegrationResolver connects github via existing org installation without fresh install', async () => {
+  const opened: string[] = [];
+  const connectBodies: unknown[] = [];
+  const io = createBufferedIO();
+  const resolver = relayfileIntegrationResolver({
+    apiUrl: 'https://cloud.example.test',
+    workspaceId: 'ws-1',
+    workspaceToken: 'tok',
+    io,
+    pollIntervalMs: 0,
+    timeoutMs: 100,
+    openUrl: (url) => {
+      opened.push(url);
+    },
+    sleep: async () => undefined,
+    fetch: async (input, init) => {
+      const url = input.toString();
+      if (url.endsWith('/integrations/connect-session')) {
+        connectBodies.push(JSON.parse(String(init?.body)));
+        return okJson({
+          connectLink: 'https://connect.example.test/github-oauth',
+          connectionId: 'conn-oauth',
+          githubInstallationFlow: {
+            enabled: true,
+            oauthProviderConfigKey: 'github-oauth-relay',
+            installProviderConfigKey: 'github-relay'
+          }
+        });
+      }
+      if (url.endsWith('/integrations/github/reconcile')) {
+        assert.deepEqual(JSON.parse(String(init?.body)), {
+          oauthConnectionId: 'conn-oauth'
+        });
+        return okJson({
+          matches: [
+            {
+              installationId: '9001',
+              accountLogin: 'Acme',
+              accountType: 'Organization',
+              suspended: false
+            }
+          ],
+          fallthrough: 'github-relay'
+        });
+      }
+      if (url.endsWith('/integrations/github/join')) {
+        assert.deepEqual(JSON.parse(String(init?.body)), {
+          installationId: '9001',
+          oauthConnectionId: 'conn-oauth'
+        });
+        return okJson({
+          action: 'join',
+          outcome: 'already_member',
+          landingWorkspace: { id: 'ws-acme', slug: 'default', name: 'Acme Default' }
+        });
+      }
+      throw new Error(`unexpected URL ${url}`);
+    }
+  });
+
+  assert.deepEqual(await resolver.connect({ workspace: 'ws-runtime', provider: 'github' }), {
+    connectionId: 'github-installation:9001'
+  });
+  assert.deepEqual(opened, ['https://connect.example.test/github-oauth']);
+  assert.deepEqual(connectBodies, [
+    {
+      allowedIntegrations: ['github'],
+      scope: { kind: 'deployer_user' },
+      githubInstallationFlow: true
+    }
+  ]);
+  assert.ok(
+    io.messages.some((message) =>
+      message.message.includes('already connected via Acme')
+    )
+  );
+});
+
+test('relayfileIntegrationResolver github installation flow reads the latest workspace token while polling', async () => {
+  let token = 'initial-token';
+  const authHeaders: string[] = [];
+  const resolver = relayfileIntegrationResolver({
+    apiUrl: 'https://cloud.example.test',
+    workspaceId: 'ws-1',
+    workspaceToken: () => token,
+    pollIntervalMs: 0,
+    timeoutMs: 100,
+    openUrl: () => undefined,
+    sleep: async () => {
+      token = 'refreshed-token';
+    },
+    fetch: async (input, init) => {
+      const url = input.toString();
+      authHeaders.push(String(new Headers(init?.headers).get('authorization')));
+      if (url.endsWith('/integrations/connect-session')) {
+        return okJson({
+          connectLink: 'https://connect.example.test/github-oauth',
+          connectionId: 'conn-oauth',
+          githubInstallationFlow: {
+            enabled: true
+          }
+        });
+      }
+      if (url.endsWith('/integrations/github/reconcile')) {
+        return okJson({
+          matches: [
+            {
+              installationId: '9001',
+              accountLogin: 'Acme',
+              accountType: 'Organization',
+              suspended: false
+            }
+          ]
+        });
+      }
+      if (url.endsWith('/integrations/github/join')) {
+        return okJson({
+          outcome: 'joined',
+          landingWorkspace: { id: 'ws-acme' }
+        });
+      }
+      throw new Error(`unexpected URL ${url}`);
+    }
+  });
+
+  assert.deepEqual(await resolver.connect({ workspace: 'ws-runtime', provider: 'github' }), {
+    connectionId: 'github-installation:9001'
+  });
+  assert.deepEqual(authHeaders, [
+    'Bearer initial-token',
+    'Bearer refreshed-token',
+    'Bearer refreshed-token'
+  ]);
+});
+
+test('relayfileIntegrationResolver github installation fallback reads the latest workspace token', async () => {
+  let token = 'initial-token';
+  const authHeaders: string[] = [];
+  const connectBodies: unknown[] = [];
+  const opened: string[] = [];
+  const resolver = relayfileIntegrationResolver({
+    apiUrl: 'https://cloud.example.test',
+    workspaceId: 'ws-1',
+    workspaceToken: () => token,
+    pollIntervalMs: 0,
+    timeoutMs: 100,
+    openUrl: (url) => {
+      opened.push(url);
+    },
+    sleep: async () => {
+      token = 'refreshed-token';
+    },
+    fetch: async (input, init) => {
+      const url = input.toString();
+      authHeaders.push(String(new Headers(init?.headers).get('authorization')));
+      if (url.endsWith('/integrations/connect-session')) {
+        connectBodies.push(JSON.parse(String(init?.body)));
+        return okJson(
+          connectBodies.length === 1
+            ? {
+                connectLink: 'https://connect.example.test/github-oauth',
+                connectionId: 'conn-oauth',
+                githubInstallationFlow: {
+                  enabled: true,
+                  installProviderConfigKey: 'github-relay'
+                }
+              }
+            : {
+                connectLink: 'https://connect.example.test/github-install',
+                connectionId: 'conn-install',
+                configKey: 'github-relay'
+              }
+        );
+      }
+      if (url.endsWith('/integrations/github/reconcile')) {
+        return okJson({ matches: [] });
+      }
+      if (url.includes('/integrations/github/status')) {
+        return okJson({
+          provider: 'github',
+          configKey: 'github-relay',
+          status: 'ready',
+          connectionId: 'conn-install'
+        });
+      }
+      throw new Error(`unexpected URL ${url}`);
+    }
+  });
+
+  assert.deepEqual(await resolver.connect({ workspace: 'ws-runtime', provider: 'github' }), {
+    connectionId: 'conn-install'
+  });
+  assert.deepEqual(opened, [
+    'https://connect.example.test/github-oauth',
+    'https://connect.example.test/github-install'
+  ]);
+  assert.deepEqual(connectBodies, [
+    {
+      allowedIntegrations: ['github'],
+      scope: { kind: 'deployer_user' },
+      githubInstallationFlow: true
+    },
+    {
+      allowedIntegrations: ['github-relay'],
+      scope: { kind: 'deployer_user' }
+    }
+  ]);
+  assert.deepEqual(authHeaders, [
+    'Bearer initial-token',
+    'Bearer refreshed-token',
+    'Bearer refreshed-token',
+    'Bearer refreshed-token'
+  ]);
+});
+
 test('relayfileIntegrationResolver connect resolves when OAuth completes at workspace scope', async () => {
   const opened: string[] = [];
   const statusUrls: string[] = [];
@@ -775,7 +991,13 @@ test('relayfileIntegrationResolver connect defaults to deployer_user when source
     }
   });
   await resolver.connect({ workspace: 'ws-1', provider: 'github' });
-  assert.deepEqual(bodies, [{ allowedIntegrations: ['github'], scope: { kind: 'deployer_user' } }]);
+  assert.deepEqual(bodies, [
+    {
+      allowedIntegrations: ['github'],
+      scope: { kind: 'deployer_user' },
+      githubInstallationFlow: true
+    }
+  ]);
 });
 
 test('relayfileIntegrationResolver connect turns 409 unknown_provider into a "did you mean" error', async () => {
@@ -1392,4 +1614,436 @@ test('relayfileOptionsResolver normalizes the cloud options response', async () 
   assert.deepEqual(urls, [
     'https://cloud.example.test/api/v1/workspaces/ws%201/integrations/linear/options/teams'
   ]);
+});
+
+test('relayfileOptionsResolver keeps old cloud behavior with no nextCursor', async () => {
+  const urls: string[] = [];
+  const resolver = relayfileOptionsResolver({
+    apiUrl: 'https://cloud.example.test',
+    workspaceToken: 'tok',
+    fetch: async (url) => {
+      urls.push(String(url));
+      return okJson({
+        ok: true,
+        options: [{ value: 'team-1', label: 'Engineering', hint: 'ENG' }]
+      });
+    }
+  });
+
+  const options = await resolver.list({ workspace: 'ws-1', provider: 'linear', resource: 'teams' });
+
+  assert.deepEqual(options, [{ value: 'team-1', label: 'Engineering', hint: 'ENG' }]);
+  assert.equal(urls.length, 1);
+  assert.equal(new URL(urls[0]!).searchParams.has('cursor'), false);
+});
+
+test('relayfileOptionsResolver drains multiple option pages in order', async () => {
+  const urls: string[] = [];
+  const pages: Record<string, unknown> = {
+    '': {
+      options: [
+        { value: 'A', label: 'Alpha' },
+        { value: 'B', label: 'Beta' }
+      ],
+      nextCursor: 'c1'
+    },
+    c1: { options: [{ value: 'C', label: 'Gamma' }], nextCursor: 'c2' },
+    c2: { options: [{ value: 'D', label: 'Delta' }] }
+  };
+  const resolver = relayfileOptionsResolver({
+    apiUrl: 'https://cloud.example.test',
+    workspaceToken: 'tok',
+    fetch: async (url) => {
+      urls.push(String(url));
+      const cursor = new URL(String(url)).searchParams.get('cursor') ?? '';
+      return okJson(pages[cursor]);
+    }
+  });
+
+  const options = await resolver.list({ workspace: 'ws-1', provider: 'slack', resource: 'users' });
+
+  assert.deepEqual(options, [
+    { value: 'A', label: 'Alpha' },
+    { value: 'B', label: 'Beta' },
+    { value: 'C', label: 'Gamma' },
+    { value: 'D', label: 'Delta' }
+  ]);
+  assert.equal(urls.length, 3);
+  assert.equal(new URL(urls[0]!).searchParams.get('cursor'), null);
+  assert.equal(new URL(urls[1]!).searchParams.get('cursor'), 'c1');
+  assert.equal(new URL(urls[2]!).searchParams.get('cursor'), 'c2');
+});
+
+test('relayfileOptionsResolver keeps paging after an empty page with nextCursor', async () => {
+  const urls: string[] = [];
+  const resolver = relayfileOptionsResolver({
+    apiUrl: 'https://cloud.example.test',
+    workspaceToken: 'tok',
+    fetch: async (url) => {
+      urls.push(String(url));
+      const cursor = new URL(String(url)).searchParams.get('cursor');
+      if (!cursor) return okJson({ options: [], nextCursor: 'c1' });
+      return okJson({ options: [{ value: 'U1', label: 'Benjamin' }] });
+    }
+  });
+
+  const options = await resolver.list({ workspace: 'ws-1', provider: 'slack', resource: 'users' });
+
+  assert.deepEqual(options, [{ value: 'U1', label: 'Benjamin' }]);
+  assert.equal(urls.length, 2);
+  assert.equal(new URL(urls[1]!).searchParams.get('cursor'), 'c1');
+});
+
+test('relayfileOptionsResolver stops at the page cap and warns', async () => {
+  const io = createBufferedIO();
+  let calls = 0;
+  const resolver = relayfileOptionsResolver({
+    apiUrl: 'https://cloud.example.test',
+    workspaceToken: 'tok',
+    io,
+    fetch: async () => {
+      calls += 1;
+      return okJson({
+        options: [{ value: `item-${calls}`, label: `Item ${calls}` }],
+        nextCursor: `cursor-${calls}`
+      });
+    }
+  });
+
+  const options = await resolver.list({ workspace: 'ws-1', provider: 'slack', resource: 'channels' });
+
+  assert.equal(calls, RELAYFILE_OPTIONS_MAX_PAGES);
+  assert.equal(options.length, RELAYFILE_OPTIONS_MAX_PAGES);
+  assert.equal(options[0]?.value, 'item-1');
+  assert.equal(options.at(-1)?.value, `item-${RELAYFILE_OPTIONS_MAX_PAGES}`);
+  assert.ok(
+    io.messages.some(
+      (message) =>
+        message.level === 'warn' &&
+        /exceeded 200 pages/.test(message.message) &&
+        /truncated/.test(message.message)
+    )
+  );
+});
+
+test('relayfileOptionsResolver forwards query and limit params', async () => {
+  const urls: string[] = [];
+  const resolver = relayfileOptionsResolver({
+    apiUrl: 'https://cloud.example.test',
+    workspaceToken: 'tok',
+    fetch: async (url) => {
+      urls.push(String(url));
+      return okJson({ options: [] });
+    }
+  });
+
+  await resolver.list({
+    workspace: 'ws-1',
+    provider: 'linear',
+    resource: 'teams',
+    query: 'eng',
+    limit: 25
+  });
+
+  assert.equal(urls.length, 1);
+  const params = new URL(urls[0]!).searchParams;
+  assert.equal(params.get('query'), 'eng');
+  assert.equal(params.get('limit'), '25');
+});
+
+test('relayfileOptionsResolver only forwards positive integer limits', async () => {
+  const urls: string[] = [];
+  const resolver = relayfileOptionsResolver({
+    apiUrl: 'https://cloud.example.test',
+    workspaceToken: 'tok',
+    fetch: async (url) => {
+      urls.push(String(url));
+      return okJson({ options: [] });
+    }
+  });
+
+  await resolver.list({ workspace: 'ws-1', provider: 'linear', resource: 'teams', limit: 0 });
+  await resolver.list({ workspace: 'ws-1', provider: 'linear', resource: 'teams', limit: -5 });
+  await resolver.list({ workspace: 'ws-1', provider: 'linear', resource: 'teams', limit: 2.5 });
+  await resolver.list({ workspace: 'ws-1', provider: 'linear', resource: 'teams', limit: 3 });
+
+  assert.deepEqual(
+    urls.map((url) => new URL(url).searchParams.get('limit')),
+    [null, null, null, '3']
+  );
+});
+
+test('relayfileOptionsResolver stops when the server repeats the same cursor', async () => {
+  const urls: string[] = [];
+  const resolver = relayfileOptionsResolver({
+    apiUrl: 'https://cloud.example.test',
+    workspaceToken: 'tok',
+    fetch: async (url) => {
+      urls.push(String(url));
+      const cursor = new URL(String(url)).searchParams.get('cursor');
+      if (!cursor) return okJson({ options: [{ value: 'A', label: 'Alpha' }], nextCursor: 'same' });
+      return okJson({ options: [{ value: 'B', label: 'Beta' }], nextCursor: 'same' });
+    }
+  });
+
+  const options = await resolver.list({ workspace: 'ws-1', provider: 'slack', resource: 'users' });
+
+  assert.deepEqual(options, [
+    { value: 'A', label: 'Alpha' },
+    { value: 'B', label: 'Beta' }
+  ]);
+  assert.equal(urls.length, 2);
+  assert.equal(new URL(urls[1]!).searchParams.get('cursor'), 'same');
+});
+
+// --- Daytona status-route contract (resolver-level) -----------------------
+//
+// Locks the exact `/integrations/daytona/status` response shape Cloud-Cred
+// confirmed: connected emits ready:true / state:'ready' / oauth.connected:true
+// (credential row + encrypted store object both present); missing either
+// returns ready:false / state:'pending' / oauth.connected:false. These run the
+// REAL relayfileIntegrationResolver (not a stub) so a drift in either side's
+// contract fails here.
+
+test('relayfileIntegrationResolver reads a connected daytona status from the credential-backed route', async () => {
+  let requestedUrl = '';
+  const resolver = relayfileIntegrationResolver({
+    apiUrl: 'https://cloud.example.test',
+    workspaceId: 'ws-1',
+    workspaceToken: 'tok',
+    fetch: async (input) => {
+      requestedUrl = String(input);
+      return okJson({
+        provider: 'daytona',
+        ready: true,
+        state: 'ready',
+        connectionMatched: true,
+        oauth: { connected: true }
+      });
+    }
+  });
+  assert.equal(
+    await resolver.isConnected({ workspace: 'ws-1', provider: 'daytona' }),
+    true
+  );
+  assert.match(requestedUrl, /\/workspaces\/ws-1\/integrations\/daytona\/status/);
+  assert.match(requestedUrl, /scope=deployer_user/);
+});
+
+test('relayfileIntegrationResolver treats a pending daytona status (no store object yet) as not connected', async () => {
+  const resolver = relayfileIntegrationResolver({
+    apiUrl: 'https://cloud.example.test',
+    workspaceId: 'ws-1',
+    workspaceToken: 'tok',
+    fetch: async () => okJson({
+      provider: 'daytona',
+      ready: false,
+      state: 'pending',
+      oauth: { connected: false }
+    })
+  });
+  assert.equal(
+    await resolver.isConnected({ workspace: 'ws-1', provider: 'daytona' }),
+    false
+  );
+});
+
+// --- Daytona connect (provider-agnostic walker proof) ---------------------
+//
+// daytona is captured out-of-band by `agent-relay cloud connect daytona`
+// (sandbox `daytona login` → cloud stores provider 'daytona'), then surfaced
+// to deploy via the SAME `/integrations/status` check every other provider
+// uses. These tests prove the generic walker recognizes + gates `daytona`
+// with zero provider-specific plumbing, exactly mirroring slack/github.
+// See daytona-monitor/persona.json which declares `integrations.daytona`.
+
+test('connectIntegrations treats a connected daytona integration as already-connected (no connect call)', async () => {
+  const io = createBufferedIO();
+  let connectCalled = false;
+  io.confirm = async () => {
+    throw new Error('should not prompt when daytona is already connected');
+  };
+
+  const result = await connectIntegrations({
+    persona: {
+      id: 'daytona-monitor',
+      intent: 'relay-orchestrator',
+      description: 'test persona',
+      tags: ['discovery'],
+      integrations: { daytona: { scope: { sandboxes: '/daytona/sandboxes/**' } } }
+    } as never,
+    workspace: 'ws-1',
+    noConnect: false,
+    io,
+    integrations: {
+      async isConnected(args) {
+        assert.equal(args.provider, 'daytona');
+        return true;
+      },
+      async connect() {
+        connectCalled = true;
+        return { connectionId: 'conn-daytona' };
+      }
+    }
+  });
+
+  assert.equal(connectCalled, false);
+  assert.deepEqual(result.outcomes, [{ provider: 'daytona', status: 'already-connected' }]);
+  assert.ok(io.messages.some((m) => m.level === 'info' && /daytona: already connected/.test(m.message)));
+});
+
+test('connectIntegrations ignores catalog config keys for CLI-captured daytona credentials', async () => {
+  const io = createBufferedIO();
+  let catalogLookupCalled = false;
+
+  const result = await connectIntegrations({
+    persona: {
+      id: 'daytona-monitor',
+      intent: 'relay-orchestrator',
+      description: 'test persona',
+      tags: ['discovery'],
+      integrations: { daytona: {} }
+    } as never,
+    workspace: 'ws-1',
+    noConnect: false,
+    io,
+    providerConfigKeys: {
+      async resolve(provider) {
+        catalogLookupCalled = true;
+        assert.equal(provider, 'daytona');
+        return 'daytona-relay';
+      }
+    },
+    integrations: {
+      async isConnected(args) {
+        assert.equal(args.provider, 'daytona');
+        assert.equal(args.expectedConfigKey, undefined);
+        return true;
+      },
+      async connect() {
+        throw new Error('should not connect when daytona is already connected');
+      }
+    }
+  });
+
+  assert.equal(catalogLookupCalled, false);
+  assert.deepEqual(result.outcomes, [{ provider: 'daytona', status: 'already-connected' }]);
+});
+
+test('connectIntegrations gates the deploy when daytona is not connected under --no-prompt', async () => {
+  const io = createBufferedIO();
+  let connectCalled = false;
+
+  const result = await connectIntegrations({
+    persona: {
+      id: 'daytona-monitor',
+      intent: 'relay-orchestrator',
+      description: 'test persona',
+      tags: ['discovery'],
+      integrations: { daytona: {} }
+    } as never,
+    workspace: 'ws-1',
+    noConnect: false,
+    noPrompt: true,
+    io,
+    integrations: {
+      async isConnected() {
+        return false;
+      },
+      async connect() {
+        connectCalled = true;
+        return { connectionId: 'conn-daytona' };
+      }
+    }
+  });
+
+  assert.equal(connectCalled, false);
+  assert.equal(result.outcomes.length, 1);
+  const [outcome] = result.outcomes;
+  assert.equal(outcome.provider, 'daytona');
+  assert.equal(outcome.status, 'failed');
+  assert.match(outcome.message ?? '', /not connected/i);
+});
+
+test('connectIntegrations instructs the relay CLI capture command when daytona is not connected (interactive)', async () => {
+  const io = createBufferedIO();
+  let connectCalled = false;
+  let confirmCalled = false;
+  io.confirm = async () => {
+    confirmCalled = true;
+    return true;
+  };
+
+  const result = await connectIntegrations({
+    persona: {
+      id: 'daytona-monitor',
+      intent: 'relay-orchestrator',
+      description: 'test persona',
+      tags: ['discovery'],
+      integrations: { daytona: {} }
+    } as never,
+    workspace: 'ws-1',
+    noConnect: false,
+    io,
+    integrations: {
+      async isConnected() {
+        return false;
+      },
+      async connect() {
+        connectCalled = true;
+        return { connectionId: 'conn-daytona' };
+      }
+    }
+  });
+
+  // daytona is captured out-of-band: no browser prompt, no connect-session call.
+  assert.equal(confirmCalled, false);
+  assert.equal(connectCalled, false);
+  assert.equal(result.outcomes.length, 1);
+  const [outcome] = result.outcomes;
+  assert.equal(outcome.provider, 'daytona');
+  assert.equal(outcome.status, 'failed');
+  assert.match(outcome.message ?? '', /agent-relay cloud connect daytona/);
+  assert.ok(io.messages.some((m) =>
+    m.level === 'error' && /agent-relay cloud connect daytona/.test(m.message)
+  ));
+  // Must NOT show the misleading browser prompt copy for a CLI-captured provider.
+  assert.ok(!io.messages.some((m) => /opens browser/.test(m.message)));
+});
+
+test('connectIntegrations --reconnect daytona instructs the relay CLI capture command (no browser connect)', async () => {
+  const io = createBufferedIO();
+  let connectCalled = false;
+
+  const result = await connectIntegrations({
+    persona: {
+      id: 'daytona-monitor',
+      intent: 'relay-orchestrator',
+      description: 'test persona',
+      tags: ['discovery'],
+      integrations: { daytona: {} }
+    } as never,
+    workspace: 'ws-1',
+    noConnect: false,
+    reconnectProviders: ['daytona'],
+    io,
+    integrations: {
+      async isConnected() {
+        return true;
+      },
+      async connect() {
+        connectCalled = true;
+        return { connectionId: 'conn-daytona' };
+      }
+    }
+  });
+
+  // --reconnect for a CLI-captured provider can't run a browser flow either;
+  // it instructs the capture command and gates.
+  assert.equal(connectCalled, false);
+  assert.equal(result.outcomes.length, 1);
+  const [outcome] = result.outcomes;
+  assert.equal(outcome.provider, 'daytona');
+  assert.equal(outcome.status, 'failed');
+  assert.match(outcome.message ?? '', /agent-relay cloud connect daytona/);
 });

@@ -7,6 +7,85 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [4.1.14] - 2026-06-25
+
+### Added
+
+- **Ctx.relay — agent-to-agent messaging over the relay (#254 pt.2)** (#254)
+
+## [4.1.6] - 2026-06-18
+
+### Fixed
+
+- Treat Relayfile writebacks that time out without receipts as first-class `WritebackError`s from the runtime client helpers.
+
+## [4.1.5] - 2026-06-18
+
+### Dependencies
+
+- Refresh relayfile trigger catalog
+
+## [4.1.3] - 2026-06-16
+
+### Added
+
+- **Add OpenRouter/opencode LLM provider support**
+
+### Changed
+
+- Opencode is its own provider, not an alias for openrouter
+
+## [4.1.1] - 2026-06-16
+
+### Fixed
+
+- Surface harness stderr on non-zero exit so failures aren't blank
+
+## [4.0.4] - 2026-06-14
+
+### Dependencies
+
+- Refresh relayfile trigger catalog for daytona (#231)
+
+## [4.0.2] - 2026-06-11
+
+### Fixed
+
+- Patch vulnerable transitive deps (shell-quote, protobufjs, hono) and align adapter-core
+
+## [4.0.1] - 2026-06-10
+
+### Fixed
+
+- No-trigger personas narrow to AgentEvent, not BaseAgentEvent (#221)
+
+## [4.0.0] - 2026-06-10
+
+### Breaking Changes
+
+- **Relay SDK AgentEvent + declarative relay persona field (Stage 1, A, B, C-runtime)** (#220)
+
+## [3.0.51] - 2026-06-08
+
+### Added
+
+- **Auto-record decision trajectories + emit ai-hist contract (Workstream B)** (#207)
+
+### Fixed
+
+- Use broker-aware agent-relay MCP for local persona spawns (#214)
+- Address grok harness review feedback
+
+### Changed
+
+- Consolidate trajectories + ai-memory under memory (opt-in) (#210)
+
+## [3.0.50] - 2026-06-06
+
+### Fixed
+
+- Wire Relay MCP into cloud personas (#205)
+
 ## [3.0.49] - 2026-06-05
 
 ### Fixed

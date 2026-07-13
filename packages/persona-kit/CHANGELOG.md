@@ -7,6 +7,84 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [4.1.15] - 2026-07-13
+
+### Fixed
+
+- Harden the warm fast path per review
+
+### Dependencies
+
+- Consume published @relayfile/local-mount 0.10.23
+
+## [4.1.12] - 2026-06-24
+
+### Added
+
+- **Support optional integrations**
+
+## [4.1.6] - 2026-06-18
+
+### Dependencies
+
+- Consume adapter-core writeback normalizer
+
+## [4.1.5] - 2026-06-18
+
+### Dependencies
+
+- Refresh relayfile trigger catalog
+
+## [4.1.2] - 2026-06-16
+
+### Added
+
+- **Type gitlab materialization config**
+- **Add adapter config passthrough**
+
+## [4.1.0] - 2026-06-15
+
+### Added
+
+- **Add side-effect-free ./spec validation entrypoint**
+
+## [4.0.4] - 2026-06-14
+
+### Changed
+
+- Preserve trigger maxConcurrency in persona-kit (#230)
+
+### Dependencies
+
+- Refresh relayfile trigger catalog for daytona (#231)
+
+## [4.0.0] - 2026-06-10
+
+### Breaking Changes
+
+- **Relay SDK AgentEvent + declarative relay persona field (Stage 1, A, B, C-runtime)** (#220)
+
+## [3.0.51] - 2026-06-08
+
+### Added
+
+- **Launch ai-hist via plain npx -y ai-hist-mcp + enable trajectory memory on persona-maker** (#211)
+- **Auto-inject ai-hist MCP + enforce trajectory recording**
+- **Add grok harness support**
+
+### Fixed
+
+- Launch full ai-hist MCP via npx -p ai-hist (revert bundled WHY-only server) (#209)
+- Address grok harness review feedback
+
+### Changed
+
+- Consolidate trajectories + ai-memory under memory (opt-in) (#210)
+
+### Dependencies
+
+- Apply pr-reviewer fixes for #206 (#206)
+
 ## [3.0.47] - 2026-06-04
 
 ### Added

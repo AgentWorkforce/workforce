@@ -1,8 +1,10 @@
 import { readFile, stat } from 'node:fs/promises';
 import path from 'node:path';
 import {
+  KNOWN_TRIGGER_PROVIDER_ALIASES,
   lintTriggers,
   parsePersonaSpec,
+  type AgentSpec,
   type PersonaIntent,
   type PersonaSpec
 } from '@agentworkforce/persona-kit';
@@ -102,14 +104,31 @@ export async function preflightPersona(personaPath: string): Promise<DeployPrefl
     }
   }
 
-  const triggerLint = lintTriggers(agent);
+  for (const [provider, integration] of Object.entries(persona.integrations ?? {})) {
+    const enabledByInput = integration.enabledByInput;
+    if (enabledByInput && !Object.prototype.hasOwnProperty.call(persona.inputs ?? {}, enabledByInput)) {
+      throw new Error(
+        `persona "${persona.id}" integration "${provider}" is enabled by input "${enabledByInput}", ` +
+          `but persona.inputs does not declare ${enabledByInput}`
+      );
+    }
+  }
+
+  // Normalize trigger provider aliases to canonical names so the cloud API
+  // receives e.g. 'gmail' instead of 'google-mail'. The integration-provider
+  // check above runs against the raw (alias) form — the persona and agent can
+  // both use 'google-mail' and the check still passes. Only the outbound
+  // agent spec sent to the cloud needs canonical names.
+  const normalizedAgent = normalizeTriggerProviderAliases(agent);
+
+  const triggerLint = lintTriggers(normalizedAgent);
   const warnings = triggerLint.map(
     (issue) => `${issue.path}: ${issue.message}`
   );
 
   return {
     persona,
-    agent,
+    agent: normalizedAgent,
     personaPath: absPath,
     personaDir,
     onEventPath,
@@ -142,4 +161,22 @@ async function readPersonaJson(absPath: string): Promise<unknown> {
 async function readPersonaSource(absPath: string): Promise<unknown> {
   const { persona } = await loadPersonaSourceFile(absPath);
   return persona;
+}
+
+/**
+ * Replace alias trigger provider names with their canonical counterparts so
+ * the cloud API never sees a name it doesn't recognise. E.g. 'google-mail'
+ * (the integration provider id) → 'gmail' (the trigger catalog name).
+ * The persona's `integrations` map is left untouched — the cloud resolves
+ * integrations and triggers under different namespaces.
+ */
+function normalizeTriggerProviderAliases(agent: AgentSpec): AgentSpec {
+  const { triggers } = agent;
+  if (!triggers) return agent;
+  const aliases = KNOWN_TRIGGER_PROVIDER_ALIASES as Record<string, string>;
+  const normalized: NonNullable<AgentSpec['triggers']> = {};
+  for (const [provider, list] of Object.entries(triggers)) {
+    normalized[aliases[provider] ?? provider] = list;
+  }
+  return { ...agent, triggers: normalized };
 }

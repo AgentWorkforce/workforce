@@ -18,6 +18,15 @@ function persona(over: Partial<ResolvedPersona> = {}): ResolvedPersona {
 
 const cleanEnv: NodeJS.ProcessEnv = Object.freeze({}) as NodeJS.ProcessEnv;
 
+function assertAiHistServer(server: unknown, env: Record<string, string>): void {
+  assert.deepEqual(server, {
+    type: 'stdio',
+    command: 'npx',
+    args: ['-y', 'ai-hist-mcp'],
+    env
+  });
+}
+
 test('buildPersonaSpawnPlan returns the persona, cli, and args for claude', () => {
   const plan = buildPersonaSpawnPlan(persona(), { processEnv: cleanEnv });
   assert.equal(plan.cli, 'claude');
@@ -28,6 +37,59 @@ test('buildPersonaSpawnPlan returns the persona, cli, and args for claude', () =
   assert.equal(plan.mount, undefined);
   assert.deepEqual(plan.inputs, []);
   assert.equal(plan.initialPrompt, undefined);
+});
+
+test('buildPersonaSpawnPlan injects ai-hist when memory.aiMemory is opted in', () => {
+  const plan = buildPersonaSpawnPlan(persona({ memory: { aiMemory: true } }), {
+    processEnv: cleanEnv
+  });
+  const mcpIdx = plan.args.indexOf('--mcp-config');
+  assert.ok(mcpIdx >= 0, 'expected --mcp-config');
+  const payload = JSON.parse(plan.args[mcpIdx + 1]);
+  assertAiHistServer(payload.mcpServers['ai-hist'], {});
+});
+
+test('buildPersonaSpawnPlan threads ai-hist env overrides when aiMemory is on', () => {
+  const plan = buildPersonaSpawnPlan(persona({ memory: { aiMemory: true } }), {
+    processEnv: {
+      TRAJECTORY_ROOT: '/repo/.trajectories',
+      AI_HIST_DB: '/tmp/ai-history.db'
+    } as NodeJS.ProcessEnv
+  });
+  const mcpIdx = plan.args.indexOf('--mcp-config');
+  const payload = JSON.parse(plan.args[mcpIdx + 1]);
+  assert.deepEqual(payload.mcpServers['ai-hist'].env, {
+    TRAJECTORY_ROOT: '/repo/.trajectories',
+    AI_HIST_DB: '/tmp/ai-history.db'
+  });
+});
+
+test('buildPersonaSpawnPlan: memory.aiMemory.dbPath overrides the history DB', () => {
+  const plan = buildPersonaSpawnPlan(persona({ memory: { aiMemory: { dbPath: '/custom/hist.db' } } }), {
+    processEnv: cleanEnv
+  });
+  const mcpIdx = plan.args.indexOf('--mcp-config');
+  const payload = JSON.parse(plan.args[mcpIdx + 1]);
+  assert.deepEqual(payload.mcpServers['ai-hist'].env, { AI_HIST_DB: '/custom/hist.db' });
+});
+
+test('buildPersonaSpawnPlan omits ai-hist when memory.aiMemory is not opted in', () => {
+  // Default (no memory) — off.
+  const off = buildPersonaSpawnPlan(persona(), { processEnv: cleanEnv });
+  const offIdx = off.args.indexOf('--mcp-config');
+  assert.equal(JSON.parse(off.args[offIdx + 1]).mcpServers['ai-hist'], undefined);
+
+  // `memory: true` enables long-form memory only, NOT the aiMemory facet.
+  const longFormOnly = buildPersonaSpawnPlan(persona({ memory: true }), { processEnv: cleanEnv });
+  const lfIdx = longFormOnly.args.indexOf('--mcp-config');
+  assert.equal(JSON.parse(longFormOnly.args[lfIdx + 1]).mcpServers['ai-hist'], undefined);
+
+  // Explicit opt-out.
+  const explicitOff = buildPersonaSpawnPlan(persona({ memory: { aiMemory: false } }), {
+    processEnv: cleanEnv
+  });
+  const eoIdx = explicitOff.args.indexOf('--mcp-config');
+  assert.equal(JSON.parse(explicitOff.args[eoIdx + 1]).mcpServers['ai-hist'], undefined);
 });
 
 test('buildPersonaSpawnPlan emits initialPrompt for codex', () => {
@@ -59,6 +121,22 @@ test('buildPersonaSpawnPlan emits configFiles for opencode', () => {
   );
 });
 
+test('buildPersonaSpawnPlan emits AGENTS.md configFile for grok systemPrompt', () => {
+  const plan = buildPersonaSpawnPlan(
+    persona({
+      personaId: 'sample',
+      harness: 'grok',
+      model: 'grok-build-0.1',
+      systemPrompt: 'grok prompt'
+    }),
+    { processEnv: cleanEnv }
+  );
+  assert.equal(plan.cli, 'grok');
+  assert.deepEqual(plan.configFiles, [
+    { path: 'AGENTS.md', contents: 'grok prompt\n' }
+  ]);
+});
+
 test('buildPersonaSpawnPlan resolves sidecars from claudeMdContent / agentsMdContent', () => {
   const claudePlan = buildPersonaSpawnPlan(
     persona({
@@ -82,6 +160,18 @@ test('buildPersonaSpawnPlan resolves sidecars from claudeMdContent / agentsMdCon
   assert.equal(opencodePlan.sidecars.length, 1);
   assert.equal(opencodePlan.sidecars[0].filename, 'AGENTS.md');
   assert.equal(opencodePlan.sidecars[0].mode, 'extend');
+
+  const grokPlan = buildPersonaSpawnPlan(
+    persona({
+      agentsMdContent: '# grok agents sidecar',
+      harness: 'grok',
+      model: 'grok-build-0.1'
+    }),
+    { processEnv: cleanEnv }
+  );
+  assert.equal(grokPlan.sidecars.length, 1);
+  assert.equal(grokPlan.sidecars[0].filename, 'AGENTS.md');
+  assert.equal(grokPlan.sidecars[0].contents, '# grok agents sidecar');
 });
 
 test('buildPersonaSpawnPlan threads mount policy through when patterns present', () => {
@@ -193,7 +283,7 @@ test('buildPersonaSpawnPlan emits sourcePath when only claudeMd path is set', ()
   assert.equal(plan.sidecars[0].mode, 'extend');
 });
 
-test('buildPersonaSpawnPlan emits sourcePath for opencode/codex agentsMd path', () => {
+test('buildPersonaSpawnPlan emits sourcePath for AGENTS.md harness agentsMd path', () => {
   const plan = buildPersonaSpawnPlan(
     persona({
       harness: 'opencode',
@@ -205,6 +295,18 @@ test('buildPersonaSpawnPlan emits sourcePath for opencode/codex agentsMd path', 
   );
   assert.equal(plan.sidecars.length, 1);
   assert.equal(plan.sidecars[0].sourcePath, '/abs/path/to/AGENTS.md');
+
+  const grokPlan = buildPersonaSpawnPlan(
+    persona({
+      harness: 'grok',
+      model: 'grok-build-0.1',
+      systemPrompt: 's',
+      agentsMd: '/abs/path/to/AGENTS.md'
+    }),
+    { processEnv: cleanEnv }
+  );
+  assert.equal(grokPlan.sidecars.length, 1);
+  assert.equal(grokPlan.sidecars[0].sourcePath, '/abs/path/to/AGENTS.md');
 });
 
 test('buildPersonaSpawnPlan does not capture ambient env by default', () => {
@@ -225,7 +327,7 @@ test('buildPersonaSpawnPlan opt-in includeProcessEnv captures process.env', () =
 });
 
 test('buildPersonaSpawnPlan empty-skills case keeps installs empty', () => {
-  for (const harness of ['claude', 'codex', 'opencode'] as Harness[]) {
+  for (const harness of ['claude', 'codex', 'opencode', 'grok'] as Harness[]) {
     const plan = buildPersonaSpawnPlan(
       persona({
         harness,

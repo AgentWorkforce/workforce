@@ -1,7 +1,6 @@
 import {
   createTerminalIO,
   formatHttpErrorBody,
-  readActiveWorkspace,
   resolveCloudUrl,
   resolveWorkspaceToken
 } from '@agentworkforce/deploy';
@@ -68,10 +67,8 @@ export async function runDeploymentList(args: readonly string[]): Promise<void> 
   try {
     const opts = parseDeploymentListArgs(args);
     const io = createTerminalIO();
-    const active = await readActiveWorkspace().catch(() => null);
     const cloudUrl = resolveCloudUrl({
-      ...(opts.cloudUrl ? { flag: opts.cloudUrl } : {}),
-      active
+      ...(opts.cloudUrl ? { flag: opts.cloudUrl } : {})
     });
     const auth = await resolveWorkspaceToken({
       ...(opts.workspace ? { workspace: opts.workspace } : {}),
@@ -348,12 +345,15 @@ export async function resolveDeploymentRequestContext(opts: {
   workspace?: string;
   cloudUrl?: string;
   noPrompt?: boolean;
-}): Promise<{ cloudUrl: string; workspace: string; token: string }> {
+}): Promise<{
+  cloudUrl: string;
+  workspace: string;
+  token: string;
+  authSource?: 'env' | 'cloud-session';
+}> {
   const io = createTerminalIO();
-  const active = await readActiveWorkspace().catch(() => null);
   const cloudUrl = resolveCloudUrl({
-    ...(opts.cloudUrl ? { flag: opts.cloudUrl } : {}),
-    active
+    ...(opts.cloudUrl ? { flag: opts.cloudUrl } : {})
   });
   const auth = await resolveWorkspaceToken({
     ...(opts.workspace ? { workspace: opts.workspace } : {}),
@@ -365,7 +365,19 @@ export async function resolveDeploymentRequestContext(opts: {
   if (!workspace) {
     throw new Error('workspace is required: pass --workspace, set WORKFORCE_WORKSPACE_ID, or run `agentworkforce login`');
   }
-  return { cloudUrl, workspace, token: auth.token };
+  const authSource = readAuthSource(auth);
+  return {
+    cloudUrl,
+    workspace,
+    token: auth.token,
+    ...(authSource ? { authSource } : {})
+  };
+}
+
+function readAuthSource(value: unknown): 'env' | 'cloud-session' | undefined {
+  if (!value || typeof value !== 'object') return undefined;
+  const authSource = (value as { authSource?: unknown }).authSource;
+  return authSource === 'env' || authSource === 'cloud-session' ? authSource : undefined;
 }
 
 export async function fetchDeployments(args: {

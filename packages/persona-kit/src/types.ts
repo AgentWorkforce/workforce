@@ -194,11 +194,18 @@ export type McpServerSpec =
  *   { on: "pull_request.opened" }
  *   { on: "pull_request_review_comment.created", match: "@mention" }
  *   { on: "check_run.completed", where: "conclusion=failure" }
+ *   { on: "message.created", maxConcurrency: 1 }
  */
 export interface PersonaIntegrationTrigger {
   on: string;
   match?: string;
   where?: string;
+  /**
+   * Optional delivery backpressure hint for this trigger. Positive integers are
+   * preserved by the parser; invalid values are treated as unset so older or
+   * malformed specs do not block delivery.
+   */
+  maxConcurrency?: number;
 }
 
 /**
@@ -235,10 +242,23 @@ export type IntegrationSource =
  * `source` discriminates the cloud-side resolver between `user_integrations`
  * and `workspace_integrations`; defaults to `{ kind: 'deployer_user' }` when
  * omitted so existing personas keep their pre-discriminator behavior.
+ *
+ * `config` is a forward-compatible adapter passthrough. Persona-kit validates
+ * only that it is an object; provider adapters own the nested schema
+ * (for example GitHub materialization policy).
+ *
+ * Optional integrations are deploy-time choices controlled by persona inputs:
+ * set `optional: true` and `enabledByInput: "SLACK_CHANNEL"` to include this
+ * provider only when that input resolves to a non-empty value. Inactive
+ * optional providers are skipped before deploy connects integrations or
+ * registers provider triggers.
  */
 export interface PersonaIntegrationConfig {
   source?: IntegrationSource;
   scope?: Record<string, string>;
+  config?: Record<string, unknown>;
+  optional?: boolean;
+  enabledByInput?: string;
 }
 
 /**
@@ -321,9 +341,81 @@ export interface PersonaMemoryConfig {
   ttlDays?: number;
   autoPromote?: boolean;
   dedupMs?: number;
+  /**
+   * Opt into decision-trajectory recording (the "why"). **Off by default.**
+   * When enabled, the runtime auto-records this persona's decisions per run and
+   * writes a compacted contract artifact to
+   * `<root>/<personaId>/compacted/<runId>.json` (root = `TRAJECTORY_ROOT` env or
+   * the cloud workspace default). Object form lets you toggle compaction.
+   */
+  trajectories?: boolean | PersonaTrajectoryConfig;
+  /**
+   * Opt into ai-memory recall (the "how" + "why" retrieval). **Off by default.**
+   * When enabled, the persona loads the ai-hist MCP so it can recall its own
+   * compacted trajectories (the why) and cross-tool prompt/session history
+   * (the how). Object form lets you override the history DB path.
+   */
+  aiMemory?: boolean | PersonaAiMemoryConfig;
+}
+
+/**
+ * Decision-trajectory recording config (the "why"). `enabled` defaults to true
+ * in object form, so `{ autoCompact: false }` means "record, don't compact".
+ * The store root is never per-persona — it's resolved once from
+ * `TRAJECTORY_ROOT` (or the cloud default) so the recorder's write-root always
+ * matches the ai-hist MCP's read-root.
+ */
+export interface PersonaTrajectoryConfig {
+  enabled?: boolean;
+  /** Run mechanical+markdown compaction on completion. Defaults to true. */
+  autoCompact?: boolean;
+}
+
+/**
+ * ai-memory recall config (the "how" + "why" retrieval via the ai-hist MCP).
+ * `enabled` defaults to true in object form.
+ */
+export interface PersonaAiMemoryConfig {
+  enabled?: boolean;
+  /** Override the ai-hist history DB path; else `AI_HIST_DB` env / discovery. */
+  dbPath?: string;
 }
 
 export type PersonaMemory = boolean | PersonaMemoryConfig;
+
+/**
+ * Relay (agent-relay / relaycast) participation config. Like {@link
+ * PersonaMemoryConfig}, the persona declares **intent** only — the API key and
+ * base URL are secrets that come from workforce env (`RELAY_API_KEY`,
+ * `RELAY_BASE_URL`). When enabled, launchers inject the relaycast MCP server
+ * (see `buildRelaycastMcpServer`) so the persona is a first-class chat
+ * participant: it can post to channels, DM, and answer replies — the
+ * human-in-the-loop surface a solo persona otherwise lacks.
+ */
+export interface PersonaRelayConfig {
+  /** Master switch. Object form defaults to enabled (`{}` ⇒ on). */
+  enabled?: boolean;
+  /**
+   * Agent identity registered on relay (`RELAY_AGENT_NAME`). Defaults to the
+   * env value, then the persona id. Must match the broker's routing name.
+   */
+  agentName?: string;
+  /**
+   * Relaycast channels the persona participates in (names may omit the leading
+   * `#`). Declarative intent consumed when wiring inbox triggers (Unit C);
+   * does not affect MCP injection on its own.
+   */
+  channels?: string[];
+  /**
+   * Relaycast inbox selectors the persona subscribes to (e.g. `@self`, `#eng`),
+   * mirroring the SDK `AgentDefinition.inbox` contract.
+   */
+  inbox?: string[];
+  /** Default relay workspace (`RELAY_DEFAULT_WORKSPACE`); else env. */
+  defaultWorkspace?: string;
+}
+
+export type PersonaRelay = boolean | PersonaRelayConfig;
 
 export type CapabilityValue =
   | boolean
@@ -383,7 +475,7 @@ export interface PersonaSpec {
    */
   inputs?: Record<string, PersonaInputSpec>;
   /**
-   * Harness binary used to run this persona (`claude`, `codex`, `opencode`).
+   * Harness binary used to run this persona (`claude`, `codex`, `opencode`, `grok`).
    * Required for interactive personas. Optional for handler-style personas
    * ({@link onEvent} set): only consumed when the handler calls
    * `ctx.harness.run(...)`; pure orchestrators omit it.
@@ -405,13 +497,15 @@ export interface PersonaSpec {
    * MCP servers to attach to the harness session.
    * - `claude`: passed via `--mcp-config`
    * - `codex`: translated into `--config mcp_servers.<name>...` overrides
-   * - `opencode`: currently warns and skips
+   * - `opencode` / `grok`: currently warn and skip
    */
   mcpServers?: Record<string, McpServerSpec>;
   /**
    * Permission policy (allow/deny lists, mode) for the harness session.
-   * Only wired for `claude` today (via `--allowedTools`, `--disallowedTools`,
-   * `--permission-mode`); other harnesses warn and skip.
+   * `claude` is wired for allow/deny/mode flags (via `--allowedTools`,
+   * `--disallowedTools`, `--permission-mode`). `grok` maps
+   * `mode: "bypassPermissions"` to `--always-approve`; other
+   * fields/harnesses warn and skip.
    */
   permissions?: PersonaPermissions;
   /**
@@ -451,7 +545,7 @@ export interface PersonaSpec {
   claudeMdMode?: SidecarMdMode;
   /**
    * Author-supplied path to an `AGENTS.md` sidecar that should be applied
-   * when the persona runs under the opencode harness. Same resolution
+   * when the persona runs under the opencode/codex/grok harnesses. Same resolution
    * rules as {@link claudeMd}.
    */
   agentsMd?: string;
@@ -505,6 +599,13 @@ export interface PersonaSpec {
    */
   memory?: PersonaMemory;
   /**
+   * Relay (agent-relay / relaycast) participation. Off unless declared. When
+   * enabled, launchers inject the relaycast MCP so the persona can post to
+   * channels, DM, and answer replies — see {@link PersonaRelayConfig}. Secrets
+   * (`RELAY_API_KEY`, `RELAY_BASE_URL`) come from workforce env, not the spec.
+   */
+  relay?: PersonaRelay;
+  /**
    * Relative POSIX path to the TypeScript (or compiled .js / .mjs) file
    * whose default export is the deploy-time event handler. Resolved
    * relative to the persona JSON's directory at deploy time. Required by
@@ -530,6 +631,13 @@ export interface PersonaSelection {
   mcpServers?: Record<string, McpServerSpec>;
   permissions?: PersonaPermissions;
   mount?: PersonaMount;
+  /**
+   * Carried through from {@link PersonaSpec.memory}. Launchers read its opt-in
+   * facets: `memory.aiMemory` gates injecting the `ai-hist` MCP (recall), and
+   * `memory.trajectories` gates runtime decision-trajectory recording. Both are
+   * off unless declared. Use {@link resolveAiMemory} / {@link resolveTrajectoryRecording}.
+   */
+  memory?: PersonaMemory;
   /**
    * Effective sidecar config for the persona. Modes default to `overwrite`
    * when a path or inlined content exists; otherwise the mode field is omitted.

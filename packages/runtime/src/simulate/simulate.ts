@@ -1,7 +1,9 @@
 import { randomUUID } from 'node:crypto';
 import { buildCtx } from '../ctx.js';
 import { isWorkforceHandler } from '../handler.js';
-import { shimEnvelope, type RawGatewayEnvelope } from '../shim.js';
+import { type RawGatewayEnvelope } from '../shim.js';
+import { envelopeToAgentEvent } from '../to-agent-event.js';
+import { isCronTickEvent } from '@agent-relay/events';
 import type {
   WorkforceAgentContext,
   WorkforceDeploymentContext,
@@ -101,7 +103,7 @@ export async function simulateInvocation(
   const unsupported: UnsupportedEnvelope[] = [];
 
   for (const raw of envelopes) {
-    const event = shimEnvelope(raw);
+    const event = envelopeToAgentEvent(raw);
     if (!event) {
       unsupported.push({ id: raw.id ?? '(missing id)', type: raw.type ?? '(missing type)' });
       continue;
@@ -135,7 +137,7 @@ export async function simulateInvocation(
       durationMs: runEnded.getTime() - runStarted.getTime(),
       trigger: {
         kind: explicitTriggerKind ?? triggerKindForEvent(event),
-        eventSource: event.source
+        eventSource: isCronTickEvent(event) ? 'cron' : event.resource.provider
       },
       sandbox: { id: null, name: 'local-simulation' },
       failureClass: deriveSimulatedRunFailureClass({ status, error }),
@@ -206,7 +208,7 @@ function summaryFromHandlerReturn(returned: unknown): string | null {
  * by the caller).
  */
 function triggerKindForEvent(event: WorkforceEvent): string {
-  return event.source === 'cron' ? 'clock' : 'inbox';
+  return isCronTickEvent(event) ? 'clock' : 'inbox';
 }
 
 function renderLogLines(

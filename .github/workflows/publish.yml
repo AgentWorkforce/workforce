@@ -88,6 +88,7 @@ jobs:
           # Dependency order (topological):
           #   persona-kit     (leaf — consumed by everyone)
           #   runtime         (→ persona-kit; consumed by deploy + mcp-workforce)
+          #   delivery        (→ runtime; consumed by external agents)
           #   workload-router (→ persona-kit; consumed by cli)
           #   deploy          (→ persona-kit + runtime; consumed by cli)
           #   mcp-workforce   (→ persona-kit + runtime)
@@ -95,7 +96,7 @@ jobs:
           #   cli             (→ persona-kit + workload-router + deploy)
           #   agentworkforce  (→ cli — umbrella wrapper, must publish last)
           # personas-core publishes via the separate publish-personas.yml workflow.
-          echo "packages=persona-kit runtime workload-router deploy mcp-workforce daytona-runner cli agentworkforce" >> "$GITHUB_OUTPUT"
+          echo "packages=persona-kit runtime delivery workload-router deploy mcp-workforce daytona-runner cli agentworkforce" >> "$GITHUB_OUTPUT"
 
       # Lockstep baseline heal. The workspace publishes every package at the
       # same version, so if any package's local version lags either its own
@@ -549,9 +550,11 @@ jobs:
             git commit -m "$MSG"
           fi
 
-      # npm >= 11.5.1 is required for the OIDC trusted-publisher flow.
-      - name: Install latest npm
-        run: npm install -g npm@latest
+      # npm >= 11.5.1 is required for the OIDC trusted-publisher flow. Pinned
+      # to the npm 11 line: @latest broke 2026-07-13 when npm 12 dropped
+      # support for the runner's node 22.14 (EBADENGINE).
+      - name: Install npm 11
+        run: npm install -g npm@11
 
       # Authentication note: this workflow does NOT use an NPM_TOKEN. It relies
       # on npm's OIDC trusted-publisher flow — the `id-token: write` permission
@@ -707,6 +710,7 @@ jobs:
           const packageOrder = [
             'persona-kit',
             'runtime',
+            'delivery',
             'workload-router',
             'deploy',
             'mcp-workforce',
