@@ -7,6 +7,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [4.1.15] - 2026-07-13
+
+### Fixed
+
+- Harden the warm fast path per review
+
+### Dependencies
+
+- Consume published @relayfile/local-mount 0.10.23
+
 ## [4.1.12] - 2026-06-24
 
 ### Added

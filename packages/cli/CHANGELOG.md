@@ -7,6 +7,22 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [4.1.15] - 2026-07-13
+
+### Added
+
+- **Warm fast path spawns the harness in ~20ms; 10x faster cold launches**
+
+### Fixed
+
+- Split PATH on the platform delimiter in resolveBinOnPath
+- Harden the warm fast path per review
+- Resolve fast-session exit even when the child exits during module load
+
+### Dependencies
+
+- Consume published @relayfile/local-mount 0.10.23
+
 ## [4.1.13] - 2026-06-25
 
 ### Added

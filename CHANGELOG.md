@@ -8,6 +8,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [4.1.15] - 2026-07-13
+
 ### Added
 
 - `@agentworkforce/cli`: warm fast path for `agent <persona>`. Repeat
@@ -32,3 +34,4 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - `@agentworkforce/cli`: requires `@relayfile/local-mount` ^0.10.23
   (git-list population, `attachMount`, exported autosync state, and the
   external-teardown safety guard).
+
