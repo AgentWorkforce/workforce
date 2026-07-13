@@ -167,3 +167,58 @@ test('tryFastAgentLaunch: valid-looking plan still refuses without a warm mount'
     rmSync(dir, { recursive: true, force: true });
   }
 });
+
+test('tryFastAgentLaunch: corrupted or truncated plans fall back instead of throwing', () => {
+  const selector = 'fast-launch-corrupt-plan-persona';
+  const planPath = launchPlanPath(process.cwd(), selector);
+  const version = (JSON.parse(
+    readFileSync(new URL('../package.json', import.meta.url), 'utf8')
+  ) as { version: string }).version;
+  try {
+    mkdirSync(join(planPath, '..'), { recursive: true });
+    // Not JSON at all.
+    writeFileSync(planPath, '{not json');
+    assert.equal(tryFastAgentLaunch([selector]), null);
+    // Valid JSON, right version/selector, but missing whole sections.
+    writeFileSync(
+      planPath,
+      JSON.stringify({
+        schemaVersion: LAUNCH_PLAN_SCHEMA_VERSION,
+        cliVersion: version,
+        cwd: process.cwd(),
+        selector
+      })
+    );
+    assert.equal(tryFastAgentLaunch([selector]), null);
+    // Sections present but null.
+    writeFileSync(
+      planPath,
+      JSON.stringify({
+        schemaVersion: LAUNCH_PLAN_SCHEMA_VERSION,
+        cliVersion: version,
+        cwd: process.cwd(),
+        selector,
+        digests: null,
+        envExact: null,
+        skillCache: null,
+        spawn: null,
+        mount: null
+      })
+    );
+    assert.equal(tryFastAgentLaunch([selector]), null);
+  } finally {
+    deleteLaunchPlan(process.cwd(), selector);
+  }
+});
+
+test('statDigestOf: directories digest with size pinned to 0', () => {
+  const dir = tempDir();
+  try {
+    writeFileSync(join(dir, 'entry.txt'), 'content');
+    const digest = statDigestOf(dir);
+    assert.equal(digest.size, 0);
+    assert.notEqual(digest.mtimeMs, null);
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});

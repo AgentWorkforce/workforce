@@ -101,6 +101,12 @@ export interface FastLaunch {
   mountDir: string;
   /** Path to the claimed autosync state snapshot from the previous session. */
   statePath: string;
+  /**
+   * Set when the child emitted 'error' before the session manager attached
+   * its listeners (e.g. the recorded binary vanished between the existence
+   * check and the spawn). The session manager treats it as exit code 127.
+   */
+  spawnFailure: { error: Error | null };
   startedAt: number;
 }
 
@@ -123,7 +129,10 @@ export function warmMountDir(cwd: string, selector: string): string {
 export function statDigestOf(path: string): StatDigest {
   try {
     const st = statSync(path);
-    return { path, size: st.size, mtimeMs: st.mtimeMs };
+    // Directory digests only witness entry add/remove/rename via mtime —
+    // size is filesystem-dependent noise, so pin it. Content edits inside a
+    // directory are covered by per-file digests on the plan side.
+    return { path, size: st.isDirectory() ? 0 : st.size, mtimeMs: st.mtimeMs };
   } catch {
     return { path, size: null, mtimeMs: null };
   }
@@ -198,6 +207,17 @@ function perfMark(label: string): void {
  * stale" conditions — only for programmer errors.
  */
 export function tryFastAgentLaunch(rest: readonly string[]): FastLaunch | null {
+  // The contract is "never throw for stale-plan conditions" — and a
+  // corrupted or hand-edited plan file is exactly such a condition, so the
+  // whole validation runs under a blanket fallback.
+  try {
+    return tryFastAgentLaunchInner(rest);
+  } catch {
+    return null;
+  }
+}
+
+function tryFastAgentLaunchInner(rest: readonly string[]): FastLaunch | null {
   // Any flag beyond a bare selector changes launch semantics → full path.
   if (rest.length !== 1 || rest[0].startsWith('-')) return null;
   const selector = rest[0];
@@ -269,6 +289,13 @@ export function tryFastAgentLaunch(rest: readonly string[]): FastLaunch | null {
         ? { ...process.env, ...plan.spawn.envAdditions }
         : process.env
     });
+    // Park async spawn failures until resumeFastSession attaches its own
+    // listeners: an unhandled 'error' during the heavy import would crash
+    // the process, and the exit promise must be able to observe it later.
+    const spawnFailure: { error: Error | null } = { error: null };
+    child.once('error', (err) => {
+      spawnFailure.error = err;
+    });
     perfMark('fast-launch: harness child spawning');
     return {
       plan,
@@ -276,6 +303,7 @@ export function tryFastAgentLaunch(rest: readonly string[]): FastLaunch | null {
       sessionRoot,
       mountDir,
       statePath,
+      spawnFailure,
       startedAt: Date.now()
     };
   } catch {

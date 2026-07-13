@@ -1668,6 +1668,11 @@ function buildFastLaunchPlan(input: {
   if (input.selection.inputValues !== undefined) return null;
   if (input.selection.env !== undefined) return null;
   if (input.selection.mcpServers !== undefined) return null;
+  // Path-form sidecars are read from disk at materialization time; until
+  // those files are folded into the digest set, editing one must not be
+  // able to slip past a cached plan.
+  if (input.selection.claudeMd !== undefined) return null;
+  if (input.selection.agentsMd !== undefined) return null;
   if (!input.skillCacheDir || !input.skillCacheFingerprint) return null;
   // Opencode ignores relay MCP injection entirely; every other harness wires
   // it into argv (tokens included), so those are only eligible with relay
@@ -1703,7 +1708,20 @@ function buildFastLaunchPlan(input: {
   const { directories, config } = buildPersonaSourceDirectories();
   digests.push(statDigestOf(config.configPath));
   for (const dir of directories) {
+    // Dir mtime witnesses entry add/remove/rename; per-file digests below
+    // witness in-place edits, which don't touch the parent dir's stat.
     digests.push(statDigestOf(dir.dir));
+    let entries: string[];
+    try {
+      entries = readdirSync(dir.dir);
+    } catch {
+      continue;
+    }
+    // Persona ids live in file contents and same-id layers merge across
+    // dirs, so every persona JSON in every layer is a resolution input.
+    for (const name of entries) {
+      if (name.endsWith('.json')) digests.push(statDigestOf(join(dir.dir, name)));
+    }
   }
   // Dotfiles shape the mount patterns. Persona ids are kebab-case, so the
   // per-agent filenames need no sanitization here.
@@ -3565,9 +3583,14 @@ export async function resumeFastSession(fast: FastLaunch): Promise<never> {
 
   const exitCodePromise = new Promise<number>((resolve) => {
     // The child was spawned before this module even loaded; if it already
-    // exited (its 'close' fired while the import was in flight), the settled
-    // state is on the object — waiting for an event that already happened
-    // would hang the teardown forever.
+    // exited or failed (its 'close'/'error' fired while the import was in
+    // flight), the settled state is on the object / the fast-launch parking
+    // slot — waiting for an event that already happened would hang the
+    // teardown forever.
+    if (fast.spawnFailure.error) {
+      resolve(127);
+      return;
+    }
     if (child.exitCode !== null) {
       resolve(child.exitCode);
       return;
@@ -3701,6 +3724,7 @@ export async function resumeFastSession(fast: FastLaunch): Promise<never> {
   const exitCode = await exitCodePromise;
   perfMark('exit: harness child exited');
 
+  let teardownFailed = false;
   isSyncing = true;
   syncSpinner = ora({
     text: 'Syncing session changes back to the repo… (Ctrl-C to skip)',
@@ -3747,6 +3771,10 @@ export async function resumeFastSession(fast: FastLaunch): Promise<never> {
       syncSpinner.fail(`Sync did not complete: ${(err as Error).message}`);
       syncSpinner = undefined;
     }
+    // The harness may have succeeded, but its work didn't fully reach the
+    // repo — that must not read as a clean exit (the cold path returns
+    // non-zero for the same class of failure).
+    teardownFailed = true;
   } finally {
     process.removeListener('SIGINT', sigintHandler);
     if (handle) {
@@ -3771,7 +3799,7 @@ export async function resumeFastSession(fast: FastLaunch): Promise<never> {
       }
     });
   }
-  process.exit(exitCode);
+  process.exit(teardownFailed && exitCode === 0 ? 1 : exitCode);
 }
 
 interface LocalPersonaImproverContext {
