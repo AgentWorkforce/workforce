@@ -16,7 +16,7 @@
     "@agentworkforce/runtime": "workspace:*",
     "@agentworkforce/workload-router": "workspace:*",
     "@relayburn/sdk": "^2.5.2",
-    "@relayfile/local-mount": "^0.7.24",
+    "@relayfile/local-mount": "^0.11.0",
     "ora": "^9.4.0"
   },
   "repository": {

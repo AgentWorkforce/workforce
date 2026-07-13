@@ -32,7 +32,7 @@ import {
   stripAgentFlag,
   type ImproverProposal,
   type ResolvedSidecar
-} from './cli.js';
+} from './cli-impl.js';
 
 // The conflict-detection path inside parseAgentArgs uses the module-local
 // `die()` helper, which calls process.exit(1) after writing to stderr. Tests
