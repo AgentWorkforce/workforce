@@ -29,6 +29,6 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   cache into the mount; and cloud subcommand handlers load lazily off the
   launch path. In the relay repo, launch-to-harness went from ~26s to ~2.5s
   cold and ~20ms warm, and session teardown from ~11s to under 1s.
-- `@agentworkforce/cli`: requires `@relayfile/local-mount` ^0.11.0
+- `@agentworkforce/cli`: requires `@relayfile/local-mount` ^0.10.23
   (git-list population, `attachMount`, exported autosync state, and the
   external-teardown safety guard).
