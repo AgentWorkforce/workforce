@@ -19,7 +19,7 @@ import {
   type Dirent
 } from 'node:fs';
 import { constants, homedir, tmpdir } from 'node:os';
-import { dirname, isAbsolute, join, resolve as resolvePath } from 'node:path';
+import { delimiter as pathDelimiter, dirname, isAbsolute, join, resolve as resolvePath } from 'node:path';
 import { pathToFileURL } from 'node:url';
 
 import {
@@ -1613,10 +1613,14 @@ interface RunInteractiveCapture {
 const SKILL_LOCAL_MD_RE = /\.md$/i;
 const SKILL_URL_PREFIX_RE = /^[a-z][a-z0-9+.-]*:\/\//i;
 
-/** Resolve a bare binary name to its absolute PATH entry, or null. */
+/**
+ * Resolve a bare binary name to its absolute PATH entry, or null. No PATHEXT
+ * handling: on Windows this returns null for `.cmd`/`.exe` shims, which just
+ * means the warm fast path never engages there — launches take the full path.
+ */
 function resolveBinOnPath(bin: string): string | null {
   if (isAbsolute(bin)) return existsSync(bin) ? bin : null;
-  for (const dir of (process.env.PATH ?? '').split(':')) {
+  for (const dir of (process.env.PATH ?? '').split(pathDelimiter)) {
     if (!dir) continue;
     const candidate = join(dir, bin);
     try {
