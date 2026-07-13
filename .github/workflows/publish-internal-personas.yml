@@ -80,9 +80,11 @@ jobs:
       - name: Install deps
         run: pnpm install --frozen-lockfile
 
-      # npm >= 11.5.1 is required for the OIDC trusted-publisher flow.
-      - name: Install latest npm
-        run: npm install -g npm@latest
+      # npm >= 11.5.1 is required for the OIDC trusted-publisher flow. Pinned
+      # to the npm 11 line: @latest broke 2026-07-13 when npm 12 dropped
+      # support for the runner's node 22.14 (EBADENGINE).
+      - name: Install npm 11
+        run: npm install -g npm@11
 
       - name: Resolve target packs
         id: targets
