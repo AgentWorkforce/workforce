@@ -16,7 +16,7 @@ test('broker-only relay MCP prefers BROKER_BINARY_PATH over the Agent Relay CLI'
 test('broker-only relay MCP treats an empty Agent Relay CLI override as unset', () => {
   assert.equal(
     resolveAgentRelayBrokerBinary({ AGENT_RELAY_BIN: '   ' }),
-    'agent-relay-broker'
+    resolveAgentRelayBrokerBinary({})
   );
 });
 
