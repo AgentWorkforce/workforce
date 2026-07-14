@@ -100,7 +100,7 @@ export async function resolveAgentRelayBrokerMcpArgs(args: {
 }
 
 export function resolveAgentRelayBrokerBinary(env: NodeJS.ProcessEnv): string {
-  const configured = env.AGENT_RELAY_BIN?.trim() || env.BROKER_BINARY_PATH?.trim();
+  const configured = env.BROKER_BINARY_PATH?.trim() || env.AGENT_RELAY_BIN?.trim();
   if (configured) return configured;
   const sandboxBroker = resolveSandboxAgentRelayBrokerBinary();
   return sandboxBroker ?? 'agent-relay-broker';
