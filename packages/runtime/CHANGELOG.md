@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [4.1.16] - 2026-07-14
+
+### Fixed
+
+- Fix broker precedence for relay MCP injection (#260)
+
 ## [4.1.14] - 2026-06-25
 
 ### Added
