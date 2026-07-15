@@ -1,3 +1,5 @@
+const nonBlankString = { type: 'string', minLength: 1, pattern: '\\S' } as const;
+
 export const TEAM_SPEC_JSON_SCHEMA = {
   $schema: 'https://json-schema.org/draft/2020-12/schema',
   $id: 'https://agentworkforce.dev/schemas/compose/team-spec.json',
@@ -6,31 +8,31 @@ export const TEAM_SPEC_JSON_SCHEMA = {
   required: ['id', 'lead', 'members'],
   additionalProperties: false,
   properties: {
-    id: { type: 'string', minLength: 1 },
-    lead: { type: 'string', minLength: 1 },
+    id: nonBlankString,
+    lead: nonBlankString,
     members: {
       type: 'array', minItems: 1,
       items: {
         type: 'object', required: ['name', 'persona'], additionalProperties: false,
         properties: {
-          name: { type: 'string', minLength: 1 },
+          name: nonBlankString,
           persona: {
             oneOf: [
-              { type: 'string', minLength: 1 },
+              nonBlankString,
               {
                 type: 'object',
                 additionalProperties: false,
                 properties: {
-                  slug: { type: 'string', minLength: 1 },
-                  version: { oneOf: [{ type: 'string', minLength: 1 }, { type: 'integer', minimum: 1 }] },
-                  path: { type: 'string', minLength: 1 },
+                  slug: nonBlankString,
+                  version: { oneOf: [nonBlankString, { type: 'integer', minimum: 1 }] },
+                  path: nonBlankString,
                   inline: { type: 'object' }
                 },
                 anyOf: [{ required: ['slug'] }, { required: ['path'] }, { required: ['inline'] }]
               }
             ]
           },
-          role: { type: 'string', minLength: 1 },
+          role: nonBlankString,
           owns: { type: 'array', items: { type: 'object' } }
         }
       }

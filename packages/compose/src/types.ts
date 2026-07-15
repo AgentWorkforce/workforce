@@ -1,11 +1,16 @@
-export type PersonaRef =
-  | string
-  | {
-      slug?: string;
-      version?: number | string;
-      path?: string;
-      inline?: Record<string, unknown>;
-    };
+interface PersonaRefFields {
+  slug?: string;
+  version?: number | string;
+  path?: string;
+  inline?: Record<string, unknown>;
+}
+
+/** Object refs require at least one resolvable selector, matching the parser/schema. */
+export type PersonaRef = string | (PersonaRefFields & (
+  | { slug: string }
+  | { path: string }
+  | { inline: Record<string, unknown> }
+));
 
 export type TriggerSelector = Record<string, unknown>;
 export type DelegationRule = Record<string, unknown>;
@@ -55,18 +60,23 @@ export interface ComposePlanEdgeV1 {
   reason?: string;
 }
 
-export interface ComposePlanV1 {
+interface ComposePlanBaseV1 {
   schemaVersion: 1;
   composeId: string;
-  kind: ComposeRef['kind'];
-  ref: ComposeRef;
   status: 'valid' | 'invalid';
   nodes: ComposePlanNodeV1[];
   edges: ComposePlanEdgeV1[];
+  delegation?: DelegationRule[];
   budget?: { tokenBudget?: number; timeBudgetSeconds?: number };
   errors: string[];
   extensions?: Record<string, unknown>;
 }
+
+/** Plan kind and reference stay correlated across serialization boundaries. */
+export type ComposePlanV1 = ComposePlanBaseV1 & (
+  | { kind: 'team'; ref: Extract<ComposeRef, { kind: 'team' }> }
+  | { kind: 'workflow'; ref: Extract<ComposeRef, { kind: 'workflow' }> }
+);
 
 export interface ComposeResultV1 {
   schemaVersion: 1;

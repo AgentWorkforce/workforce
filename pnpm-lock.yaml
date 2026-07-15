@@ -65,6 +65,8 @@ importers:
         specifier: ^9.4.0
         version: 9.4.0
 
+  packages/compose: {}
+
   packages/daytona-runner:
     devDependencies:
       '@daytonaio/sdk':

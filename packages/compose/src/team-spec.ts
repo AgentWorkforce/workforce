@@ -1,5 +1,5 @@
 import { readFile } from 'node:fs/promises';
-import { basename, dirname, join } from 'node:path';
+import { basename, dirname, join, resolve } from 'node:path';
 import type { PersonaRef, TeamMember, TeamSpec } from './types.js';
 
 export const TEAM_SPEC_FILENAME = 'team.json';
@@ -15,6 +15,7 @@ export class TeamSpecError extends Error {
 /** Throwing parser compatible with Cloud's original TeamSpec contract. */
 export function loadTeamSpec(value: unknown): TeamSpec {
   if (!isRecord(value)) throw new TeamSpecError('TeamSpec must be an object');
+  assertKnownKeys(value, new Set(['id', 'lead', 'members', 'delegation', 'tokenBudget', 'timeBudgetSeconds']), 'TeamSpec');
   const id = requireNonEmptyString(value.id, 'id');
   const lead = requireNonEmptyString(value.lead, 'lead');
   if (!Array.isArray(value.members) || value.members.length === 0) {
@@ -74,8 +75,8 @@ export async function loadTeamSpecFile(filePath: string): Promise<TeamSpec> {
 
 export async function parseTeamSpecFile(filePath: string): Promise<TeamSpec> {
   const spec = await loadTeamSpecFile(filePath);
-  const expectedId = basename(dirname(filePath));
-  if (expectedId && expectedId !== '.' && spec.id !== expectedId) {
+  const expectedId = basename(dirname(resolve(filePath)));
+  if (spec.id !== expectedId) {
     throw new TeamSpecError(`TeamSpec id "${spec.id}" must match team directory "${expectedId}"`);
   }
   return spec;
@@ -116,6 +117,7 @@ function parseTeamSpecJson(contents: string, sourcePath: string): TeamSpec {
 
 function parseMember(value: unknown, index: number): TeamMember {
   if (!isRecord(value)) throw new TeamSpecError(`members[${index}] must be an object`);
+  assertKnownKeys(value, new Set(['name', 'persona', 'role', 'owns']), `members[${index}]`);
   const member: TeamMember = {
     name: requireNonEmptyString(value.name, `members[${index}].name`),
     persona: parsePersonaRef(value.persona, `members[${index}].persona`)
@@ -130,28 +132,32 @@ function parseMember(value: unknown, index: number): TeamMember {
 function parsePersonaRef(value: unknown, path: string): PersonaRef {
   if (typeof value === 'string') return requireNonEmptyString(value, path);
   if (!isRecord(value)) throw new TeamSpecError(`${path} must be a string or object`);
-  const ref: Exclude<PersonaRef, string> = {};
+  assertKnownKeys(value, new Set(['slug', 'version', 'path', 'inline']), path);
   const slug = optionalNonEmptyString(value.slug, `${path}.slug`);
   const pathRef = optionalNonEmptyString(value.path, `${path}.path`);
-  if (slug !== undefined) ref.slug = slug;
-  if (pathRef !== undefined) ref.path = pathRef;
+  let version: string | number | undefined;
   if (value.version !== undefined) {
     if (typeof value.version === 'string') {
-      const version = value.version.trim();
+      version = value.version.trim();
       if (!version) throw new TeamSpecError(`${path}.version must be a non-empty string or positive integer`);
-      ref.version = version;
     } else if (typeof value.version !== 'number' || !Number.isInteger(value.version) || value.version <= 0) {
       throw new TeamSpecError(`${path}.version must be a non-empty string or positive integer`);
-    } else ref.version = value.version;
+    } else version = value.version;
   }
+  let inline: Record<string, unknown> | undefined;
   if (value.inline !== undefined) {
     if (!isRecord(value.inline)) throw new TeamSpecError(`${path}.inline must be an object`);
-    ref.inline = value.inline;
+    inline = value.inline;
   }
-  if (ref.slug === undefined && ref.path === undefined && ref.inline === undefined) {
-    throw new TeamSpecError(`${path} must include slug, path, or inline`);
-  }
-  return ref;
+  const optional = {
+    ...(version !== undefined ? { version } : {}),
+    ...(pathRef !== undefined ? { path: pathRef } : {}),
+    ...(inline !== undefined ? { inline } : {})
+  };
+  if (slug !== undefined) return { slug, ...optional };
+  if (pathRef !== undefined) return { path: pathRef, ...(version !== undefined ? { version } : {}), ...(inline !== undefined ? { inline } : {}) };
+  if (inline !== undefined) return { inline, ...(version !== undefined ? { version } : {}) };
+  throw new TeamSpecError(`${path} must include slug, path, or inline`);
 }
 
 function parseRecordArray(value: unknown, path: string): Record<string, unknown>[] | undefined {
@@ -184,9 +190,16 @@ function requireNonEmptyString(value: unknown, path: string): string {
 }
 
 function stableJson(value: unknown): string {
+  if (value === undefined) return 'null';
   if (Array.isArray(value)) return `[${value.map(stableJson).join(',')}]`;
   if (isRecord(value)) return `{${Object.keys(value).sort().map((key) => `${JSON.stringify(key)}:${stableJson(value[key])}`).join(',')}}`;
-  return JSON.stringify(value);
+  return JSON.stringify(value) ?? 'null';
+}
+
+function assertKnownKeys(value: Record<string, unknown>, allowed: ReadonlySet<string>, path: string): void {
+  for (const key of Object.keys(value)) {
+    if (!allowed.has(key)) throw new TeamSpecError(`${path}.${key} is not a known field`);
+  }
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {

@@ -1,4 +1,4 @@
-import type { ComposePlanV1, ComposeRef, TeamSpec } from './types.js';
+import type { ComposePlanV1, ComposeRef, ComposeResultV1, TeamSpec } from './types.js';
 import { loadTeamSpec } from './team-spec.js';
 
 /** Pure TeamSpec planner used by preview mode; it never launches child Runs. */
@@ -26,9 +26,12 @@ export function planTeamSpec(input: unknown, ref?: ComposeRef): ComposePlanV1 {
     ref: composeRef,
     status: 'valid',
     nodes,
-    edges: spec.members
-      .filter((member) => member.name !== spec.lead)
-      .map((member) => ({ from: spec.lead, to: member.name, kind: 'delegates' as const })),
+    edges: spec.delegation === undefined
+      ? spec.members
+        .filter((member) => member.name !== spec.lead)
+        .map((member) => ({ from: spec.lead, to: member.name, kind: 'delegates' as const }))
+      : [],
+    ...(spec.delegation !== undefined ? { delegation: spec.delegation.map((rule) => ({ ...rule })) } : {}),
     ...((spec.tokenBudget !== undefined || spec.timeBudgetSeconds !== undefined) ? {
       budget: {
         ...(spec.tokenBudget !== undefined ? { tokenBudget: spec.tokenBudget } : {}),
@@ -39,7 +42,7 @@ export function planTeamSpec(input: unknown, ref?: ComposeRef): ComposePlanV1 {
   };
 }
 
-export function createComposePreviewResult(plan: ComposePlanV1) {
+export function createComposePreviewResult(plan: ComposePlanV1): ComposeResultV1 {
   return {
     schemaVersion: 1 as const,
     composeId: plan.composeId,
