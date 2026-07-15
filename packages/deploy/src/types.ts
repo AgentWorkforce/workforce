@@ -172,6 +172,14 @@ export interface ModeLaunchHandle {
    * resolves only when the user invokes `stop()`.
    */
   done: Promise<{ code: number }>;
+  /**
+   * Write a raw line directly to the runner's envelope stdin, bypassing the
+   * `process.stdin` passthrough. Only `dev` mode implements this today — it
+   * lets a long-lived host process (e.g. a fleet-node bridge) that owns the
+   * `deploy()` call feed one `RawGatewayEnvelope` per message without a real
+   * piped parent stdin. Absent when the mode has no addressable stdin.
+   */
+  write?(line: string): void;
 }
 
 export interface IntegrationConnectOutcome {

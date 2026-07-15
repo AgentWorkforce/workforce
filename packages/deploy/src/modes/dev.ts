@@ -119,7 +119,10 @@ export const devLauncher: ModeLauncher = {
     return {
       id: `pid:${child.pid}`,
       stop,
-      done
+      done,
+      write: (line: string) => {
+        child.stdin?.write(line);
+      }
     };
   }
 };
