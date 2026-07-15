@@ -22,6 +22,8 @@ import type {
   PersonaIntegrationTrigger,
   PersonaIntent,
   PersonaAiMemoryConfig,
+  PersonaHttpReadCapability,
+  PersonaHttpReadRule,
   PersonaMemory,
   PersonaMemoryConfig,
   PersonaMemoryScope,
@@ -1107,6 +1109,56 @@ function parseCapabilityValue(value: unknown, context: string): CapabilityValue 
   return { ...value } as CapabilityValue;
 }
 
+function parseHttpReadRule(value: unknown, context: string): PersonaHttpReadRule {
+  if (!isObject(value) || Array.isArray(value)) {
+    throw new Error(`${context} must be an object`);
+  }
+  const entry = value as Record<string, unknown>;
+  for (const key of Object.keys(entry)) {
+    if (!['method', 'urlGlob'].includes(key)) {
+      throw new Error(`${context}.${key} is not allowed`);
+    }
+  }
+  if (entry.method !== 'GET' && entry.method !== 'HEAD') {
+    throw new Error(`${context}.method must be "GET" or "HEAD"`);
+  }
+  if (typeof entry.urlGlob !== 'string' || !entry.urlGlob.trim()) {
+    throw new Error(`${context}.urlGlob must be a non-empty string`);
+  }
+  return {
+    method: entry.method,
+    urlGlob: entry.urlGlob
+  };
+}
+
+function parseHttpReadCapability(value: unknown, context: string): PersonaHttpReadCapability {
+  if (!isObject(value) || Array.isArray(value)) {
+    throw new Error(`${context} must be an object if provided`);
+  }
+  const entry = value as Record<string, unknown>;
+  for (const key of Object.keys(entry)) {
+    if (!['enabled', 'allow'].includes(key)) {
+      throw new Error(`${context}.${key} is not allowed`);
+    }
+  }
+  if (entry.enabled !== undefined && typeof entry.enabled !== 'boolean') {
+    throw new Error(`${context}.enabled must be a boolean if provided`);
+  }
+  if (entry.allow !== undefined && !Array.isArray(entry.allow)) {
+    throw new Error(`${context}.allow must be an array if provided`);
+  }
+  return {
+    ...(entry.enabled !== undefined ? { enabled: entry.enabled } : {}),
+    ...(entry.allow !== undefined
+      ? {
+          allow: entry.allow.map((rule, index) =>
+            parseHttpReadRule(rule, `${context}.allow[${index}]`)
+          )
+        }
+      : {})
+  };
+}
+
 export function parseCapabilities(
   value: unknown,
   context: string
@@ -1127,7 +1179,9 @@ export function parseCapabilities(
   // drop capability keys it happens not to recognize.
   for (const [key, raw] of Object.entries(value)) {
     if (raw === undefined) continue;
-    out[key] = parseCapabilityValue(raw, `${context}.${key}`);
+    out[key] = key === 'httpRead'
+      ? parseHttpReadCapability(raw, `${context}.${key}`)
+      : parseCapabilityValue(raw, `${context}.${key}`);
   }
 
   return Object.keys(out).length > 0 ? out : undefined;

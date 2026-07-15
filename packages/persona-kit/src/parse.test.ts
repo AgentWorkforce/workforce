@@ -1120,6 +1120,35 @@ test('parseCapabilities rejects arrays for the capabilities map and values', () 
   );
 });
 
+test('parseCapabilities validates the httpRead capability contract', () => {
+  const caps = parseCapabilities({
+    httpRead: {
+      allow: [
+        { method: 'GET', urlGlob: 'https://example.test/front-page' },
+        { method: 'HEAD', urlGlob: 'https://example.test/*' }
+      ]
+    }
+  }, 'persona.capabilities');
+
+  assert.deepEqual(caps?.httpRead, {
+    allow: [
+      { method: 'GET', urlGlob: 'https://example.test/front-page' },
+      { method: 'HEAD', urlGlob: 'https://example.test/*' }
+    ]
+  });
+  assert.throws(
+    () => parseCapabilities({ httpRead: true }, 'persona.capabilities'),
+    /persona\.capabilities\.httpRead must be an object if provided/
+  );
+  assert.throws(
+    () => parseCapabilities(
+      { httpRead: { allow: [{ method: 'POST', urlGlob: 'https://example.test/*' }] } },
+      'persona.capabilities'
+    ),
+    /persona\.capabilities\.httpRead\.allow\[0\]\.method must be "GET" or "HEAD"/
+  );
+});
+
 test('parsePersonaSpec round-trip preserves a declared teamSolve capability', () => {
   const spec = parsePersonaSpec(
     validSpec({
@@ -1131,5 +1160,25 @@ test('parsePersonaSpec round-trip preserves a declared teamSolve capability', ()
   assert.deepEqual(spec.capabilities?.teamSolve, {
     enabled: true,
     maxMembers: 1
+  });
+});
+
+test('parsePersonaSpec preserves a declared httpRead capability', () => {
+  const spec = parsePersonaSpec(
+    validSpec({
+      cloud: true,
+      capabilities: {
+        httpRead: {
+          enabled: true,
+          allow: [{ method: 'GET', urlGlob: 'https://example.test/*' }]
+        }
+      }
+    }),
+    'documentation'
+  );
+
+  assert.deepEqual(spec.capabilities?.httpRead, {
+    enabled: true,
+    allow: [{ method: 'GET', urlGlob: 'https://example.test/*' }]
   });
 });

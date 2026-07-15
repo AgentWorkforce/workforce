@@ -16,12 +16,14 @@ const fixture: IntegrationsDocument = {
       adapterSlug: 'github',
       inCloudCatalog: true,
       connected: true,
+      registrationHealth: { workspace: { registered: true, healthy: true } },
       connections: [
         {
           connectionId: 'conn-github',
           scope: 'workspace',
           serviceAccountName: null,
-          status: 'ready'
+          status: 'ready',
+          registrationHealth: { registered: true, healthy: true }
         }
       ],
       triggers: ['issues.opened', 'pull_request.opened', 'pull_request.closed'],
@@ -169,6 +171,7 @@ test('runIntegrationsCommand renders single-provider details and snippet', async
     assert.equal(process.exitCode, 0);
     assert.match(io.stdout.text, /Triggers:\n  issues\.opened/);
     assert.match(io.stdout.text, /connectionId|conn-github/);
+    assert.match(io.stdout.text, /registrationHealth/);
     assert.match(io.stdout.text, /"integrations": \{ "github": \{\} \}/);
     assert.match(io.stdout.text, /triggers: \{ "github": \[\{ "on": "issues\.opened" \}\] \}/);
   } finally {

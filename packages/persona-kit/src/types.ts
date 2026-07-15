@@ -421,6 +421,17 @@ export type CapabilityValue =
   | boolean
   | { enabled?: boolean; [k: string]: unknown };
 
+export interface PersonaHttpReadRule {
+  method: 'GET' | 'HEAD';
+  urlGlob: string;
+}
+
+export interface PersonaHttpReadCapability {
+  enabled?: boolean;
+  allow?: PersonaHttpReadRule[];
+  [k: string]: unknown;
+}
+
 /**
  * Portable proactive capability declarations.
  *
@@ -438,6 +449,8 @@ export interface ProactiveCapabilities {
   conflictAutofix?: CapabilityValue;
   /** Legacy alias of `review`. */
   pullRequest?: CapabilityValue;
+  /** Declarative local live-read allowlist for GET/HEAD URLs. */
+  httpRead?: PersonaHttpReadCapability;
   /**
    * Consumer-defined capabilities pass through the parser unchanged. persona-kit
    * is platform-agnostic and must not drop capability keys it does not model

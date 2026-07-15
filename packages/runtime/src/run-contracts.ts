@@ -145,3 +145,74 @@ export function resolveLocalEffectPolicy(
     ...(requested.allowedProviders ? { allowedProviders: [...requested.allowedProviders] } : {})
   };
 }
+
+export function mergeAllowedHttpRules(
+  ...groups: ReadonlyArray<ReadonlyArray<{ method: string; urlGlob: string }>>
+): EffectPolicyV1['allowedHttp'] {
+  const seen = new Set<string>();
+  const merged: EffectPolicyV1['allowedHttp'] = [];
+  for (const group of groups) {
+    for (const rule of group) {
+      const method = rule.method.toUpperCase();
+      const key = `${method}\u0000${rule.urlGlob}`;
+      if (seen.has(key)) continue;
+      seen.add(key);
+      merged.push({ method, urlGlob: rule.urlGlob });
+    }
+  }
+  return merged;
+}
+
+export function resolvePersonaHttpReadRules(
+  persona: Pick<PersonaSpec, 'id' | 'capabilities'>
+): EffectPolicyV1['allowedHttp'] {
+  const declared = persona.capabilities?.httpRead;
+  if (declared === undefined) return [];
+  if (typeof declared !== 'object' || declared === null || Array.isArray(declared)) {
+    throw new Error(
+      `invoke: persona "${persona.id}" capabilities.httpRead must be an object with optional enabled and allow fields`
+    );
+  }
+
+  const entry = declared as Record<string, unknown>;
+  for (const key of Object.keys(entry)) {
+    if (!['enabled', 'allow'].includes(key)) {
+      throw new Error(`invoke: persona "${persona.id}" capabilities.httpRead.${key} is not allowed`);
+    }
+  }
+  if (entry.enabled !== undefined && typeof entry.enabled !== 'boolean') {
+    throw new Error(`invoke: persona "${persona.id}" capabilities.httpRead.enabled must be a boolean if provided`);
+  }
+  if (entry.allow !== undefined && !Array.isArray(entry.allow)) {
+    throw new Error(`invoke: persona "${persona.id}" capabilities.httpRead.allow must be an array if provided`);
+  }
+
+  const rules = (entry.allow ?? []).map((value, index) => {
+    if (typeof value !== 'object' || value === null || Array.isArray(value)) {
+      throw new Error(`invoke: persona "${persona.id}" capabilities.httpRead.allow[${index}] must be an object`);
+    }
+    const rule = value as Record<string, unknown>;
+    for (const key of Object.keys(rule)) {
+      if (!['method', 'urlGlob'].includes(key)) {
+        throw new Error(`invoke: persona "${persona.id}" capabilities.httpRead.allow[${index}].${key} is not allowed`);
+      }
+    }
+    if (rule.method !== 'GET' && rule.method !== 'HEAD') {
+      throw new Error(
+        `invoke: persona "${persona.id}" capabilities.httpRead.allow[${index}].method must be "GET" or "HEAD"`
+      );
+    }
+    if (typeof rule.urlGlob !== 'string' || !rule.urlGlob.trim()) {
+      throw new Error(
+        `invoke: persona "${persona.id}" capabilities.httpRead.allow[${index}].urlGlob must be a non-empty string`
+      );
+    }
+    return {
+      method: rule.method,
+      urlGlob: rule.urlGlob
+    };
+  });
+
+  if (entry.enabled === false) return [];
+  return mergeAllowedHttpRules(rules);
+}
