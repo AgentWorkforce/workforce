@@ -7,6 +7,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [4.1.19] - 2026-07-15
+
+### Added
+
+- **Compile single-file Agent presets** (#267)
+
+### Fixed
+
+- Repair opencode one-shot invocation (#270)
+
 ## [4.1.18] - 2026-07-15
 
 ### Added

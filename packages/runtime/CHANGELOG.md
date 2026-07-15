@@ -7,6 +7,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [4.1.19] - 2026-07-15
+
+### Added
+
+- **Compile single-file Agent presets** (#267)
+- **Add versioned Run contracts** (#266)
+- **Add canonical Event contracts** (#265)
+
 ## [4.1.18] - 2026-07-15
 
 ### Added

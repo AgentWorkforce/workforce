@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [4.1.19] - 2026-07-15
+
+### Added
+
+- **Fleet-node bridge for running proactive personas on a laptop** (#263)
+
 ## [4.1.18] - 2026-07-15
 
 ### Added
