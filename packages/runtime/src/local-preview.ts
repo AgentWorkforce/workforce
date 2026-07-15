@@ -83,7 +83,6 @@ const MAX_REDIRECTS = 8;
 const REDACTED_INPUT_VALUE = '[redacted]';
 const WORKER_ENTRY_PATH = fileURLToPath(new URL('./local-preview-child.js', import.meta.url));
 const WORKER_RUNTIME_ROOT = fileURLToPath(new URL('.', import.meta.url));
-const WORKSPACE_ROOT = path.resolve(WORKER_RUNTIME_ROOT, '..', '..', '..');
 const require = createRequire(import.meta.url);
 let spawnPreviewWorkerProcess: typeof spawn = spawn;
 
@@ -355,7 +354,7 @@ async function runPreviewWorker(args: {
   };
 
   try {
-    await waitForWorkerReady(child, () => ready, localPreviewReadyTimeoutMs());
+    await waitForWorkerReady(child, () => ready, localPreviewReadyTimeoutMs(), () => stderr);
     await sendToChild(child, args.init);
   } catch (error) {
     return await failAndStop(error);
@@ -634,11 +633,11 @@ async function buildWorkerPermissionArgs(bundlePath: string, extraReadRoots: rea
   const bundleDir = await realpath(path.dirname(bundlePath));
   const bundleFile = await realpath(bundlePath);
   const runtimeRoot = await realpath(WORKER_RUNTIME_ROOT);
+  const runtimePackageRoot = await resolveRuntimePackageRoot();
   const readRoots = uniquePaths([
     runtimeRoot,
-    path.join(WORKSPACE_ROOT, 'node_modules'),
-    path.join(WORKSPACE_ROOT, 'packages'),
-    path.join(WORKSPACE_ROOT, '.workforce'),
+    runtimePackageRoot,
+    ...collectRuntimeDependencyRoots(runtimePackageRoot),
     ...extraReadRoots,
     bundleDirPath,
     bundlePath,
@@ -656,16 +655,12 @@ async function stageWorkerBundle(bundlePath: string): Promise<{
   bundlePath: string;
   readRoots: string[];
 }> {
-  const stagingRoot = path.join(WORKSPACE_ROOT, '.workforce');
+  const stagingRoot = path.join(resolveLocalPreviewWorkspaceRoot(), '.workforce');
   await mkdir(stagingRoot, { recursive: true });
   const dir = await mkdtemp(path.join(stagingRoot, 'local-preview-worker-'));
   const stagedBundlePath = path.join(dir, path.basename(bundlePath));
   await copyFile(bundlePath, stagedBundlePath);
-  const originalBundleDir = path.dirname(bundlePath);
-  const runtimePackageJson = require.resolve('@agentworkforce/runtime/package.json', {
-    paths: [originalBundleDir, WORKSPACE_ROOT]
-  });
-  const runtimePackageRoot = path.dirname(runtimePackageJson);
+  const runtimePackageRoot = await resolveRuntimePackageRoot();
   const runtimeNodeModulesDir = path.join(dir, 'node_modules', '@agentworkforce');
   await mkdir(runtimeNodeModulesDir, { recursive: true });
   await symlink(runtimePackageRoot, path.join(runtimeNodeModulesDir, 'runtime'));
@@ -673,7 +668,7 @@ async function stageWorkerBundle(bundlePath: string): Promise<{
     dir,
     bundlePath: stagedBundlePath,
     readRoots: uniquePaths([
-      originalBundleDir,
+      path.dirname(bundlePath),
       bundlePath,
       runtimePackageRoot
     ])
@@ -728,6 +723,31 @@ function compareNodeVersions(left: string, right: string): number {
 
 function uniquePaths(values: readonly string[]): string[] {
   return [...new Set(values.map((value) => path.resolve(value)))];
+}
+
+function resolveLocalPreviewWorkspaceRoot(): string {
+  return path.resolve(process.cwd());
+}
+
+async function resolveRuntimePackageRoot(): Promise<string> {
+  return await realpath(path.dirname(require.resolve('@agentworkforce/runtime/package.json')));
+}
+
+function collectRuntimeDependencyRoots(runtimePackageRoot: string): string[] {
+  const roots = [path.join(runtimePackageRoot, 'node_modules')];
+  let cursor = path.resolve(runtimePackageRoot);
+  while (true) {
+    const parent = path.dirname(cursor);
+    if (parent === cursor) break;
+    const base = path.basename(parent);
+    if (base === 'node_modules') {
+      roots.push(parent);
+    } else if (base === 'packages') {
+      roots.push(parent, path.join(path.dirname(parent), 'node_modules'));
+    }
+    cursor = parent;
+  }
+  return roots;
 }
 
 function httpRuleMatches(
@@ -792,7 +812,8 @@ function sendToChild(
 function waitForWorkerReady(
   child: import('node:child_process').ChildProcess,
   isReady: () => boolean,
-  timeoutMs: number
+  timeoutMs: number,
+  getStderr: () => string
 ): Promise<void> {
   if (isReady()) return Promise.resolve();
   return new Promise((resolve, reject) => {
@@ -803,15 +824,18 @@ function waitForWorkerReady(
     }, 10);
     const timer = setTimeout(() => {
       cleanup();
-      reject(new Error(`invoke worker timed out waiting for readiness after ${timeoutMs}ms`));
+      reject(new Error(withWorkerStderr(
+        `invoke worker timed out waiting for readiness after ${timeoutMs}ms`,
+        getStderr()
+      )));
     }, timeoutMs);
     const onError = (error: Error) => {
       cleanup();
-      reject(error);
+      reject(new Error(withWorkerStderr(error.message, getStderr())));
     };
     const onClose = () => {
       cleanup();
-      reject(new Error('invoke worker exited before signaling readiness'));
+      reject(new Error(withWorkerStderr('invoke worker exited before signaling readiness', getStderr())));
     };
     const cleanup = () => {
       clearInterval(interval);
@@ -822,6 +846,11 @@ function waitForWorkerReady(
     child.on('error', onError);
     child.on('close', onClose);
   });
+}
+
+function withWorkerStderr(message: string, stderr: string): string {
+  const trimmed = redactLocalPreviewText(stderr).trim();
+  return trimmed ? `${message}\nworker stderr:\n${trimmed}` : message;
 }
 
 function waitForChildClose(

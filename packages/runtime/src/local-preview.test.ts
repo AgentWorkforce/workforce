@@ -2,9 +2,10 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import { EventEmitter } from 'node:events';
 import { createServer } from 'node:http';
-import { mkdtemp, readdir, rm, writeFile } from 'node:fs/promises';
+import { copyFile, cp, mkdir, mkdtemp, readdir, rm, writeFile } from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
+import { fileURLToPath, pathToFileURL } from 'node:url';
 import { decodeEventFrame } from '@agentworkforce/events';
 import {
   __setPreviewWorkerSpawnForTest,
@@ -636,3 +637,182 @@ test('executeLocalRun: no-close child stop path still rejects promptly and clean
     await rm(tempDir, { recursive: true, force: true });
   }
 });
+
+test('executeLocalRun: installed runtime stages under the invocation workspace and grants consumer/runtime roots', async () => {
+  await withInstalledRuntimeCopy(async (consumerRoot, installed) => {
+    class ReadyChild extends EventEmitter {
+      connected = true;
+      exitCode: number | null = null;
+      signalCode: NodeJS.Signals | null = null;
+      stderr = new EventEmitter() as EventEmitter & { setEncoding: (encoding: string) => void };
+
+      constructor() {
+        super();
+        this.stderr.setEncoding = () => undefined;
+        setTimeout(() => {
+          this.emit('message', { type: 'ready' });
+        }, 0);
+      }
+
+      send(message: unknown, callback?: (error: Error | null) => void): boolean {
+        if ((message as { type?: string } | undefined)?.type === 'init') {
+          setTimeout(() => {
+            this.emit('message', {
+              type: 'result',
+              result: {
+                ok: true,
+                exitCode: 0,
+                record: {
+                  schemaVersion: 2,
+                  status: 'succeeded',
+                  actions: [],
+                  extensions: {}
+                },
+                state: {}
+              }
+            });
+            this.connected = false;
+            this.exitCode = 0;
+            this.emit('close', 0);
+          }, 0);
+        }
+        callback?.(null);
+        return true;
+      }
+
+      kill(_signal: NodeJS.Signals): boolean {
+        return true;
+      }
+    }
+
+    const previousCwd = process.cwd();
+    const tempDir = await mkdtemp(path.join(consumerRoot, 'preview-root-'));
+    const bundlePath = path.join(tempDir, 'bundle.mjs');
+    await writeFile(bundlePath, 'export default async function handler() { return undefined; }\n', 'utf8');
+
+    let spawnArgs: string[] | undefined;
+    let spawnCwd: string | URL | undefined;
+    installed.__setPreviewWorkerSpawnForTest(((
+      _cmd: string,
+      args: readonly string[],
+      options?: import('node:child_process').SpawnOptions
+    ) => {
+      spawnArgs = [...args];
+      spawnCwd = options?.cwd;
+      return new ReadyChild();
+    }) as unknown as typeof import('node:child_process').spawn);
+
+    try {
+      process.chdir(consumerRoot);
+      const result = await installed.executeLocalRun({
+        request: previewRequest({ tempDir, id: 'installed-layout', allowedHttp: [] }),
+        bundlePath
+      });
+      assert.equal(result.exitCode, 0);
+      assert.ok(spawnArgs);
+      const readRoots = spawnArgs
+        .filter((entry) => entry.startsWith('--allow-fs-read='))
+        .map((entry) => entry.slice('--allow-fs-read='.length));
+      assert.equal(spawnCwd, consumerRoot);
+      assert.ok(readRoots.includes(path.join(consumerRoot, 'node_modules')));
+      assert.ok(readRoots.some((entry) =>
+        entry.startsWith(path.join(consumerRoot, '.workforce', 'local-preview-worker-'))
+      ));
+      assert.ok(!readRoots.some((entry) => entry.startsWith(path.join(consumerRoot, 'node_modules', '.workforce'))));
+      assert.ok(!readRoots.some((entry) => entry.startsWith(path.join(consumerRoot, 'node_modules', 'node_modules'))));
+    } finally {
+      installed.__setPreviewWorkerSpawnForTest(undefined);
+      process.chdir(previousCwd);
+      await rm(tempDir, { recursive: true, force: true });
+    }
+  });
+});
+
+test('executeLocalRun: installed runtime surfaces redacted child stderr when the worker exits before readiness', async () => {
+  await withInstalledRuntimeCopy(async (consumerRoot, installed) => {
+    class EarlyExitChild extends EventEmitter {
+      connected = true;
+      exitCode: number | null = null;
+      signalCode: NodeJS.Signals | null = null;
+      stderr = new EventEmitter() as EventEmitter & { setEncoding: (encoding: string) => void };
+
+      constructor() {
+        super();
+        this.stderr.setEncoding = () => undefined;
+        setTimeout(() => {
+          this.stderr.emit(
+            'data',
+            'Error: ERR_ACCESS_DENIED: fs.read denied for /tmp/preview\nOPENAI_API_KEY=sk-live-secret-value\n'
+          );
+          this.connected = false;
+          this.exitCode = 1;
+          this.emit('close', 1);
+        }, 0);
+      }
+
+      send(_message: unknown, callback?: (error: Error | null) => void): boolean {
+        callback?.(null);
+        return true;
+      }
+
+      kill(_signal: NodeJS.Signals): boolean {
+        return true;
+      }
+    }
+
+    const previousCwd = process.cwd();
+    const tempDir = await mkdtemp(path.join(consumerRoot, 'preview-root-'));
+    const bundlePath = path.join(tempDir, 'bundle.mjs');
+    await writeFile(bundlePath, 'export default async function handler() { return undefined; }\n', 'utf8');
+    installed.__setPreviewWorkerSpawnForTest((() => new EarlyExitChild()) as unknown as typeof import('node:child_process').spawn);
+
+    try {
+      process.chdir(consumerRoot);
+      await assert.rejects(
+        () => installed.executeLocalRun({
+          request: previewRequest({ tempDir, id: 'installed-layout-stderr', allowedHttp: [] }),
+          bundlePath
+        }),
+        (error: unknown) => {
+          assert.ok(error instanceof Error);
+          assert.match(error.message, /exited before signaling readiness/);
+          assert.match(error.message, /worker stderr:/);
+          assert.match(error.message, /ERR_ACCESS_DENIED/);
+          assert.match(error.message, /\[REDACTED\]/);
+          assert.doesNotMatch(error.message, /sk-live-secret-value/);
+          return true;
+        }
+      );
+    } finally {
+      installed.__setPreviewWorkerSpawnForTest(undefined);
+      process.chdir(previousCwd);
+      await rm(tempDir, { recursive: true, force: true });
+    }
+  });
+});
+
+async function withInstalledRuntimeCopy<T>(
+  fn: (
+    consumerRoot: string,
+    installed: {
+      executeLocalRun: typeof executeLocalRun;
+      __setPreviewWorkerSpawnForTest: typeof __setPreviewWorkerSpawnForTest;
+    }
+  ) => Promise<T>
+): Promise<T> {
+  const runtimePackageRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
+  const consumerRoot = await mkdtemp(path.join(runtimePackageRoot, '.installed-preview-consumer-'));
+  const installedRuntimeRoot = path.join(consumerRoot, 'node_modules', '@agentworkforce', 'runtime');
+  await mkdir(path.dirname(installedRuntimeRoot), { recursive: true });
+  await cp(path.join(runtimePackageRoot, 'dist'), path.join(installedRuntimeRoot, 'dist'), { recursive: true });
+  await copyFile(path.join(runtimePackageRoot, 'package.json'), path.join(installedRuntimeRoot, 'package.json'));
+  try {
+    const installed = await import(`${pathToFileURL(path.join(installedRuntimeRoot, 'dist', 'local-preview.js')).href}?installed=${Date.now()}`) as {
+      executeLocalRun: typeof executeLocalRun;
+      __setPreviewWorkerSpawnForTest: typeof __setPreviewWorkerSpawnForTest;
+    };
+    return await fn(consumerRoot, installed);
+  } finally {
+    await rm(consumerRoot, { recursive: true, force: true });
+  }
+}
