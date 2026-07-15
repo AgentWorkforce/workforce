@@ -52,7 +52,8 @@ test('RunRecordV2 JSON round-trip preserves richer transport preview fields', ()
   interface TransportPreviewAction extends PreviewAction {
     method: 'write';
     path: string;
-    parameters: Record<string, unknown>;
+    /** Mirrors the narrower WS-D transport query-parameter contract. */
+    parameters: Record<string, string | number>;
     body: Record<string, unknown>;
     simulatedReceipt: { id: string; timestamp: string };
   }
