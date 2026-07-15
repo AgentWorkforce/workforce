@@ -579,6 +579,42 @@ test('runInvoke: isolated worker strips ambient creds, redacts secret-shaped inp
   }
 });
 
+test('runInvoke: benign input keys with credential-shaped values are redacted from env, ctx, and logs', async () => {
+  await withAgent({
+    'agent.ts': `
+      import { defineAgent } from '@agentworkforce/runtime';
+      export default defineAgent({
+        schedules: [{ name: 'scan', cron: '0 9 * * *' }],
+        handler: async (ctx) => {
+          ctx.log('info', JSON.stringify({
+            benignEnv: process.env.PROBE ?? 'missing',
+            benignCtx: ctx.persona.inputs.PROBE ?? 'missing'
+          }));
+        }
+      });
+    `
+  }, async (_dir, agentPath) => {
+    const io = collectingIO();
+    const previousExitCode = process.exitCode;
+    const result = await runInvoke([
+      agentPath,
+      '--schedule',
+      'scan',
+      '--input',
+      'PROBE=xoxb-benign-looking-secret-token'
+    ], io);
+    const exitCode = process.exitCode;
+    process.exitCode = previousExitCode;
+
+    assert.ok(result && !Array.isArray(result));
+    assert.equal(exitCode, 0);
+    const messages = extractLoggedMessagePayloads(result);
+    assert.ok(messages.some((line) => line.includes('"benignEnv":"missing"')));
+    assert.ok(messages.every((line) => !line.includes('xoxb-benign-looking-secret-token')));
+    assert.ok(!JSON.stringify(result).includes('xoxb-benign-looking-secret-token'));
+  });
+});
+
 test('runInvoke: mixed fetch/raw-http probe keeps allowed GET, blocks denied POST, blocks raw http, and exposes no net permission', async () => {
   let allowedGetHits = 0;
   let deniedPostHits = 0;
@@ -663,6 +699,45 @@ test('runInvoke: mixed fetch/raw-http probe keeps allowed GET, blocks denied POS
   } finally {
     server.close();
   }
+});
+
+test('runInvoke: parent fetch failures return deterministic errors without leaking transport details', async () => {
+  await withAgent({
+    'agent.ts': `
+      import { defineAgent } from '@agentworkforce/runtime';
+
+      async function attempt(fn) {
+        try {
+          await fn();
+          return 'ok';
+        } catch (error) {
+          return error instanceof Error ? error.message : String(error);
+        }
+      }
+
+      export default defineAgent({
+        schedules: [{ name: 'scan', cron: '0 9 * * *' }],
+        handler: async (ctx) => {
+          const failed = await attempt(async () => {
+            await fetch('http://127.0.0.1:1/unreachable');
+          });
+          ctx.log('info', JSON.stringify({ failed }));
+        }
+      });
+    `
+  }, async (_dir, agentPath) => {
+    const io = collectingIO();
+    const previousExitCode = process.exitCode;
+    const result = await runInvoke([agentPath, '--schedule', 'scan', '--reads', 'live'], io);
+    const exitCode = process.exitCode;
+    process.exitCode = previousExitCode;
+
+    assert.ok(result && !Array.isArray(result));
+    assert.equal(exitCode, 0);
+    const messages = extractLoggedMessagePayloads(result);
+    assert.ok(messages.some((line) => line.includes('invoke parent fetch failed for GET http://127.0.0.1:1/unreachable: network error')));
+    assert.ok(messages.every((line) => !line.includes('ECONNREFUSED')));
+  });
 });
 
 test('runInvoke: process.getBuiltinModule http escape is denied with zero raw hits', async () => {
@@ -763,16 +838,67 @@ test('runInvoke: replay bundle preserves provenance and unavailable state fideli
       });
     `,
     'replay.json': JSON.stringify({
-      runId: 'run_hosted_123',
-      event: {
-        id: 'evt_hosted_123',
-        workspace: 'ws-hosted',
-        type: 'cron.tick',
-        occurredAt: '2026-07-15T09:00:00.000Z',
-        name: 'scan',
-        cron: '0 9 * * *'
+      schemaVersion: 1,
+      manifest: {
+        schemaVersion: 1,
+        runId: 'run_hosted_123',
+        eventId: 'evt_hosted_123',
+        exportedAt: '2026-07-15T09:00:00.000Z',
+        redacted: true,
+        files: {
+          'event.json': { fidelity: 'historical' },
+          'run.json': { fidelity: 'historical' },
+          'state/manifest.json': { fidelity: 'unavailable' }
+        }
       },
-      state: null
+      files: {
+        'manifest.json': {
+          fidelity: 'historical',
+          content: {
+            schemaVersion: 1,
+            runId: 'run_hosted_123',
+            eventId: 'evt_hosted_123',
+            exportedAt: '2026-07-15T09:00:00.000Z',
+            redacted: true,
+            files: {
+              'event.json': { fidelity: 'historical' },
+              'run.json': { fidelity: 'historical' },
+              'state/manifest.json': { fidelity: 'unavailable' }
+            }
+          }
+        },
+        'event.json': {
+          fidelity: 'historical',
+          content: {
+            schemaVersion: 1,
+            id: 'evt_hosted_123',
+            workspace: 'ws-hosted',
+            type: 'cron.tick',
+            contractVersion: 1,
+            occurredAt: '2026-07-15T09:00:00.000Z',
+            attempt: 1,
+            resource: {
+              path: '/cron/schedules/scan',
+              kind: 'cron.schedule',
+              id: 'scan',
+              provider: 'cron'
+            },
+            summary: {},
+            schedule: {
+              name: 'scan',
+              cron: '0 9 * * *'
+            }
+          }
+        },
+        'run.json': {
+          fidelity: 'historical',
+          content: { id: 'run_hosted_123' }
+        },
+        'state/manifest.json': {
+          fidelity: 'unavailable',
+          content: { available: false }
+        }
+      }
     }, null, 2)
   }, async (dir, agentPath) => {
     const io = collectingIO();
@@ -790,6 +916,7 @@ test('runInvoke: replay bundle preserves provenance and unavailable state fideli
     const provenance = extensions.provenance as Record<string, unknown>;
     assert.equal(stateSource.fidelity, 'unavailable');
     assert.equal(provenance.sourceRunId, 'run_hosted_123');
+    assert.equal(provenance.sourceEventId, 'evt_hosted_123');
   });
 });
 

@@ -3,6 +3,7 @@ import { pathToFileURL } from 'node:url';
 import type { EventFrameV1 } from '@agentworkforce/events';
 import { buildCtx } from './ctx.js';
 import { getPreviewProcessState, transportActionToPreviewAction } from './local-preview-hooks.js';
+import { redactLocalPreviewValue } from './local-preview-redaction.js';
 import type {
   ExecuteLocalRunResult,
   LocalPreviewMemoryEntry,
@@ -46,11 +47,16 @@ export async function executeLocalRunInWorkerProcess(
   let scheduleSeq = 0;
 
   const recordAction = (action: PreviewAction): void => {
-    previewState.recordAction(action);
+    previewState.recordAction(redactLocalPreviewValue(action));
   };
 
   const log: WorkforceCtx['log'] = (level, message, attrs) => {
-    const payloadLine = { t: previewState.now().toISOString(), level, message, ...(attrs ?? {}) };
+    const payloadLine = redactLocalPreviewValue({
+      t: previewState.now().toISOString(),
+      level,
+      message,
+      ...(attrs ?? {})
+    });
     logs.push(JSON.stringify(payloadLine));
   };
 
@@ -358,9 +364,10 @@ export async function executeLocalRunInWorkerProcess(
     },
     ...(error ? { error } : {})
   };
+  const safeRecord = redactLocalPreviewValue(record) as RunRecordV2;
 
   return {
-    record,
+    record: safeRecord,
     exitCode: error ? 1 : 0,
     logs,
     state: {

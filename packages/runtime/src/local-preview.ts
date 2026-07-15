@@ -3,6 +3,10 @@ import { copyFile, mkdir, mkdtemp, realpath, rm, symlink } from 'node:fs/promise
 import { createRequire } from 'node:module';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
+import {
+  isCredentialLikeValue,
+  redactLocalPreviewText
+} from './local-preview-redaction.js';
 import type {
   ExecuteLocalRunOptions,
   ExecuteLocalRunResult,
@@ -40,7 +44,11 @@ const WORKER_ENV_KEEP = new Set([
   'TMP',
   'TMPDIR',
   'TZ',
-  'USER'
+  'USER',
+  'WF_LOCAL_PREVIEW_FETCH_TIMEOUT_MS',
+  'WF_LOCAL_PREVIEW_FORCE_KILL_TIMEOUT_MS',
+  'WF_LOCAL_PREVIEW_OVERALL_TIMEOUT_MS',
+  'WF_LOCAL_PREVIEW_READY_TIMEOUT_MS'
 ]);
 
 const SECRET_INPUT_NAMES = new Set([
@@ -134,7 +142,7 @@ async function runPreviewWorker(args: {
   let stderr = '';
   let result: LocalPreviewWorkerResult | undefined;
   let ready = false;
-  const pendingResponses = new Set<Promise<void>>();
+  const pendingResponses = new Map<Promise<void>, AbortController>();
 
   child.stderr?.setEncoding('utf8');
   child.stderr?.on('data', (chunk) => {
@@ -151,19 +159,34 @@ async function runPreviewWorker(args: {
       return;
     }
     if (message?.type !== 'fetch') return;
-    const work = respondToFetch(child, args.init.config, message)
+    const controller = new AbortController();
+    const work = respondToFetch(child, args.init.config, message, controller)
       .finally(() => pendingResponses.delete(work));
-    pendingResponses.add(work);
+    pendingResponses.set(work, controller);
   });
 
-  await waitForWorkerReady(child, () => ready);
-  await sendToChild(child, args.init);
+  const failAndStop = async (error: unknown): Promise<never> => {
+    abortPendingResponses(pendingResponses);
+    await stopChildProcess(child);
+    throw error;
+  };
 
-  const exitCode = await new Promise<number | null>((resolve, reject) => {
-    child.once('error', reject);
-    child.once('close', resolve);
-  });
-  await Promise.all(pendingResponses);
+  try {
+    await waitForWorkerReady(child, () => ready, localPreviewReadyTimeoutMs());
+    await sendToChild(child, args.init);
+  } catch (error) {
+    return await failAndStop(error);
+  }
+
+  let exitCode: number | null;
+  try {
+    exitCode = await waitForChildClose(child, localPreviewOverallTimeoutMs());
+  } catch (error) {
+    return await failAndStop(error);
+  }
+
+  abortPendingResponses(pendingResponses);
+  await Promise.allSettled([...pendingResponses.keys()]);
 
   if (!result) {
     throw new Error(stderr.trim() || `invoke worker exited with code ${String(exitCode)}`);
@@ -177,15 +200,17 @@ async function runPreviewWorker(args: {
 async function respondToFetch(
   child: import('node:child_process').ChildProcess,
   config: LocalPreviewGuardConfig,
-  request: LocalPreviewFetchRequestMessage
+  request: LocalPreviewFetchRequestMessage,
+  controller: AbortController
 ): Promise<void> {
-  const response = await resolveParentFetch(config, request);
+  const response = await resolveParentFetch(config, request, controller);
   await sendToChild(child, response);
 }
 
 async function resolveParentFetch(
   config: LocalPreviewGuardConfig,
-  request: LocalPreviewFetchRequestMessage
+  request: LocalPreviewFetchRequestMessage,
+  controller: AbortController
 ): Promise<LocalPreviewFetchResponseMessage> {
   const method = request.method.toUpperCase();
   const fixture = config.fixtures.find((candidate) =>
@@ -213,13 +238,37 @@ async function resolveParentFetch(
     };
   }
 
-  return await resolveLiveParentFetch(config, request, 0);
+  try {
+    return await resolveLiveParentFetch(config, request, 0, controller);
+  } catch {
+    if (controller.signal.aborted) {
+      return parentFetchErrorResponse(
+        request,
+        {
+          method,
+          url: request.url,
+          reason: 'parent_fetch_timeout'
+        },
+        `invoke parent fetch timeout after ${localPreviewFetchTimeoutMs()}ms for ${method} ${request.url}`
+      );
+    }
+    return parentFetchErrorResponse(
+      request,
+      {
+        method,
+        url: request.url,
+        reason: 'parent_fetch_failed'
+      },
+      `invoke parent fetch failed for ${method} ${request.url}: network error`
+    );
+  }
 }
 
 async function resolveLiveParentFetch(
   config: LocalPreviewGuardConfig,
   request: LocalPreviewFetchRequestMessage,
-  redirects: number
+  redirects: number,
+  controller: AbortController
 ): Promise<LocalPreviewFetchResponseMessage> {
   const method = request.method.toUpperCase();
   const url = request.url;
@@ -241,12 +290,20 @@ async function resolveLiveParentFetch(
     }, `invoke policy denied undeclared live read ${method} ${url}`);
   }
 
-  const response = await fetch(new Request(url, {
-    method,
-    headers: new Headers(request.headers),
-    ...(request.bodyBase64 ? { body: Buffer.from(request.bodyBase64, 'base64') } : {}),
-    redirect: 'manual'
-  }));
+  const timeout = setTimeout(() => controller.abort(), localPreviewFetchTimeoutMs());
+  let response: Response;
+  try {
+    response = await fetch(new Request(url, {
+      method,
+      headers: new Headers(request.headers),
+      ...(request.bodyBase64 ? { body: Buffer.from(request.bodyBase64, 'base64') } : {}),
+      redirect: 'manual',
+      signal: controller.signal
+    }));
+  } finally {
+    clearTimeout(timeout);
+  }
+
   if (!isRedirect(response.status)) {
     return {
       type: 'fetch-response',
@@ -317,10 +374,28 @@ async function resolveLiveParentFetch(
     method: response.status === 303 ? 'GET' : method,
     url: redirectedUrl,
     ...(response.status === 303 ? { bodyBase64: undefined } : {})
-  }, redirects + 1);
+  }, redirects + 1, controller);
 }
 
 function deniedFetchResponse(
+  request: LocalPreviewFetchRequestMessage,
+  data: Record<string, unknown>,
+  error: string
+): LocalPreviewFetchResponseMessage {
+  return {
+    type: 'fetch-response',
+    requestId: request.requestId,
+    ok: false,
+    action: {
+      kind: 'http.read',
+      status: 'denied',
+      data
+    },
+    error
+  };
+}
+
+function parentFetchErrorResponse(
   request: LocalPreviewFetchRequestMessage,
   data: Record<string, unknown>,
   error: string
@@ -344,8 +419,9 @@ function buildWorkerEnv(inputs: Record<string, string>): NodeJS.ProcessEnv {
     if (WORKER_ENV_KEEP.has(key)) env[key] = value;
   }
   for (const [key, value] of Object.entries(inputs)) {
-    env[key] = value;
-    env[`WORKFORCE_INPUT_${key}`] = value;
+    const safeValue = redactLocalPreviewText(value);
+    env[key] = safeValue;
+    env[`WORKFORCE_INPUT_${key}`] = safeValue;
   }
   return env;
 }
@@ -408,7 +484,7 @@ function sanitizeWorkerInputs(inputs: Record<string, string>): {
   const ctxInputs: Record<string, string> = {};
   const envInputs: Record<string, string> = {};
   for (const [key, value] of Object.entries(inputs)) {
-    if (isSecretInputKey(key)) {
+    if (isSecretInputKey(key) || isCredentialLikeValue(value)) {
       ctxInputs[key] = REDACTED_INPUT_VALUE;
       continue;
     }
@@ -424,14 +500,27 @@ function isSecretInputKey(key: string): boolean {
 }
 
 function assertPermissionBoundarySupport(): void {
+  const detectedVersion = process.versions.node;
   if (
-    !process.allowedNodeEnvironmentFlags.has('--permission')
+    compareNodeVersions(detectedVersion, '26.3.1') < 0
+    || !process.allowedNodeEnvironmentFlags.has('--permission')
     || !process.allowedNodeEnvironmentFlags.has('--allow-fs-read')
+    || !process.allowedNodeEnvironmentFlags.has('--allow-net')
   ) {
     throw new Error(
-      'invoke: local preview requires a Node runtime with --permission and --allow-fs-read support; refusing to run without an isolated worker boundary'
+      `invoke: local preview requires supported patched Node >=26.3.1 with --permission, --allow-fs-read, and --allow-net support; detected ${detectedVersion}`
     );
   }
+}
+
+function compareNodeVersions(left: string, right: string): number {
+  const a = left.split('.').map((part) => Number(part));
+  const b = right.split('.').map((part) => Number(part));
+  for (let index = 0; index < Math.max(a.length, b.length); index += 1) {
+    const delta = (a[index] ?? 0) - (b[index] ?? 0);
+    if (delta !== 0) return delta;
+  }
+  return 0;
 }
 
 function uniquePaths(values: readonly string[]): string[] {
@@ -476,7 +565,8 @@ function sendToChild(
 
 function waitForWorkerReady(
   child: import('node:child_process').ChildProcess,
-  isReady: () => boolean
+  isReady: () => boolean,
+  timeoutMs: number
 ): Promise<void> {
   if (isReady()) return Promise.resolve();
   return new Promise((resolve, reject) => {
@@ -485,6 +575,10 @@ function waitForWorkerReady(
       cleanup();
       resolve();
     }, 10);
+    const timer = setTimeout(() => {
+      cleanup();
+      reject(new Error(`invoke worker timed out waiting for readiness after ${timeoutMs}ms`));
+    }, timeoutMs);
     const onError = (error: Error) => {
       cleanup();
       reject(error);
@@ -495,10 +589,83 @@ function waitForWorkerReady(
     };
     const cleanup = () => {
       clearInterval(interval);
+      clearTimeout(timer);
       child.off('error', onError);
       child.off('close', onClose);
     };
     child.on('error', onError);
     child.on('close', onClose);
   });
+}
+
+function waitForChildClose(
+  child: import('node:child_process').ChildProcess,
+  timeoutMs: number
+): Promise<number | null> {
+  return new Promise((resolve, reject) => {
+    const timer = setTimeout(() => {
+      cleanup();
+      reject(new Error(`invoke worker timed out after ${timeoutMs}ms`));
+    }, timeoutMs);
+    const onError = (error: Error) => {
+      cleanup();
+      reject(error);
+    };
+    const onClose = (code: number | null) => {
+      cleanup();
+      resolve(code);
+    };
+    const cleanup = () => {
+      clearTimeout(timer);
+      child.off('error', onError);
+      child.off('close', onClose);
+    };
+    child.once('error', onError);
+    child.once('close', onClose);
+  });
+}
+
+async function stopChildProcess(child: import('node:child_process').ChildProcess): Promise<void> {
+  if (child.exitCode !== null || child.signalCode !== null) return;
+  await new Promise<void>((resolve) => {
+    const forceKill = setTimeout(() => {
+      if (child.exitCode === null && child.signalCode === null) {
+        child.kill('SIGKILL');
+      }
+    }, localPreviewForceKillTimeoutMs());
+    child.once('close', () => {
+      clearTimeout(forceKill);
+      resolve();
+    });
+    child.kill('SIGTERM');
+  });
+}
+
+function abortPendingResponses(pendingResponses: ReadonlyMap<Promise<void>, AbortController>): void {
+  for (const controller of pendingResponses.values()) {
+    controller.abort();
+  }
+}
+
+function readTimeoutEnv(name: string, fallback: number): number {
+  const raw = process.env[name];
+  if (!raw) return fallback;
+  const parsed = Number(raw);
+  return Number.isFinite(parsed) && parsed > 0 ? parsed : fallback;
+}
+
+function localPreviewReadyTimeoutMs(): number {
+  return readTimeoutEnv('WF_LOCAL_PREVIEW_READY_TIMEOUT_MS', 5_000);
+}
+
+function localPreviewOverallTimeoutMs(): number {
+  return readTimeoutEnv('WF_LOCAL_PREVIEW_OVERALL_TIMEOUT_MS', 30_000);
+}
+
+function localPreviewFetchTimeoutMs(): number {
+  return readTimeoutEnv('WF_LOCAL_PREVIEW_FETCH_TIMEOUT_MS', 10_000);
+}
+
+function localPreviewForceKillTimeoutMs(): number {
+  return readTimeoutEnv('WF_LOCAL_PREVIEW_FORCE_KILL_TIMEOUT_MS', 1_000);
 }

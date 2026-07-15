@@ -13,7 +13,9 @@ import { getPreviewProcessState, installPreviewProcessGuards } from './local-pre
 const pendingFetches = new Map<string, {
   resolve: (value: LocalPreviewFetchResponseMessage) => void;
   reject: (error: Error) => void;
+  timeout: ReturnType<typeof setTimeout>;
 }>();
+const LOCAL_PREVIEW_FETCH_IPC_TIMEOUT_MS = readTimeoutEnv('WF_LOCAL_PREVIEW_FETCH_TIMEOUT_MS', 10_000);
 
 process.on('message', (message: LocalPreviewWorkerInboundMessage) => {
   if (message?.type === 'fetch-response') {
@@ -87,9 +89,16 @@ function sendFetchToParent(
       reject(new Error('invoke: preview worker missing parent IPC channel'));
       return;
     }
-    pendingFetches.set(request.requestId, { resolve, reject });
+    const timeout = setTimeout(() => {
+      pendingFetches.delete(request.requestId);
+      reject(new Error(
+        `invoke: preview worker fetch IPC timeout after ${LOCAL_PREVIEW_FETCH_IPC_TIMEOUT_MS}ms for ${request.method} ${request.url}`
+      ));
+    }, LOCAL_PREVIEW_FETCH_IPC_TIMEOUT_MS);
+    pendingFetches.set(request.requestId, { resolve, reject, timeout });
     process.send(request, (error) => {
       if (!error) return;
+      clearTimeout(timeout);
       pendingFetches.delete(request.requestId);
       reject(error);
     });
@@ -129,5 +138,13 @@ function resolvePendingFetch(message: LocalPreviewFetchResponseMessage): void {
   const pending = pendingFetches.get(message.requestId);
   if (!pending) return;
   pendingFetches.delete(message.requestId);
+  clearTimeout(pending.timeout);
   pending.resolve(message);
+}
+
+function readTimeoutEnv(name: string, fallback: number): number {
+  const raw = process.env[name];
+  if (!raw) return fallback;
+  const parsed = Number(raw);
+  return Number.isFinite(parsed) && parsed > 0 ? parsed : fallback;
 }

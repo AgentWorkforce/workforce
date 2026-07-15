@@ -1,7 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { createServer } from 'node:http';
-import { mkdtemp, rm, writeFile } from 'node:fs/promises';
+import { mkdtemp, readdir, rm, writeFile } from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
 import { decodeEventFrame } from '@agentworkforce/events';
@@ -103,6 +103,93 @@ test('executeLocalRun: redirected live read is denied before blocked target fetc
   } finally {
     allowedServer.close();
     blockedServer.close();
+    await rm(tempDir, { recursive: true, force: true });
+  }
+});
+
+test('executeLocalRun: overall timeout tears the worker down and leaves no orphan staging directories', async () => {
+  const previousOverall = process.env.WF_LOCAL_PREVIEW_OVERALL_TIMEOUT_MS;
+  const previousForceKill = process.env.WF_LOCAL_PREVIEW_FORCE_KILL_TIMEOUT_MS;
+  process.env.WF_LOCAL_PREVIEW_OVERALL_TIMEOUT_MS = '200';
+  process.env.WF_LOCAL_PREVIEW_FORCE_KILL_TIMEOUT_MS = '100';
+
+  const tempDir = await mkdtemp(path.join(os.tmpdir(), 'wf-preview-timeout-'));
+  const bundlePath = path.join(tempDir, 'bundle.mjs');
+  await writeFile(
+    bundlePath,
+    'export default async function handler() { await new Promise(() => {}); }\n',
+    'utf8'
+  );
+
+  const request = {
+    schemaVersion: 1,
+    agent: {
+      schemaVersion: 1,
+      sourceKind: 'single-file',
+      sourcePath: path.join(tempDir, 'agent.ts'),
+      sourceDigest: 'test-timeout-digest',
+      handlerEntry: path.join(tempDir, 'agent.ts'),
+      compileWarnings: [],
+      persona: {
+        id: 'timeout-test',
+        intent: 'local-preview',
+        tags: [],
+        description: 'timeout test persona',
+        skills: [],
+        harness: 'claude',
+        model: 'local-preview-stub',
+        systemPrompt: 'test',
+        harnessSettings: { reasoning: 'medium', timeoutSeconds: 300 },
+        cloud: true,
+        onEvent: './agent.ts'
+      },
+      agent: {
+        triggers: [],
+        schedules: [{ name: 'scan', cron: '0 9 * * *' }],
+        watch: []
+      }
+    },
+    event: decodeEventFrame({
+      id: 'evt_timeout',
+      workspace: 'ws-local',
+      type: 'cron.tick',
+      occurredAt: '2026-07-15T09:00:00.000Z',
+      name: 'scan',
+      cron: '0 9 * * *'
+    }).frame,
+    mode: 'preview',
+    inputs: {},
+    policy: {
+      reads: 'fixtures',
+      writes: 'preview',
+      model: 'stub',
+      shell: 'simulate',
+      compose: 'preview',
+      allowedHttp: []
+    },
+    state: {
+      schemaVersion: 1,
+      kind: 'empty',
+      fidelity: 'simulated'
+    }
+  } as unknown as RunRequestV1;
+
+  const stagingRoot = path.join(process.cwd(), '.workforce');
+  const before = await readdir(stagingRoot).catch((): string[] => []);
+
+  try {
+    await assert.rejects(
+      () => executeLocalRun({ request, bundlePath }),
+      /invoke worker timed out after 200ms/
+    );
+    const after = await readdir(stagingRoot).catch((): string[] => []);
+    const leaked = after.filter((entry) =>
+      entry.startsWith('local-preview-worker-') && !before.includes(entry)
+    );
+    assert.deepEqual(leaked, []);
+  } finally {
+    process.env.WF_LOCAL_PREVIEW_OVERALL_TIMEOUT_MS = previousOverall;
+    process.env.WF_LOCAL_PREVIEW_FORCE_KILL_TIMEOUT_MS = previousForceKill;
     await rm(tempDir, { recursive: true, force: true });
   }
 });

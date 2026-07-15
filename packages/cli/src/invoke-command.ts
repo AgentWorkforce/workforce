@@ -599,6 +599,9 @@ function normalizeFixtureEntry(entry: unknown): {
   stateFidelity?: 'historical' | 'unavailable';
   replayProvenance?: Record<string, unknown>;
 } {
+  const replayBundle = unwrapReplayBundle(entry);
+  if (replayBundle) return replayBundle;
+
   const record = asRecord(entry);
   if (record && record.event !== undefined) {
     const state = asRecord(record.state);
@@ -613,6 +616,45 @@ function normalizeFixtureEntry(entry: unknown): {
   return { event: decodeEventFrame(entry).frame };
 }
 
+function unwrapReplayBundle(entry: unknown): {
+  event: ReturnType<typeof decodeEventFrame>['frame'];
+  historicalState?: LocalPreviewState;
+  stateFidelity?: 'historical' | 'unavailable';
+  replayProvenance?: Record<string, unknown>;
+} | null {
+  const bundle = asRecord(entry);
+  const files = asRecord(bundle?.files);
+  const manifest = asRecord(bundle?.manifest);
+  const eventFile = asRecord(files?.['event.json']);
+  if (!bundle || bundle.schemaVersion !== 1 || !files || !eventFile || eventFile.content === undefined) {
+    return null;
+  }
+
+  const stateFile = asRecord(files['state/manifest.json']);
+  const stateFidelity = normalizeReplayFidelity(
+    stateFile?.fidelity,
+    asRecord(asRecord(manifest?.files)?.['state/manifest.json'])?.fidelity
+  );
+  const historicalState = stateFidelity === 'historical'
+    ? normalizeHistoricalState(asRecord(stateFile?.content) ?? {})
+    : undefined;
+  const replayProvenance = extractReplayBundleProvenance(manifest, files);
+
+  return {
+    event: decodeEventFrame(eventFile.content).frame,
+    ...(historicalState ? { historicalState } : {}),
+    ...(stateFidelity ? { stateFidelity } : {}),
+    ...(replayProvenance ? { replayProvenance } : {})
+  };
+}
+
+function normalizeReplayFidelity(...values: unknown[]): 'historical' | 'unavailable' | undefined {
+  for (const value of values) {
+    if (value === 'historical' || value === 'unavailable') return value;
+  }
+  return undefined;
+}
+
 function normalizeHistoricalState(value: Record<string, unknown>): LocalPreviewState {
   const files = asRecord(value.files);
   return {
@@ -624,6 +666,26 @@ function normalizeHistoricalState(value: Record<string, unknown>): LocalPreviewS
         }
       : {})
   };
+}
+
+function extractReplayBundleProvenance(
+  manifest: Record<string, unknown> | null,
+  files: Record<string, unknown>
+): Record<string, unknown> | undefined {
+  const provenance: Record<string, unknown> = {};
+  const runFile = asRecord(files['run.json']);
+  const run = asRecord(runFile?.content);
+  const runId = typeof manifest?.runId === 'string'
+    ? manifest.runId
+    : typeof run?.id === 'string'
+      ? run.id
+      : typeof run?.runId === 'string'
+        ? run.runId
+        : undefined;
+  if (runId) provenance.sourceRunId = runId;
+  const eventId = typeof manifest?.eventId === 'string' ? manifest.eventId : undefined;
+  if (eventId) provenance.sourceEventId = eventId;
+  return Object.keys(provenance).length > 0 ? provenance : undefined;
 }
 
 function extractReplayProvenance(record: Record<string, unknown>): Record<string, unknown> | undefined {
