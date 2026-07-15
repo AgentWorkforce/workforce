@@ -99,6 +99,14 @@ export {
   type StateDiff,
   type StateSourceV1
 } from './run-contracts.js';
+export {
+  executeLocalRun,
+  type ExecuteLocalRunOptions,
+  type ExecuteLocalRunResult,
+  type LocalHttpFixture,
+  type LocalPreviewMemoryEntry,
+  type LocalPreviewState
+} from './local-preview.js';
 
 export type {
   LinearAgentActivity,

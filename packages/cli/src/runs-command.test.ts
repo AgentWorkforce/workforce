@@ -1,7 +1,12 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import path from 'node:path';
-import { interpretEnvelopeResponse, isProbeNotFound, parseRunsArgs } from './runs-command.js';
+import {
+  interpretEnvelopeResponse,
+  interpretReplayBundleResponse,
+  isProbeNotFound,
+  parseRunsArgs
+} from './runs-command.js';
 
 // ---------------------------------------------------------------------------
 // parseRunsArgs
@@ -26,6 +31,17 @@ test('parseRunsArgs: export with full flags', () => {
   assert.equal(path.basename(parsed.options.fixturePath ?? ''), 'event.json');
   assert.equal(parsed.options.workspace, 'ws-1');
   assert.equal(parsed.options.noPrompt, true);
+});
+
+test('parseRunsArgs: --bundle is accepted and exclusive with --fixture', () => {
+  const parsed = parseRunsArgs(['export', 'run-123', '--bundle', './replay.json']);
+  assert.ok(!('help' in parsed));
+  if ('help' in parsed) return;
+  assert.equal(path.basename(parsed.options.bundlePath ?? ''), 'replay.json');
+  assert.throws(
+    () => parseRunsArgs(['export', 'run-123', '--bundle', './replay.json', '--fixture', './event.json']),
+    /mutually exclusive/
+  );
 });
 
 test('parseRunsArgs: bare/help/unknown-action contracts', () => {
@@ -124,4 +140,15 @@ test('interpretEnvelopeResponse: non-object envelopes are refused (string/number
     if (result.ok) continue;
     assert.match(result.error, /non-object envelope/);
   }
+});
+
+test('interpretReplayBundleResponse: object payload is emitted verbatim', () => {
+  const result = interpretReplayBundleResponse(
+    { schemaVersion: 1, event: { id: 'evt_1', type: 'cron.tick' } },
+    'run-1',
+    'hn-monitor'
+  );
+  assert.ok(result.ok);
+  if (!result.ok) return;
+  assert.equal(JSON.parse(result.fixture).schemaVersion, 1);
 });

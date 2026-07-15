@@ -80,6 +80,10 @@ export {
   loadPersonaSourceFile,
   type PersonaSourceLoadResult
 } from './persona-source.js';
+export {
+  extractAgentSpec,
+  type ExtractedAgent
+} from './extract-agent.js';
 export { devLauncher } from './modes/dev.js';
 export { sandboxLauncher, resolveSandboxAuth, type SandboxAuth } from './modes/sandbox.js';
 export { cloudLauncher } from './modes/cloud/index.js';

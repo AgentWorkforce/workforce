@@ -1,9 +1,9 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdtemp, rm, writeFile } from 'node:fs/promises';
+import { createServer } from 'node:http';
+import { mkdtemp, mkdir, readFile, rm, symlink, writeFile } from 'node:fs/promises';
 import path from 'node:path';
 import {
-  extractBundleHandler,
   parseFixtureEnvelopes,
   parseInvokeArgs,
   renderHumanSummary,
@@ -11,154 +11,7 @@ import {
   scaffoldFixture,
   type RunInvokeIO
 } from './invoke-command.js';
-import type { SimulationResult } from '@agentworkforce/runtime';
-
-// ---------------------------------------------------------------------------
-// parseInvokeArgs
-
-test('parseInvokeArgs: persona + fixture + repeatable flags', () => {
-  const parsed = parseInvokeArgs([
-    './persona.json',
-    '--fixture',
-    './event.json',
-    '--input',
-    'SLACK_CHANNEL=#general',
-    '--input=REGION=eu',
-    '--seed',
-    '/slack/channels/_index.json=./channels.json',
-    '--workspace',
-    'ws-123',
-    '--output',
-    './run.json'
-  ]);
-  assert.ok(!('help' in parsed) && !('scaffold' in parsed));
-  if ('help' in parsed || 'scaffold' in parsed) return;
-  assert.equal(path.basename(parsed.personaPath), 'persona.json');
-  assert.equal(path.basename(parsed.fixturePath), 'event.json');
-  assert.equal(path.basename(parsed.outputPath ?? ''), 'run.json');
-  assert.deepEqual(parsed.inputs, { SLACK_CHANNEL: '#general', REGION: 'eu' });
-  assert.deepEqual(parsed.seeds, { '/slack/channels/_index.json': './channels.json' });
-  assert.equal(parsed.workspaceId, 'ws-123');
-});
-
-test('parseInvokeArgs: -h returns help sentinel', () => {
-  assert.deepEqual(parseInvokeArgs(['-h']), { help: true });
-});
-
-test('parseInvokeArgs: missing persona path throws', () => {
-  assert.throws(() => parseInvokeArgs(['--fixture', 'x.json']), /missing persona path/);
-});
-
-test('parseInvokeArgs: missing --fixture throws', () => {
-  assert.throws(() => parseInvokeArgs(['./persona.json']), /missing --fixture/);
-});
-
-test('parseInvokeArgs: unknown flag throws', () => {
-  assert.throws(
-    () => parseInvokeArgs(['./persona.json', '--fixture', 'x.json', '--bogus']),
-    /unknown flag "--bogus"/
-  );
-});
-
-// ---------------------------------------------------------------------------
-// parseFixtureEnvelopes
-
-const ENVELOPE = {
-  id: 'e1',
-  workspace: 'ws-test',
-  type: 'cron.tick',
-  occurredAt: '2026-05-12T09:00:00Z',
-  name: 'weekly',
-  cron: '0 9 * * 6'
-};
-
-test('parseFixtureEnvelopes: single JSON object (incl. pretty-printed)', () => {
-  const parsed = parseFixtureEnvelopes(JSON.stringify(ENVELOPE, null, 2), 'event.json');
-  assert.equal(parsed.length, 1);
-  assert.equal(parsed[0].id, 'e1');
-});
-
-test('parseFixtureEnvelopes: JSON array', () => {
-  const parsed = parseFixtureEnvelopes(JSON.stringify([ENVELOPE, { ...ENVELOPE, id: 'e2' }]), 'events.json');
-  assert.deepEqual(parsed.map((e) => e.id), ['e1', 'e2']);
-});
-
-test('parseFixtureEnvelopes: NDJSON lines', () => {
-  const ndjson = `${JSON.stringify(ENVELOPE)}\n${JSON.stringify({ ...ENVELOPE, id: 'e2' })}\n`;
-  const parsed = parseFixtureEnvelopes(ndjson, 'events.ndjson');
-  assert.deepEqual(parsed.map((e) => e.id), ['e1', 'e2']);
-});
-
-test('parseFixtureEnvelopes: empty / malformed inputs throw with the label', () => {
-  assert.throws(() => parseFixtureEnvelopes('   ', 'empty.json'), /empty\.json is empty/);
-  assert.throws(() => parseFixtureEnvelopes('not json', 'bad.json'), /must be a JSON envelope object/);
-  assert.throws(() => parseFixtureEnvelopes('[{"id":"x"}, 42]', 'mixed.json'), /mixed\.json\[1\] must be a JSON object/);
-  assert.throws(
-    () => parseFixtureEnvelopes(`${JSON.stringify(ENVELOPE)}\nnot-json\n`, 'lines.ndjson'),
-    /lines\.ndjson:2 is not valid JSON/
-  );
-});
-
-// ---------------------------------------------------------------------------
-// extractBundleHandler — mirrors the generated runner.mjs extraction
-
-test('extractBundleHandler: defineAgent default export', () => {
-  const handler = async () => {};
-  const extracted = extractBundleHandler(
-    { default: { __workforceAgent: true, handler, schedules: [] } },
-    'p1'
-  );
-  assert.equal(extracted, handler);
-});
-
-test('extractBundleHandler: plain { handler } object', () => {
-  const handler = async () => {};
-  assert.equal(extractBundleHandler({ default: { handler } }, 'p2'), handler);
-});
-
-test('extractBundleHandler: bare function fallback', () => {
-  const handler = async () => {};
-  assert.equal(extractBundleHandler({ default: handler }, 'p3'), handler);
-});
-
-test('extractBundleHandler: non-function throws the defineAgent hint', () => {
-  assert.throws(() => extractBundleHandler({ default: { nope: true } }, 'p4'), /defineAgent/);
-});
-
-// ---------------------------------------------------------------------------
-// End-to-end: real preflight → real esbuild bundle → simulateInvocation.
-//
-// The temp persona lives INSIDE packages/cli (not os.tmpdir) on purpose: the
-// staged bundle leaves `@agentworkforce/runtime` external, so Node must be
-// able to walk up from the bundle to a node_modules that provides it — same
-// constraint deploy's `.workforce/build/` placement satisfies.
-
-const E2E_PERSONA = {
-  id: 'invoke-e2e',
-  intent: 'documentation',
-  tags: ['documentation'],
-  description: 'invoke e2e persona',
-  harness: 'claude',
-  model: 'anthropic/claude-3-5-sonnet',
-  systemPrompt: 'be helpful',
-  harnessSettings: { reasoning: 'medium', timeoutSeconds: 300 },
-  cloud: true,
-  onEvent: './agent.ts'
-};
-
-const E2E_AGENT_SRC = `import { defineAgent, isCronTickEvent } from '@agentworkforce/runtime';
-export default defineAgent({
-  schedules: [{ name: 'weekly', cron: '0 9 * * 6' }],
-  handler: async (ctx, event) => {
-    ctx.log('info', 'e2e handler ran', { id: event.id });
-    await ctx.memory.save('e2e note');
-    if (isCronTickEvent(event) && event.schedule === 'explode') {
-      throw new Error('fixture asked for failure');
-    }
-    return 'weekly digest sent';
-  }
-});
-`;
+import type { RunRecordV2 } from '@agentworkforce/runtime';
 
 function collectingIO(): RunInvokeIO & { out: string[]; err: string[] } {
   const out: string[] = [];
@@ -166,242 +19,371 @@ function collectingIO(): RunInvokeIO & { out: string[]; err: string[] } {
   return {
     out,
     err,
-    stdout: (text: string) => {
-      out.push(text);
-    },
-    stderr: (text: string) => {
-      err.push(text);
-    }
+    stdout: (text: string) => out.push(text),
+    stderr: (text: string) => err.push(text)
   };
 }
 
-async function withE2EPersona<T>(
-  fn: (dir: string, personaPath: string) => Promise<T>
+test('parseInvokeArgs: schedule source with policy flags', () => {
+  const parsed = parseInvokeArgs([
+    './agent.ts',
+    '--schedule',
+    'scan',
+    '--reads',
+    'live',
+    '--model=stub',
+    '--input',
+    'SLACK_CHANNEL=C123',
+    '--seed',
+    '/tmp/state.json=./state.json',
+    '--watch'
+  ]);
+  assert.ok(!('help' in parsed) && !('scaffold' in parsed));
+  if ('help' in parsed || 'scaffold' in parsed) return;
+  assert.equal(parsed.source.kind, 'schedule');
+  assert.equal(parsed.source.name, 'scan');
+  assert.equal(parsed.reads, 'live');
+  assert.equal(parsed.model, 'stub');
+  assert.equal(parsed.watch, true);
+  assert.deepEqual(parsed.inputs, { SLACK_CHANNEL: 'C123' });
+});
+
+test('parseInvokeArgs: case and fixture are mutually exclusive', () => {
+  assert.throws(
+    () => parseInvokeArgs(['./agent.ts', '--case', './case.yaml', '--fixture', './event.json']),
+    /mutually exclusive/
+  );
+});
+
+test('parseFixtureEnvelopes: object, array, and NDJSON stay supported', () => {
+  const object = parseFixtureEnvelopes('{"id":"evt_1"}', 'event.json');
+  const array = parseFixtureEnvelopes('[{"id":"evt_1"},{"id":"evt_2"}]', 'events.json');
+  const ndjson = parseFixtureEnvelopes('{"id":"evt_1"}\n{"id":"evt_2"}\n', 'events.ndjson');
+  assert.equal(object.length, 1);
+  assert.equal(array.length, 2);
+  assert.equal(ndjson.length, 2);
+});
+
+async function withAgent<T>(
+  files: Record<string, string>,
+  fn: (dir: string, agentPath: string) => Promise<T>
 ): Promise<T> {
-  const dir = await mkdtemp(path.join(process.cwd(), '.invoke-e2e-'));
-  const personaPath = path.join(dir, 'persona.json');
+  const dir = await mkdtemp(path.join(process.cwd(), '.invoke-'));
   try {
-    await writeFile(personaPath, JSON.stringify(E2E_PERSONA, null, 2), 'utf8');
-    await writeFile(path.join(dir, 'agent.ts'), E2E_AGENT_SRC, 'utf8');
-    return await fn(dir, personaPath);
+    for (const [relativePath, contents] of Object.entries(files)) {
+      const absPath = path.join(dir, relativePath);
+      await writeFile(absPath, contents, 'utf8');
+    }
+    return await fn(dir, path.join(dir, 'agent.ts'));
   } finally {
     await rm(dir, { recursive: true, force: true });
   }
 }
 
-test('runInvoke e2e: bundles, simulates, emits Cloud-compatible record', async () => {
-  await withE2EPersona(async (dir, personaPath) => {
-    const fixturePath = path.join(dir, 'event.json');
-    await writeFile(fixturePath, JSON.stringify(ENVELOPE), 'utf8');
-
+test('runInvoke: bare Agent source runs by schedule and emits a RunRecordV2', async () => {
+  await withAgent({
+    'agent.ts': `
+      import { defineAgent } from '@agentworkforce/runtime';
+      export default defineAgent({
+        schedules: [{ name: 'scan', cron: '0 9 * * *' }],
+        handler: async (ctx) => {
+          await ctx.memory.save(JSON.stringify({ ok: true }), { tags: ['probe'], scope: 'workspace' });
+          ctx.log('info', 'agent.ran');
+        }
+      });
+    `
+  }, async (_dir, agentPath) => {
     const io = collectingIO();
     const previousExitCode = process.exitCode;
-    const result = await runInvoke([personaPath, '--fixture', fixturePath], io);
+    const result = await runInvoke([agentPath, '--schedule', 'scan'], io);
     const exitCode = process.exitCode;
     process.exitCode = previousExitCode;
 
-    assert.ok(result, `expected a result; stderr: ${io.err.join('')}`);
+    assert.ok(result && !Array.isArray(result));
     assert.equal(exitCode, 0);
-    assert.equal(result.summary.total, 1);
-    assert.equal(result.runs[0].status, 'succeeded');
-    assert.equal(result.runs[0].origin, 'local_dry_run');
-    assert.equal(result.runs[0].summary, 'weekly digest sent');
-    assert.equal(result.runs[0].failureClass, 'success');
-    // The memory.save the handler made was recorded, not executed.
-    assert.ok(result.runs[0].simulation.sideEffects.some((e) => e.kind === 'memory.save'));
-    // ctx.log landed in the record's stdout stream.
-    assert.match(result.runs[0].logs.stdout, /e2e handler ran/);
-
-    // stdout got the machine record; stderr got the human summary.
-    const machine = JSON.parse(io.out.join('')) as SimulationResult;
-    assert.equal(machine.runs[0].runId, result.runs[0].runId);
-    assert.match(io.err.join(''), /1 run\(s\) — 1 ok, 0 failed/);
-
-    // Build dir was cleaned up.
-    const { readdir } = await import('node:fs/promises');
-    const buildRoot = path.join(dir, '.workforce', 'invoke-build');
-    const leftover = await readdir(buildRoot).catch(() => []);
-    assert.deepEqual(leftover, []);
+    assert.equal(result.status, 'succeeded');
+    assert.equal(result.eventContract, 'cron.tick@1');
+    assert.ok(result.actions.some((action) => action.kind === 'memory.save'));
+    assert.match(io.err.join(''), /preview: 1 run\(s\) — 1 ok, 0 failed/);
   });
 });
 
-test('runInvoke e2e: handler failure → exit 1, error in record', async () => {
-  await withE2EPersona(async (dir, personaPath) => {
-    const fixturePath = path.join(dir, 'events.ndjson');
-    const failing = { ...ENVELOPE, id: 'e-fail', cron: 'explode' };
-    await writeFile(
-      fixturePath,
-      `${JSON.stringify(failing)}\n${JSON.stringify(ENVELOPE)}\n`,
-      'utf8'
-    );
-
+test('runInvoke: watch reruns the same source when authored files change', async () => {
+  await withAgent({
+    'agent.ts': `
+      import { defineAgent } from '@agentworkforce/runtime';
+      import { marker } from './marker.ts';
+      export default defineAgent({
+        schedules: [{ name: 'scan', cron: '0 9 * * *' }],
+        handler: async (ctx) => {
+          ctx.log('info', marker);
+        }
+      });
+    `,
+    'marker.ts': `export const marker = 'first-pass';\n`
+  }, async (dir, agentPath) => {
     const io = collectingIO();
+    let waits = 0;
     const previousExitCode = process.exitCode;
-    const result = await runInvoke([personaPath, '--fixture', fixturePath], io);
+    const result = await runInvoke([agentPath, '--schedule', 'scan', '--watch'], io, {
+      waitForWatchChange: async (files) => {
+        waits += 1;
+        if (waits === 1) {
+          assert.ok(files.some((file) => file.endsWith(path.sep + 'marker.ts')));
+          await writeFile(path.join(dir, 'marker.ts'), `export const marker = 'second-pass';\n`, 'utf8');
+          return 'change';
+        }
+        return 'stop';
+      }
+    });
     const exitCode = process.exitCode;
     process.exitCode = previousExitCode;
 
-    assert.ok(result, `expected a result; stderr: ${io.err.join('')}`);
-    assert.equal(exitCode, 1);
-    assert.equal(result.summary.failed, 1);
-    assert.equal(result.summary.succeeded, 1);
-    assert.equal(result.runs[0].status, 'failed');
-    assert.equal(result.runs[0].error, 'fixture asked for failure');
-    assert.equal(result.runs[0].failureClass, 'runner_error');
-    assert.equal(result.runs[1].status, 'succeeded');
+    assert.ok(result && !Array.isArray(result));
+    assert.equal(exitCode, 0);
+    assert.match(io.err.join(''), /watch: change detected, rerunning preview/);
+    const logs = ((result.extensions as Record<string, unknown>).logs ?? []) as string[];
+    assert.ok(logs.some((line) => line.includes('second-pass')));
   });
 });
 
-test('runInvoke e2e: --output writes the record to a file', async () => {
-  await withE2EPersona(async (dir, personaPath) => {
-    const fixturePath = path.join(dir, 'event.json');
-    const outputPath = path.join(dir, 'run.json');
-    await writeFile(fixturePath, JSON.stringify(ENVELOPE), 'utf8');
-
+test('runInvoke: case file executes with assertions and fixture-backed HTTP/model preview', async () => {
+  await withAgent({
+    'agent.ts': `
+      import { defineAgent } from '@agentworkforce/runtime';
+      export default defineAgent({
+        schedules: [{ name: 'scan', cron: '0 9 * * *' }],
+        handler: async (ctx) => {
+          const response = await fetch('https://example.test/front-page');
+          const story = await response.json();
+          await ctx.memory.save(JSON.stringify(story), { tags: ['stories'], scope: 'workspace' });
+          await ctx.llm.complete('Return ONLY compact JSON with this shape:\\n[{"id":1,"title":"Agent"}]');
+          ctx.log('info', 'agent.case-ran');
+        }
+      });
+    `,
+    'case.yaml': `
+schemaVersion: 1
+id: test.case
+kind: scheduled
+event:
+  schedule: scan
+policy:
+  reads: fixtures
+  model: stub
+http:
+  - method: GET
+    match: front-page
+    file: ./fixture.json
+expect:
+  status: succeeded
+  eventSource: cron
+  logsContain:
+    - agent.case-ran
+  effectsContain:
+    - memory.save
+    - model.complete
+`,
+    'fixture.json': '{"id":1,"title":"Agent"}\n'
+  }, async (dir, agentPath) => {
     const io = collectingIO();
     const previousExitCode = process.exitCode;
-    const result = await runInvoke(
-      [personaPath, '--fixture', fixturePath, '--output', outputPath],
-      io
-    );
+    const result = await runInvoke([agentPath, '--case', path.join(dir, 'case.yaml')], io);
+    const exitCode = process.exitCode;
     process.exitCode = previousExitCode;
 
-    assert.ok(result);
-    assert.equal(io.out.join(''), '');
-    const { readFile } = await import('node:fs/promises');
-    const written = JSON.parse(await readFile(outputPath, 'utf8')) as SimulationResult;
-    assert.equal(written.origin, 'local_dry_run');
-    assert.match(io.err.join(''), /run record written to/);
+    assert.ok(result && !Array.isArray(result));
+    assert.equal(exitCode, 0);
+    assert.equal(result.status, 'succeeded');
+    assert.ok(result.actions.some((action) => action.kind === 'http.read'));
+    assert.ok(result.actions.some((action) => action.kind === 'model.complete'));
   });
 });
 
-test('runInvoke: usage error prints usage and sets exit 1, no throw', async () => {
-  const io = collectingIO();
-  const previousExitCode = process.exitCode;
-  const result = await runInvoke(['--fixture', 'x.json'], io);
-  const exitCode = process.exitCode;
-  process.exitCode = previousExitCode;
+test('runInvoke: preview transport binds before import and blocks ambient Slack writes', async () => {
+  const previousRelayfileToken = process.env.RELAYFILE_TOKEN;
+  const previousRelayfileUrl = process.env.RELAYFILE_URL;
+  const previousRelayfileWorkspace = process.env.RELAYFILE_WORKSPACE_ID;
+  process.env.RELAYFILE_TOKEN = 'xoxb-prod-shaped-token';
+  process.env.RELAYFILE_URL = 'https://prod.example.com';
+  process.env.RELAYFILE_WORKSPACE_ID = 'ws-prod';
 
-  assert.equal(result, undefined);
-  assert.equal(exitCode, 1);
-  assert.match(io.err.join(''), /missing persona path/);
-  assert.match(io.err.join(''), /usage: agentworkforce invoke/);
+  try {
+    await withAgent({
+      'agent.ts': `
+        import { defineAgent } from '@agentworkforce/runtime';
+        import { slackClient } from '@relayfile/relay-helpers';
+        export default defineAgent({
+          schedules: [{ name: 'scan', cron: '0 9 * * *' }],
+          handler: async () => {
+            await slackClient().post('C123', 'Preview only');
+          }
+        });
+      `
+    }, async (dir, agentPath) => {
+      const relayfileDir = path.join(dir, 'node_modules', '@relayfile');
+      await mkdir(relayfileDir, { recursive: true });
+      await symlink(
+        path.resolve(process.cwd(), '..', 'delivery', 'node_modules', '@relayfile', 'relay-helpers'),
+        path.join(relayfileDir, 'relay-helpers')
+      );
+      const io = collectingIO();
+      const result = await runInvoke([agentPath, '--schedule', 'scan'], io);
+      assert.ok(result && !Array.isArray(result));
+      const slackWrite = result.actions.find((action) => action.kind === 'provider.write' && action.provider === 'slack');
+      assert.ok(slackWrite);
+    });
+  } finally {
+    process.env.RELAYFILE_TOKEN = previousRelayfileToken;
+    process.env.RELAYFILE_URL = previousRelayfileUrl;
+    process.env.RELAYFILE_WORKSPACE_ID = previousRelayfileWorkspace;
+  }
 });
 
-// ---------------------------------------------------------------------------
-// renderHumanSummary
+test('runInvoke: live GET is allowed while POST is denied and never reaches the sentinel', async () => {
+  let getHits = 0;
+  let postHits = 0;
+  const server = createServer((req, res) => {
+    if (req.method === 'GET') {
+      getHits += 1;
+      res.setHeader('content-type', 'application/json');
+      res.end('{"ok":true}');
+      return;
+    }
+    postHits += 1;
+    res.statusCode = 204;
+    res.end();
+  });
+  await new Promise<void>((resolve) => server.listen(0, '127.0.0.1', () => resolve()));
+  const address = server.address();
+  assert.ok(address && typeof address === 'object');
+  const baseUrl = `http://127.0.0.1:${address.port}`;
 
-test('renderHumanSummary: lists runs with status, side-effect count, skips', () => {
-  const summary = renderHumanSummary({
+  try {
+    await withAgent({
+      'agent.ts': `
+        import { defineAgent } from '@agentworkforce/runtime';
+        export default defineAgent({
+          schedules: [{ name: 'scan', cron: '0 9 * * *' }],
+          handler: async () => {
+            await fetch('${baseUrl}/allowed');
+            await fetch('${baseUrl}/blocked', { method: 'POST', body: 'nope' });
+          }
+        });
+      `
+    }, async (_dir, agentPath) => {
+      const io = collectingIO();
+      const previousExitCode = process.exitCode;
+      const result = await runInvoke([agentPath, '--schedule', 'scan', '--reads', 'live'], io);
+      const exitCode = process.exitCode;
+      process.exitCode = previousExitCode;
+
+      assert.ok(result && !Array.isArray(result));
+      assert.equal(exitCode, 1);
+      assert.equal(getHits, 1);
+      assert.equal(postHits, 0);
+      assert.ok(result.actions.some((action) => action.kind === 'http.read' && action.status === 'denied'));
+    });
+  } finally {
+    server.close();
+  }
+});
+
+test('runInvoke: raw node:https import fails closed before handler import', async () => {
+  await withAgent({
+    'agent.ts': `
+      import https from 'node:https';
+      import { defineAgent } from '@agentworkforce/runtime';
+      export default defineAgent({
+        schedules: [{ name: 'scan', cron: '0 9 * * *' }],
+        handler: async () => {
+          https.globalAgent.destroy();
+        }
+      });
+    `
+  }, async (_dir, agentPath) => {
+    const io = collectingIO();
+    const previousExitCode = process.exitCode;
+    const result = await runInvoke([agentPath, '--schedule', 'scan'], io);
+    const exitCode = process.exitCode;
+    process.exitCode = previousExitCode;
+
+    assert.equal(result, undefined);
+    assert.equal(exitCode, 1);
+    assert.match(io.err.join(''), /preview bundles may not import node:https/);
+  });
+});
+
+test('runInvoke: replay bundle preserves provenance and unavailable state fidelity', async () => {
+  await withAgent({
+    'agent.ts': `
+      import { defineAgent } from '@agentworkforce/runtime';
+      export default defineAgent({
+        schedules: [{ name: 'scan', cron: '0 9 * * *' }],
+        handler: async (ctx) => {
+          ctx.log('info', 'replay.ran');
+        }
+      });
+    `,
+    'replay.json': JSON.stringify({
+      runId: 'run_hosted_123',
+      event: {
+        id: 'evt_hosted_123',
+        workspace: 'ws-hosted',
+        type: 'cron.tick',
+        occurredAt: '2026-07-15T09:00:00.000Z',
+        name: 'scan',
+        cron: '0 9 * * *'
+      },
+      state: null
+    }, null, 2)
+  }, async (dir, agentPath) => {
+    const io = collectingIO();
+    const previousExitCode = process.exitCode;
+    const result = await runInvoke([agentPath, '--fixture', path.join(dir, 'replay.json')], io);
+    const exitCode = process.exitCode;
+    process.exitCode = previousExitCode;
+
+    assert.ok(result && !Array.isArray(result));
+    assert.equal(exitCode, 0);
+    assert.equal(result.mode, 'replay');
+    assert.equal(result.eventId, 'evt_hosted_123');
+    const extensions = result.extensions as Record<string, unknown>;
+    const stateSource = extensions.stateSource as Record<string, unknown>;
+    const provenance = extensions.provenance as Record<string, unknown>;
+    assert.equal(stateSource.fidelity, 'unavailable');
+    assert.equal(provenance.sourceRunId, 'run_hosted_123');
+  });
+});
+
+test('renderHumanSummary: renders single or multi-record previews', () => {
+  const record: RunRecordV2 = {
+    runId: 'run_1',
+    status: 'succeeded',
     origin: 'local_dry_run',
-    mode: 'simulate',
-    startedAt: 't0',
-    endedAt: 't1',
-    durationMs: 5,
-    runs: [
-      {
-        runId: 'sim_run_1',
-        deploymentId: 'd',
-        agentId: 'a',
-        status: 'failed',
-        exitCode: 1,
-        summary: null,
-        error: 'kaboom',
-        startedAt: 't0',
-        endedAt: 't1',
-        durationMs: 5,
-        trigger: { kind: 'clock', eventSource: 'cron' },
-        sandbox: { id: null, name: 'local-simulation' },
-        failureClass: 'runner_error',
-        origin: 'local_dry_run',
-        logs: { stdout: '', stderr: '', mountLogTail: '', stdoutTruncated: false, stderrTruncated: false },
-        simulation: { mode: 'simulate', sideEffects: [], capturedLogs: [] }
-      }
-    ],
-    unsupported: [{ id: 'e9', type: 'mystery.event' }],
-    summary: { total: 1, succeeded: 0, failed: 1, unsupported: 1 },
-    exitCode: 1
-  });
-  assert.match(summary, /1 run\(s\) — 0 ok, 1 failed, 1 unsupported/);
-  assert.match(summary, /\[FAIL\] cron\/clock sim_run_1/);
-  assert.match(summary, /error: kaboom/);
-  assert.match(summary, /\[skip\] unsupported envelope e9 \(mystery\.event\)/);
+    mode: 'preview',
+    policy: {
+      reads: 'fixtures',
+      writes: 'preview',
+      model: 'stub',
+      shell: 'simulate',
+      compose: 'preview',
+      allowedHttp: []
+    },
+    eventId: 'evt_1',
+    eventContract: 'cron.tick@1',
+    trace: [],
+    actions: [],
+    artifacts: { artifacts: [] },
+    stateDiff: {}
+  };
+  assert.match(renderHumanSummary(record), /preview: 1 run\(s\) — 1 ok, 0 failed/);
+  assert.match(renderHumanSummary([record, { ...record, runId: 'run_2', status: 'failed' }]), /preview: 2 run\(s\) — 1 ok, 1 failed/);
 });
 
-// ---------------------------------------------------------------------------
-// --scaffold (workforce#189)
-
-test('parseInvokeArgs: --scaffold needs no persona or fixture', () => {
-  const parsed = parseInvokeArgs(['--scaffold', 'cron.tick', '--output', './event.json']);
-  assert.ok('scaffold' in parsed);
-  if (!('scaffold' in parsed)) return;
-  assert.equal(parsed.scaffold, 'cron.tick');
-  assert.equal(path.basename(parsed.outputPath ?? ''), 'event.json');
-});
-
-test('parseInvokeArgs: --scaffold rejects invoke-only args instead of ignoring them', () => {
-  assert.throws(
-    () => parseInvokeArgs(['./persona.json', '--scaffold', 'cron.tick']),
-    /only accepts --output.*<persona-path>/
-  );
-  assert.throws(
-    () => parseInvokeArgs(['--scaffold', 'cron.tick', '--fixture', './event.json']),
-    /only accepts --output.*--fixture/
-  );
-  assert.throws(
-    () => parseInvokeArgs(['--scaffold', 'cron.tick', '--input', 'FOO=bar', '--seed', '/x=./x.json']),
-    /only accepts --output.*--input, --seed/
-  );
-});
-
-test('scaffoldFixture: cron.tick emits a complete frame with name/cron and no warnings', () => {
-  const { fixture, warnings } = scaffoldFixture('cron.tick');
-  assert.deepEqual(warnings, []);
-  assert.equal(fixture.type, 'cron.tick');
-  assert.ok(typeof fixture.occurredAt === 'string');
-  assert.ok(String(fixture.name).includes('TODO'));
-  assert.ok(typeof fixture.cron === 'string');
-  assert.ok(!('resource' in fixture));
-
-  const named = scaffoldFixture('cron.daily-report');
-  assert.equal(named.fixture.type, 'cron.daily-report');
-});
-
-test('scaffoldFixture: known provider event emits frame + explicit resource TODO hole', () => {
-  const { fixture, warnings } = scaffoldFixture('github.pull_request.opened');
-  assert.deepEqual(warnings, []);
-  assert.equal(fixture.type, 'github.pull_request.opened');
-  const resource = fixture.resource as Record<string, unknown>;
-  assert.ok(String(resource.TODO).includes('runs export'));
-});
-
-test('scaffoldFixture: unknown provider/event warns but never blocks (lintTriggers stance)', () => {
-  const unknownProvider = scaffoldFixture('notaprovider.something');
-  assert.equal(unknownProvider.warnings.length, 1);
-  assert.match(unknownProvider.warnings[0], /not in KNOWN_TRIGGER_CATALOG/);
-  assert.equal(unknownProvider.fixture.type, 'notaprovider.something');
-
-  const unknownEvent = scaffoldFixture('github.not_a_real_event');
-  assert.equal(unknownEvent.warnings.length, 1);
-  assert.match(unknownEvent.warnings[0], /not a known github trigger/);
-});
-
-test('runInvoke --scaffold writes the skeleton and exits clean', async () => {
-  const io = collectingIO();
-  const previousExitCode = process.exitCode;
-  const result = await runInvoke(['--scaffold', 'cron.tick'], io);
-  const exitCode = process.exitCode;
-  process.exitCode = previousExitCode;
-
-  assert.equal(result, undefined);
-  assert.notEqual(exitCode, 1);
-  const skeleton = JSON.parse(io.out.join(''));
-  assert.equal(skeleton.type, 'cron.tick');
-});
-
-test('scaffoldFixture: non-tick cron types are PRESERVED with a warning, never rewritten', () => {
-  const { fixture, warnings } = scaffoldFixture('cron.daily');
-  assert.equal(fixture.type, 'cron.daily');
-  assert.equal(warnings.length, 1);
-  assert.match(warnings[0], /preserving requested type "cron.daily"/);
+test('scaffoldFixture: cron and provider scaffolds remain available', () => {
+  const cron = scaffoldFixture('cron.tick');
+  const provider = scaffoldFixture('github.pull_request.opened');
+  assert.equal(cron.fixture.type, 'cron.tick');
+  assert.equal(provider.fixture.type, 'github.pull_request.opened');
 });

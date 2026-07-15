@@ -265,7 +265,8 @@ Commands:
                       1-based configurable position.
   integrations [provider] [--all] [--json]
                       Discover workspace integrations, connection status, and
-                      known trigger events.
+                      known trigger events. JSON output includes registration
+                      health when the cloud status API provides it.
   trigger <agent-name-or-id> [flags]
                       Manually fire an active deployed persona for testing.
                       The selector accepts agent id, compact agent id,
@@ -315,29 +316,32 @@ Commands:
                       mirroring is not supported, so this targets cron/timer-
                       only or webhook-shape-only personas. See
                       \`agentworkforce local-surface --help\` for flags.
-  invoke <persona-path> --fixture <file> [flags]
-                      Simulate an invocation: run the persona's handler
-                      against fixture event envelope(s) with every external
-                      side effect recorded, NOT executed. Emits a
-                      Cloud-compatible run record (origin "local_dry_run")
-                      to stdout. Distinct from \`deploy --dry-run\`, which
-                      validates without invoking the handler.
+  invoke <persona-path> (--fixture <file> | --schedule <name> | --case <file>) [flags]
+                      Run a local preview invocation through the composable
+                      runtime path. Effects are previewed locally and raw
+                      output is a RunRecord JSON document.
                       Flags:
-                        --fixture <file>    JSON envelope, JSON array, or
-                                            NDJSON of raw gateway envelopes
+                        --fixture <file>    JSON event/replay fixture, JSON
+                                            array, or NDJSON
+                        --schedule <name>   invoke a declared schedule
+                        --case <file>       run a YAML case with assertions
+                        --reads <mode>      fixtures | live
+                        --model <mode>      stub | fixture | live
+                        --watch             rerun the same selected source
                         --output <file>     write the run record to a file
                         --input KEY=value   override a declared persona input
-                        --seed PATH=file    seed the simulated filesystem
-                        --workspace <id>    workspace id for the simulated ctx
+                        --seed PATH=file    seed preview file state
+                        --workspace <id>    workspace id for synthesized events
                         --scaffold <type>   emit a fixture skeleton for an
                                             event type instead of running
                                             (no persona needed)
   runs export <runId> [flags]
-                      Export the gateway envelope cloud delivered to a run
-                      as a replayable invoke fixture. Flags:
+                      Export the cloud replay fixture or replay bundle for a
+                      run. Flags:
                         --agent <selector>  agentId/deployedName owning the
                                             run (otherwise all are checked)
-                        --fixture <file>    write the fixture to a file
+                        --fixture <file>    write the legacy fixture to a file
+                        --bundle <file>     write the replay bundle to a file
   deployments list    List deployed cloud agents in the active workspace.
   deployments logs    Show structured logs for a deployed cloud agent.
   destroy <persona-or-agent-id> [flags]
