@@ -33,7 +33,11 @@
     "build": "tsc -p tsconfig.json",
     "dev": "tsc -p tsconfig.json --watch --preserveWatchOutput",
     "typecheck": "tsc -p tsconfig.json --noEmit",
-    "test": "tsc -p tsconfig.json && node --test dist/**/*.test.js dist/*.test.js",
+    "test": "tsc -p tsconfig.json && node --test dist/*.test.js",
     "lint": "tsc -p tsconfig.json --noEmit"
+  },
+  "dependencies": {
+    "ajv": "^8.20.0",
+    "ajv-formats": "^3.0.1"
   }
 }

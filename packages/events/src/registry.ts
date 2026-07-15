@@ -1,9 +1,10 @@
 import { redactEventValue } from './redact.js';
+import { validateJsonSchema, withoutSchemaIdentifiers } from './json-schema.js';
 import { EVENT_FRAME_V1_SCHEMA, EVENT_SUMMARY_SCHEMA } from './schemas.js';
 import type { EventContract, EventFrameV1, JsonSchema, ValidationIssue, ValidationResult } from './types.js';
 import { validateEventFrameV1 } from './validate.js';
 
-const OPEN_PAYLOAD_SCHEMA = { type: 'object', additionalProperties: true } as const;
+const OPEN_PAYLOAD_SCHEMA = Object.freeze({}) satisfies JsonSchema;
 
 function example(
   id: string,
@@ -58,12 +59,29 @@ function contract<TPayload = unknown>(config: {
       if (frame.contractVersion !== 1) errors.push({ path: '$.contractVersion', message: 'must equal 1', keyword: 'const' });
       if (frame.resource.provider !== config.provider) errors.push({ path: '$.resource.provider', message: `must equal ${config.provider}`, keyword: 'const' });
       if (frame.resource.kind !== config.resourceKind) errors.push({ path: '$.resource.kind', message: `must equal ${config.resourceKind}`, keyword: 'const' });
+      const summary = validateJsonSchema(EVENT_SUMMARY_SCHEMA, frame.summary, '$.summary');
+      if (!summary.valid) errors.push(...summary.errors);
+      if (frame.payload !== undefined) {
+        const payload = validateJsonSchema(config.payloadSchema ?? OPEN_PAYLOAD_SCHEMA, frame.payload, '$.payload');
+        if (!payload.valid) errors.push(...payload.errors);
+      }
       return errors.length === 0 ? { valid: true, errors: [] } : { valid: false, errors };
     }
   });
 }
 
 export const EVENT_CONTRACTS = Object.freeze([
+  contract({
+    id: 'startup',
+    provider: 'runtime',
+    trigger: 'startup',
+    resourceKind: 'runtime.startup',
+    fixture: example('startup', 'runtime', 'startup', 'runtime.startup', {
+      resource: { path: '/runtime/startups/evt_startup', kind: 'runtime.startup', id: 'evt_startup', provider: 'runtime' },
+      summary: { title: 'Agent runtime started' },
+      payload: undefined
+    })
+  }),
   contract({
     id: 'cron.tick',
     provider: 'cron',
@@ -154,7 +172,7 @@ export const EVENT_CONTRACT_JSON_SCHEMAS = Object.freeze(Object.fromEntries(
       $schema: 'https://json-schema.org/draft/2020-12/schema',
       $id: `https://agentworkforce.dev/schemas/events/${entry.id}/v${entry.version}.json`,
       allOf: [
-        EVENT_FRAME_V1_SCHEMA,
+        withoutSchemaIdentifiers(EVENT_FRAME_V1_SCHEMA),
         {
           type: 'object',
           properties: {

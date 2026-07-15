@@ -97,6 +97,8 @@ export interface EventCompatibilityInfo {
   originalType: string;
   aliasesApplied: readonly string[];
   preservedFields: readonly string[];
+  /** A colliding legacy `compatibility` field, retained without hiding the decoder trace. */
+  originalCompatibility?: unknown;
 }
 
 export interface DecodedEventFrame {

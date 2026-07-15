@@ -22,17 +22,32 @@ function visit(value: unknown, options: RedactOptions, seen: WeakMap<object, unk
     for (const item of value) out.push(visit(item, options, seen));
     return out;
   }
+  if (!isPlainObject(value)) return value;
   const out: Record<string, unknown> = {};
   seen.set(value, out);
   for (const [key, child] of Object.entries(value)) {
-    out[key] = isSensitiveKey(key, options.additionalSensitiveKeys) ? REDACTED : visit(child, options, seen);
+    Object.defineProperty(out, key, {
+      value: isSensitiveKey(key, options.additionalSensitiveKeys) ? REDACTED : visit(child, options, seen),
+      enumerable: true,
+      configurable: true,
+      writable: true
+    });
   }
   return out;
 }
 
 function isSensitiveKey(key: string, additional: RedactOptions['additionalSensitiveKeys']): boolean {
   if (SENSITIVE_KEY.test(key)) return true;
-  return additional?.some((matcher) =>
-    typeof matcher === 'string' ? matcher.toLowerCase() === key.toLowerCase() : matcher.test(key)
-  ) ?? false;
+  return additional?.some((matcher) => {
+    if (typeof matcher === 'string') return matcher.toLowerCase() === key.toLowerCase();
+    matcher.lastIndex = 0;
+    const matches = matcher.test(key);
+    matcher.lastIndex = 0;
+    return matches;
+  }) ?? false;
+}
+
+function isPlainObject(value: object): value is Record<string, unknown> {
+  const prototype = Object.getPrototypeOf(value);
+  return prototype === Object.prototype || prototype === null;
 }

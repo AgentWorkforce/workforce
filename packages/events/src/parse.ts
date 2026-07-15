@@ -74,14 +74,15 @@ export function decodeLegacyRawGatewayEnvelope(input: unknown): DecodedEventFram
     source: 'legacy-raw-gateway-envelope',
     originalType,
     aliasesApplied,
-    preservedFields: preserved
+    preservedFields: preserved,
+    ...(Object.hasOwn(input, 'compatibility') ? { originalCompatibility: input.compatibility } : {})
   };
   const legacyExtensions: Record<string, unknown> = {};
-  for (const key of preserved) legacyExtensions[key] = input[key];
+  for (const key of preserved) defineDataProperty(legacyExtensions, key, input[key]);
   for (const key of ['expand', 'resumeContext', 'harnessSession', 'eventType'] as const) {
-    if (legacy[key] !== undefined) legacyExtensions[key] = legacy[key];
+    if (legacy[key] !== undefined) defineDataProperty(legacyExtensions, key, legacy[key]);
   }
-  legacyExtensions.compatibility = compatibility;
+  defineDataProperty(legacyExtensions, 'compatibility', compatibility);
 
   const frame: EventFrameV1 = {
     schemaVersion: 1,
@@ -105,13 +106,22 @@ export function decodeLegacyRawGatewayEnvelope(input: unknown): DecodedEventFram
 }
 
 function isCanonicalResource(value: unknown): value is EventFrameV1['resource'] {
-  return isRecord(value) && typeof value.path === 'string' && typeof value.kind === 'string' && typeof value.id === 'string' && typeof value.provider === 'string';
+  if (!isRecord(value)) return false;
+  const keys = ['path', 'kind', 'id', 'provider'] as const;
+  return Object.keys(value).length === keys.length && keys.every((key) => typeof value[key] === 'string');
 }
 
 function deriveLegacyPath(type: string, provider: string, kind: string, id: string, channel?: string): string {
   if (type === 'cron.tick') return `/cron/schedules/${encodeURIComponent(id)}`;
   if (type === 'relaycast.message') return `/relaycast/${encodeURIComponent(channel ?? 'dm')}/messages/${encodeURIComponent(id)}`;
-  return `/${encodeURIComponent(provider)}/${kind.split('.').slice(1).map(encodeURIComponent).join('/')}/${encodeURIComponent(id)}`;
+  const kindSegments = kind.split('.').filter(Boolean);
+  if (kindSegments[0] === provider) kindSegments.shift();
+  const resourceSegments = kindSegments.length > 0 ? kindSegments : ['resources'];
+  return `/${encodeURIComponent(provider)}/${resourceSegments.map(encodeURIComponent).join('/')}/${encodeURIComponent(id)}`;
+}
+
+function defineDataProperty(target: Record<string, unknown>, key: string, value: unknown): void {
+  Object.defineProperty(target, key, { value, enumerable: true, configurable: true, writable: true });
 }
 
 function firstPath(value: unknown): string | undefined {
