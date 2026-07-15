@@ -50,6 +50,38 @@ test('single-file source compiles into existing persona/agent deploy fields', as
   }
 });
 
+test('preflight evaluates a single-file Agent source exactly once', async () => {
+  const dir = await mkdtemp(path.join(tmpdir(), 'compiled-agent-once-'));
+  const counterKey = `__agentworkforce_compile_${Date.now()}_${Math.random()}`;
+  const counters = globalThis as unknown as Record<string, unknown>;
+  try {
+    const sourcePath = path.join(dir, 'agent.ts');
+    const source = PRESET.replace(
+      "import { defineAgent } from '@agentworkforce/runtime';",
+      `import { defineAgent } from '@agentworkforce/runtime';\n` +
+      `const counters = globalThis as unknown as Record<string, number>;\n` +
+      `counters[${JSON.stringify(counterKey)}] = (counters[${JSON.stringify(counterKey)}] ?? 0) + 1;`
+    );
+    await writeFile(sourcePath, source);
+    await preflightPersona(sourcePath);
+    assert.equal(counters[counterKey], 1);
+  } finally {
+    delete counters[counterKey];
+    await rm(dir, { recursive: true, force: true });
+  }
+});
+
+test('single-file detection routes invalid persona fields to precise validation', async () => {
+  const dir = await mkdtemp(path.join(tmpdir(), 'compiled-agent-invalid-'));
+  try {
+    const sourcePath = path.join(dir, 'agent.ts');
+    await writeFile(sourcePath, PRESET.replace("description: 'Golden single-file agent.'", 'description: 42'));
+    await assert.rejects(compileAgentSource(sourcePath), /description/);
+  } finally {
+    await rm(dir, { recursive: true, force: true });
+  }
+});
+
 test('unknown capability extensions survive source-to-persistence projection', async () => {
   const dir = await mkdtemp(path.join(tmpdir(), 'compiled-agent-golden-'));
   try {

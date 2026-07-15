@@ -33,11 +33,7 @@ export async function compileAgentSource(inputPath: string): Promise<CompiledAge
 }
 
 export function isSingleFileAgentSource(value: unknown): value is Record<string, unknown> & { handler: Function } {
-  return isRecord(value)
-    && typeof value.handler === 'function'
-    && typeof value.id === 'string'
-    && typeof value.intent === 'string'
-    && typeof value.description === 'string';
+  return isRecord(value) && typeof value.handler === 'function';
 }
 
 /** JSON serialization seam used by deploy upload/persistence contract tests. */

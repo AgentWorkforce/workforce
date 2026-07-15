@@ -1,19 +1,11 @@
-import { readFile, stat } from 'node:fs/promises';
+import { stat } from 'node:fs/promises';
 import path from 'node:path';
 import {
   KNOWN_TRIGGER_PROVIDER_ALIASES,
   lintTriggers,
-  parsePersonaSpec,
-  type AgentSpec,
-  type PersonaIntent,
-  type PersonaSpec
+  type AgentSpec
 } from '@agentworkforce/persona-kit';
-import {
-  isPersonaSourcePath,
-  loadPersonaSourceFile
-} from './persona-source.js';
-import { extractAgentSpec } from './extract-agent.js';
-import { compileAgentSource, isSingleFileAgentSource } from './compile-agent.js';
+import { compileAgentSource } from './compile-agent.js';
 import type { DeployPreflight } from './types.js';
 
 /**
@@ -31,29 +23,10 @@ import type { DeployPreflight } from './types.js';
 export async function preflightPersona(personaPath: string): Promise<DeployPreflight> {
   const absPath = path.resolve(personaPath);
   const personaDir = path.dirname(absPath);
-
-  const json = isPersonaSourcePath(absPath)
-    ? await readPersonaSource(absPath)
-    : await readPersonaJson(absPath);
-
-  if (typeof json !== 'object' || json === null) {
-    throw new Error(`persona at ${absPath} must be a top-level object`);
-  }
-
-  // The persona-kit parser is intent-aware; we pass the intent it declares
-  // back to itself so the check is self-consistent (parsePersonaSpec
-  // enforces that `intent` matches `expectedIntent` to catch type-collated
-  // mistakes in built-in catalogs). For loose deploy use, mirror the
-  // declared intent.
-  const declaredIntent = (json as { intent?: unknown }).intent;
-  if (typeof declaredIntent !== 'string' || !declaredIntent) {
-    throw new Error(`persona at ${absPath} is missing top-level "intent"`);
-  }
-
-  const singleFile = isPersonaSourcePath(absPath) && isSingleFileAgentSource(json);
-  const compiledSingle = singleFile ? await compileAgentSource(absPath) : undefined;
-  const persona: PersonaSpec = compiledSingle?.persona
-    ?? parsePersonaSpec(json, declaredIntent as PersonaIntent);
+  // One compiler entry point handles both single-file presets and the
+  // established split persona/agent form. Source modules are evaluated once.
+  const compiled = await compileAgentSource(absPath);
+  const persona = compiled.persona;
 
   if (persona.cloud !== true) {
     throw new Error(
@@ -67,7 +40,7 @@ export async function preflightPersona(personaPath: string): Promise<DeployPrefl
     );
   }
 
-  const onEventPath = compiledSingle?.handlerEntry ?? path.resolve(personaDir, persona.onEvent);
+  const onEventPath = compiled.handlerEntry;
   const onEventStat = await stat(onEventPath).catch((err: NodeJS.ErrnoException) => {
     if (err.code === 'ENOENT') {
       throw new Error(
@@ -80,9 +53,7 @@ export async function preflightPersona(personaPath: string): Promise<DeployPrefl
     throw new Error(`onEvent path ${onEventPath} is not a regular file`);
   }
 
-  // Triggers/schedules/watch live on the agent now — extract them from the
-  // `defineAgent(...)` default export of the onEvent file.
-  const agent = compiledSingle?.agent ?? (await extractAgentSpec(onEventPath)).agent;
+  const agent = compiled.agent;
 
   const hasTriggers = !!agent.triggers && Object.values(agent.triggers).some((t) => (t?.length ?? 0) > 0);
   const hasSchedules = (agent.schedules?.length ?? 0) > 0;
@@ -139,33 +110,8 @@ export async function preflightPersona(personaPath: string): Promise<DeployPrefl
     schedules: (agent.schedules ?? []).map((s) => s.name),
     integrations: persona.integrations ? Object.keys(persona.integrations) : [],
     warnings,
-    ...(compiledSingle ? { compiledAgent: compiledSingle } : {})
+    ...(compiled.sourceKind === 'single-file' ? { compiledAgent: compiled } : {})
   };
-}
-
-async function readPersonaJson(absPath: string): Promise<unknown> {
-  const raw = await readFile(absPath, 'utf8').catch((err: NodeJS.ErrnoException) => {
-    if (err.code === 'ENOENT') {
-      throw new Error(`persona JSON not found at ${absPath}`);
-    }
-    throw err;
-  });
-
-  let json: unknown;
-  try {
-    json = JSON.parse(raw);
-  } catch (err) {
-    throw new Error(
-      `persona JSON at ${absPath} is not valid JSON: ${err instanceof Error ? err.message : String(err)}`
-    );
-  }
-
-  return json;
-}
-
-async function readPersonaSource(absPath: string): Promise<unknown> {
-  const { persona } = await loadPersonaSourceFile(absPath);
-  return persona;
 }
 
 /**
