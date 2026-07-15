@@ -1,56 +1,58 @@
-import { fileURLToPath } from 'node:url';
-import Module, { createRequire, registerHooks } from 'node:module';
+import { Buffer } from 'node:buffer';
+import { createRequire, syncBuiltinESMExports } from 'node:module';
 import { bindPreviewTransport, PreviewTransport, type TransportPreviewAction } from '@relayfile/relay-helpers';
 import type { PreviewAction } from './run-contracts.js';
 import type {
+  LocalPreviewFetchRequestMessage,
+  LocalPreviewFetchResponseMessage,
   LocalPreviewGuardConfig,
   PreviewProcessState
 } from './local-preview-contract.js';
 
 const PREVIEW_PROCESS_STATE = Symbol.for('agentworkforce.local-preview.process-state');
-const MAX_REDIRECTS = 8;
-const TRUSTED_WORKER_ROOT = fileURLToPath(new URL('.', import.meta.url));
 const require = createRequire(import.meta.url);
 const childProcess = require('node:child_process') as typeof import('node:child_process');
-const FORBIDDEN_IMPORT_SPECIFIERS = new Map<string, string>([
-  ['http', 'http'],
-  ['node:http', 'node:http'],
-  ['https', 'https'],
-  ['node:https', 'node:https'],
-  ['net', 'net'],
-  ['node:net', 'node:net'],
-  ['tls', 'tls'],
-  ['node:tls', 'node:tls'],
-  ['dgram', 'dgram'],
-  ['node:dgram', 'node:dgram'],
-  ['child_process', 'child_process'],
-  ['node:child_process', 'node:child_process']
-]);
+const http = require('node:http') as typeof import('node:http');
+const https = require('node:https') as typeof import('node:https');
+const net = require('node:net') as typeof import('node:net');
+const tls = require('node:tls') as typeof import('node:tls');
+const dgram = require('node:dgram') as typeof import('node:dgram');
 
-type PreviewModuleState = PreviewProcessState & {
-  deregisterHooks: () => void;
-  guardActive: boolean;
-};
+type PreviewModuleState = PreviewProcessState;
 
-export function installPreviewProcessGuards(
-  config: LocalPreviewGuardConfig
-): PreviewProcessState {
+export function installPreviewProcessGuards(args: {
+  config: LocalPreviewGuardConfig;
+  fetchFromParent: (request: LocalPreviewFetchRequestMessage) => Promise<LocalPreviewFetchResponseMessage>;
+}): PreviewProcessState {
   const existing = getPreviewProcessState();
   if (existing) return existing;
 
   const previewTransport = new PreviewTransport();
   const restoreTransport = bindPreviewTransport(previewTransport);
   const recordedActions: PreviewAction[] = [];
-  const clockNow = config.clockNow;
+  const clockNow = args.config.clockNow;
   const now = clockNow ? () => new Date(clockNow) : () => new Date();
-  const moduleFacade = Module as unknown as {
-    _load: (
-      request: string,
-      parent: NodeJS.Module | null | undefined,
-      isMain: boolean
-    ) => unknown;
+  const originalFetch = globalThis.fetch.bind(globalThis);
+  const originalHttp = {
+    request: http.request,
+    get: http.get
   };
-  const originalLoad = moduleFacade._load;
+  const originalHttps = {
+    request: https.request,
+    get: https.get
+  };
+  const originalNet = {
+    connect: net.connect,
+    createConnection: net.createConnection,
+    createServer: net.createServer
+  };
+  const originalTls = {
+    connect: tls.connect,
+    createServer: tls.createServer
+  };
+  const originalDgram = {
+    createSocket: dgram.createSocket
+  };
   const originalChildProcess = {
     exec: childProcess.exec,
     execFile: childProcess.execFile,
@@ -60,49 +62,23 @@ export function installPreviewProcessGuards(
     spawn: childProcess.spawn,
     spawnSync: childProcess.spawnSync
   };
-  const originalFetch = globalThis.fetch.bind(globalThis);
-  const hook = registerHooks({
-    resolve(specifier, context, nextResolve) {
-      assertAllowedModule(specifier, context.parentURL);
-      return nextResolve(specifier, context);
-    }
-  });
-
-  moduleFacade._load = ((request: string, parent: NodeJS.Module | null | undefined, isMain: boolean) => {
-    assertAllowedModule(
-      request,
-      typeof parent?.filename === 'string' ? parent.filename : typeof parent?.id === 'string' ? parent.id : undefined
-    );
-    return originalLoad.call(moduleFacade, request, parent, isMain);
-  }) as typeof moduleFacade._load;
-
-  const denyChildProcess = (call: string, cmd?: unknown): never => {
-    state.recordAction({
-      kind: 'shell.exec',
-      status: 'denied',
-      data: {
-        call,
-        ...(cmd !== undefined ? { cmd: stringifyCommand(cmd) } : {})
-      }
-    });
-    throw new Error(`invoke: preview worker denied child_process.${call}`);
-  };
 
   const state: PreviewModuleState = {
     activateUserImportGuard() {
-      state.guardActive = true;
+      // Permission-mode worker + patched builtins are the safety boundary.
     },
-    now,
-    previewTransport: previewTransport as unknown as PreviewProcessState['previewTransport'],
-    recordedActions,
-    guardActive: false,
-    recordAction(action) {
-      recordedActions.push(action);
-    },
-    deregisterHooks: () => hook.deregister(),
     cleanup() {
       globalThis.fetch = originalFetch;
-      moduleFacade._load = originalLoad;
+      http.request = originalHttp.request;
+      http.get = originalHttp.get;
+      https.request = originalHttps.request;
+      https.get = originalHttps.get;
+      net.connect = originalNet.connect;
+      net.createConnection = originalNet.createConnection;
+      net.createServer = originalNet.createServer;
+      tls.connect = originalTls.connect;
+      tls.createServer = originalTls.createServer;
+      dgram.createSocket = originalDgram.createSocket;
       childProcess.exec = originalChildProcess.exec;
       childProcess.execFile = originalChildProcess.execFile;
       childProcess.execFileSync = originalChildProcess.execFileSync;
@@ -110,21 +86,40 @@ export function installPreviewProcessGuards(
       childProcess.fork = originalChildProcess.fork;
       childProcess.spawn = originalChildProcess.spawn;
       childProcess.spawnSync = originalChildProcess.spawnSync;
-      hook.deregister();
+      syncBuiltinESMExports();
       restoreTransport();
       delete (globalThis as Record<PropertyKey, unknown>)[PREVIEW_PROCESS_STATE];
-    }
+    },
+    fetchFromParent: args.fetchFromParent,
+    now,
+    previewTransport: previewTransport as unknown as PreviewProcessState['previewTransport'],
+    recordAction(action) {
+      recordedActions.push(action);
+    },
+    recordedActions
   };
 
-  childProcess.exec = ((command: string, ..._args: unknown[]) => denyChildProcess('exec', command)) as unknown as typeof childProcess.exec;
-  childProcess.execFile = ((file: string, ..._args: unknown[]) => denyChildProcess('execFile', file)) as unknown as typeof childProcess.execFile;
-  childProcess.execFileSync = ((file: string, ..._args: unknown[]) => denyChildProcess('execFileSync', file)) as unknown as typeof childProcess.execFileSync;
-  childProcess.execSync = ((command: string, ..._args: unknown[]) => denyChildProcess('execSync', command)) as unknown as typeof childProcess.execSync;
-  childProcess.fork = ((modulePath: string, ..._args: unknown[]) => denyChildProcess('fork', modulePath)) as unknown as typeof childProcess.fork;
-  childProcess.spawn = ((command: string, ..._args: unknown[]) => denyChildProcess('spawn', command)) as unknown as typeof childProcess.spawn;
-  childProcess.spawnSync = ((command: string, ..._args: unknown[]) => denyChildProcess('spawnSync', command)) as unknown as typeof childProcess.spawnSync;
+  http.request = ((..._args: unknown[]) => denyRawNetwork(state, 'node:http', 'request')) as typeof http.request;
+  http.get = ((..._args: unknown[]) => denyRawNetwork(state, 'node:http', 'get')) as typeof http.get;
+  https.request = ((..._args: unknown[]) => denyRawNetwork(state, 'node:https', 'request')) as typeof https.request;
+  https.get = ((..._args: unknown[]) => denyRawNetwork(state, 'node:https', 'get')) as typeof https.get;
+  net.connect = ((..._args: unknown[]) => denyRawNetwork(state, 'node:net', 'connect')) as typeof net.connect;
+  net.createConnection = ((..._args: unknown[]) => denyRawNetwork(state, 'node:net', 'createConnection')) as typeof net.createConnection;
+  net.createServer = ((..._args: unknown[]) => denyRawNetwork(state, 'node:net', 'createServer')) as typeof net.createServer;
+  tls.connect = ((..._args: unknown[]) => denyRawNetwork(state, 'node:tls', 'connect')) as typeof tls.connect;
+  tls.createServer = ((..._args: unknown[]) => denyRawNetwork(state, 'node:tls', 'createServer')) as typeof tls.createServer;
+  dgram.createSocket = ((..._args: unknown[]) => denyRawNetwork(state, 'node:dgram', 'createSocket')) as typeof dgram.createSocket;
 
-  globalThis.fetch = installFetchPolicy(config, state, originalFetch);
+  childProcess.exec = ((command: string, ..._args: unknown[]) => denyChildProcess(state, 'exec', command)) as unknown as typeof childProcess.exec;
+  childProcess.execFile = ((file: string, ..._args: unknown[]) => denyChildProcess(state, 'execFile', file)) as unknown as typeof childProcess.execFile;
+  childProcess.execFileSync = ((file: string, ..._args: unknown[]) => denyChildProcess(state, 'execFileSync', file)) as typeof childProcess.execFileSync;
+  childProcess.execSync = ((command: string, ..._args: unknown[]) => denyChildProcess(state, 'execSync', command)) as typeof childProcess.execSync;
+  childProcess.fork = ((modulePath: string, ..._args: unknown[]) => denyChildProcess(state, 'fork', modulePath)) as typeof childProcess.fork;
+  childProcess.spawn = ((command: string, ..._args: unknown[]) => denyChildProcess(state, 'spawn', command)) as typeof childProcess.spawn;
+  childProcess.spawnSync = ((command: string, ..._args: unknown[]) => denyChildProcess(state, 'spawnSync', command)) as typeof childProcess.spawnSync;
+
+  syncBuiltinESMExports();
+  globalThis.fetch = installFetchBridge(state);
   (globalThis as Record<PropertyKey, unknown>)[PREVIEW_PROCESS_STATE] = state;
   return state;
 }
@@ -153,160 +148,61 @@ export function transportActionToPreviewAction(action: TransportPreviewAction): 
   };
 }
 
-function assertAllowedModule(specifier: string, parentRef?: string): void {
-  const state = getPreviewProcessState() as PreviewModuleState | undefined;
-  if (!state?.guardActive) return;
-  const denied = FORBIDDEN_IMPORT_SPECIFIERS.get(specifier);
-  if (denied) {
-    if (isTrustedWorkerParent(parentRef)) return;
-    throw new Error(`invoke: preview worker denied raw module import ${denied}`);
-  }
+function installFetchBridge(state: PreviewProcessState): typeof globalThis.fetch {
+  return (async (input: URL | RequestInfo, init?: RequestInit) => {
+    const request = toRequest(input, init);
+    const message: LocalPreviewFetchRequestMessage = {
+      type: 'fetch',
+      requestId: `fetch_${Math.random().toString(16).slice(2, 10)}`,
+      method: request.method.toUpperCase(),
+      url: request.url,
+      headers: [...request.headers.entries()],
+      ...(request.method !== 'GET' && request.method !== 'HEAD'
+        ? { bodyBase64: Buffer.from(await request.arrayBuffer()).toString('base64') }
+        : {})
+    };
+    const response = await state.fetchFromParent(message);
+    state.recordAction(response.action);
+    if (!response.ok || !response.response) {
+      throw new Error(response.error ?? `invoke parent fetch bridge failed for ${request.method} ${request.url}`);
+    }
+    return new Response(Buffer.from(response.response.bodyBase64, 'base64'), {
+      status: response.response.status,
+      headers: response.response.headers
+    });
+  }) as typeof globalThis.fetch;
 }
 
-function isTrustedWorkerParent(parentRef: string | undefined): boolean {
-  if (!parentRef) return false;
-  const normalized = parentRef.startsWith('file:')
-    ? fileURLToPath(parentRef)
-    : parentRef;
-  return normalized.startsWith(TRUSTED_WORKER_ROOT);
+function denyRawNetwork(state: PreviewProcessState, moduleName: string, call: string): never {
+  state.recordAction({
+    kind: 'http.read',
+    status: 'denied',
+    data: {
+      module: moduleName,
+      call
+    }
+  });
+  throw new Error(`invoke: preview worker denied raw network ${moduleName}.${call}`);
+}
+
+function denyChildProcess(state: PreviewProcessState, call: string, cmd?: unknown): never {
+  state.recordAction({
+    kind: 'shell.exec',
+    status: 'denied',
+    data: {
+      call,
+      ...(cmd !== undefined ? { cmd: stringifyCommand(cmd) } : {})
+    }
+  });
+  throw new Error(`invoke: preview worker denied child_process.${call}`);
 }
 
 function stringifyCommand(value: unknown): string {
   return typeof value === 'string' ? value : JSON.stringify(value);
 }
 
-function installFetchPolicy(
-  config: LocalPreviewGuardConfig,
-  state: PreviewProcessState,
-  originalFetch: typeof globalThis.fetch
-): typeof globalThis.fetch {
-  return (async (input: URL | RequestInfo, init?: RequestInit) => {
-    const request = toRequest(input, init);
-    const fixture = config.fixtures.find((candidate) =>
-      candidate.method.toUpperCase() === request.method && request.url.includes(candidate.match)
-    );
-    if (fixture) {
-      state.recordAction({
-        kind: 'http.read',
-        status: 'previewed',
-        data: {
-          method: request.method,
-          url: request.url,
-          source: fixture.sourcePath ?? 'fixture'
-        }
-      });
-      return new Response(fixture.body, {
-        status: 200,
-        headers: {
-          'content-type': fixture.contentType ?? 'application/json'
-        }
-      });
-    }
-
-    return await fetchLiveWithRedirectGuard(config, state, request, 0, originalFetch);
-  }) as typeof globalThis.fetch;
-}
-
-async function fetchLiveWithRedirectGuard(
-  config: LocalPreviewGuardConfig,
-  state: PreviewProcessState,
-  request: Request,
-  redirects: number,
-  originalFetch: typeof globalThis.fetch
-): Promise<Response> {
-  const method = request.method.toUpperCase();
-  const url = request.url;
-
-  if (config.policy.reads !== 'live' || !['GET', 'HEAD'].includes(method)) {
-    state.recordAction({
-      kind: 'http.read',
-      status: 'denied',
-      data: { method, url }
-    });
-    throw new Error(`invoke policy denied ${method} ${url}`);
-  }
-
-  if (
-    config.policy.allowedHttp.length > 0
-    && !config.policy.allowedHttp.some((rule) => httpRuleMatches(rule, method, url))
-  ) {
-    state.recordAction({
-      kind: 'http.read',
-      status: 'denied',
-      data: { method, url }
-    });
-    throw new Error(`invoke policy denied undeclared live read ${method} ${url}`);
-  }
-
-  state.recordAction({
-    kind: 'http.read',
-    status: 'previewed',
-    data: { method, url, source: 'live', at: state.now().toISOString() }
-  });
-
-  const response = await originalFetch(new Request(request, { redirect: 'manual' }));
-  if (!isRedirect(response.status)) return response;
-
-  const location = response.headers.get('location');
-  if (!location) return response;
-  if (redirects >= MAX_REDIRECTS) {
-    state.recordAction({
-      kind: 'http.read',
-      status: 'denied',
-      data: { method, url, reason: 'too_many_redirects' }
-    });
-    throw new Error(`invoke policy denied redirect chain for ${method} ${url}: too many redirects`);
-  }
-
-  const redirectedUrl = new URL(location, url).toString();
-  if (
-    config.policy.allowedHttp.length > 0
-    && !config.policy.allowedHttp.some((rule) => httpRuleMatches(rule, method, redirectedUrl))
-  ) {
-    state.recordAction({
-      kind: 'http.read',
-      status: 'denied',
-      data: { method, url: redirectedUrl, redirectedFrom: url }
-    });
-    throw new Error(`invoke policy denied redirected live read ${method} ${redirectedUrl}`);
-  }
-
-  const redirectedRequest = new Request(redirectedUrl, {
-    method: response.status === 303 ? 'GET' : method,
-    headers: request.headers,
-    redirect: 'manual'
-  });
-  return await fetchLiveWithRedirectGuard(
-    config,
-    state,
-    redirectedRequest,
-    redirects + 1,
-    originalFetch
-  );
-}
-
 function toRequest(input: URL | RequestInfo, init?: RequestInit): Request {
   if (input instanceof Request) return new Request(input, init);
   if (input instanceof URL) return new Request(input, init);
   return new Request(input, init);
-}
-
-function isRedirect(status: number): boolean {
-  return [301, 302, 303, 307, 308].includes(status);
-}
-
-function httpRuleMatches(
-  rule: { method: string; urlGlob: string },
-  method: string,
-  url: string
-): boolean {
-  if (rule.method.toUpperCase() !== method.toUpperCase()) return false;
-  const pattern = rule.urlGlob.includes('*')
-    ? new RegExp(`^${rule.urlGlob.split('*').map(escapeRegExp).join('.*')}$`)
-    : null;
-  return pattern ? pattern.test(url) : url.includes(rule.urlGlob);
-}
-
-function escapeRegExp(value: string): string {
-  return value.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
 }

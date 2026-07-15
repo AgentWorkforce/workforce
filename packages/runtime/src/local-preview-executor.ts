@@ -257,7 +257,17 @@ export async function executeLocalRunInWorkerProcess(
 
   previewState.activateUserImportGuard();
   const bundleUrl = `${pathToFileURL(payload.bundlePath).href}?invoke=${randomUUID()}`;
-  const userModule = (await import(bundleUrl)) as Record<string, unknown>;
+  let userModule: Record<string, unknown>;
+  try {
+    userModule = (await import(bundleUrl)) as Record<string, unknown>;
+  } catch (error) {
+    const fsReadAllowed = process.permission?.has?.('fs.read', payload.bundlePath);
+    throw new Error(
+      `invoke: preview worker could not import bundle ${payload.bundlePath} (fs.read=${String(fsReadAllowed)}): ${
+        error instanceof Error ? error.message : String(error)
+      }`
+    );
+  }
   const handler = extractHandler(userModule);
   const event = envelopeToAgentEvent(eventFrameToRawEnvelope(payload.request.event));
   if (!event) throw new Error(`invoke: unsupported event ${payload.request.event.type}`);

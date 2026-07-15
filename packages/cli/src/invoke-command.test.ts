@@ -4,6 +4,7 @@ import { createServer } from 'node:http';
 import { mkdtemp, mkdir, readFile, rm, symlink, writeFile } from 'node:fs/promises';
 import path from 'node:path';
 import {
+  matchesExpectedProviderAction,
   parseFixtureEnvelopes,
   parseInvokeArgs,
   renderHumanSummary,
@@ -22,6 +23,18 @@ function collectingIO(): RunInvokeIO & { out: string[]; err: string[] } {
     stdout: (text: string) => out.push(text),
     stderr: (text: string) => err.push(text)
   };
+}
+
+function extractLoggedMessagePayloads(record: RunRecordV2): string[] {
+  const logs = ((record.extensions as Record<string, unknown>).logs ?? []) as string[];
+  return logs.map((line) => {
+    try {
+      const parsed = JSON.parse(line) as { message?: unknown };
+      return typeof parsed.message === 'string' ? parsed.message : '';
+    } catch {
+      return line;
+    }
+  });
 }
 
 test('parseInvokeArgs: schedule source with policy flags', () => {
@@ -200,6 +213,35 @@ expect:
   });
 });
 
+test('matchesExpectedProviderAction: threaded Slack replies satisfy messages+threaded case expectations', () => {
+  const action: RunRecordV2['actions'][number] = {
+    kind: 'provider.write',
+    status: 'previewed',
+    provider: 'slack',
+    resource: 'replies',
+    id: 'preview-slack-replies-0001',
+    data: {
+      parameters: {
+        channelId: 'C123',
+        messageTs: '300_1'
+      },
+      path: '/slack/channels/C123/messages/300_1/replies/preview-slack-replies-0001.json',
+      body: {
+        text: 'Threaded reply',
+        thread_ts: '300.1'
+      }
+    }
+  };
+
+  assert.equal(matchesExpectedProviderAction(action, {
+    provider: 'slack',
+    resource: 'messages',
+    channel: 'C123',
+    threaded: true,
+    textContains: ['Threaded reply']
+  }), true);
+});
+
 test('runInvoke: preview transport binds before import and blocks ambient Slack writes', async () => {
   const previousRelayfileToken = process.env.RELAYFILE_TOKEN;
   const previousRelayfileUrl = process.env.RELAYFILE_URL;
@@ -289,7 +331,7 @@ test('runInvoke: live GET is allowed while POST is denied and never reaches the 
   }
 });
 
-test('runInvoke: raw node:https import fails closed before handler import', async () => {
+test('runInvoke: raw node:https request fails closed with no network permission', async () => {
   await withAgent({
     'agent.ts': `
       import https from 'node:https';
@@ -297,7 +339,8 @@ test('runInvoke: raw node:https import fails closed before handler import', asyn
       export default defineAgent({
         schedules: [{ name: 'scan', cron: '0 9 * * *' }],
         handler: async () => {
-          https.globalAgent.destroy();
+          const req = https.request('https://example.test/escape', { method: 'POST' });
+          req.end('escape');
         }
       });
     `
@@ -308,9 +351,9 @@ test('runInvoke: raw node:https import fails closed before handler import', asyn
     const exitCode = process.exitCode;
     process.exitCode = previousExitCode;
 
-    assert.equal(result, undefined);
+    assert.ok(result && !Array.isArray(result));
     assert.equal(exitCode, 1);
-    assert.match(io.err.join(''), /raw module import node:https/);
+    assert.match(String(result.error ?? ''), /raw network node:https.request/);
   });
 });
 
@@ -349,14 +392,14 @@ test('runInvoke: dynamic computed node:http import is denied with zero raw hits'
       assert.ok(result && !Array.isArray(result));
       assert.equal(exitCode, 1);
       assert.equal(rawHits, 0);
-      assert.match(String(result.error ?? ''), /raw module import node:http/);
+      assert.match(String(result.error ?? ''), /raw network node:http.request/);
     });
   } finally {
     server.close();
   }
 });
 
-test('runInvoke: bare http import is denied before handler execution', async () => {
+test('runInvoke: bare http request is denied before any network write lands', async () => {
   await withAgent({
     'agent.ts': `
       import http from 'http';
@@ -364,7 +407,8 @@ test('runInvoke: bare http import is denied before handler execution', async () 
       export default defineAgent({
         schedules: [{ name: 'scan', cron: '0 9 * * *' }],
         handler: async () => {
-          http.globalAgent.destroy();
+          const req = http.request('http://127.0.0.1:1/escape', { method: 'POST' });
+          req.end('escape');
         }
       });
     `
@@ -375,9 +419,9 @@ test('runInvoke: bare http import is denied before handler execution', async () 
     const exitCode = process.exitCode;
     process.exitCode = previousExitCode;
 
-    assert.equal(result, undefined);
+    assert.ok(result && !Array.isArray(result));
     assert.equal(exitCode, 1);
-    assert.match(io.err.join(''), /raw module import http/);
+    assert.match(String(result.error ?? ''), /raw network node:http.request/);
   });
 });
 
@@ -418,14 +462,14 @@ test('runInvoke: createRequire http escape is denied with zero raw hits', async 
       assert.ok(result && !Array.isArray(result));
       assert.equal(exitCode, 1);
       assert.equal(rawHits, 0);
-      assert.match(String(result.error ?? ''), /raw module import http/);
+      assert.match(String(result.error ?? ''), /raw network node:http.request/);
     });
   } finally {
     server.close();
   }
 });
 
-test('runInvoke: helper module importing raw network builtin fails closed', async () => {
+test('runInvoke: helper module importing raw network builtin fails closed on use', async () => {
   await withAgent({
     'agent.ts': `
       import { defineAgent } from '@agentworkforce/runtime';
@@ -440,7 +484,8 @@ test('runInvoke: helper module importing raw network builtin fails closed', asyn
     'helper.ts': `
       import http from 'node:http';
       export function escape() {
-        http.globalAgent.destroy();
+        const req = http.request('http://127.0.0.1:1/escape', { method: 'POST' });
+        req.end('escape');
       }
     `
   }, async (_dir, agentPath) => {
@@ -450,13 +495,13 @@ test('runInvoke: helper module importing raw network builtin fails closed', asyn
     const exitCode = process.exitCode;
     process.exitCode = previousExitCode;
 
-    assert.equal(result, undefined);
+    assert.ok(result && !Array.isArray(result));
     assert.equal(exitCode, 1);
-    assert.match(io.err.join(''), /raw module import node:http/);
+    assert.match(String(result.error ?? ''), /raw network node:http.request/);
   });
 });
 
-test('runInvoke: child_process import is denied before handler execution', async () => {
+test('runInvoke: child_process execution is denied under the isolated worker boundary', async () => {
   await withAgent({
     'agent.ts': `
       import { execFile } from 'node:child_process';
@@ -475,13 +520,13 @@ test('runInvoke: child_process import is denied before handler execution', async
     const exitCode = process.exitCode;
     process.exitCode = previousExitCode;
 
-    assert.equal(result, undefined);
+    assert.ok(result && !Array.isArray(result));
     assert.equal(exitCode, 1);
-    assert.match(io.err.join(''), /raw module import node:child_process/);
+    assert.match(String(result.error ?? ''), /child_process.execFile/);
   });
 });
 
-test('runInvoke: sanitized worker env blocks token exfiltration and leaves parent env untouched', async () => {
+test('runInvoke: isolated worker strips ambient creds, redacts secret-shaped inputs, and keeps safe inputs', async () => {
   const previousRelayfileToken = process.env.RELAYFILE_TOKEN;
   process.env.RELAYFILE_TOKEN = 'xoxb-sensitive-token';
 
@@ -492,26 +537,173 @@ test('runInvoke: sanitized worker env blocks token exfiltration and leaves paren
         export default defineAgent({
           schedules: [{ name: 'scan', cron: '0 9 * * *' }],
           handler: async (ctx) => {
-            ctx.log('info', process.env.RELAYFILE_TOKEN ?? 'missing');
+            ctx.log('info', JSON.stringify({
+              ambientToken: process.env.RELAYFILE_TOKEN ?? 'missing',
+              secretEnv: process.env.SLACK_BOT_TOKEN ?? 'missing',
+              safeEnv: process.env.SLACK_CHANNEL ?? 'missing',
+              secretInput: ctx.persona.inputs.SLACK_BOT_TOKEN ?? 'missing',
+              safeInput: ctx.persona.inputs.SLACK_CHANNEL ?? 'missing'
+            }));
           }
         });
       `
     }, async (_dir, agentPath) => {
       const io = collectingIO();
       const previousExitCode = process.exitCode;
-      const result = await runInvoke([agentPath, '--schedule', 'scan'], io);
+      const result = await runInvoke([
+        agentPath,
+        '--schedule',
+        'scan',
+        '--input',
+        'SLACK_BOT_TOKEN=xoxb-secret-input',
+        '--input',
+        'SLACK_CHANNEL=C123'
+      ], io);
       const exitCode = process.exitCode;
       process.exitCode = previousExitCode;
 
       assert.ok(result && !Array.isArray(result));
       assert.equal(exitCode, 0);
-      const logs = ((result.extensions as Record<string, unknown>).logs ?? []) as string[];
-      assert.ok(logs.some((line) => line.includes('missing')));
-      assert.ok(logs.every((line) => !line.includes('xoxb-sensitive-token')));
+      const messages = extractLoggedMessagePayloads(result);
+      assert.ok(messages.some((line) => line.includes('"ambientToken":"missing"')));
+      assert.ok(messages.some((line) => line.includes('"secretEnv":"missing"')));
+      assert.ok(messages.some((line) => line.includes('"safeEnv":"C123"')));
+      assert.ok(messages.some((line) => line.includes('"secretInput":"missing"')));
+      assert.ok(messages.some((line) => line.includes('"safeInput":"missing"')));
+      assert.ok(messages.every((line) => !line.includes('xoxb-sensitive-token')));
+      assert.ok(messages.every((line) => !line.includes('xoxb-secret-input')));
       assert.equal(process.env.RELAYFILE_TOKEN, 'xoxb-sensitive-token');
     });
   } finally {
     process.env.RELAYFILE_TOKEN = previousRelayfileToken;
+  }
+});
+
+test('runInvoke: mixed fetch/raw-http probe keeps allowed GET, blocks denied POST, blocks raw http, and exposes no net permission', async () => {
+  let allowedGetHits = 0;
+  let deniedPostHits = 0;
+  let rawHttpHits = 0;
+  const server = createServer((req, res) => {
+    if (req.url === '/allowed') {
+      allowedGetHits += 1;
+      res.setHeader('content-type', 'application/json');
+      res.end('{"ok":true}');
+      return;
+    }
+    if (req.url === '/blocked') {
+      deniedPostHits += 1;
+      res.statusCode = 204;
+      res.end();
+      return;
+    }
+    rawHttpHits += 1;
+    res.statusCode = 204;
+    res.end();
+  });
+  await new Promise<void>((resolve) => server.listen(0, '127.0.0.1', () => resolve()));
+  const address = server.address();
+  assert.ok(address && typeof address === 'object');
+  const baseUrl = `http://127.0.0.1:${address.port}`;
+
+  try {
+    await withAgent({
+      'agent.ts': `
+        import http from 'node:http';
+        import { defineAgent } from '@agentworkforce/runtime';
+
+        async function attempt(fn) {
+          try {
+            await fn();
+            return 'ok';
+          } catch (error) {
+            return error instanceof Error ? error.message : String(error);
+          }
+        }
+
+        export default defineAgent({
+          schedules: [{ name: 'scan', cron: '0 9 * * *' }],
+          handler: async (ctx) => {
+            const permissionNet = process.permission?.has?.('net');
+            const allowed = await attempt(async () => {
+              const response = await fetch('${baseUrl}/allowed');
+              await response.text();
+            });
+            const deniedFetch = await attempt(async () => {
+              await fetch('${baseUrl}/blocked', { method: 'POST', body: 'nope' });
+            });
+            const deniedRaw = await attempt(async () => {
+              await new Promise((resolve, reject) => {
+                const req = http.request('${baseUrl}/raw-http', { method: 'POST' }, () => resolve(undefined));
+                req.on('error', reject);
+                req.end('escape');
+              });
+            });
+            ctx.log('info', JSON.stringify({ permissionNet, allowed, deniedFetch, deniedRaw }));
+          }
+        });
+      `
+    }, async (_dir, agentPath) => {
+      const io = collectingIO();
+      const previousExitCode = process.exitCode;
+      const result = await runInvoke([agentPath, '--schedule', 'scan', '--reads', 'live'], io);
+      const exitCode = process.exitCode;
+      process.exitCode = previousExitCode;
+
+      assert.ok(result && !Array.isArray(result));
+      assert.equal(exitCode, 0);
+      assert.equal(allowedGetHits, 1);
+      assert.equal(deniedPostHits, 0);
+      assert.equal(rawHttpHits, 0);
+      const messages = extractLoggedMessagePayloads(result);
+      assert.ok(messages.some((line) => line.includes('"permissionNet":false')));
+      assert.ok(messages.some((line) => line.includes('"allowed":"ok"')));
+      assert.ok(messages.some((line) => line.includes('invoke policy denied POST')));
+      assert.ok(messages.some((line) => line.includes('raw network node:http.request')));
+    });
+  } finally {
+    server.close();
+  }
+});
+
+test('runInvoke: process.getBuiltinModule http escape is denied with zero raw hits', async () => {
+  let rawHits = 0;
+  const server = createServer((_req, res) => {
+    rawHits += 1;
+    res.statusCode = 204;
+    res.end();
+  });
+  await new Promise<void>((resolve) => server.listen(0, '127.0.0.1', () => resolve()));
+  const address = server.address();
+  assert.ok(address && typeof address === 'object');
+  const url = `http://127.0.0.1:${address.port}/escape`;
+
+  try {
+    await withAgent({
+      'agent.ts': `
+        import { defineAgent } from '@agentworkforce/runtime';
+        export default defineAgent({
+          schedules: [{ name: 'scan', cron: '0 9 * * *' }],
+          handler: async () => {
+            const http = process.getBuiltinModule('node:http');
+            const req = http.request('${url}', { method: 'POST' });
+            req.end('escape');
+          }
+        });
+      `
+    }, async (_dir, agentPath) => {
+      const io = collectingIO();
+      const previousExitCode = process.exitCode;
+      const result = await runInvoke([agentPath, '--schedule', 'scan', '--reads', 'live'], io);
+      const exitCode = process.exitCode;
+      process.exitCode = previousExitCode;
+
+      assert.ok(result && !Array.isArray(result));
+      assert.equal(exitCode, 1);
+      assert.equal(rawHits, 0);
+      assert.match(String(result.error ?? ''), /raw network node:http.request/);
+    });
+  } finally {
+    server.close();
   }
 });
 
@@ -526,13 +718,16 @@ test('runInvoke: failed malicious run cleans up so a later safe run still succee
       export default defineAgent({
         schedules: [{ name: 'scan', cron: '0 9 * * *' }],
         handler: async () => {
-          http.globalAgent.destroy();
+          const req = http.request('http://127.0.0.1:1/escape', { method: 'POST' });
+          req.end('escape');
         }
       });
     `
   }, async (_dir, agentPath) => {
     const first = await runInvoke([agentPath, '--schedule', 'scan'], firstIO);
-    assert.equal(first, undefined);
+    assert.ok(first && !Array.isArray(first));
+    assert.equal(first.status, 'failed');
+    assert.match(String(first.error ?? ''), /raw network node:http.request/);
     assert.equal(process.exitCode, 1);
   });
 

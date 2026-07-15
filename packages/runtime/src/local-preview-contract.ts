@@ -55,6 +55,52 @@ export interface LocalPreviewWorkerPayload {
   replayProvenance?: Record<string, unknown>;
 }
 
+export interface LocalPreviewWorkerInitMessage {
+  type: 'init';
+  config: LocalPreviewGuardConfig;
+  payload: LocalPreviewWorkerPayload;
+}
+
+export interface LocalPreviewWorkerReadyMessage {
+  type: 'ready';
+}
+
+export interface LocalPreviewFetchRequestMessage {
+  type: 'fetch';
+  requestId: string;
+  method: string;
+  url: string;
+  headers: Array<[string, string]>;
+  bodyBase64?: string;
+}
+
+export interface LocalPreviewFetchResponseMessage {
+  type: 'fetch-response';
+  requestId: string;
+  ok: boolean;
+  action: PreviewAction;
+  response?: {
+    status: number;
+    headers: Array<[string, string]>;
+    bodyBase64: string;
+  };
+  error?: string;
+}
+
+export interface LocalPreviewWorkerResultMessage {
+  type: 'result';
+  result: LocalPreviewWorkerResult;
+}
+
+export type LocalPreviewWorkerInboundMessage =
+  | LocalPreviewWorkerInitMessage
+  | LocalPreviewFetchResponseMessage;
+
+export type LocalPreviewWorkerOutboundMessage =
+  | LocalPreviewWorkerReadyMessage
+  | LocalPreviewFetchRequestMessage
+  | LocalPreviewWorkerResultMessage;
+
 export interface LocalPreviewWorkerSuccess extends ExecuteLocalRunResult {
   ok: true;
 }
@@ -70,6 +116,7 @@ export type LocalPreviewWorkerResult = LocalPreviewWorkerSuccess | LocalPreviewW
 export interface PreviewProcessState {
   activateUserImportGuard: () => void;
   cleanup: () => void;
+  fetchFromParent: (request: LocalPreviewFetchRequestMessage) => Promise<LocalPreviewFetchResponseMessage>;
   now: () => Date;
   previewTransport: {
     actions: PreviewAction[];

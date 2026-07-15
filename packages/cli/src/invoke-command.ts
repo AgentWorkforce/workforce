@@ -10,7 +10,11 @@ import {
   type LocalPreviewState,
   type RunRecordV2
 } from '@agentworkforce/runtime';
-import { parseInvokeCase, type ParsedInvokeCase } from './invoke/case-file.js';
+import {
+  parseInvokeCase,
+  type ParsedCaseExpectationProviderAction,
+  type ParsedInvokeCase
+} from './invoke/case-file.js';
 import { prepareInvokeTarget } from './invoke/prepare-target.js';
 
 export const INVOKE_USAGE = `usage: agentworkforce invoke <agent> (--fixture <file> | --schedule <name> | --case <file>) [flags]
@@ -526,34 +530,52 @@ function evaluateCaseAssertions(
     }
   }
   for (const expected of parsedCase.expect.providerActions) {
-    const matched = record.actions.find((action) => {
-      const data = asRecord(action.data);
-      if (action.kind !== 'provider.write') return false;
-      if (action.provider !== expected.provider) return false;
-      if (action.resource !== expected.resource) return false;
-      if (expected.channel) {
-        const channel = typeof data?.parameters === 'object' && data.parameters !== null
-          ? String((data.parameters as Record<string, unknown>).channelId ?? (data.parameters as Record<string, unknown>).channel ?? '')
-          : '';
-        const pathValue = typeof data?.path === 'string' ? data.path : '';
-        if (channel !== expected.channel && !pathValue.includes(`/${encodeURIComponent(expected.channel)}/`)) return false;
-      }
-      if (expected.threaded === true) {
-        const body = asRecord(data?.body);
-        if (!body?.parentRef) return false;
-      }
-      if (expected.textContains?.length) {
-        const body = asRecord(data?.body);
-        const text = typeof body?.text === 'string' ? body.text : typeof data?.text === 'string' ? data.text : '';
-        if (!expected.textContains.every((snippet) => text.includes(snippet))) return false;
-      }
-      return true;
-    });
+    const matched = record.actions.find((action) => matchesExpectedProviderAction(action, expected));
     if (!matched) {
       failures.push(`$.expect.providerActions: missing ${expected.provider}.${expected.resource}`);
     }
   }
   return failures;
+}
+
+export function matchesExpectedProviderAction(
+  action: RunRecordV2['actions'][number],
+  expected: ParsedCaseExpectationProviderAction
+): boolean {
+  const data = asRecord(action.data);
+  if (action.kind !== 'provider.write') return false;
+  if (action.provider !== expected.provider) return false;
+  const threadedSlackReplyMatch =
+    expected.provider === 'slack' &&
+    expected.resource === 'messages' &&
+    expected.threaded === true &&
+    action.resource === 'replies';
+  if (action.resource !== expected.resource && !threadedSlackReplyMatch) return false;
+  if (expected.channel) {
+    const channel = typeof data?.parameters === 'object' && data.parameters !== null
+      ? String((data.parameters as Record<string, unknown>).channelId ?? (data.parameters as Record<string, unknown>).channel ?? '')
+      : '';
+    const pathValue = typeof data?.path === 'string' ? data.path : '';
+    if (channel !== expected.channel && !pathValue.includes(`/${encodeURIComponent(expected.channel)}/`)) return false;
+  }
+  if (expected.threaded === true) {
+    const body = asRecord(data?.body);
+    const threaded =
+      typeof body?.parentRef === 'string' ||
+      typeof body?.thread_ts === 'string' ||
+      action.resource === 'replies' ||
+      (typeof data?.path === 'string' && data.path.includes('/replies/')) ||
+      (typeof data?.parameters === 'object' &&
+        data.parameters !== null &&
+        typeof (data.parameters as Record<string, unknown>).messageTs === 'string');
+    if (!threaded) return false;
+  }
+  if (expected.textContains?.length) {
+    const body = asRecord(data?.body);
+    const text = typeof body?.text === 'string' ? body.text : typeof data?.text === 'string' ? data.text : '';
+    if (!expected.textContains.every((snippet) => text.includes(snippet))) return false;
+  }
+  return true;
 }
 
 function asRecord(value: unknown): Record<string, unknown> | null {
