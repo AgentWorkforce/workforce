@@ -1,4 +1,4 @@
-import { mkdir, readFile, writeFile } from 'node:fs/promises';
+import { mkdir, writeFile } from 'node:fs/promises';
 import { createRequire } from 'node:module';
 import os from 'node:os';
 import path from 'node:path';
@@ -9,7 +9,14 @@ import {
   upsertFleetNodeEnrollment,
   type FleetNodeEnrollmentRecord
 } from '@agent-relay/cloud';
-import { createTerminalIO, preflightPersona, resolveCloudUrl, resolveWorkspaceToken } from '@agentworkforce/deploy';
+import {
+  createTerminalIO,
+  formatHttpErrorBody,
+  preflightPersona,
+  resolveCloudUrl,
+  resolveWorkspaceToken
+} from '@agentworkforce/deploy';
+import { fetchDeployments, type DeploymentAgent } from './list-command.js';
 
 export const LOCAL_SURFACE_USAGE = `usage: agentworkforce local-surface <persona-path> [flags]
 
@@ -19,6 +26,16 @@ manual token wiring required. The persona runs in \`--mode dev\`; local
 credential mirroring is NOT supported (workforce#local-surface-plan), so this
 is safe for cron/timer-only or webhook-shape-only personas that don't need a
 per-connection integration credential resolved locally.
+
+Requires a prior cloud deployment: this command resolves the persona's cloud
+DB id from its deployed \`agents\` row (\`agentworkforce deploy ... --mode
+cloud\`) and fails loudly if none exists — both because Cloud only fans
+local-surface events out to a persona with an ACTIVE deployment that has real
+watch config (declared triggers), and because there is no other way for this
+command to identify the persona to Cloud. It can't detect a
+deployed-with-no-watch-config persona from the workforce side (that data
+isn't exposed to the CLI); if events never arrive despite a successful setup,
+check that the persona's declared triggers match the event you're expecting.
 
 Flags:
   --workspace <id>          Workforce workspace to opt in. Defaults to the
@@ -30,15 +47,6 @@ Flags:
                              are persisted and reused on subsequent runs.
   --enrollment-url <url>    Enrollment redeem endpoint. Defaults to
                              <cloud-url>/api/v1/fleet/register.
-  --channel <name>          The relaycast channel Cloud bound this persona's
-                             local-surface webhook to (from the Cloud
-                             dashboard's "enable local surface" action for
-                             this persona — that action is session-gated,
-                             so this CLI cannot resolve it on its own). Only
-                             needed the first time per persona+workspace on
-                             this machine — cached in
-                             ~/.agentworkforce/local-surface/state.json and
-                             reused on subsequent runs.
   --node-name <name>        Fleet node name. Defaults to a channel-derived name.
   --config-out <file>       Where to write the generated node-config file.
                              Defaults to
@@ -55,7 +63,6 @@ export interface LocalSurfaceOptions {
   workspace?: string;
   enrollmentToken?: string;
   enrollmentUrl?: string;
-  channel?: string;
   nodeName?: string;
   configOut?: string;
   cloudUrl?: string;
@@ -78,8 +85,6 @@ export function parseLocalSurfaceArgs(args: readonly string[]): ParsedLocalSurfa
       opts.enrollmentToken = expectValue('--enrollment-token', args[++i]);
     } else if (a === '--enrollment-url') {
       opts.enrollmentUrl = expectValue('--enrollment-url', args[++i]);
-    } else if (a === '--channel') {
-      opts.channel = expectValue('--channel', args[++i]);
     } else if (a === '--node-name') {
       opts.nodeName = expectValue('--node-name', args[++i]);
     } else if (a === '--config-out') {
@@ -110,10 +115,9 @@ function expectValue(flag: string, value: string | undefined): string {
   return value;
 }
 
-export interface LocalSurfaceBinding {
+export interface LocalSurfaceApiResponse {
   channel: string;
   relayWorkspaceId?: string;
-  boundAt: string;
 }
 
 export interface LocalSurfaceCommandDeps {
@@ -122,8 +126,9 @@ export interface LocalSurfaceCommandDeps {
   enrollFleetNode: typeof enrollFleetNode;
   upsertFleetNodeEnrollment: typeof upsertFleetNodeEnrollment;
   preflightPersona: typeof preflightPersona;
+  fetchDeployments: typeof fetchDeployments;
+  fetch: typeof fetch;
   spawn: typeof spawnChild;
-  readFile: typeof readFile;
   writeFile: typeof writeFile;
   mkdir: typeof mkdir;
   resolveLocalSurfaceEntry(): string;
@@ -142,8 +147,9 @@ const defaultDeps: LocalSurfaceCommandDeps = {
   enrollFleetNode,
   upsertFleetNodeEnrollment,
   preflightPersona,
+  fetchDeployments,
+  fetch,
   spawn: spawnChild,
-  readFile,
   writeFile,
   mkdir,
   resolveLocalSurfaceEntry: defaultResolveLocalSurfaceEntry,
@@ -166,21 +172,25 @@ export function configureLocalSurfaceCommandForTest(overrides: Partial<LocalSurf
  * `agentworkforce local-surface <persona-path>` entry.
  *
  * 1. Resolve workspace + token via the same flow `deploy` already uses.
- * 2. Reuse a persisted fleet-node enrollment, or redeem `--enrollment-token`
+ * 2. Resolve the persona's cloud-side DB UUID from its deployed `agents` row
+ *    (`resolveDeployedPersonaUuid`) — fails loudly if none exists. This is a
+ *    hard requirement, not just a courtesy check: it's the only way to learn
+ *    the UUID `POST /api/v1/fleet/local-surface` needs, and Cloud's
+ *    dispatch-time relevance filter only fans events out to a persona's
+ *    deployed `agents` row (real watch config) in the first place — opting
+ *    into local-surface alone is never sufficient (cloud#2623, dfd446511).
+ * 3. Reuse a persisted fleet-node enrollment, or redeem `--enrollment-token`
  *    (minting one requires a browser session — `POST
  *    /api/v1/fleet/enrollment-tokens` is session-cookie-gated, so a headless
  *    CLI can only redeem an already-minted token, via the same
  *    `enrollFleetNode`/`upsertFleetNodeEnrollment` store `relay cloud enroll`
  *    and `relay node up` already read/write).
- * 3. Resolve the persona's bound relaycast channel: `POST
- *    /api/v1/fleet/local-surface` (the route that opts a persona in and
- *    returns its channel) is ALSO session-cookie-gated — same reason as
- *    step 2 — so this CLI can't call it either. `--channel` (from wherever
- *    Cloud's dashboard surfaces that opt-in action) is cached locally after
- *    the first run instead.
- * 4. Write a node-config file that default-exports
+ * 4. Call `POST /api/v1/fleet/local-surface` to opt the persona in and get
+ *    back its bound relaycast channel (session OR `cli:auth`/deploy-scoped
+ *    bearer token — `resolveWorkspaceToken()`'s token qualifies).
+ * 5. Write a node-config file that default-exports
  *    `defineWorkforcePersonaNode(...)`.
- * 5. Shell out to `relay node up --config <file>`.
+ * 6. Shell out to `relay node up --config <file>`.
  *
  * Sets `process.exitCode` (never calls `process.exit`) so tests can call
  * this directly.
@@ -238,11 +248,18 @@ async function runLocalSurfaceWithOptions(opts: LocalSurfaceOptions): Promise<vo
   }
   deps.log(`local-surface: workspace ${workspace}`);
 
+  const personaUuid = await resolveDeployedPersonaUuid({
+    cloudUrl,
+    workspace,
+    token,
+    personaSlug: preflight.persona.id
+  });
+
   const enrollment = await resolveOrRedeemEnrollment({ workspace, opts, cloudUrl });
   deps.log(`local-surface: fleet node "${enrollment.nodeName}" (${enrollment.relaycastUrl})`);
 
-  const binding = await resolveChannelBinding({ workspace, personaId: preflight.persona.id, opts });
-  deps.log(`local-surface: channel "${binding.channel}"`);
+  const localSurface = await callLocalSurfaceApi({ cloudUrl, token, workspace, personaId: personaUuid });
+  deps.log(`local-surface: channel "${localSurface.channel}"`);
 
   const configPath = opts.configOut
     ? path.resolve(opts.configOut)
@@ -250,7 +267,7 @@ async function runLocalSurfaceWithOptions(opts: LocalSurfaceOptions): Promise<vo
   await writeNodeConfig({
     configPath,
     personaPath: preflight.personaPath,
-    channel: binding.channel,
+    channel: localSurface.channel,
     workspace,
     workspaceToken: token,
     cloudUrl,
@@ -263,7 +280,7 @@ async function runLocalSurfaceWithOptions(opts: LocalSurfaceOptions): Promise<vo
       JSON.stringify(
         {
           workspace,
-          channel: binding.channel,
+          channel: localSurface.channel,
           nodeName: enrollment.nodeName,
           configPath
         },
@@ -275,6 +292,64 @@ async function runLocalSurfaceWithOptions(opts: LocalSurfaceOptions): Promise<vo
   }
 
   await runRelayNodeUp(configPath, opts.nodeName);
+}
+
+/**
+ * Resolve the persona's cloud-side DB UUID from its deployed `agents` row —
+ * this is a hard requirement, not just a UX nicety: `POST
+ * /api/v1/fleet/local-surface`'s `personaId` field is `personas.id` (a
+ * UUID), NOT the workforce persona.json's own `id` (a human slug). Sending
+ * the slug would 404/500 at the API call regardless, so there is no valid
+ * request to make until the persona has been `agentworkforce deploy`ed to
+ * this workspace at least once — which is also exactly the condition Cloud's
+ * dispatch-time relevance filter needs (a deployed `agents` row with real
+ * watch config; cloud#2623, dfd446511) for events to ever arrive. Mirrors
+ * `modes/cloud/index.ts`'s `findExistingAgent`/`parseAgentLike` matching
+ * (there is no server-side `?personaId=<slug>` filter — `agents.personaId`
+ * is a UUID, so the workspace's deployments list is fetched and matched
+ * client-side against `deployedName`/`personaSlug`/`personaId`) and
+ * `parseExistingAgent`'s active-first, newest-first tiebreak.
+ */
+async function resolveDeployedPersonaUuid(input: {
+  cloudUrl: string;
+  workspace: string;
+  token: string;
+  personaSlug: string;
+}): Promise<string> {
+  const deployments = await deps.fetchDeployments({
+    cloudUrl: input.cloudUrl,
+    workspace: input.workspace,
+    token: input.token
+  });
+  const matches = deployments.filter(
+    (agent) =>
+      agent.status !== 'destroyed' &&
+      (agent.deployedName === input.personaSlug ||
+        agent.personaSlug === input.personaSlug ||
+        agent.personaId === input.personaSlug)
+  );
+  if (matches.length === 0) {
+    throw new Error(
+      `persona "${input.personaSlug}" has no active cloud-side deployment in workspace ${input.workspace}. ` +
+        "Cloud only routes local-surface events to a persona's deployed `agents` row (real watch config from " +
+        '`agentworkforce deploy`) — opting into local-surface requires the persona to already be deployed there. ' +
+        `Run: agentworkforce deploy ${input.personaSlug} --mode cloud --workspace ${input.workspace} — then re-run.`
+    );
+  }
+  matches.sort((a, b) => {
+    const aActive = a.status === 'active' ? 1 : 0;
+    const bActive = b.status === 'active' ? 1 : 0;
+    if (aActive !== bActive) return bActive - aActive;
+    return Date.parse(b.createdAt || '') - Date.parse(a.createdAt || '');
+  });
+  const personaUuid = matches[0]!.personaId.trim();
+  if (!personaUuid) {
+    throw new Error(
+      `matched a deployment for persona "${input.personaSlug}" but its personaId field was empty — ` +
+        'cannot resolve the persona to opt into local-surface.'
+    );
+  }
+  return personaUuid;
 }
 
 async function resolveOrRedeemEnrollment(input: {
@@ -307,90 +382,34 @@ async function resolveOrRedeemEnrollment(input: {
   return record;
 }
 
-interface LocalSurfaceState {
-  version: 1;
-  bindings: Record<string, LocalSurfaceBinding>;
-}
-
-function localSurfaceStatePath(): string {
-  return path.join(os.homedir(), '.agentworkforce', 'local-surface', 'state.json');
-}
-
-function bindingKey(workspace: string, personaId: string): string {
-  return `${workspace}#${personaId}`;
-}
-
-function isLocalSurfaceState(value: unknown): value is LocalSurfaceState {
-  return (
-    typeof value === 'object' &&
-    value !== null &&
-    typeof (value as { bindings?: unknown }).bindings === 'object' &&
-    (value as { bindings?: unknown }).bindings !== null
-  );
-}
-
-async function readLocalSurfaceState(): Promise<LocalSurfaceState> {
-  const file = localSurfaceStatePath();
-  let raw: string;
-  try {
-    raw = await deps.readFile(file, 'utf8');
-  } catch (err) {
-    if ((err as NodeJS.ErrnoException)?.code === 'ENOENT') {
-      return { version: 1, bindings: {} };
-    }
-    throw err;
-  }
-  let parsed: unknown;
-  try {
-    parsed = JSON.parse(raw);
-  } catch (err) {
-    throw new Error(
-      `local-surface state file at ${file} is corrupt (${
-        err instanceof Error ? err.message : String(err)
-      }). Repair or remove it, then re-run with --channel.`
-    );
-  }
-  return isLocalSurfaceState(parsed) ? parsed : { version: 1, bindings: {} };
-}
-
-/**
- * `POST /api/v1/fleet/local-surface` — the route that opts a persona into
- * local-surface mode and returns its bound relaycast channel — is
- * session-cookie-gated (org-owner-only), same as `/api/v1/fleet/
- * enrollment-tokens`. A headless CLI's workspace bearer token can never
- * satisfy that gate, so unlike enrollment (which this CLI CAN redeem given a
- * token minted elsewhere) it cannot even attempt the call. `--channel`
- * carries the value obtained from wherever Cloud surfaces that opt-in
- * action; it's cached locally so it's only needed once per persona+workspace.
- */
-async function resolveChannelBinding(input: {
+async function callLocalSurfaceApi(input: {
+  cloudUrl: string;
+  token: string;
   workspace: string;
   personaId: string;
-  opts: LocalSurfaceOptions;
-}): Promise<LocalSurfaceBinding> {
-  const state = await readLocalSurfaceState();
-  const key = bindingKey(input.workspace, input.personaId);
-  const channelFlag = input.opts.channel?.trim();
-  if (channelFlag) {
-    const binding: LocalSurfaceBinding = { channel: channelFlag, boundAt: deps.now().toISOString() };
-    const file = localSurfaceStatePath();
-    await deps.mkdir(path.dirname(file), { recursive: true });
-    await deps.writeFile(
-      file,
-      JSON.stringify({ version: 1, bindings: { ...state.bindings, [key]: binding } }, null, 2),
-      'utf8'
+}): Promise<LocalSurfaceApiResponse> {
+  const url = `${input.cloudUrl.replace(/\/+$/, '')}/api/v1/fleet/local-surface`;
+  const response = await deps.fetch(url, {
+    method: 'POST',
+    headers: {
+      authorization: `Bearer ${input.token}`,
+      'content-type': 'application/json',
+      'user-agent': 'workforce-local-surface'
+    },
+    body: JSON.stringify({ workspaceId: input.workspace, personaId: input.personaId })
+  });
+  if (!response.ok) {
+    const text = await response.text().catch(() => '');
+    throw new Error(
+      `POST /api/v1/fleet/local-surface failed: ${response.status} ${formatHttpErrorBody(text, { url })}`.trim()
     );
-    return binding;
   }
-
-  const existing = state.bindings[key];
-  if (existing) {
-    return existing;
+  const body = (await response.json().catch(() => null)) as Partial<LocalSurfaceApiResponse> | null;
+  const channel = body?.channel?.trim();
+  if (!channel) {
+    throw new Error('POST /api/v1/fleet/local-surface response is missing "channel"');
   }
-  throw new Error(
-    `no local-surface channel known for persona "${input.personaId}" in workspace ${input.workspace}. ` +
-      'Enable local-surface for this persona from the Cloud dashboard, then re-run with --channel <name>.'
-  );
+  return { channel, ...(body?.relayWorkspaceId ? { relayWorkspaceId: body.relayWorkspaceId } : {}) };
 }
 
 function defaultConfigPath(personaId: string): string {

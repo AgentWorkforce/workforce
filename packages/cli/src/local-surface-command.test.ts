@@ -2,11 +2,48 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import type { ChildProcess } from 'node:child_process';
 import { EventEmitter } from 'node:events';
+import type { DeploymentAgent } from './list-command.js';
 import {
   configureLocalSurfaceCommandForTest,
   parseLocalSurfaceArgs,
   runLocalSurface
 } from './local-surface-command.js';
+
+function fakeResponse(input: { ok: boolean; status?: number; json?: unknown; text?: string }): Response {
+  return {
+    ok: input.ok,
+    status: input.status ?? (input.ok ? 200 : 500),
+    json: async () => input.json,
+    text: async () => input.text ?? ''
+  } as unknown as Response;
+}
+
+function fakeEnrollment() {
+  return {
+    nodeId: 'node_1',
+    nodeName: 'my-laptop',
+    nodeToken: 'nt_live_abc',
+    relayWorkspaceId: 'rws_1',
+    relaycastUrl: 'https://relaycast.example.com',
+    websocketUrl: 'wss://relaycast.example.com/v1/node/ws',
+    enrolledAt: '2026-07-01T00:00:00.000Z'
+  };
+}
+
+function deployedAgent(overrides: Partial<DeploymentAgent> = {}): DeploymentAgent {
+  return {
+    agentId: 'agent_1',
+    personaId: 'persona-uuid-1',
+    personaSlug: 'demo-persona',
+    deployedName: 'demo-persona',
+    status: 'active',
+    createdAt: '2026-07-01T00:00:00.000Z',
+    lastUsedAt: null,
+    scheduleIds: [],
+    deployedByUserId: 'user_1',
+    ...overrides
+  };
+}
 
 test('parseLocalSurfaceArgs requires a persona path', () => {
   assert.throws(() => parseLocalSurfaceArgs([]), /missing persona path/);
@@ -19,8 +56,6 @@ test('parseLocalSurfaceArgs parses flags and resolves the persona path', () => {
     'ws_1',
     '--enrollment-token',
     'ocl_node_enr_abc',
-    '--channel',
-    'local-surface-demo',
     '--node-name',
     'my-laptop',
     '--json'
@@ -29,7 +64,6 @@ test('parseLocalSurfaceArgs parses flags and resolves the persona path', () => {
   if ('help' in parsed) return;
   assert.equal(parsed.workspace, 'ws_1');
   assert.equal(parsed.enrollmentToken, 'ocl_node_enr_abc');
-  assert.equal(parsed.channel, 'local-surface-demo');
   assert.equal(parsed.nodeName, 'my-laptop');
   assert.equal(parsed.json, true);
   assert.ok(parsed.personaPath.endsWith('demo.json'));
@@ -40,50 +74,10 @@ test('parseLocalSurfaceArgs -h returns help', () => {
   assert.deepEqual(parsed, { help: true });
 });
 
-function fakeEnrollment(overrides: Partial<Record<string, unknown>> = {}) {
-  return {
-    nodeId: 'node_1',
-    nodeName: 'my-laptop',
-    nodeToken: 'nt_live_abc',
-    relayWorkspaceId: 'rws_1',
-    relaycastUrl: 'https://relaycast.example.com',
-    websocketUrl: 'wss://relaycast.example.com/v1/node/ws',
-    enrolledAt: '2026-07-01T00:00:00.000Z',
-    ...overrides
-  };
-}
-
-/**
- * In-memory fake for the `readFile`/`writeFile` pair `resolveChannelBinding`
- * uses to persist the `--channel` → state.json cache, so tests can assert
- * the cache actually round-trips across two `runLocalSurface` calls without
- * touching the real filesystem.
- */
-function fakeStateFile() {
-  let contents: string | undefined;
-  return {
-    readFile: (async () => {
-      if (contents === undefined) {
-        const err = new Error('ENOENT') as NodeJS.ErrnoException;
-        err.code = 'ENOENT';
-        throw err;
-      }
-      return contents;
-    }) as never,
-    writeFile: (async (_path: string, data: string) => {
-      contents = data;
-    }) as never,
-    get raw() {
-      return contents;
-    }
-  };
-}
-
 function withMockedDeps(overrides: Parameters<typeof configureLocalSurfaceCommandForTest>[0]) {
   const writes: Array<{ path: string; contents: string; options: unknown }> = [];
   const logs: string[] = [];
   const errors: string[] = [];
-  const state = fakeStateFile();
   const restore = configureLocalSurfaceCommandForTest({
     preflightPersona: (async (personaPath: string) => ({
       persona: { id: 'demo-persona', integrations: {} },
@@ -99,21 +93,25 @@ function withMockedDeps(overrides: Parameters<typeof configureLocalSurfaceComman
       token: 'tok_workspace',
       workspace: 'ws_1'
     })) as never,
+    fetchDeployments: (async () => [deployedAgent()]) as never,
     resolveActiveFleetNodeEnrollment: (() => undefined) as never,
-    enrollFleetNode: (async () => fakeEnrollment()) as never,
+    enrollFleetNode: (async () => ({
+      nodeId: 'node_1',
+      nodeName: 'my-laptop',
+      nodeToken: 'nt_live_abc',
+      relayWorkspaceId: 'rws_1',
+      relaycastUrl: 'https://relaycast.example.com',
+      websocketUrl: 'wss://relaycast.example.com/v1/node/ws'
+    })) as never,
     upsertFleetNodeEnrollment: (() => undefined) as never,
+    fetch: (async () => fakeResponse({ ok: true, json: { channel: 'local-surface-demo-persona' } })) as never,
     spawn: ((_cmd: string, _args: string[]) => {
       const child = new EventEmitter() as unknown as ChildProcess;
       queueMicrotask(() => child.emit('exit', 0, null));
       return child;
     }) as never,
-    readFile: state.readFile,
-    writeFile: (async (targetPath: string, contents: string, options: unknown) => {
-      if (String(targetPath).endsWith('state.json')) {
-        await (state.writeFile as (p: string, c: string) => Promise<void>)(String(targetPath), String(contents));
-        return;
-      }
-      writes.push({ path: String(targetPath), contents: String(contents), options });
+    writeFile: (async (path: string, contents: string, options: unknown) => {
+      writes.push({ path: String(path), contents: String(contents), options });
     }) as never,
     mkdir: (async () => undefined) as never,
     resolveLocalSurfaceEntry: () => '/node_modules/@agentworkforce/local-surface/dist/index.js',
@@ -122,31 +120,130 @@ function withMockedDeps(overrides: Parameters<typeof configureLocalSurfaceComman
     error: (message: string) => errors.push(message),
     ...overrides
   });
-  return { writes, logs, errors, state, restore };
+  return { writes, logs, errors, restore };
 }
 
-test('runLocalSurface reuses a persisted enrollment, resolves --channel, writes config, and shells to relay node up', async () => {
+test('runLocalSurface resolves the deployed persona UUID, reuses a persisted enrollment, calls the local-surface API, writes config, and shells to relay node up', async () => {
   let sawEnrollmentReuse = false;
+  let capturedLocalSurfaceBody: unknown;
   const { writes, logs, restore } = withMockedDeps({
     resolveActiveFleetNodeEnrollment: (() => {
       sawEnrollmentReuse = true;
-      return fakeEnrollment();
+      return {
+        nodeId: 'node_1',
+        nodeName: 'my-laptop',
+        nodeToken: 'nt_live_abc',
+        relayWorkspaceId: 'rws_1',
+        relaycastUrl: 'https://relaycast.example.com',
+        websocketUrl: 'wss://relaycast.example.com/v1/node/ws',
+        enrolledAt: '2026-07-01T00:00:00.000Z'
+      };
     }) as never,
     enrollFleetNode: (async () => {
       throw new Error('should not redeem when a persisted enrollment exists');
+    }) as never,
+    fetch: (async (_url: string, init: { body?: string }) => {
+      capturedLocalSurfaceBody = JSON.parse(init.body ?? '{}');
+      return fakeResponse({ ok: true, json: { channel: 'local-surface-demo-persona', relayWorkspaceId: 'rws_1' } });
     }) as never
   });
 
   try {
     process.exitCode = undefined;
-    await runLocalSurface(['/personas/demo.json', '--channel', 'local-surface-demo-persona']);
+    await runLocalSurface(['/personas/demo.json']);
     assert.equal(process.exitCode, 0);
     assert.ok(sawEnrollmentReuse);
+    // The API call must use the resolved cloud DB UUID (personaId from the
+    // deployments list), not the workforce persona.json's own slug id.
+    assert.deepEqual(capturedLocalSurfaceBody, { workspaceId: 'ws_1', personaId: 'persona-uuid-1' });
     assert.equal(writes.length, 1);
     assert.ok(writes[0]!.contents.includes('defineWorkforcePersonaNode'));
     assert.ok(writes[0]!.contents.includes('"local-surface-demo-persona"'));
     assert.ok(writes[0]!.contents.includes('"tok_workspace"'));
     assert.ok(logs.some((line) => line.includes('relay node up --config')));
+  } finally {
+    restore();
+    process.exitCode = undefined;
+  }
+});
+
+test('runLocalSurface fails loud (does not proceed) when the persona has no active cloud deployment', async () => {
+  const { errors, logs, restore } = withMockedDeps({
+    fetchDeployments: (async () => []) as never
+  });
+  try {
+    process.exitCode = undefined;
+    await runLocalSurface(['/personas/demo.json']);
+    assert.equal(process.exitCode, 1);
+    assert.ok(
+      errors.some(
+        (line) => line.includes('no active cloud-side deployment') && line.includes('demo-persona')
+      )
+    );
+    // Must not have gotten far enough to write a node config.
+    assert.ok(!logs.some((line) => line.includes('wrote node config')));
+  } finally {
+    restore();
+    process.exitCode = undefined;
+  }
+});
+
+test('runLocalSurface treats a destroyed-only deployment the same as no deployment', async () => {
+  const { errors, restore } = withMockedDeps({
+    fetchDeployments: (async () => [deployedAgent({ status: 'destroyed' })]) as never
+  });
+  try {
+    process.exitCode = undefined;
+    await runLocalSurface(['/personas/demo.json']);
+    assert.equal(process.exitCode, 1);
+    assert.ok(errors.some((line) => line.includes('no active cloud-side deployment')));
+  } finally {
+    restore();
+    process.exitCode = undefined;
+  }
+});
+
+test('runLocalSurface matches the deployment by personaSlug/deployedName, not the raw slug against personaId', async () => {
+  let capturedBody: unknown;
+  const { restore } = withMockedDeps({
+    fetchDeployments: (async () => [
+      deployedAgent({ personaId: 'uuid-xyz', personaSlug: 'demo-persona', deployedName: 'demo-persona' })
+    ]) as never,
+    resolveActiveFleetNodeEnrollment: (() => fakeEnrollment()) as never,
+    fetch: (async (_url: string, init: { body?: string }) => {
+      capturedBody = JSON.parse(init.body ?? '{}');
+      return fakeResponse({ ok: true, json: { channel: 'ch' } });
+    }) as never
+  });
+  try {
+    process.exitCode = undefined;
+    await runLocalSurface(['/personas/demo.json']);
+    assert.equal(process.exitCode, 0);
+    assert.deepEqual(capturedBody, { workspaceId: 'ws_1', personaId: 'uuid-xyz' });
+  } finally {
+    restore();
+    process.exitCode = undefined;
+  }
+});
+
+test('runLocalSurface prefers the active-status deployment when multiple rows match', async () => {
+  let capturedBody: unknown;
+  const { restore } = withMockedDeps({
+    fetchDeployments: (async () => [
+      deployedAgent({ personaId: 'uuid-old-stopped', status: 'stopped', createdAt: '2026-01-01T00:00:00.000Z' }),
+      deployedAgent({ personaId: 'uuid-active', status: 'active', createdAt: '2026-06-01T00:00:00.000Z' })
+    ]) as never,
+    resolveActiveFleetNodeEnrollment: (() => fakeEnrollment()) as never,
+    fetch: (async (_url: string, init: { body?: string }) => {
+      capturedBody = JSON.parse(init.body ?? '{}');
+      return fakeResponse({ ok: true, json: { channel: 'ch' } });
+    }) as never
+  });
+  try {
+    process.exitCode = undefined;
+    await runLocalSurface(['/personas/demo.json']);
+    assert.equal(process.exitCode, 0);
+    assert.deepEqual(capturedBody, { workspaceId: 'ws_1', personaId: 'uuid-active' });
   } finally {
     restore();
     process.exitCode = undefined;
@@ -163,13 +260,7 @@ test('runLocalSurface redeems --enrollment-token and persists it when no enrollm
 
   try {
     process.exitCode = undefined;
-    await runLocalSurface([
-      '/personas/demo.json',
-      '--enrollment-token',
-      'ocl_node_enr_abc',
-      '--channel',
-      'local-surface-demo-persona'
-    ]);
+    await runLocalSurface(['/personas/demo.json', '--enrollment-token', 'ocl_node_enr_abc']);
     assert.equal(process.exitCode, 0);
     assert.ok(persisted);
     assert.equal((persisted as { nodeToken: string }).nodeToken, 'nt_live_abc');
@@ -184,7 +275,7 @@ test('runLocalSurface fails with a clear message when no enrollment exists and n
   const { errors, restore } = withMockedDeps({});
   try {
     process.exitCode = undefined;
-    await runLocalSurface(['/personas/demo.json', '--channel', 'local-surface-demo-persona']);
+    await runLocalSurface(['/personas/demo.json']);
     assert.equal(process.exitCode, 1);
     assert.ok(errors.some((line) => line.includes('no fleet node enrollment found')));
   } finally {
@@ -193,34 +284,16 @@ test('runLocalSurface fails with a clear message when no enrollment exists and n
   }
 });
 
-test('runLocalSurface fails with a clear message when no channel is cached and --channel was not passed', async () => {
+test('runLocalSurface surfaces a clear error when the local-surface API call fails', async () => {
   const { errors, restore } = withMockedDeps({
-    resolveActiveFleetNodeEnrollment: (() => fakeEnrollment()) as never
+    resolveActiveFleetNodeEnrollment: (() => fakeEnrollment()) as never,
+    fetch: (async () => fakeResponse({ ok: false, status: 403, text: 'Forbidden' })) as never
   });
   try {
     process.exitCode = undefined;
     await runLocalSurface(['/personas/demo.json']);
     assert.equal(process.exitCode, 1);
-    assert.ok(errors.some((line) => line.includes('no local-surface channel known')));
-  } finally {
-    restore();
-    process.exitCode = undefined;
-  }
-});
-
-test('runLocalSurface caches --channel so a later run without the flag reuses it', async () => {
-  const { writes, restore } = withMockedDeps({
-    resolveActiveFleetNodeEnrollment: (() => fakeEnrollment()) as never
-  });
-  try {
-    process.exitCode = undefined;
-    await runLocalSurface(['/personas/demo.json', '--channel', 'local-surface-demo-persona']);
-    assert.equal(process.exitCode, 0);
-
-    await runLocalSurface(['/personas/demo.json']);
-    assert.equal(process.exitCode, 0);
-    assert.equal(writes.length, 2);
-    assert.ok(writes[1]!.contents.includes('"local-surface-demo-persona"'));
+    assert.ok(errors.some((line) => line.includes('/api/v1/fleet/local-surface failed: 403')));
   } finally {
     restore();
     process.exitCode = undefined;
@@ -238,7 +311,7 @@ test('runLocalSurface --json prints setup info instead of shelling to relay node
   });
   try {
     process.exitCode = undefined;
-    await runLocalSurface(['/personas/demo.json', '--channel', 'local-surface-demo-persona', '--json']);
+    await runLocalSurface(['/personas/demo.json', '--json']);
     assert.equal(spawnCalls, 0);
     const jsonLine = logs.find((line) => line.trim().startsWith('{'));
     assert.ok(jsonLine);
@@ -262,12 +335,11 @@ test('runLocalSurface warns when the persona declares integrations (known local-
       schedules: [],
       integrations: ['github'],
       warnings: []
-    })) as never,
-    resolveActiveFleetNodeEnrollment: (() => fakeEnrollment()) as never
+    })) as never
   });
   try {
     process.exitCode = undefined;
-    await runLocalSurface(['/personas/demo.json', '--channel', 'local-surface-demo-persona']);
+    await runLocalSurface(['/personas/demo.json']);
     assert.ok(errors.some((line) => line.includes('does not mirror')));
   } finally {
     restore();
