@@ -1,5 +1,7 @@
 import type {
   AgentSpec,
+  Harness,
+  PersonaDefinitionBase,
   PersonaSchedule,
   TypedTriggerMap,
   WatchRule
@@ -116,6 +118,18 @@ export interface AgentDefinition<
   handler: (ctx: WorkforceCtx, event: WorkforceEventFor<Tr, S>) => Promise<void> | void;
 }
 
+/** Common-case one-file Agent: persona identity/runtime plus listeners and handler. */
+export type SingleFileAgentDefinition<
+  Tr extends TypedTriggerMap = TypedTriggerMap,
+  S extends readonly PersonaSchedule[] = readonly PersonaSchedule[]
+> = PersonaDefinitionBase &
+  Omit<AgentDefinition<Tr, S>, 'handler'> & {
+    harness?: Harness;
+    model?: string;
+    systemPrompt?: string;
+    handler: (ctx: WorkforceCtx, event: WorkforceEventFor<Tr, S>) => Promise<void> | void;
+  };
+
 /**
  * Branded object returned by {@link defineAgent}. The deploy CLI reads
  * `triggers`/`schedules`/`watch` off this default export to build the cloud
@@ -128,6 +142,8 @@ export interface WorkforceAgentExport {
   readonly schedules?: readonly PersonaSchedule[];
   readonly watch?: readonly WatchRule[];
   readonly handler: WorkforceHandlerExport;
+  /** Preset persona fields are retained on single-file exports for the compiler. */
+  readonly [field: string]: unknown;
 }
 
 /**
@@ -155,24 +171,25 @@ export interface WorkforceAgentExport {
 export function defineAgent<
   const Tr extends TypedTriggerMap = Record<string, never>,
   const S extends readonly PersonaSchedule[] = []
->(input: AgentDefinition<Tr, S>): WorkforceAgentExport {
+>(input: SingleFileAgentDefinition<Tr, S>): WorkforceAgentExport & Omit<SingleFileAgentDefinition<Tr, S>, 'handler'>;
+export function defineAgent<
+  const Tr extends TypedTriggerMap = Record<string, never>,
+  const S extends readonly PersonaSchedule[] = []
+>(input: AgentDefinition<Tr, S>): WorkforceAgentExport;
+export function defineAgent(
+  input: AgentDefinition<TypedTriggerMap, readonly PersonaSchedule[]> | SingleFileAgentDefinition<TypedTriggerMap, readonly PersonaSchedule[]>
+): WorkforceAgentExport {
   if (!input || typeof input !== 'object') {
     throw new TypeError('defineAgent() expects an object');
   }
   if (typeof input.handler !== 'function') {
     throw new TypeError('defineAgent({ handler }) — handler must be a function');
   }
-  const agent: {
-    launchedBy?: AgentSpec['launchedBy'];
-    triggers?: TypedTriggerMap;
-    schedules?: readonly PersonaSchedule[];
-    watch?: readonly WatchRule[];
-    handler: WorkforceHandlerExport;
-  } = {
-    ...(input.launchedBy !== undefined ? { launchedBy: input.launchedBy } : {}),
-    ...(input.triggers ? { triggers: input.triggers as TypedTriggerMap } : {}),
-    ...(input.schedules ? { schedules: input.schedules } : {}),
-    ...(input.watch ? { watch: input.watch } : {}),
+  // Preserve the authored object. The single-file compiler removes handler and
+  // listener fields to form the existing persona block; whitelisting here
+  // would recreate the silent field-loss failure class from #1732.
+  const agent = {
+    ...input,
     handler: brandHandler(input.handler as WorkforceHandler)
   };
   Object.defineProperty(agent, '__workforceAgent', {

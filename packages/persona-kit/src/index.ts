@@ -77,6 +77,7 @@ export {
   type GitHubMaterializationRule,
   type GitHubMaterializationState,
   type PersonaDefinition,
+  type PersonaDefinitionBase,
   type ScopeKeysFor,
   type TriggerNameFor,
   type TypedAdapterMaterializationFilter,
