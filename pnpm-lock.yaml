@@ -98,6 +98,15 @@ importers:
         specifier: ^0.25.0
         version: 0.25.12
 
+  packages/events:
+    dependencies:
+      ajv:
+        specifier: 8.20.0
+        version: 8.20.0
+      ajv-formats:
+        specifier: 3.0.1
+        version: 3.0.1(ajv@8.20.0)
+
   packages/local-surface:
     dependencies:
       '@agent-relay/fleet':
@@ -166,6 +175,9 @@ importers:
       '@agent-relay/events':
         specifier: ^6.3.3
         version: 6.3.6
+      '@agentworkforce/events':
+        specifier: workspace:*
+        version: link:../events
       '@agentworkforce/persona-kit':
         specifier: workspace:*
         version: link:../persona-kit

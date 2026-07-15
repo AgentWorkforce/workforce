@@ -55,6 +55,7 @@
   "dependencies": {
     "@agent-assistant/proactive": "^0.4.32",
     "@agent-relay/events": "^6.3.3",
+    "@agentworkforce/events": "workspace:*",
     "@agentworkforce/persona-kit": "workspace:*",
     "@relayfile/adapter-core": "^0.5.1",
     "agent-trajectories": "^0.5.3"
