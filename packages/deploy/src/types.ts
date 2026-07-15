@@ -1,4 +1,5 @@
 import type { AgentSpec, PersonaSpec } from '@agentworkforce/persona-kit';
+import type { CompiledAgentV1 } from '@agentworkforce/runtime';
 
 export type DeployMode = 'dev' | 'sandbox' | 'cloud';
 
@@ -222,4 +223,6 @@ export interface DeployPreflight {
   integrations: string[];
   /** Non-fatal warnings (unknown triggers, etc). */
   warnings: string[];
+  /** Present when the deploy input used the single-file compiler path. */
+  compiledAgent?: CompiledAgentV1;
 }

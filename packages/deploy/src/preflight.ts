@@ -13,6 +13,7 @@ import {
   loadPersonaSourceFile
 } from './persona-source.js';
 import { extractAgentSpec } from './extract-agent.js';
+import { compileAgentSource, isSingleFileAgentSource } from './compile-agent.js';
 import type { DeployPreflight } from './types.js';
 
 /**
@@ -49,7 +50,10 @@ export async function preflightPersona(personaPath: string): Promise<DeployPrefl
     throw new Error(`persona at ${absPath} is missing top-level "intent"`);
   }
 
-  const persona: PersonaSpec = parsePersonaSpec(json, declaredIntent as PersonaIntent);
+  const singleFile = isPersonaSourcePath(absPath) && isSingleFileAgentSource(json);
+  const compiledSingle = singleFile ? await compileAgentSource(absPath) : undefined;
+  const persona: PersonaSpec = compiledSingle?.persona
+    ?? parsePersonaSpec(json, declaredIntent as PersonaIntent);
 
   if (persona.cloud !== true) {
     throw new Error(
@@ -63,7 +67,7 @@ export async function preflightPersona(personaPath: string): Promise<DeployPrefl
     );
   }
 
-  const onEventPath = path.resolve(personaDir, persona.onEvent);
+  const onEventPath = compiledSingle?.handlerEntry ?? path.resolve(personaDir, persona.onEvent);
   const onEventStat = await stat(onEventPath).catch((err: NodeJS.ErrnoException) => {
     if (err.code === 'ENOENT') {
       throw new Error(
@@ -78,7 +82,7 @@ export async function preflightPersona(personaPath: string): Promise<DeployPrefl
 
   // Triggers/schedules/watch live on the agent now — extract them from the
   // `defineAgent(...)` default export of the onEvent file.
-  const { agent } = await extractAgentSpec(onEventPath);
+  const agent = compiledSingle?.agent ?? (await extractAgentSpec(onEventPath)).agent;
 
   const hasTriggers = !!agent.triggers && Object.values(agent.triggers).some((t) => (t?.length ?? 0) > 0);
   const hasSchedules = (agent.schedules?.length ?? 0) > 0;
@@ -134,7 +138,8 @@ export async function preflightPersona(personaPath: string): Promise<DeployPrefl
     onEventPath,
     schedules: (agent.schedules ?? []).map((s) => s.name),
     integrations: persona.integrations ? Object.keys(persona.integrations) : [],
-    warnings
+    warnings,
+    ...(compiledSingle ? { compiledAgent: compiledSingle } : {})
   };
 }
 

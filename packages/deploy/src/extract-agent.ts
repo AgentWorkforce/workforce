@@ -33,13 +33,8 @@ import {
  * named imports without a static "no matching export" error.
  */
 const RUNTIME_STUB = `
-const hasOwn = Object.prototype.hasOwnProperty;
 function defineAgent(input) {
-  const out = {};
-  if (input && hasOwn.call(input, 'launchedBy')) out.launchedBy = input.launchedBy;
-  if (input && input.triggers) out.triggers = input.triggers;
-  if (input && input.schedules) out.schedules = input.schedules;
-  if (input && input.watch) out.watch = input.watch;
+  const out = input && typeof input === 'object' ? { ...input } : {};
   // Preserve the handler so extraction can confirm a real defineAgent shape
   // (it is never invoked during extraction).
   if (input && typeof input.handler === 'function') out.handler = input.handler;

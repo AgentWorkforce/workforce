@@ -10,6 +10,7 @@ export {
   defineAgent,
   isWorkforceAgent,
   type AgentDefinition,
+  type SingleFileAgentDefinition,
   type WorkforceEventFor,
   type WorkforceAgentExport
 } from './define-agent.js';

@@ -18,6 +18,12 @@ import type {
 export { pickMode, type CloudAuthRecoveryResolver, type DeployResolvers };
 export { preflightPersona };
 export {
+  compileAgentSource,
+  isSingleFileAgentSource,
+  projectCompiledAgentForPersistence,
+  type PersistedAgentProjectionV1
+} from './compile-agent.js';
+export {
   collectPickerInputs,
   connectIntegrations,
   envIntegrationResolver,
