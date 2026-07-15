@@ -675,8 +675,8 @@ export interface NonInteractiveSpec {
  * - `claude`: appends `--print --output-format text <task>`.
  * - `codex`:  prefixes `exec`, appends `--skip-git-repo-check`, then a prompt
  *   built from any `initialPrompt` joined with the user task.
- * - `opencode`: prefixes `run`, appends `--model <m> --format default
- *   [--dir <cwd>] [--title <n>] <task>`.
+ * - `opencode`: prefixes `run`, appends `--format default
+ *   [--title <n>] <task>`; model selection stays in the generated agent config.
  * - `grok`: appends `--output-format plain [--cwd <cwd>] --always-approve
  *   --single <prompt>`, where prompt includes the persona system prompt plus
  *   the one-shot task.
@@ -712,8 +712,12 @@ export function buildNonInteractiveSpec(
       };
     }
     case 'opencode': {
-      const args = ['run', ...interactive.args, '--model', input.model, '--format', 'default'];
-      if (input.workingDirectory) args.push('--dir', input.workingDirectory);
+      // The generated opencode.json already selects the persona model through
+      // `--agent`. Avoid overriding it with `--model`: that CLI flag requires
+      // provider/model syntax, while agent configs also accept persona model
+      // values without a provider prefix. The child process is spawned with
+      // cwd set separately, and `opencode run` does not support `--dir`.
+      const args = ['run', ...interactive.args, '--format', 'default'];
       if (input.name) args.push('--title', input.name);
       args.push(input.task);
       return {
