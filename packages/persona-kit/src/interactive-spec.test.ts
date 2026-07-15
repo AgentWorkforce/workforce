@@ -324,7 +324,7 @@ test('opencode configFiles carries a well-formed opencode.json with the agent de
   });
 });
 
-test('opencode non-interactive spec relies on cwd and agent config for directory and model', () => {
+test('opencode non-interactive spec omits cwd/model flags and normalizes the agent model', () => {
   const result = buildNonInteractiveSpec({
     harness: 'opencode',
     personaId: 'daily-ship',
@@ -351,7 +351,7 @@ test('opencode non-interactive spec relies on cwd and agent config for directory
 
   const [file] = result.configFiles;
   const parsed = JSON.parse(file.contents);
-  assert.equal(parsed.agent['daily-ship'].model, 'deepseek-v4-flash-free');
+  assert.equal(parsed.agent['daily-ship'].model, 'opencode/deepseek-v4-flash-free');
 });
 
 test('grok launches the Grok Build CLI and writes systemPrompt to AGENTS.md', () => {

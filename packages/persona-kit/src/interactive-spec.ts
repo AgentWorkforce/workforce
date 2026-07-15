@@ -147,6 +147,10 @@ function stripProviderPrefix(model: string): string {
   return idx >= 0 ? model.slice(idx + 1) : model;
 }
 
+function normalizeOpencodeModel(model: string): string {
+  return model.includes('/') ? model : `opencode/${model}`;
+}
+
 function hasAnyPermission(p: PersonaPermissions | undefined): boolean {
   if (!p) return false;
   return Boolean(p.allow?.length || p.deny?.length || p.mode);
@@ -558,7 +562,7 @@ export function buildInteractiveSpec(input: BuildInteractiveSpecInput): Interact
       const agentConfig = {
         agent: {
           [personaId]: {
-            model,
+            model: normalizeOpencodeModel(model),
             ...(systemPrompt ? { prompt: systemPrompt } : {}),
             mode: 'primary',
             permission: { '*': 'allow' }
@@ -714,9 +718,9 @@ export function buildNonInteractiveSpec(
     case 'opencode': {
       // The generated opencode.json already selects the persona model through
       // `--agent`. Avoid overriding it with `--model`: that CLI flag requires
-      // provider/model syntax, while agent configs also accept persona model
-      // values without a provider prefix. The child process is spawned with
-      // cwd set separately, and `opencode run` does not support `--dir`.
+      // provider/model syntax, and bare persona model values are normalized in
+      // the generated agent config. The child process is spawned with cwd set
+      // separately, and `opencode run` does not support `--dir`.
       const args = ['run', ...interactive.args, '--format', 'default'];
       if (input.name) args.push('--title', input.name);
       args.push(input.task);
