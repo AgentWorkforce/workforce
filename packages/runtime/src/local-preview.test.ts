@@ -1,11 +1,16 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
+import { EventEmitter } from 'node:events';
 import { createServer } from 'node:http';
 import { mkdtemp, readdir, rm, writeFile } from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
 import { decodeEventFrame } from '@agentworkforce/events';
-import { executeLocalRun } from './local-preview.js';
+import {
+  __setPreviewWorkerSpawnForTest,
+  executeLocalRun,
+  stopChildProcess
+} from './local-preview.js';
 import type { RunRequestV1 } from './run-contracts.js';
 
 test('executeLocalRun: redirected live read is denied before blocked target fetch', async () => {
@@ -190,6 +195,160 @@ test('executeLocalRun: overall timeout tears the worker down and leaves no orpha
   } finally {
     process.env.WF_LOCAL_PREVIEW_OVERALL_TIMEOUT_MS = previousOverall;
     process.env.WF_LOCAL_PREVIEW_FORCE_KILL_TIMEOUT_MS = previousForceKill;
+    await rm(tempDir, { recursive: true, force: true });
+  }
+});
+
+test('stopChildProcess: settles after SIGKILL timeout even when close never arrives', async () => {
+  const previousForceKill = process.env.WF_LOCAL_PREVIEW_FORCE_KILL_TIMEOUT_MS;
+  const previousKillSettle = process.env.WF_LOCAL_PREVIEW_KILL_SETTLE_TIMEOUT_MS;
+  process.env.WF_LOCAL_PREVIEW_FORCE_KILL_TIMEOUT_MS = '20';
+  process.env.WF_LOCAL_PREVIEW_KILL_SETTLE_TIMEOUT_MS = '20';
+
+  class FakeChild extends EventEmitter {
+    connected = true;
+    exitCode: number | null = null;
+    signalCode: NodeJS.Signals | null = null;
+    kills: string[] = [];
+    kill(signal: NodeJS.Signals): boolean {
+      this.kills.push(signal);
+      return true;
+    }
+  }
+
+  const child = new FakeChild();
+  try {
+    await assert.doesNotReject(() => stopChildProcess(child as unknown as import('node:child_process').ChildProcess));
+    assert.deepEqual(child.kills, ['SIGTERM', 'SIGKILL']);
+    assert.equal(child.listenerCount('close'), 0);
+  } finally {
+    process.env.WF_LOCAL_PREVIEW_FORCE_KILL_TIMEOUT_MS = previousForceKill;
+    process.env.WF_LOCAL_PREVIEW_KILL_SETTLE_TIMEOUT_MS = previousKillSettle;
+  }
+});
+
+test('executeLocalRun: no-close child stop path still rejects promptly and cleans staged dirs', async () => {
+  const previousOverall = process.env.WF_LOCAL_PREVIEW_OVERALL_TIMEOUT_MS;
+  const previousForceKill = process.env.WF_LOCAL_PREVIEW_FORCE_KILL_TIMEOUT_MS;
+  const previousKillSettle = process.env.WF_LOCAL_PREVIEW_KILL_SETTLE_TIMEOUT_MS;
+  process.env.WF_LOCAL_PREVIEW_OVERALL_TIMEOUT_MS = '40';
+  process.env.WF_LOCAL_PREVIEW_FORCE_KILL_TIMEOUT_MS = '10';
+  process.env.WF_LOCAL_PREVIEW_KILL_SETTLE_TIMEOUT_MS = '10';
+
+  class FakeChild extends EventEmitter {
+    connected = true;
+    exitCode: number | null = null;
+    signalCode: NodeJS.Signals | null = null;
+    stderr = new EventEmitter() as EventEmitter & { setEncoding: (encoding: string) => void };
+    kills: string[] = [];
+
+    constructor() {
+      super();
+      this.stderr.setEncoding = () => undefined;
+      setTimeout(() => {
+        this.emit('message', { type: 'ready' });
+      }, 0);
+    }
+
+    send(_message: unknown, callback?: (error: Error | null) => void): boolean {
+      callback?.(null);
+      return true;
+    }
+
+    kill(signal: NodeJS.Signals): boolean {
+      this.kills.push(signal);
+      return true;
+    }
+  }
+
+  let fakeChild: FakeChild | undefined;
+  __setPreviewWorkerSpawnForTest((() => {
+    fakeChild = new FakeChild();
+    return fakeChild;
+  }) as unknown as typeof import('node:child_process').spawn);
+
+  const tempDir = await mkdtemp(path.join(os.tmpdir(), 'wf-preview-no-close-'));
+  const bundlePath = path.join(tempDir, 'bundle.mjs');
+  await writeFile(
+    bundlePath,
+    'export default async function handler() { return undefined; }\n',
+    'utf8'
+  );
+
+  const request = {
+    schemaVersion: 1,
+    agent: {
+      schemaVersion: 1,
+      sourceKind: 'single-file',
+      sourcePath: path.join(tempDir, 'agent.ts'),
+      sourceDigest: 'test-no-close-digest',
+      handlerEntry: path.join(tempDir, 'agent.ts'),
+      compileWarnings: [],
+      persona: {
+        id: 'no-close-test',
+        intent: 'local-preview',
+        tags: [],
+        description: 'no close test persona',
+        skills: [],
+        harness: 'claude',
+        model: 'local-preview-stub',
+        systemPrompt: 'test',
+        harnessSettings: { reasoning: 'medium', timeoutSeconds: 300 },
+        cloud: true,
+        onEvent: './agent.ts'
+      },
+      agent: {
+        triggers: [],
+        schedules: [{ name: 'scan', cron: '0 9 * * *' }],
+        watch: []
+      }
+    },
+    event: decodeEventFrame({
+      id: 'evt_no_close',
+      workspace: 'ws-local',
+      type: 'cron.tick',
+      occurredAt: '2026-07-15T09:00:00.000Z',
+      name: 'scan',
+      cron: '0 9 * * *'
+    }).frame,
+    mode: 'preview',
+    inputs: {},
+    policy: {
+      reads: 'fixtures',
+      writes: 'preview',
+      model: 'stub',
+      shell: 'simulate',
+      compose: 'preview',
+      allowedHttp: []
+    },
+    state: {
+      schemaVersion: 1,
+      kind: 'empty',
+      fidelity: 'simulated'
+    }
+  } as unknown as RunRequestV1;
+
+  const stagingRoot = path.join(process.cwd(), '.workforce');
+  const before = await readdir(stagingRoot).catch((): string[] => []);
+
+  try {
+    await assert.rejects(
+      () => executeLocalRun({ request, bundlePath }),
+      /invoke worker timed out after 40ms/
+    );
+    const after = await readdir(stagingRoot).catch((): string[] => []);
+    const leaked = after.filter((entry) =>
+      entry.startsWith('local-preview-worker-') && !before.includes(entry)
+    );
+    assert.deepEqual(leaked, []);
+    assert.ok(fakeChild);
+    assert.deepEqual(fakeChild.kills, ['SIGTERM', 'SIGKILL']);
+    assert.equal(fakeChild.listenerCount('close'), 0);
+  } finally {
+    __setPreviewWorkerSpawnForTest(undefined);
+    process.env.WF_LOCAL_PREVIEW_OVERALL_TIMEOUT_MS = previousOverall;
+    process.env.WF_LOCAL_PREVIEW_FORCE_KILL_TIMEOUT_MS = previousForceKill;
+    process.env.WF_LOCAL_PREVIEW_KILL_SETTLE_TIMEOUT_MS = previousKillSettle;
     await rm(tempDir, { recursive: true, force: true });
   }
 });

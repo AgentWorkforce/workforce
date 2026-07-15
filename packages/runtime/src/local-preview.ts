@@ -1,4 +1,4 @@
-import { spawn } from 'node:child_process';
+import { spawn, type ChildProcess } from 'node:child_process';
 import { copyFile, mkdir, mkdtemp, realpath, rm, symlink } from 'node:fs/promises';
 import { createRequire } from 'node:module';
 import path from 'node:path';
@@ -74,6 +74,13 @@ const WORKER_ENTRY_PATH = fileURLToPath(new URL('./local-preview-child.js', impo
 const WORKER_RUNTIME_ROOT = fileURLToPath(new URL('.', import.meta.url));
 const WORKSPACE_ROOT = path.resolve(WORKER_RUNTIME_ROOT, '..', '..', '..');
 const require = createRequire(import.meta.url);
+let spawnPreviewWorkerProcess: typeof spawn = spawn;
+
+export function __setPreviewWorkerSpawnForTest(
+  value: typeof spawn | undefined
+): void {
+  spawnPreviewWorkerProcess = value ?? spawn;
+}
 
 export async function executeLocalRun(
   options: ExecuteLocalRunOptions
@@ -129,7 +136,7 @@ async function runPreviewWorker(args: {
   init: LocalPreviewWorkerInitMessage;
 }): Promise<LocalPreviewWorkerResult> {
   const permissionArgs = await buildWorkerPermissionArgs(args.bundlePath, args.extraReadRoots);
-  const child = spawn(
+  const child = spawnPreviewWorkerProcess(
     process.execPath,
     [...permissionArgs, WORKER_ENTRY_PATH],
     {
@@ -625,18 +632,30 @@ function waitForChildClose(
   });
 }
 
-async function stopChildProcess(child: import('node:child_process').ChildProcess): Promise<void> {
+export async function stopChildProcess(child: ChildProcess): Promise<void> {
   if (child.exitCode !== null || child.signalCode !== null) return;
   await new Promise<void>((resolve) => {
-    const forceKill = setTimeout(() => {
+    let forceKill: ReturnType<typeof setTimeout> | undefined;
+    let hardStop: ReturnType<typeof setTimeout> | undefined;
+    const onClose = () => {
+      cleanup();
+      resolve();
+    };
+    const cleanup = () => {
+      if (forceKill) clearTimeout(forceKill);
+      if (hardStop) clearTimeout(hardStop);
+      child.off('close', onClose);
+    };
+    forceKill = setTimeout(() => {
       if (child.exitCode === null && child.signalCode === null) {
         child.kill('SIGKILL');
       }
+      hardStop = setTimeout(() => {
+        cleanup();
+        resolve();
+      }, localPreviewKillSettleTimeoutMs());
     }, localPreviewForceKillTimeoutMs());
-    child.once('close', () => {
-      clearTimeout(forceKill);
-      resolve();
-    });
+    child.once('close', onClose);
     child.kill('SIGTERM');
   });
 }
@@ -668,4 +687,8 @@ function localPreviewFetchTimeoutMs(): number {
 
 function localPreviewForceKillTimeoutMs(): number {
   return readTimeoutEnv('WF_LOCAL_PREVIEW_FORCE_KILL_TIMEOUT_MS', 1_000);
+}
+
+function localPreviewKillSettleTimeoutMs(): number {
+  return readTimeoutEnv('WF_LOCAL_PREVIEW_KILL_SETTLE_TIMEOUT_MS', 1_000);
 }
