@@ -136,8 +136,8 @@ importers:
   packages/persona-kit:
     dependencies:
       '@relayfile/adapter-core':
-        specifier: ^0.3.60
-        version: 0.3.60(@relayfile/sdk@0.7.40)
+        specifier: ^0.5.1
+        version: 0.5.1(@relayfile/sdk@0.7.40)
       '@relayfile/local-mount':
         specifier: ^0.10.23
         version: 0.10.23
@@ -170,8 +170,8 @@ importers:
         specifier: workspace:*
         version: link:../persona-kit
       '@relayfile/adapter-core':
-        specifier: ^0.3.60
-        version: 0.3.60(@relayfile/sdk@0.7.40)
+        specifier: ^0.5.1
+        version: 0.5.1(@relayfile/sdk@0.7.40)
       agent-trajectories:
         specifier: ^0.5.3
         version: 0.5.3
@@ -1030,15 +1030,15 @@ packages:
   '@relaycast/types@6.0.5':
     resolution: {integrity: sha512-wTxtHHCZF13wa28BWcTuG4sf2fcrFGgI+MSywvdR6MjWGVJdriJMZekT9iVy9We1CpXjzKUmHIhhxjH/PQoPHw==}
 
-  '@relayfile/adapter-core@0.3.60':
-    resolution: {integrity: sha512-Q7qSvgTX+0r+OUSfEwVE8VoVQeweR3yVm4K9Z9mQkEXian0u0BDHEmWle3PQkDyTYovVaMglg9e5Y0w7hF3Dnw==}
+  '@relayfile/adapter-core@0.4.3':
+    resolution: {integrity: sha512-VoGco3xYab+Ij9v2wSi6qsYg15gDfYWlZsdbiKrqM/YN+t0IhPS8Shy5dRA18kYCBKEr7bH7QdFfa8PCXj6LFg==}
     engines: {node: '>=18'}
     hasBin: true
     peerDependencies:
       '@relayfile/sdk': '>=0.6.0 <1'
 
-  '@relayfile/adapter-core@0.4.3':
-    resolution: {integrity: sha512-VoGco3xYab+Ij9v2wSi6qsYg15gDfYWlZsdbiKrqM/YN+t0IhPS8Shy5dRA18kYCBKEr7bH7QdFfa8PCXj6LFg==}
+  '@relayfile/adapter-core@0.5.1':
+    resolution: {integrity: sha512-iEhkB5qVFWgAxoJ2D8x4Pfzg6LUvI0BN0sXjkbIDBx9RDIkLs9zqsg5SCaSwNw8pxQS0Gyx//kC8xPbCzhpiLQ==}
     engines: {node: '>=18'}
     hasBin: true
     peerDependencies:
@@ -3448,7 +3448,7 @@ snapshots:
     dependencies:
       zod: 4.4.3
 
-  '@relayfile/adapter-core@0.3.60(@relayfile/sdk@0.7.40)':
+  '@relayfile/adapter-core@0.4.3(@relayfile/sdk@0.7.40)':
     dependencies:
       '@relayfile/sdk': 0.7.40
       '@scalar/postman-to-openapi': 0.6.3
@@ -3456,7 +3456,7 @@ snapshots:
       minimatch: 10.2.5
       yaml: 2.9.0
 
-  '@relayfile/adapter-core@0.4.3(@relayfile/sdk@0.7.40)':
+  '@relayfile/adapter-core@0.5.1(@relayfile/sdk@0.7.40)':
     dependencies:
       '@relayfile/sdk': 0.7.40
       '@scalar/postman-to-openapi': 0.6.3

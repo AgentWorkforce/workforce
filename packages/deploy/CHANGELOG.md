@@ -7,6 +7,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [4.1.18] - 2026-07-15
+
+### Added
+
+- **Add reusable cron and Slack delivery helpers** (#261)
+
+### Fixed
+
+- Pin exact runtime version in generated sandbox package.json (#262)
+
 ## [4.1.13] - 2026-06-25
 
 ### Added
