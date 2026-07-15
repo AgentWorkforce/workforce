@@ -1,7 +1,7 @@
 # Workforce installed-layout local-preview repair
 
 - Date: 2026-07-16
-- Commit: `79fa07a22ad9daa79f48b8f43cc1039aebf1f55f`
+- Commit: `a27067422bdc6b4fa8cca9e27bb74fa9ce72d5d6`
 
 ## Scope
 
