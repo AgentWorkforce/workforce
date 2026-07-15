@@ -505,6 +505,10 @@
         "pullRequest": {
           "$ref": "#/definitions/CapabilityValue",
           "description": "Legacy alias of `review`."
+        },
+        "httpRead": {
+          "$ref": "#/definitions/PersonaHttpReadCapability",
+          "description": "Declarative local live-read allowlist for GET/HEAD URLs."
         }
       },
       "additionalProperties": {
@@ -534,6 +538,40 @@
           },
           "additionalProperties": {}
         }
+      ]
+    },
+    "PersonaHttpReadCapability": {
+      "type": "object",
+      "properties": {
+        "enabled": {
+          "type": "boolean"
+        },
+        "allow": {
+          "type": "array",
+          "items": {
+            "$ref": "#/definitions/PersonaHttpReadRule"
+          }
+        }
+      },
+      "additionalProperties": {}
+    },
+    "PersonaHttpReadRule": {
+      "type": "object",
+      "properties": {
+        "method": {
+          "type": "string",
+          "enum": [
+            "GET",
+            "HEAD"
+          ]
+        },
+        "urlGlob": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "method",
+        "urlGlob"
       ]
     },
     "PersonaMemory": {

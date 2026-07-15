@@ -85,6 +85,8 @@ export { envelopeToAgentEvent } from './to-agent-event.js';
 // the existing simulation record while hosted/local producers migrate.
 export {
   LOCAL_EFFECT_POLICY_DEFAULTS,
+  mergeAllowedHttpRules,
+  resolvePersonaHttpReadRules,
   resolveLocalEffectPolicy,
   type CompiledAgentV1,
   type Diagnostic,

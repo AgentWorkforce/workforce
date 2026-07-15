@@ -26,6 +26,8 @@ export type {
   McpServerSpec,
   PermissionMode,
   PersonaContext,
+  PersonaHttpReadCapability,
+  PersonaHttpReadRule,
   PersonaInputPicker,
   PersonaInputSpec,
   PersonaInstallContext,

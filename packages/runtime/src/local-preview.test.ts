@@ -13,6 +13,184 @@ import {
 } from './local-preview.js';
 import type { RunRequestV1 } from './run-contracts.js';
 
+function previewRequest(args: {
+  tempDir: string;
+  id: string;
+  allowedHttp: Array<{ method: string; urlGlob: string }>;
+}): RunRequestV1 {
+  return {
+    schemaVersion: 1,
+    agent: {
+      schemaVersion: 1,
+      sourceKind: 'single-file',
+      sourcePath: path.join(args.tempDir, 'agent.ts'),
+      sourceDigest: 'test-digest',
+      handlerEntry: path.join(args.tempDir, 'agent.ts'),
+      compileWarnings: [],
+      persona: {
+        id: args.id,
+        intent: 'local-preview',
+        tags: [],
+        description: `${args.id} persona`,
+        skills: [],
+        harness: 'claude',
+        model: 'local-preview-stub',
+        systemPrompt: 'test',
+        harnessSettings: { reasoning: 'medium', timeoutSeconds: 300 },
+        cloud: true,
+        onEvent: './agent.ts'
+      },
+      agent: {
+        triggers: {},
+        schedules: [{ name: 'scan', cron: '0 9 * * *' }],
+        watch: []
+      }
+    },
+    event: decodeEventFrame({
+      id: `evt_${args.id}`,
+      workspace: 'ws-local',
+      type: 'cron.tick',
+      occurredAt: '2026-07-15T09:00:00.000Z',
+      name: 'scan',
+      cron: '0 9 * * *'
+    }).frame,
+    mode: 'preview',
+    inputs: {},
+    policy: {
+      reads: 'live',
+      writes: 'preview',
+      model: 'stub',
+      shell: 'simulate',
+      compose: 'preview',
+      allowedHttp: args.allowedHttp
+    },
+    state: {
+      schemaVersion: 1,
+      kind: 'empty',
+      fidelity: 'simulated'
+    }
+  } as unknown as RunRequestV1;
+}
+
+test('executeLocalRun: empty live allowlist denies GET before network', async () => {
+  let hits = 0;
+  const server = createServer((_req, res) => {
+    hits += 1;
+    res.statusCode = 200;
+    res.end('ok');
+  });
+  await new Promise<void>((resolve) => server.listen(0, '127.0.0.1', () => resolve()));
+  const address = server.address();
+  assert.ok(address && typeof address === 'object');
+  const url = `http://127.0.0.1:${address.port}/denied`;
+
+  const tempDir = await mkdtemp(path.join(os.tmpdir(), 'wf-preview-empty-allow-'));
+  const bundlePath = path.join(tempDir, 'bundle.mjs');
+  await writeFile(
+    bundlePath,
+    `export default async function handler() { await fetch('${url}'); }\n`,
+    'utf8'
+  );
+
+  try {
+    const result = await executeLocalRun({
+      request: previewRequest({ tempDir, id: 'empty-allowlist-test', allowedHttp: [] }),
+      bundlePath
+    });
+    assert.equal(result.exitCode, 1);
+    assert.equal(result.record.status, 'failed');
+    assert.match(String(result.record.error ?? ''), /undeclared live read/i);
+    assert.equal(hits, 0);
+  } finally {
+    server.close();
+    await rm(tempDir, { recursive: true, force: true });
+  }
+});
+
+test('executeLocalRun: method mismatch denies before network even when another method is declared', async () => {
+  let hits = 0;
+  const server = createServer((_req, res) => {
+    hits += 1;
+    res.statusCode = 200;
+    res.end('ok');
+  });
+  await new Promise<void>((resolve) => server.listen(0, '127.0.0.1', () => resolve()));
+  const address = server.address();
+  assert.ok(address && typeof address === 'object');
+  const url = `http://127.0.0.1:${address.port}/method-mismatch`;
+
+  const tempDir = await mkdtemp(path.join(os.tmpdir(), 'wf-preview-method-mismatch-'));
+  const bundlePath = path.join(tempDir, 'bundle.mjs');
+  await writeFile(
+    bundlePath,
+    `export default async function handler() { await fetch('${url}'); }\n`,
+    'utf8'
+  );
+
+  try {
+    const result = await executeLocalRun({
+      request: previewRequest({
+        tempDir,
+        id: 'method-mismatch-test',
+        allowedHttp: [{ method: 'HEAD', urlGlob: url }]
+      }),
+      bundlePath
+    });
+    assert.equal(result.exitCode, 1);
+    assert.equal(result.record.status, 'failed');
+    assert.match(String(result.record.error ?? ''), /undeclared live read/i);
+    assert.equal(hits, 0);
+  } finally {
+    server.close();
+    await rm(tempDir, { recursive: true, force: true });
+  }
+});
+
+test('executeLocalRun: exact and glob live allow rules both permit declared GETs', async () => {
+  const hits: string[] = [];
+  const server = createServer((req, res) => {
+    hits.push(req.url ?? '/');
+    res.statusCode = 200;
+    res.setHeader('content-type', 'application/json');
+    res.end(JSON.stringify({ ok: true, path: req.url ?? '/' }));
+  });
+  await new Promise<void>((resolve) => server.listen(0, '127.0.0.1', () => resolve()));
+  const address = server.address();
+  assert.ok(address && typeof address === 'object');
+  const baseUrl = `http://127.0.0.1:${address.port}`;
+
+  const tempDir = await mkdtemp(path.join(os.tmpdir(), 'wf-preview-allow-'));
+  const bundlePath = path.join(tempDir, 'bundle.mjs');
+  await writeFile(
+    bundlePath,
+    `export default async function handler() {
+      await fetch('${baseUrl}/exact');
+      await fetch('${baseUrl}/glob/front-page');
+    }\n`,
+    'utf8'
+  );
+
+  try {
+    const result = await executeLocalRun({
+      request: previewRequest({
+        tempDir,
+        id: 'allow-rules-test',
+        allowedHttp: [
+          { method: 'GET', urlGlob: `${baseUrl}/exact` },
+          { method: 'GET', urlGlob: `${baseUrl}/glob/*` }
+        ]
+      }),
+      bundlePath
+    });
+    assert.equal(result.exitCode, 0);
+    assert.equal(result.record.status, 'succeeded');
+    assert.deepEqual(hits, ['/exact', '/glob/front-page']);
+  } finally {
+    server.close();
+    await rm(tempDir, { recursive: true, force: true });
+  }
+});
+
 test('executeLocalRun: redirected live read is denied before blocked target fetch', async () => {
   let allowedHits = 0;
   let blockedHits = 0;

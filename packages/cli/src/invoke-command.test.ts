@@ -213,6 +213,189 @@ expect:
   });
 });
 
+test('runInvoke: schedule invocation carries persona httpRead capability rules', async () => {
+  const hits: string[] = [];
+  const server = createServer((req, res) => {
+    hits.push(req.url ?? '/');
+    res.statusCode = 200;
+    res.setHeader('content-type', 'application/json');
+    res.end(JSON.stringify({ ok: true }));
+  });
+  await new Promise<void>((resolve) => server.listen(0, '127.0.0.1', () => resolve()));
+  const address = server.address();
+  assert.ok(address && typeof address === 'object');
+  const url = `http://127.0.0.1:${address.port}/schedule-allowed`;
+
+  try {
+    await withAgent({
+      'agent.ts': `
+        import { defineAgent } from '@agentworkforce/runtime';
+        export default defineAgent({
+          id: 'schedule-http-read',
+          intent: 'documentation',
+          description: 'schedule http read test',
+          skills: [],
+          harnessSettings: { reasoning: 'medium', timeoutSeconds: 300 },
+          schedules: [{ name: 'scan', cron: '0 9 * * *' }],
+          capabilities: {
+            httpRead: {
+              allow: [{ method: 'GET', urlGlob: '${url}' }]
+            }
+          },
+          handler: async (ctx) => {
+            const response = await fetch('${url}');
+            ctx.log('info', await response.text());
+          }
+        });
+      `
+    }, async (_dir, agentPath) => {
+      const io = collectingIO();
+      const previousExitCode = process.exitCode;
+      const result = await runInvoke([agentPath, '--schedule', 'scan', '--reads', 'live'], io);
+      const exitCode = process.exitCode;
+      process.exitCode = previousExitCode;
+
+      assert.ok(result && !Array.isArray(result));
+      assert.equal(exitCode, 0);
+      assert.equal(result.status, 'succeeded');
+      assert.deepEqual(hits, ['/schedule-allowed']);
+    });
+  } finally {
+    server.close();
+  }
+});
+
+test('runInvoke: fixture invocation carries persona httpRead capability rules', async () => {
+  const hits: string[] = [];
+  const server = createServer((req, res) => {
+    hits.push(req.url ?? '/');
+    res.statusCode = 200;
+    res.setHeader('content-type', 'application/json');
+    res.end(JSON.stringify({ ok: true }));
+  });
+  await new Promise<void>((resolve) => server.listen(0, '127.0.0.1', () => resolve()));
+  const address = server.address();
+  assert.ok(address && typeof address === 'object');
+  const url = `http://127.0.0.1:${address.port}/fixture-allowed`;
+
+  try {
+    await withAgent({
+      'agent.ts': `
+        import { defineAgent } from '@agentworkforce/runtime';
+        export default defineAgent({
+          id: 'fixture-http-read',
+          intent: 'documentation',
+          description: 'fixture http read test',
+          skills: [],
+          harnessSettings: { reasoning: 'medium', timeoutSeconds: 300 },
+          capabilities: {
+            httpRead: {
+              allow: [{ method: 'GET', urlGlob: '${url}' }]
+            }
+          },
+          handler: async (ctx) => {
+            const response = await fetch('${url}');
+            ctx.log('info', await response.text());
+          }
+        });
+      `,
+      'event.json': JSON.stringify({
+        id: 'evt_fixture_http_read',
+        workspace: 'ws-local',
+        type: 'cron.tick',
+        occurredAt: '2026-07-15T09:00:00.000Z',
+        name: 'scan',
+        cron: '0 9 * * *'
+      })
+    }, async (dir, agentPath) => {
+      const io = collectingIO();
+      const previousExitCode = process.exitCode;
+      const result = await runInvoke(
+        [agentPath, '--fixture', path.join(dir, 'event.json'), '--reads', 'live'],
+        io
+      );
+      const exitCode = process.exitCode;
+      process.exitCode = previousExitCode;
+
+      assert.ok(result && !Array.isArray(result));
+      assert.equal(exitCode, 0);
+      assert.equal(result.status, 'succeeded');
+      assert.deepEqual(hits, ['/fixture-allowed']);
+    });
+  } finally {
+    server.close();
+  }
+});
+
+test('runInvoke: case invocation unions persona httpRead capability rules with case-derived rules', async () => {
+  const hits: string[] = [];
+  const server = createServer((req, res) => {
+    hits.push(req.url ?? '/');
+    res.statusCode = 200;
+    res.setHeader('content-type', 'application/json');
+    res.end(JSON.stringify({ ok: true }));
+  });
+  await new Promise<void>((resolve) => server.listen(0, '127.0.0.1', () => resolve()));
+  const address = server.address();
+  assert.ok(address && typeof address === 'object');
+  const liveUrl = `http://127.0.0.1:${address.port}/case-allowed`;
+
+  try {
+    await withAgent({
+      'agent.ts': `
+        import { defineAgent } from '@agentworkforce/runtime';
+        export default defineAgent({
+          id: 'case-http-read',
+          intent: 'documentation',
+          description: 'case http read test',
+          skills: [],
+          harnessSettings: { reasoning: 'medium', timeoutSeconds: 300 },
+          schedules: [{ name: 'scan', cron: '0 9 * * *' }],
+          capabilities: {
+            httpRead: {
+              allow: [{ method: 'GET', urlGlob: '${liveUrl}' }]
+            }
+          },
+          handler: async (ctx) => {
+            const response = await fetch('${liveUrl}');
+            ctx.log('info', await response.text());
+          }
+        });
+      `,
+      'case.yaml': `
+schemaVersion: 1
+id: test.case.http-read-union
+kind: scheduled
+event:
+  schedule: scan
+policy:
+  reads: live
+http:
+  - method: GET
+    match: ignored-fixture
+    file: ./fixture.json
+expect:
+  status: succeeded
+  eventSource: cron
+`,
+      'fixture.json': '{"unused":true}\n'
+    }, async (dir, agentPath) => {
+      const io = collectingIO();
+      const previousExitCode = process.exitCode;
+      const result = await runInvoke([agentPath, '--case', path.join(dir, 'case.yaml')], io);
+      const exitCode = process.exitCode;
+      process.exitCode = previousExitCode;
+
+      assert.ok(result && !Array.isArray(result));
+      assert.equal(exitCode, 0);
+      assert.equal(result.status, 'succeeded');
+      assert.deepEqual(hits, ['/case-allowed']);
+    });
+  } finally {
+    server.close();
+  }
+});
+
 test('matchesExpectedProviderAction: threaded Slack replies satisfy messages+threaded case expectations', () => {
   const action: RunRecordV2['actions'][number] = {
     kind: 'provider.write',
@@ -306,7 +489,17 @@ test('runInvoke: live GET is allowed while POST is denied and never reaches the 
       'agent.ts': `
         import { defineAgent } from '@agentworkforce/runtime';
         export default defineAgent({
+          id: 'live-get-post',
+          intent: 'documentation',
+          description: 'live GET allow and POST deny test',
+          skills: [],
+          harnessSettings: { reasoning: 'medium', timeoutSeconds: 300 },
           schedules: [{ name: 'scan', cron: '0 9 * * *' }],
+          capabilities: {
+            httpRead: {
+              allow: [{ method: 'GET', urlGlob: '${baseUrl}/allowed' }]
+            }
+          },
           handler: async () => {
             await fetch('${baseUrl}/allowed');
             await fetch('${baseUrl}/blocked', { method: 'POST', body: 'nope' });
@@ -657,7 +850,17 @@ test('runInvoke: mixed fetch/raw-http probe keeps allowed GET, blocks denied POS
         }
 
         export default defineAgent({
+          id: 'mixed-fetch-raw-http',
+          intent: 'documentation',
+          description: 'mixed fetch and raw http probe',
+          skills: [],
+          harnessSettings: { reasoning: 'medium', timeoutSeconds: 300 },
           schedules: [{ name: 'scan', cron: '0 9 * * *' }],
+          capabilities: {
+            httpRead: {
+              allow: [{ method: 'GET', urlGlob: '${baseUrl}/allowed' }]
+            }
+          },
           handler: async (ctx) => {
             const permissionNet = process.permission?.has?.('net');
             const allowed = await attempt(async () => {
@@ -716,7 +919,17 @@ test('runInvoke: parent fetch failures return deterministic errors without leaki
       }
 
       export default defineAgent({
+        id: 'parent-fetch-failure',
+        intent: 'documentation',
+        description: 'parent fetch failure test',
+        skills: [],
+        harnessSettings: { reasoning: 'medium', timeoutSeconds: 300 },
         schedules: [{ name: 'scan', cron: '0 9 * * *' }],
+        capabilities: {
+          httpRead: {
+            allow: [{ method: 'GET', urlGlob: 'http://127.0.0.1:1/unreachable' }]
+          }
+        },
         handler: async (ctx) => {
           const failed = await attempt(async () => {
             await fetch('http://127.0.0.1:1/unreachable');

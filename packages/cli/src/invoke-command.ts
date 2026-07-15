@@ -4,6 +4,8 @@ import { bundleStager } from '@agentworkforce/deploy';
 import { decodeEventFrame } from '@agentworkforce/events';
 import {
   executeLocalRun,
+  mergeAllowedHttpRules,
+  resolvePersonaHttpReadRules,
   resolveLocalEffectPolicy,
   type EffectPolicyV1,
   type LocalHttpFixture,
@@ -285,7 +287,8 @@ async function runInvokeOnce(
     const seededFiles = await loadSeeds(opts.seeds);
     const initialPolicy = resolveLocalEffectPolicy({
       ...(opts.reads ? { reads: opts.reads } : {}),
-      ...(opts.model ? { model: opts.model } : {})
+      ...(opts.model ? { model: opts.model } : {}),
+      allowedHttp: resolvePersonaHttpReadRules(target.compiled.persona)
     });
 
     let output: RunRecordV2 | RunRecordV2[];
@@ -437,7 +440,10 @@ async function runCaseInvoke(
   const policy = resolveLocalEffectPolicy({
     ...basePolicy,
     ...parsedCase.policy,
-    allowedHttp: httpFixtures.map((fixture) => ({ method: fixture.method, urlGlob: fixture.match }))
+    allowedHttp: mergeAllowedHttpRules(
+      basePolicy.allowedHttp,
+      httpFixtures.map((fixture) => ({ method: fixture.method, urlGlob: fixture.match }))
+    )
   });
   const inputs = { ...parsedCase.inputs, ...(opts.inputs ?? {}) };
   let state: LocalPreviewState = seededFiles ? { files: seededFiles } : {};

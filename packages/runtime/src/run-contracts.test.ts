@@ -2,6 +2,8 @@ import assert from 'node:assert/strict';
 import test from 'node:test';
 import {
   LOCAL_EFFECT_POLICY_DEFAULTS,
+  mergeAllowedHttpRules,
+  resolvePersonaHttpReadRules,
   resolveLocalEffectPolicy,
   type PreviewAction,
   type RunRecordV2
@@ -39,6 +41,64 @@ test('local effect policy cannot be escalated to live writes, shell, or compose'
     allowedHttp: []
   });
   assert.equal(resolveLocalEffectPolicy({ writes: 'deny' }).writes, 'deny');
+});
+
+test('persona httpRead capability resolves to explicit local allowedHttp rules', () => {
+  assert.deepEqual(resolvePersonaHttpReadRules({
+    id: 'http-reader',
+    capabilities: {
+      httpRead: {
+        allow: [
+          { method: 'GET', urlGlob: 'https://example.test/front-page' },
+          { method: 'HEAD', urlGlob: 'https://example.test/*' }
+        ]
+      }
+    }
+  }), [
+    { method: 'GET', urlGlob: 'https://example.test/front-page' },
+    { method: 'HEAD', urlGlob: 'https://example.test/*' }
+  ]);
+  assert.deepEqual(resolvePersonaHttpReadRules({
+    id: 'http-reader',
+    capabilities: {
+      httpRead: {
+        enabled: false,
+        allow: [{ method: 'GET', urlGlob: 'https://example.test/*' }]
+      }
+    }
+  }), []);
+});
+
+test('persona httpRead capability fails closed on malformed compiled values', () => {
+  assert.throws(
+    () => resolvePersonaHttpReadRules({
+      id: 'broken-http-reader',
+      capabilities: { httpRead: true } as unknown as NonNullable<Parameters<typeof resolvePersonaHttpReadRules>[0]['capabilities']>
+    }),
+    /capabilities\.httpRead must be an object/
+  );
+  assert.throws(
+    () => resolvePersonaHttpReadRules({
+      id: 'broken-http-reader',
+      capabilities: {
+        httpRead: { allow: [{ method: 'POST', urlGlob: 'https://example.test/*' }] }
+      } as unknown as NonNullable<Parameters<typeof resolvePersonaHttpReadRules>[0]['capabilities']>
+    }),
+    /capabilities\.httpRead\.allow\[0\]\.method must be "GET" or "HEAD"/
+  );
+});
+
+test('allowedHttp rules merge additively without duplicates', () => {
+  assert.deepEqual(mergeAllowedHttpRules(
+    [{ method: 'GET', urlGlob: 'https://example.test/*' }],
+    [
+      { method: 'get', urlGlob: 'https://example.test/*' },
+      { method: 'HEAD', urlGlob: 'https://example.test/front-page' }
+    ]
+  ), [
+    { method: 'GET', urlGlob: 'https://example.test/*' },
+    { method: 'HEAD', urlGlob: 'https://example.test/front-page' }
+  ]);
 });
 
 test('RunRecordV2 retains additive existing and extension fields', () => {

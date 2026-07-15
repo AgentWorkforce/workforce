@@ -288,8 +288,7 @@ async function resolveLiveParentFetch(
   }
 
   if (
-    config.policy.allowedHttp.length > 0
-    && !config.policy.allowedHttp.some((rule) => httpRuleMatches(rule, method, url))
+    !config.policy.allowedHttp.some((rule) => httpRuleMatches(rule, method, url))
   ) {
     return deniedFetchResponse(request, {
       method,
@@ -366,8 +365,7 @@ async function resolveLiveParentFetch(
 
   const redirectedUrl = new URL(location, url).toString();
   if (
-    config.policy.allowedHttp.length > 0
-    && !config.policy.allowedHttp.some((rule) => httpRuleMatches(rule, method, redirectedUrl))
+    !config.policy.allowedHttp.some((rule) => httpRuleMatches(rule, method, redirectedUrl))
   ) {
     return deniedFetchResponse(request, {
       method,
@@ -543,7 +541,7 @@ function httpRuleMatches(
   const pattern = rule.urlGlob.includes('*')
     ? new RegExp(`^${rule.urlGlob.split('*').map(escapeRegExp).join('.*')}$`)
     : null;
-  return pattern ? pattern.test(url) : url.includes(rule.urlGlob);
+  return pattern ? pattern.test(url) : url === rule.urlGlob;
 }
 
 function escapeRegExp(value: string): string {
