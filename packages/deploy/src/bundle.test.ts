@@ -1,12 +1,15 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
+import { createRequire } from 'node:module';
 import path from 'node:path';
 import os from 'node:os';
 import { pathToFileURL } from 'node:url';
 import { bundleStager } from './bundle.js';
 import { runtimeContextEnv } from './runtime-context.js';
 import type { PersonaSpec } from '@agentworkforce/persona-kit';
+
+const require = createRequire(import.meta.url);
 
 function persona(overrides: Partial<PersonaSpec> = {}): PersonaSpec {
   return {
@@ -79,6 +82,18 @@ test('bundleStager produces an executable, importable bundle from a real onEvent
     const bundleSource = await readFile(result.bundlePath, 'utf8');
     assert.match(bundleSource, /^import /m);
     assert.match(bundleSource, /from\s+['"]@agentworkforce\/runtime['"]/);
+
+    // package.json pins the exact installed runtime version — never a
+    // wildcard a sandbox's npm install could silently satisfy with a
+    // stale pre-baked/cached copy.
+    const generatedPackageJson = JSON.parse(await readFile(result.packageJsonPath, 'utf8'));
+    const runtimeDep = generatedPackageJson.dependencies['@agentworkforce/runtime'];
+    const installedRuntimePackageJsonPath = require.resolve('@agentworkforce/runtime/package.json');
+    const installedRuntimeVersion = JSON.parse(
+      await readFile(installedRuntimePackageJsonPath, 'utf8')
+    ).version;
+    assert.equal(runtimeDep, installedRuntimeVersion);
+    assert.notEqual(runtimeDep, '*');
   } finally {
     await rm(dir, { recursive: true, force: true });
   }
