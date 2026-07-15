@@ -17,6 +17,14 @@ export interface DeployOptions {
   byoSandbox?: boolean;
   /** Background the runner instead of streaming logs in the foreground. */
   detach?: boolean;
+  /**
+   * The caller drives the runner's envelope stdin itself via the returned
+   * `ModeLaunchHandle.write()`, instead of the runner's stdin passing
+   * through this process's own stdin (`dev` mode only; ignored otherwise).
+   * Set this when calling `deploy()` from a long-lived host process (e.g. a
+   * fleet-node bridge) whose own stdin lifecycle must not end the runner's.
+   */
+  bridged?: boolean;
   /** Emit the bundle to this directory and exit (no launch). */
   bundleOut?: string;
   /** Validate-only: parse + lint + check connection status, no side effects. */
@@ -131,6 +139,12 @@ export interface ModeLaunchInput {
   io: DeployIO;
   detach?: boolean;
   /**
+   * The caller drives the runner's envelope stdin itself via the returned
+   * `ModeLaunchHandle.write()`. `dev` mode only — see `DeployOptions.bridged`;
+   * other modes ignore.
+   */
+  bridged?: boolean;
+  /**
    * Force BYO Daytona auth even when the user is logged in to workforce
    * cloud. Mode-specific (sandbox launcher only); other modes ignore.
    */
@@ -172,6 +186,14 @@ export interface ModeLaunchHandle {
    * resolves only when the user invokes `stop()`.
    */
   done: Promise<{ code: number }>;
+  /**
+   * Write a raw line directly to the runner's envelope stdin, bypassing the
+   * `process.stdin` passthrough. Only `dev` mode implements this today — it
+   * lets a long-lived host process (e.g. a fleet-node bridge) that owns the
+   * `deploy()` call feed one `RawGatewayEnvelope` per message without a real
+   * piped parent stdin. Absent when the mode has no addressable stdin.
+   */
+  write?(line: string): void;
 }
 
 export interface IntegrationConnectOutcome {

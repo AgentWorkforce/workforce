@@ -6,6 +6,7 @@
   "include": [
     "packages/cli/src/**/*.ts",
     "packages/deploy/src/**/*.ts",
+    "packages/local-surface/src/**/*.ts",
     "packages/mcp-workforce/src/**/*.ts",
     "packages/runtime/src/**/*.ts",
     "packages/persona-kit/src/**/*.ts",

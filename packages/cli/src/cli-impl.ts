@@ -307,6 +307,14 @@ Commands:
                         --cloud-url <url>   override the workforce cloud URL
                         --input KEY=value   override a declared persona input
                                             (repeat for multiple)
+  local-surface <persona-path> [flags]
+                      Run a persona on this machine, triggered by real
+                      provider webhooks routed through the fleet/relaycast
+                      infrastructure — no public IP, tunnel, or manual token
+                      wiring. Runs in \`--mode dev\`; local credential
+                      mirroring is not supported, so this targets cron/timer-
+                      only or webhook-shape-only personas. See
+                      \`agentworkforce local-surface --help\` for flags.
   invoke <persona-path> --fixture <file> [flags]
                       Simulate an invocation: run the persona's handler
                       against fixture event envelope(s) with every external
@@ -5124,6 +5132,12 @@ export async function main(): Promise<void> {
   if (subcommand === 'invoke') {
     const { runInvoke } = await import('./invoke-command.js');
     await runInvoke(rest);
+    return;
+  }
+
+  if (subcommand === 'local-surface') {
+    const { runLocalSurface } = await import('./local-surface-command.js');
+    await runLocalSurface(rest);
     return;
   }
 

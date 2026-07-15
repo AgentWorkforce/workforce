@@ -38,11 +38,14 @@ importers:
   packages/cli:
     dependencies:
       '@agent-relay/cloud':
-        specifier: ^8.7.0
-        version: 8.7.0
+        specifier: ^10.1.0
+        version: 10.2.0
       '@agentworkforce/deploy':
         specifier: workspace:*
         version: link:../deploy
+      '@agentworkforce/local-surface':
+        specifier: workspace:*
+        version: link:../local-surface
       '@agentworkforce/persona-kit':
         specifier: workspace:*
         version: link:../persona-kit
@@ -94,6 +97,21 @@ importers:
       esbuild:
         specifier: ^0.25.0
         version: 0.25.12
+
+  packages/local-surface:
+    dependencies:
+      '@agent-relay/fleet':
+        specifier: ^10.1.0
+        version: 10.2.0
+      '@agentworkforce/deploy':
+        specifier: workspace:*
+        version: link:../deploy
+      '@agentworkforce/persona-kit':
+        specifier: workspace:*
+        version: link:../persona-kit
+      '@agentworkforce/runtime':
+        specifier: workspace:*
+        version: link:../runtime
 
   packages/mcp-workforce:
     dependencies:
@@ -178,8 +196,39 @@ packages:
   '@agent-assistant/surfaces@0.4.32':
     resolution: {integrity: sha512-VI1UpwDD/RznfngRKatqL3zkZ6Bo9MszIGwZ5/H68r+6yghsFeTSq42eyoQM90DuQniX6Z/QfPmA890U1ZA2MQ==}
 
+  '@agent-relay/broker-darwin-arm64@10.2.0':
+    resolution: {integrity: sha512-JuIU0FbL50d6iXgp3NimdzWwXMc++R3TK5D4a0FlnMXMFUYbMLTwZdbtvOf4SdfLowTLhh+P+2HHG4x3dCuDVw==}
+    cpu: [arm64]
+    os: [darwin]
+
+  '@agent-relay/broker-darwin-x64@10.2.0':
+    resolution: {integrity: sha512-KtPSTenzaYB0D1AG0ZBVv90N/Owm2Qu4PE2sfRBB0FPGZUj1VzeT5ecTE0j1Pt1XJji5jX9Hg3R87pgGq9Ev+A==}
+    cpu: [x64]
+    os: [darwin]
+
+  '@agent-relay/broker-linux-arm64@10.2.0':
+    resolution: {integrity: sha512-cY0/rrmI1h5thGbiFbi4dneZ/2lOiixH4ldjGEUtkkYt1KM+z51dpgXEhOgADibzkQUZayaHlue7+JzlMgXJFA==}
+    cpu: [arm64]
+    os: [linux]
+
+  '@agent-relay/broker-linux-x64@10.2.0':
+    resolution: {integrity: sha512-rj9PsbeDv1NoJVkBpSCEkagT8wzfOO26Wcwg1OxwREvo2pLCtns2b3okxqxxTLStnujcyJ+1bNrjmLyV4nTNUQ==}
+    cpu: [x64]
+    os: [linux]
+
+  '@agent-relay/broker-win32-x64@10.2.0':
+    resolution: {integrity: sha512-+x1kN6stM4ZC8K7j45swXYLgYh5TD/hX1m/Xr5nBoFyBWp9dPjZHss2uyFtM+UpL46l3nO0mzYAcM1qdulrjZA==}
+    cpu: [x64]
+    os: [win32]
+
+  '@agent-relay/cloud@10.2.0':
+    resolution: {integrity: sha512-ZHKkXK65p+3PTjdnGpoZQHC0pqgyDagwNr0bifHdycCYXt0e+YMNZWVMzdyZUpmRgqg+EYCQ9hh8287LrdJgHA==}
+
   '@agent-relay/cloud@8.7.0':
     resolution: {integrity: sha512-7cXD1ziMOuAOy3IbVk0P6qDVipTYxbVFBWmxn9aME7hTHyy4AzfjLOj51AL7JLpDKj4I5OiXJjw12B29Wg/Krw==}
+
+  '@agent-relay/config@10.2.0':
+    resolution: {integrity: sha512-/Pz8TvyOz49gWJ8hov8ymsOkRmApoYtUoQz3VFa11NU2y4lyHpYPG9PsM3NlPZ46DGzT7c72zvSDjI+pl5l+Lg==}
 
   '@agent-relay/config@8.7.0':
     resolution: {integrity: sha512-hCH0jPSbeBYoZs/Jx8NGDqbPe93xEXlF3q0E6HCO8+niLAuYZU3+hDWsS2dvDCg6S7BH5cTQbVUyMxV8T48U8Q==}
@@ -203,6 +252,18 @@ packages:
         optional: true
       '@relayfile/adapter-slack':
         optional: true
+
+  '@agent-relay/fleet@10.2.0':
+    resolution: {integrity: sha512-Injya3fvQYOn9GoYrycgaHOOoh6TkyNkwnoYiHpPx56JhzsEQxMrQwjWzpvA+mpfPS7elO4W7m0Va2aF8PHBvQ==}
+
+  '@agent-relay/harness-driver@10.2.0':
+    resolution: {integrity: sha512-EJRbOwBF8IHPrHjyJVEkQ1XJb3WwnZ4GeUe7iy22Sdh+n0CX5EfjxOs4K5hSdKmwH29VbwjXE+lzPXbj7qMixQ==}
+
+  '@agent-relay/harnesses@10.2.0':
+    resolution: {integrity: sha512-P7Ud1hfVUjFeTbbXeYeYK7GcQy7bYixm2xgWbi1OVGEd/RqpncNl7obpmc+Tf6lnXPSEUXx7KUTBp2We5FhzlQ==}
+
+  '@agent-relay/sdk@10.2.0':
+    resolution: {integrity: sha512-NGN+UbN5PNf4Yh9y3PkUXOHlziPX9zccqbsh8URtiviJ3WZN6+6/JH25xadj7RlZQP7izwEdl89ql2PTapp1aQ==}
 
   '@aws-crypto/crc32@5.2.0':
     resolution: {integrity: sha512-nLbCWqQNgUiwwtFsen1AdzAtvuLRsQS8rYgMuxCrdKf9kOssamGLuPwyTY9wyYblNr9+1XM8v6zoDTPPSIeANg==}
@@ -962,6 +1023,12 @@ packages:
   '@relayburn/sdk@2.5.2':
     resolution: {integrity: sha512-C5eVSepGrlQY5b1yg+LfROLYhDW/w1WFVsuitRzvbXMr+qpFYFHLoMNxa9R0Q6ZiP02r6EXSazii2VNo2LZ0Vg==}
     engines: {node: '>=22'}
+
+  '@relaycast/sdk@6.0.5':
+    resolution: {integrity: sha512-LNixPCBMsqD7yhuNvt8FzcEagdmnWnXvY62HZOlZbOrxRPDP1Wxnc/EDJVjRMP2TuRmLm7aHlkTIRZKG2bxdbA==}
+
+  '@relaycast/types@6.0.5':
+    resolution: {integrity: sha512-wTxtHHCZF13wa28BWcTuG4sf2fcrFGgI+MSywvdR6MjWGVJdriJMZekT9iVy9We1CpXjzKUmHIhhxjH/PQoPHw==}
 
   '@relayfile/adapter-core@0.4.3':
     resolution: {integrity: sha512-VoGco3xYab+Ij9v2wSi6qsYg15gDfYWlZsdbiKrqM/YN+t0IhPS8Shy5dRA18kYCBKEr7bH7QdFfa8PCXj6LFg==}
@@ -2131,6 +2198,9 @@ packages:
   zod@3.25.76:
     resolution: {integrity: sha512-gzUt/qt81nXsFGKIFcC3YnfEAx5NkunCfnDlvuBSSFS02bcXu4Lmea0AFIUwbLWxWPx3d9p8S5QoaujKcNQxcQ==}
 
+  zod@4.4.3:
+    resolution: {integrity: sha512-ytENFjIJFl2UwYglde2jchW2Hwm4GJFLDiSXWdTrJQBIN9Fcyp7n4DhxJEiWNAJMV1/BqWfW/kkg71UDcHJyTQ==}
+
 snapshots:
 
   '@agent-assistant/connectivity@0.2.24':
@@ -2150,6 +2220,32 @@ snapshots:
 
   '@agent-assistant/surfaces@0.4.32': {}
 
+  '@agent-relay/broker-darwin-arm64@10.2.0':
+    optional: true
+
+  '@agent-relay/broker-darwin-x64@10.2.0':
+    optional: true
+
+  '@agent-relay/broker-linux-arm64@10.2.0':
+    optional: true
+
+  '@agent-relay/broker-linux-x64@10.2.0':
+    optional: true
+
+  '@agent-relay/broker-win32-x64@10.2.0':
+    optional: true
+
+  '@agent-relay/cloud@10.2.0':
+    dependencies:
+      '@agent-relay/config': 10.2.0
+      '@aws-sdk/client-s3': 3.1020.0
+      ignore: 7.0.5
+      tar: 7.5.15
+    optionalDependencies:
+      ssh2: 1.17.0
+    transitivePeerDependencies:
+      - aws-crt
+
   '@agent-relay/cloud@8.7.0':
     dependencies:
       '@agent-relay/config': 8.7.0
@@ -2160,6 +2256,11 @@ snapshots:
       ssh2: 1.17.0
     transitivePeerDependencies:
       - aws-crt
+
+  '@agent-relay/config@10.2.0':
+    dependencies:
+      zod: 3.25.76
+      zod-to-json-schema: 3.25.2(zod@3.25.76)
 
   '@agent-relay/config@8.7.0':
     dependencies:
@@ -2176,6 +2277,44 @@ snapshots:
       '@opentelemetry/sdk-trace-base': 2.7.1(@opentelemetry/api@1.9.1)
       '@opentelemetry/sdk-trace-node': 2.7.1(@opentelemetry/api@1.9.1)
       '@opentelemetry/semantic-conventions': 1.40.0
+
+  '@agent-relay/fleet@10.2.0':
+    dependencies:
+      '@agent-relay/harness-driver': 10.2.0
+      '@agent-relay/harnesses': 10.2.0
+      '@relaycast/sdk': 6.0.5
+      ws: 8.21.0
+      zod: 3.25.76
+    transitivePeerDependencies:
+      - bufferutil
+      - utf-8-validate
+
+  '@agent-relay/harness-driver@10.2.0':
+    dependencies:
+      '@agent-relay/sdk': 10.2.0
+      ws: 8.21.0
+      zod: 3.25.76
+    optionalDependencies:
+      '@agent-relay/broker-darwin-arm64': 10.2.0
+      '@agent-relay/broker-darwin-x64': 10.2.0
+      '@agent-relay/broker-linux-arm64': 10.2.0
+      '@agent-relay/broker-linux-x64': 10.2.0
+      '@agent-relay/broker-win32-x64': 10.2.0
+    transitivePeerDependencies:
+      - bufferutil
+      - utf-8-validate
+
+  '@agent-relay/harnesses@10.2.0':
+    dependencies:
+      '@agent-relay/harness-driver': 10.2.0
+      '@agent-relay/sdk': 10.2.0
+    transitivePeerDependencies:
+      - bufferutil
+      - utf-8-validate
+
+  '@agent-relay/sdk@10.2.0':
+    dependencies:
+      '@relaycast/sdk': 6.0.5
 
   '@aws-crypto/crc32@5.2.0':
     dependencies:
@@ -3299,6 +3438,15 @@ snapshots:
       '@relayburn/sdk-darwin-x64': 2.5.2
       '@relayburn/sdk-linux-arm64-gnu': 2.5.2
       '@relayburn/sdk-linux-x64-gnu': 2.5.2
+
+  '@relaycast/sdk@6.0.5':
+    dependencies:
+      '@relaycast/types': 6.0.5
+      zod: 4.4.3
+
+  '@relaycast/types@6.0.5':
+    dependencies:
+      zod: 4.4.3
 
   '@relayfile/adapter-core@0.4.3(@relayfile/sdk@0.7.40)':
     dependencies:
@@ -4526,3 +4674,5 @@ snapshots:
       zod: 3.25.76
 
   zod@3.25.76: {}
+
+  zod@4.4.3: {}
