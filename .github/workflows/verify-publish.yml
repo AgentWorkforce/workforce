@@ -15,6 +15,7 @@ on:
         type: choice
         options:
           - '@agentworkforce/events'
+          - '@agentworkforce/compose'
           - '@agentworkforce/cli'
           - 'agentworkforce'
           - '@agentworkforce/workload-router'
