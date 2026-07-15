@@ -60,11 +60,28 @@ test('buildEnvelopeFromTriggerMessage falls back to message.id and created_at wh
   });
   const envelope = buildEnvelopeFromTriggerMessage(message, 'fallback-ws');
   assert.ok(envelope);
-  assert.equal(envelope?.id, 'msg_1');
+  // Mirrors cloud's real `buildPayload` fallback exactly
+  // (`${provider}:${eventType}:${Date.now().toString(36)}`), not the
+  // relaycast message id — cloud's gateway never falls back to that.
+  assert.match(envelope!.id, /^linear:issue\.created:[0-9a-z]+$/);
   assert.equal(envelope?.workspace, 'fallback-ws');
   assert.equal(envelope?.occurredAt, '2026-07-15T00:00:00.000Z');
   assert.equal(envelope?.deliveryId, undefined);
   assert.equal(envelope?.paths, undefined);
+});
+
+test('buildEnvelopeFromTriggerMessage preserves a non-plain-object payload verbatim (no silent coercion to {})', () => {
+  const message = baseMessage({
+    metadata: {
+      provider: 'github',
+      eventType: 'check_run.requested_action',
+      deliveryId: 'dlv_array',
+      payload: [{ action: 'requested' }, { action: 'created' }]
+    }
+  });
+  const envelope = buildEnvelopeFromTriggerMessage(message, 'fallback-ws');
+  assert.ok(envelope);
+  assert.deepEqual(envelope?.resource, [{ action: 'requested' }, { action: 'created' }]);
 });
 
 test('buildEnvelopeFromTriggerMessage returns null for messages without provider/eventType (e.g. a human chat message)', () => {

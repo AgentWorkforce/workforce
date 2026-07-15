@@ -358,6 +358,7 @@ export async function deploy(opts: DeployOptions, resolvers: DeployResolvers = {
     ...(Object.keys(launchEnv).length > 0 ? { env: launchEnv } : {}),
     ...(activeToken ? { workspaceToken: activeToken } : {}),
     ...(opts.detach ? { detach: true } : {}),
+    ...(opts.bridged ? { bridged: true } : {}),
     ...(opts.byoSandbox ? { byoSandbox: true } : {}),
     ...(cloudUrl ? { cloudUrl } : {}),
     ...(opts.noPrompt ? { noPrompt: true } : {}),

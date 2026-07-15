@@ -153,6 +153,13 @@ async function launchPersonaRunner(input: {
       personaPath,
       mode: 'dev',
       detach: true,
+      // The fleet-node host process (`relay node up`) is meant to be
+      // always-on/daemonized; the moment ITS OWN stdin ends — the normal
+      // case for anything non-interactive — dev.ts's default stdin
+      // passthrough would end the persona child's stdin too, crashing every
+      // subsequent writeEnvelope() call. `bridged: true` opts out of that
+      // passthrough since this bridge owns the child's stdin via `write()`.
+      bridged: true,
       workspace,
       noPrompt: true,
       ...(options.connection.cloudUrl ? { cloudUrl: options.connection.cloudUrl } : {}),
@@ -206,10 +213,18 @@ export function buildEnvelopeFromTriggerMessage(
 
   const deliveryId = firstString(metadata.deliveryId);
   const path = firstString(metadata.path);
-  const resource = isPlainObject(metadata.payload) ? metadata.payload : {};
+  // Cloud's real construction (`buildPayload`) preserves `payload` verbatim
+  // (only substituting `{}` for null/undefined) — no plain-object narrowing.
+  // Coercing a non-object payload (e.g. an array, a valid webhook shape for
+  // some providers) down to `{}` would silently discard real event data.
+  const resource = metadata.payload ?? {};
 
   return {
-    id: deliveryId ?? message.id,
+    // Mirrors cloud's own fallback exactly (`buildPayload`:
+    // `input.deliveryId ?? \`${provider}:${eventType}:${Date.now().toString(36)}\``)
+    // rather than substituting the relaycast message id, which cloud's real
+    // gateway never does.
+    id: deliveryId ?? `${provider}:${eventType}:${Date.now().toString(36)}`,
     workspace: firstString(metadata.workspaceId) ?? fallbackWorkspace,
     type: `${provider}.${eventType}`,
     occurredAt: firstString(metadata.timestamp) ?? message.created_at,
