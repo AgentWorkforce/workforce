@@ -80,6 +80,25 @@ export {
 export { type RawGatewayEnvelope } from './shim.js';
 export { envelopeToAgentEvent } from './to-agent-event.js';
 
+// Versioned Agent compiler and Run engine contracts. These are additive to
+// the existing simulation record while hosted/local producers migrate.
+export {
+  LOCAL_EFFECT_POLICY_DEFAULTS,
+  resolveLocalEffectPolicy,
+  type CompiledAgentV1,
+  type Diagnostic,
+  type EffectPolicyV1,
+  type PreviewAction,
+  type RunArtifactEntry,
+  type RunArtifactManifest,
+  type RunMode,
+  type RunRecordV2,
+  type RunRequestV1,
+  type RunTraceEventV1,
+  type StateDiff,
+  type StateSourceV1
+} from './run-contracts.js';
+
 export type {
   LinearAgentActivity,
   LinearAgentActivityType,
