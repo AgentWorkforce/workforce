@@ -517,12 +517,12 @@ async function runCaseInvoke(
           ? Object.keys(opts.inputs ?? {}).length > 0 ? 'current' : 'fixture'
           : Object.keys(opts.inputs ?? {}).length > 0 ? 'current' : 'unavailable',
         http: httpFixtures.length > 0 ? 'fixture' : policy.reads === 'live' ? 'current' : 'unavailable',
-        model: modelFixtures.length > 0
-          ? 'fixture'
-          : policy.model === 'live'
-            ? 'current'
-            : policy.model === 'stub'
-              ? 'simulated'
+        model: policy.model === 'live'
+          ? 'current'
+          : policy.model === 'stub'
+            ? 'simulated'
+            : modelFixtures.length > 0
+              ? 'fixture'
               : 'unavailable'
       }
     });
@@ -578,9 +578,9 @@ function evaluateCaseAssertions(
     failures.push(`$.expect.status: expected ${parsedCase.expect.status}, got ${record.status}`);
   }
   if (parsedCase.expect.eventSource) {
-    const actual = record.eventContract.startsWith('cron.tick@') ? 'cron' : record.eventContract.startsWith('slack.') ? 'slack' : 'unknown';
-    if (actual !== parsedCase.expect.eventSource) {
-      failures.push(`$.expect.eventSource: expected ${parsedCase.expect.eventSource}, got ${actual}`);
+    const actual = deriveEventSource(record.eventContract);
+    if (!actual || actual !== parsedCase.expect.eventSource) {
+      failures.push(`$.expect.eventSource: expected ${parsedCase.expect.eventSource}, got ${actual ?? 'unknown'}`);
     }
   }
   for (const expected of parsedCase.expect.logsContain) {
@@ -638,6 +638,17 @@ export function matchesExpectedProviderAction(
     if (!expected.textContains.every((snippet) => text.includes(snippet))) return false;
   }
   return true;
+}
+
+export function deriveEventSource(eventContract: string): string | undefined {
+  const type = eventContract.split('@', 1)[0] ?? '';
+  if (!type) return undefined;
+  if (type === 'cron.tick') return 'cron';
+  if (type === 'startup') return 'startup';
+  const dot = type.indexOf('.');
+  if (dot <= 0) return undefined;
+  const prefix = type.slice(0, dot);
+  return prefix || undefined;
 }
 
 function asRecord(value: unknown): Record<string, unknown> | null {

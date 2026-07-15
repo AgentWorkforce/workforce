@@ -16,11 +16,33 @@ import type {
 const PREVIEW_PROCESS_STATE = Symbol.for('agentworkforce.local-preview.process-state');
 const require = createRequire(import.meta.url);
 const childProcess = require('node:child_process') as typeof import('node:child_process');
+const dns = require('node:dns') as typeof import('node:dns');
 const http = require('node:http') as typeof import('node:http');
+const http2 = require('node:http2') as typeof import('node:http2');
 const https = require('node:https') as typeof import('node:https');
 const net = require('node:net') as typeof import('node:net');
 const tls = require('node:tls') as typeof import('node:tls');
 const dgram = require('node:dgram') as typeof import('node:dgram');
+const workerThreads = require('node:worker_threads') as typeof import('node:worker_threads');
+
+const DNS_DENIED_FUNCTIONS = [
+  'lookup',
+  'lookupService',
+  'resolve',
+  'resolve4',
+  'resolve6',
+  'resolveAny',
+  'resolveCaa',
+  'resolveCname',
+  'resolveMx',
+  'resolveNaptr',
+  'resolveNs',
+  'resolvePtr',
+  'resolveSoa',
+  'resolveSrv',
+  'resolveTxt',
+  'reverse'
+] as const;
 
 type PreviewModuleState = PreviewProcessState;
 
@@ -50,14 +72,41 @@ export function installPreviewProcessGuards(args: {
   const originalNet = {
     connect: net.connect,
     createConnection: net.createConnection,
-    createServer: net.createServer
+    createServer: net.createServer,
+    Socket: net.Socket
   };
   const originalTls = {
     connect: tls.connect,
-    createServer: tls.createServer
+    createServer: tls.createServer,
+    createSecureContext: tls.createSecureContext,
+    TLSSocket: tls.TLSSocket
   };
   const originalDgram = {
-    createSocket: dgram.createSocket
+    createSocket: dgram.createSocket,
+    Socket: dgram.Socket
+  };
+  const originalHttp2 = {
+    connect: http2.connect,
+    createServer: http2.createServer,
+    createSecureServer: http2.createSecureServer
+  };
+  const originalDns = {
+    Resolver: dns.Resolver,
+    promisesLookup: dns.promises.lookup,
+    promisesResolver: dns.promises.Resolver,
+    functions: new Map<string, unknown>(
+      DNS_DENIED_FUNCTIONS
+        .filter((name) => typeof dns[name] === 'function')
+        .map((name) => [name, dns[name]])
+    ),
+    promiseFunctions: new Map<string, unknown>(
+      DNS_DENIED_FUNCTIONS
+        .filter((name) => typeof dns.promises[name] === 'function')
+        .map((name) => [name, dns.promises[name]])
+    )
+  };
+  const originalWorkerThreads = {
+    Worker: workerThreads.Worker
   };
   const originalChildProcess = {
     exec: childProcess.exec,
@@ -82,9 +131,22 @@ export function installPreviewProcessGuards(args: {
       net.connect = originalNet.connect;
       net.createConnection = originalNet.createConnection;
       net.createServer = originalNet.createServer;
+      net.Socket = originalNet.Socket;
       tls.connect = originalTls.connect;
       tls.createServer = originalTls.createServer;
+      tls.createSecureContext = originalTls.createSecureContext;
+      tls.TLSSocket = originalTls.TLSSocket;
       dgram.createSocket = originalDgram.createSocket;
+      dgram.Socket = originalDgram.Socket;
+      http2.connect = originalHttp2.connect;
+      http2.createServer = originalHttp2.createServer;
+      http2.createSecureServer = originalHttp2.createSecureServer;
+      dns.Resolver = originalDns.Resolver;
+      dns.promises.lookup = originalDns.promisesLookup;
+      dns.promises.Resolver = originalDns.promisesResolver;
+      for (const [name, fn] of originalDns.functions) (dns as Record<string, unknown>)[name] = fn;
+      for (const [name, fn] of originalDns.promiseFunctions) (dns.promises as Record<string, unknown>)[name] = fn;
+      workerThreads.Worker = originalWorkerThreads.Worker;
       childProcess.exec = originalChildProcess.exec;
       childProcess.execFile = originalChildProcess.execFile;
       childProcess.execFileSync = originalChildProcess.execFileSync;
@@ -116,9 +178,29 @@ export function installPreviewProcessGuards(args: {
   net.connect = ((..._args: unknown[]) => denyRawNetwork(state, 'node:net', 'connect')) as typeof net.connect;
   net.createConnection = ((..._args: unknown[]) => denyRawNetwork(state, 'node:net', 'createConnection')) as typeof net.createConnection;
   net.createServer = ((..._args: unknown[]) => denyRawNetwork(state, 'node:net', 'createServer')) as typeof net.createServer;
+  net.Socket = createDeniedConstructor(state, 'node:net', 'Socket') as unknown as typeof net.Socket;
   tls.connect = ((..._args: unknown[]) => denyRawNetwork(state, 'node:tls', 'connect')) as typeof tls.connect;
   tls.createServer = ((..._args: unknown[]) => denyRawNetwork(state, 'node:tls', 'createServer')) as typeof tls.createServer;
+  tls.createSecureContext = ((..._args: unknown[]) => denyRawNetwork(state, 'node:tls', 'createSecureContext')) as typeof tls.createSecureContext;
+  tls.TLSSocket = createDeniedConstructor(state, 'node:tls', 'TLSSocket') as unknown as typeof tls.TLSSocket;
   dgram.createSocket = ((..._args: unknown[]) => denyRawNetwork(state, 'node:dgram', 'createSocket')) as typeof dgram.createSocket;
+  dgram.Socket = createDeniedConstructor(state, 'node:dgram', 'Socket') as unknown as typeof dgram.Socket;
+  http2.connect = ((..._args: unknown[]) => denyRawNetwork(state, 'node:http2', 'connect')) as typeof http2.connect;
+  http2.createServer = ((..._args: unknown[]) => denyRawNetwork(state, 'node:http2', 'createServer')) as typeof http2.createServer;
+  http2.createSecureServer = ((..._args: unknown[]) => denyRawNetwork(state, 'node:http2', 'createSecureServer')) as typeof http2.createSecureServer;
+  dns.Resolver = createDeniedConstructor(state, 'node:dns', 'Resolver') as typeof dns.Resolver;
+  dns.promises.Resolver = createDeniedConstructor(state, 'node:dns', 'promises.Resolver') as typeof dns.promises.Resolver;
+  for (const name of DNS_DENIED_FUNCTIONS) {
+    if (typeof dns[name] === 'function') {
+      (dns as Record<string, unknown>)[name] = (..._args: unknown[]) => denyRawNetwork(state, 'node:dns', name);
+    }
+    if (typeof dns.promises[name] === 'function') {
+      (dns.promises as Record<string, unknown>)[name] = (..._args: unknown[]) =>
+        denyRawNetwork(state, 'node:dns', `promises.${name}`);
+    }
+  }
+  dns.promises.lookup = ((..._args: unknown[]) => denyRawNetwork(state, 'node:dns', 'promises.lookup')) as typeof dns.promises.lookup;
+  workerThreads.Worker = createDeniedConstructor(state, 'node:worker_threads', 'Worker', 'shell.exec') as unknown as typeof workerThreads.Worker;
 
   childProcess.exec = ((command: string, ..._args: unknown[]) => denyChildProcess(state, 'exec', command)) as unknown as typeof childProcess.exec;
   childProcess.execFile = ((file: string, ..._args: unknown[]) => denyChildProcess(state, 'execFile', file)) as unknown as typeof childProcess.execFile;
@@ -224,6 +306,30 @@ function denyRawNetwork(state: PreviewProcessState, moduleName: string, call: st
     }
   });
   throw new Error(`invoke: preview worker denied raw network ${moduleName}.${call}`);
+}
+
+function createDeniedConstructor(
+  state: PreviewProcessState,
+  moduleName: string,
+  call: string,
+  kind: PreviewAction['kind'] = 'http.read'
+): new (...args: unknown[]) => never {
+  return class DeniedConstructor {
+    constructor(..._args: unknown[]) {
+      if (kind === 'shell.exec') {
+        state.recordAction({
+          kind,
+          status: 'denied',
+          data: {
+            module: moduleName,
+            call
+          }
+        });
+        throw new Error(`invoke: preview worker denied ${moduleName}.${call}`);
+      }
+      denyRawNetwork(state, moduleName, call);
+    }
+  } as unknown as new (...args: unknown[]) => never;
 }
 
 function denyChildProcess(state: PreviewProcessState, call: string, cmd?: unknown): never {

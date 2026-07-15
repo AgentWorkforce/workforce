@@ -101,6 +101,7 @@ function normalizeCaseEvent(value: unknown, pathLabel: string): EventFrameV1 {
   const type = expectString(record.type ?? (typeof record.schedule === 'string' ? 'cron.tick' : undefined), `${pathLabel}.type`);
 
   if (type === 'cron.tick') {
+    assertOnlyKeys(record, pathLabel, ['type', 'schedule', 'name', 'cron']);
     const name = expectString(record.schedule ?? record.name, `${pathLabel}.schedule`);
     const cron = optionalString(record.cron);
     return decodeEventFrame({
@@ -114,7 +115,11 @@ function normalizeCaseEvent(value: unknown, pathLabel: string): EventFrameV1 {
   }
 
   if (type.startsWith('slack.')) {
+    assertOnlyKeys(record, pathLabel, ['type', 'resource', 'channel', 'ts', 'thread_ts', 'threadTs', 'text', 'user']);
     const resource = expectRecord(record.resource ?? record, `${pathLabel}.resource`);
+    if (record.resource !== undefined) {
+      assertOnlyKeys(resource, `${pathLabel}.resource`, ['channel', 'ts', 'thread_ts', 'threadTs', 'text', 'user']);
+    }
     const channel = expectString(resource.channel ?? record.channel, `${pathLabel}.channel`);
     const ts = expectString(resource.ts ?? record.ts, `${pathLabel}.ts`);
     const threadTs = optionalString(resource.thread_ts ?? resource.threadTs ?? record.thread_ts ?? record.threadTs);

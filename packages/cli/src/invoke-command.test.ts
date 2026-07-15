@@ -4,6 +4,7 @@ import { createServer } from 'node:http';
 import { mkdtemp, mkdir, readFile, rm, symlink, writeFile } from 'node:fs/promises';
 import path from 'node:path';
 import {
+  deriveEventSource,
   matchesExpectedProviderAction,
   parseFixtureEnvelopes,
   parseInvokeArgs,
@@ -12,6 +13,7 @@ import {
   scaffoldFixture,
   type RunInvokeIO
 } from './invoke-command.js';
+import { parseInvokeCase } from './invoke/case-file.js';
 import type { RunRecordV2 } from '@agentworkforce/runtime';
 
 function collectingIO(): RunInvokeIO & { out: string[]; err: string[] } {
@@ -75,6 +77,50 @@ test('parseFixtureEnvelopes: object, array, and NDJSON stay supported', () => {
   assert.equal(object.length, 1);
   assert.equal(array.length, 2);
   assert.equal(ndjson.length, 2);
+});
+
+test('parseInvokeCase: normalizeCaseEvent rejects unknown cron and slack fields path-specifically', async () => {
+  await withAgent({
+    'cron.case.yaml': `
+schemaVersion: 1
+id: bad.cron
+kind: scheduled
+event:
+  schedule: scan
+  extra: nope
+`,
+    'slack.case.yaml': `
+schemaVersion: 1
+id: bad.slack
+kind: chat
+event:
+  type: slack.message.created
+  resource:
+    channel: C123
+    ts: "1.2"
+    text: hi
+    user: U123
+    extra: nope
+`
+  }, async (dir) => {
+    await assert.rejects(
+      () => parseInvokeCase(path.join(dir, 'cron.case.yaml')),
+      /\$\.event\.extra: unknown field/
+    );
+    await assert.rejects(
+      () => parseInvokeCase(path.join(dir, 'slack.case.yaml')),
+      /\$\.event\.resource\.extra: unknown field/
+    );
+  });
+});
+
+test('deriveEventSource: maps core and provider-prefixed contracts without guessing unknowns', () => {
+  assert.equal(deriveEventSource('cron.tick@1'), 'cron');
+  assert.equal(deriveEventSource('slack.message.created@1'), 'slack');
+  assert.equal(deriveEventSource('github.pull_request.opened@2026-07-15'), 'github');
+  assert.equal(deriveEventSource('acme.custom.event@1'), 'acme');
+  assert.equal(deriveEventSource('startup@1'), 'startup');
+  assert.equal(deriveEventSource('unknown'), undefined);
 });
 
 async function withAgent<T>(
@@ -303,6 +349,122 @@ model:
     assert.equal(result.status, 'failed');
     assert.match(String(result.error ?? ''), /model fixture 2 requested but only 1 fixture\(s\) are available/);
   });
+});
+
+test('runInvoke: case live model uses current fidelity even when model fixtures are present', async () => {
+  let modelRequests = 0;
+  let seenPrompt = '';
+  const server = createServer(async (req, res) => {
+    if (req.method !== 'POST' || req.url !== '/backend-api/codex/responses') {
+      res.statusCode = 404;
+      res.end('not found');
+      return;
+    }
+    modelRequests += 1;
+    const chunks: Buffer[] = [];
+    for await (const chunk of req) chunks.push(Buffer.from(chunk));
+    const body = JSON.parse(Buffer.concat(chunks).toString('utf8')) as {
+      input?: Array<{ content?: Array<{ text?: string }> }>;
+    };
+    seenPrompt = String(body.input?.[0]?.content?.[0]?.text ?? '');
+    res.statusCode = 200;
+    res.setHeader('content-type', 'text/event-stream');
+    res.end([
+      'event: response.output_text.delta',
+      'data: {"type":"response.output_text.delta","delta":"live-case-output"}',
+      '',
+      'event: response.completed',
+      'data: {"type":"response.completed","response":{"id":"resp-live-case"}}',
+      '',
+      ''
+    ].join('\n'));
+  });
+  await new Promise<void>((resolve) => server.listen(0, '127.0.0.1', () => resolve()));
+  const address = server.address();
+  assert.ok(address && typeof address === 'object');
+  const baseUrl = `http://127.0.0.1:${address.port}`;
+  const previousEnv = {
+    ANTHROPIC_API_KEY: process.env.ANTHROPIC_API_KEY,
+    CLAUDE_CODE_OAUTH_TOKEN: process.env.CLAUDE_CODE_OAUTH_TOKEN,
+    CODEX_ACCOUNT_ID: process.env.CODEX_ACCOUNT_ID,
+    CODEX_BACKEND_BASE_URL: process.env.CODEX_BACKEND_BASE_URL,
+    CODEX_OAUTH_CREDENTIAL: process.env.CODEX_OAUTH_CREDENTIAL,
+    CODEX_OAUTH_TOKEN: process.env.CODEX_OAUTH_TOKEN,
+    OPENAI_API_KEY: process.env.OPENAI_API_KEY
+  };
+
+  try {
+    delete process.env.ANTHROPIC_API_KEY;
+    delete process.env.CLAUDE_CODE_OAUTH_TOKEN;
+    delete process.env.CODEX_ACCOUNT_ID;
+    delete process.env.CODEX_BACKEND_BASE_URL;
+    delete process.env.CODEX_OAUTH_TOKEN;
+    delete process.env.OPENAI_API_KEY;
+    process.env.CODEX_OAUTH_CREDENTIAL = JSON.stringify({
+      tokens: {
+        access_token: 'fresh-access',
+        refresh_token: 'refresh',
+        account_id: 'acct-live-case'
+      },
+      last_refresh: '2026-07-15T09:00:00.000Z',
+      base_url: `${baseUrl}/backend-api/codex`
+    });
+
+    await withAgent({
+      'agent.ts': `
+        import { defineAgent } from '@agentworkforce/runtime';
+        export default defineAgent({
+          id: 'live-case-model-fidelity',
+          intent: 'documentation',
+          description: 'case live model fidelity test',
+          skills: [],
+          harnessSettings: { reasoning: 'medium', timeoutSeconds: 300 },
+          schedules: [{ name: 'scan', cron: '0 9 * * *' }],
+          handler: async (ctx) => {
+            ctx.log('info', await ctx.llm.complete('live case prompt'));
+          }
+        });
+      `,
+      'case.yaml': `
+schemaVersion: 1
+id: live.case.model
+kind: scheduled
+event:
+  schedule: scan
+policy:
+  model: live
+model:
+  - output: fixture-should-not-be-used
+expect:
+  status: succeeded
+  eventSource: cron
+`
+    }, async (dir, agentPath) => {
+      const io = collectingIO();
+      const previousExitCode = process.exitCode;
+      const result = await runInvoke([agentPath, '--case', path.join(dir, 'case.yaml')], io);
+      const exitCode = process.exitCode;
+      process.exitCode = previousExitCode;
+
+      assert.ok(result && !Array.isArray(result));
+      assert.equal(exitCode, 0);
+      assert.equal(modelRequests, 1);
+      assert.equal(seenPrompt, 'live case prompt');
+      const sourceFidelity = ((result.extensions as Record<string, unknown>).sourceFidelity ?? {}) as Record<string, unknown>;
+      assert.equal(sourceFidelity.model, 'current');
+      const action = result.actions.find((entry) => entry.kind === 'model.complete');
+      assert.equal(action?.data?.source, 'current');
+      const messages = extractLoggedMessagePayloads(result);
+      assert.ok(messages.some((line) => line.includes('live-case-output')));
+      assert.ok(messages.every((line) => !line.includes('fixture-should-not-be-used')));
+    });
+  } finally {
+    server.close();
+    for (const [key, value] of Object.entries(previousEnv)) {
+      if (value === undefined) delete process.env[key];
+      else process.env[key] = value;
+    }
+  }
 });
 
 test('runInvoke: schedule invocation carries persona httpRead capability rules', async () => {
@@ -616,6 +778,88 @@ test('runInvoke: live GET is allowed while POST is denied and never reaches the 
   }
 });
 
+test('runInvoke: parent live fetch strips credential-bearing headers before upstream', async () => {
+  const seenHeaders: Record<string, string | undefined> = {};
+  const server = createServer((req, res) => {
+    seenHeaders.authorization = req.headers.authorization;
+    seenHeaders['proxy-authorization'] = req.headers['proxy-authorization'] as string | undefined;
+    seenHeaders.cookie = req.headers.cookie;
+    seenHeaders['set-cookie'] = req.headers['set-cookie'] as string | undefined;
+    seenHeaders['x-api-key'] = req.headers['x-api-key'] as string | undefined;
+    seenHeaders['x-session-token'] = req.headers['x-session-token'] as string | undefined;
+    seenHeaders['x-trace-id'] = req.headers['x-trace-id'] as string | undefined;
+    res.statusCode = 200;
+    res.setHeader('content-type', 'application/json');
+    res.end(JSON.stringify({ ok: true }));
+  });
+  await new Promise<void>((resolve) => server.listen(0, '127.0.0.1', () => resolve()));
+  const address = server.address();
+  assert.ok(address && typeof address === 'object');
+  const url = `http://127.0.0.1:${address.port}/allowed`;
+
+  try {
+    await withAgent({
+      'agent.ts': `
+        import { defineAgent } from '@agentworkforce/runtime';
+        export default defineAgent({
+          id: 'header-sanitization',
+          intent: 'documentation',
+          description: 'credential-bearing header strip test',
+          skills: [],
+          harnessSettings: { reasoning: 'medium', timeoutSeconds: 300 },
+          schedules: [{ name: 'scan', cron: '0 9 * * *' }],
+          capabilities: {
+            httpRead: {
+              allow: [{ method: 'GET', urlGlob: '${url}' }]
+            }
+          },
+          handler: async () => {
+            const response = await fetch('${url}', {
+              headers: {
+                Authorization: 'Bearer should-not-leak',
+                'Proxy-Authorization': 'Basic should-not-leak',
+                Cookie: 'sid=should-not-leak',
+                'Set-Cookie': 'sid=should-not-leak',
+                'X-Api-Key': 'sk-should-not-leak',
+                'X-Session-Token': 'session-should-not-leak',
+                'X-Trace-Id': 'trace-ok'
+              }
+            });
+            await response.text();
+          }
+        });
+      `
+    }, async (_dir, agentPath) => {
+      const io = collectingIO();
+      const previousExitCode = process.exitCode;
+      const result = await runInvoke([agentPath, '--schedule', 'scan', '--reads', 'live'], io);
+      const exitCode = process.exitCode;
+      process.exitCode = previousExitCode;
+
+      assert.ok(result && !Array.isArray(result));
+      assert.equal(exitCode, 0);
+      assert.equal(seenHeaders.authorization, undefined);
+      assert.equal(seenHeaders['proxy-authorization'], undefined);
+      assert.equal(seenHeaders.cookie, undefined);
+      assert.equal(seenHeaders['set-cookie'], undefined);
+      assert.equal(seenHeaders['x-api-key'], undefined);
+      assert.equal(seenHeaders['x-session-token'], undefined);
+      assert.equal(seenHeaders['x-trace-id'], 'trace-ok');
+      const action = result.actions.find((entry) => entry.kind === 'http.read' && entry.status === 'previewed');
+      assert.deepEqual((action?.data as Record<string, unknown>).strippedHeaders, [
+        'authorization',
+        'cookie',
+        'proxy-authorization',
+        'set-cookie',
+        'x-api-key',
+        'x-session-token'
+      ]);
+    });
+  } finally {
+    server.close();
+  }
+});
+
 test('runInvoke: raw node:https request fails closed with no network permission', async () => {
   await withAgent({
     'agent.ts': `
@@ -682,6 +926,89 @@ test('runInvoke: dynamic computed node:http import is denied with zero raw hits'
   } finally {
     server.close();
   }
+});
+
+test('runInvoke: alternate raw module paths are denied deterministically in the worker', async () => {
+  await withAgent({
+    'agent.ts': `
+      import { defineAgent } from '@agentworkforce/runtime';
+      import net, { Socket as NetSocket } from 'node:net';
+      import tls, { TLSSocket } from 'node:tls';
+      import dgram, { Socket as DgramSocket } from 'node:dgram';
+      import dns from 'node:dns';
+      import http2 from 'node:http2';
+      import { Worker } from 'node:worker_threads';
+
+      async function attempt(fn) {
+        try {
+          const value = fn();
+          if (value && typeof value.then === 'function') await value;
+          return 'ok';
+        } catch (error) {
+          return error instanceof Error ? error.message : String(error);
+        }
+      }
+
+      export default defineAgent({
+        schedules: [{ name: 'scan', cron: '0 9 * * *' }],
+        handler: async (ctx) => {
+          const results = {
+            netSocket: await attempt(() => new NetSocket()),
+            netConnect: await attempt(() => net.connect(1, '127.0.0.1')),
+            tlsSocket: await attempt(() => new TLSSocket()),
+            tlsConnect: await attempt(() => tls.connect(1, '127.0.0.1')),
+            tlsContext: await attempt(() => tls.createSecureContext()),
+            dgramSocket: await attempt(() => new DgramSocket('udp4')),
+            dgramCreate: await attempt(() => dgram.createSocket('udp4')),
+            dnsLookup: await attempt(() => dns.promises.lookup('example.test')),
+            http2Connect: await attempt(() => http2.connect('http://127.0.0.1:1')),
+            worker: await attempt(() => new Worker('export {};', { eval: true })),
+            permissionNet: process.permission?.has?.('net'),
+            permissionWorker: process.permission?.has?.('worker')
+          };
+          ctx.log('info', JSON.stringify(results));
+        }
+      });
+    `
+  }, async (_dir, agentPath) => {
+    const io = collectingIO();
+    const previousExitCode = process.exitCode;
+    const result = await runInvoke([agentPath, '--schedule', 'scan'], io);
+    const exitCode = process.exitCode;
+    process.exitCode = previousExitCode;
+
+    assert.ok(result && !Array.isArray(result));
+    assert.equal(exitCode, 0);
+    const messages = extractLoggedMessagePayloads(result);
+    assert.ok(messages.some((line) => line.includes('"permissionNet":false')));
+    assert.ok(messages.some((line) => line.includes('node:net.Socket')));
+    assert.ok(messages.some((line) => line.includes('node:net.connect')));
+    assert.ok(messages.some((line) => line.includes('node:tls.TLSSocket')));
+    assert.ok(messages.some((line) => line.includes('node:tls.connect')));
+    assert.ok(messages.some((line) => line.includes('node:tls.createSecureContext')));
+    assert.ok(messages.some((line) => line.includes('node:dgram.Socket')));
+    assert.ok(messages.some((line) => line.includes('node:dgram.createSocket')));
+    assert.ok(messages.some((line) => line.includes('node:dns.promises.lookup')));
+    assert.ok(messages.some((line) => line.includes('node:http2.connect')));
+    assert.ok(messages.some((line) => line.includes('node:worker_threads.Worker')));
+    const deniedCalls = result.actions
+      .filter((entry) => entry.status === 'denied')
+      .map((entry) => `${String((entry.data as Record<string, unknown>).module)}.${String((entry.data as Record<string, unknown>).call)}`);
+    for (const expected of [
+      'node:net.Socket',
+      'node:net.connect',
+      'node:tls.TLSSocket',
+      'node:tls.connect',
+      'node:tls.createSecureContext',
+      'node:dgram.Socket',
+      'node:dgram.createSocket',
+      'node:dns.promises.lookup',
+      'node:http2.connect',
+      'node:worker_threads.Worker'
+    ]) {
+      assert.ok(deniedCalls.includes(expected), `missing denied action for ${expected}`);
+    }
+  });
 });
 
 test('runInvoke: bare http request is denied before any network write lands', async () => {

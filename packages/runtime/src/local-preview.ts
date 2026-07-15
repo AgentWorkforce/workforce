@@ -73,6 +73,12 @@ const SECRET_INPUT_NAMES = new Set([
 ]);
 
 const SECRET_INPUT_SEGMENT = /(^|_)(ACCESS_KEY|API_KEY|AUTH|BEARER|CLIENT_SECRET|COOKIE|CREDENTIAL|CREDENTIALS|OAUTH|PASSWORD|PASSWD|PRIVATE_KEY|SECRET|SESSION|TOKEN|WEBHOOK_SECRET)(_|$)/u;
+const STRIP_LIVE_REQUEST_HEADERS = new Set([
+  'authorization',
+  'proxy-authorization',
+  'cookie',
+  'set-cookie'
+]);
 const MAX_REDIRECTS = 8;
 const REDACTED_INPUT_VALUE = '[redacted]';
 const WORKER_ENTRY_PATH = fileURLToPath(new URL('./local-preview-child.js', import.meta.url));
@@ -481,10 +487,11 @@ async function resolveLiveParentFetch(
 
   const timeout = setTimeout(() => controller.abort(), localPreviewFetchTimeoutMs());
   let response: Response;
+  const { headers, strippedHeaders } = sanitizeLiveRequestHeaders(request.headers);
   try {
     response = await fetch(new Request(url, {
       method,
-      headers: new Headers(request.headers),
+      headers,
       ...(request.bodyBase64 ? { body: Buffer.from(request.bodyBase64, 'base64') } : {}),
       redirect: 'manual',
       signal: controller.signal
@@ -504,7 +511,8 @@ async function resolveLiveParentFetch(
         data: {
           method,
           url,
-          source: 'current'
+          source: 'current',
+          ...(strippedHeaders.length > 0 ? { strippedHeaders } : {})
         },
         extensions: {
           sourceFidelity: 'current'
@@ -530,7 +538,8 @@ async function resolveLiveParentFetch(
         data: {
           method,
           url,
-          source: 'current'
+          source: 'current',
+          ...(strippedHeaders.length > 0 ? { strippedHeaders } : {})
         },
         extensions: {
           sourceFidelity: 'current'
@@ -739,6 +748,29 @@ function escapeRegExp(value: string): string {
 
 function isRedirect(status: number): boolean {
   return [301, 302, 303, 307, 308].includes(status);
+}
+
+function sanitizeLiveRequestHeaders(
+  entries: ReadonlyArray<[string, string]>
+): { headers: Headers; strippedHeaders: string[] } {
+  const headers = new Headers();
+  const stripped = new Set<string>();
+  for (const [name, value] of entries) {
+    const normalized = name.toLowerCase();
+    if (
+      STRIP_LIVE_REQUEST_HEADERS.has(normalized) ||
+      (normalized.startsWith('x-') && (isCredentialLikeHeaderName(normalized) || isCredentialLikeValue(value)))
+    ) {
+      stripped.add(normalized);
+      continue;
+    }
+    headers.append(name, value);
+  }
+  return { headers, strippedHeaders: [...stripped].sort() };
+}
+
+function isCredentialLikeHeaderName(name: string): boolean {
+  return /(?:access|api|auth|bearer|cookie|credential|key|oauth|proxy|secret|session|token)/u.test(name);
 }
 
 function sendToChild(
