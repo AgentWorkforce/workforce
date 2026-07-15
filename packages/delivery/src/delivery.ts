@@ -16,6 +16,7 @@ import {
   type TelegramRef
 } from './types.js';
 import { defaultRelaycastSender } from './relaycast.js';
+import { requireSlackReceipt } from './slack.js';
 
 const WRITEBACK_TIMEOUT_MS = 45_000;
 
@@ -201,8 +202,9 @@ class DeliveryClientImpl implements DeliveryClient {
 
     if (!result.ts) {
       this.ctx.log?.('warn', 'delivery.slack.no-receipt', { channel });
-      return null;
     }
+
+    requireSlackReceipt(result);
 
     return {
       provider: 'slack',

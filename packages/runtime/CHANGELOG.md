@@ -7,6 +7,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [4.1.17] - 2026-07-15
+
+### Added
+
+- Add `normalizeCronFire` and `workforceEventType` so handlers can consume one
+  stable cron view across legacy v3 and normalized v4 runtime events.
+
 ## [4.1.16] - 2026-07-14
 
 ### Fixed

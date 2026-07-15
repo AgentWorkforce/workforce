@@ -58,6 +58,14 @@ export {
   isStartupEvent
 } from './types.js';
 
+// Cross-version cron compatibility for handlers deployed across the v3/v4
+// event-model boundary.
+export {
+  normalizeCronFire,
+  workforceEventType,
+  type NormalizedCronFire
+} from './cron.js';
+
 // Relay (agent-to-agent) client used by ctx.relay; exported for external ctx
 // builders and tests.
 export { buildRelayContext, DEFAULT_RELAYCAST_URL } from './relay.js';
