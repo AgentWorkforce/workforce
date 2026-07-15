@@ -18,4 +18,18 @@ export {
 
 export { DEFAULT_RELAYCAST_URL, resolveRelaycastUrl, defaultRelaycastSender } from './relaycast.js';
 
+export {
+  buildSlackMentionIndex,
+  formatSlackRoster,
+  isSlackChannelId,
+  linkSlackMentions,
+  loadSlackUsers,
+  requireSlackReceipt,
+  resolveSlackUserId,
+  type SlackMentionIndex,
+  type SlackUser,
+  type SlackUsersOptions,
+  type SlackUsersWarning
+} from './slack.js';
+
 export { input, list, withTimeout, fetchWithTimeout } from './helpers.js';
