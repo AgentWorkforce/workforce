@@ -106,6 +106,7 @@ export {
   type ExecuteLocalRunOptions,
   type ExecuteLocalRunResult,
   type LocalHttpFixture,
+  type LocalModelFixture,
   type LocalPreviewMemoryEntry,
   type LocalPreviewState
 } from './local-preview.js';

@@ -6,6 +6,10 @@ import type {
   LocalPreviewFetchRequestMessage,
   LocalPreviewFetchResponseMessage,
   LocalPreviewGuardConfig,
+  LocalPreviewModelRequestMessage,
+  LocalPreviewModelResponseMessage,
+  LocalPreviewTransportReceipt,
+  LocalPreviewTransportState,
   PreviewProcessState
 } from './local-preview-contract.js';
 
@@ -23,11 +27,13 @@ type PreviewModuleState = PreviewProcessState;
 export function installPreviewProcessGuards(args: {
   config: LocalPreviewGuardConfig;
   fetchFromParent: (request: LocalPreviewFetchRequestMessage) => Promise<LocalPreviewFetchResponseMessage>;
+  completeModelFromParent: (request: LocalPreviewModelRequestMessage) => Promise<LocalPreviewModelResponseMessage>;
 }): PreviewProcessState {
   const existing = getPreviewProcessState();
   if (existing) return existing;
 
   const previewTransport = new PreviewTransport();
+  if (args.config.transportState) restorePreviewTransportState(previewTransport, args.config.transportState);
   const restoreTransport = bindPreviewTransport(previewTransport);
   const recordedActions: PreviewAction[] = [];
   const clockNow = args.config.clockNow;
@@ -91,8 +97,12 @@ export function installPreviewProcessGuards(args: {
       delete (globalThis as Record<PropertyKey, unknown>)[PREVIEW_PROCESS_STATE];
     },
     fetchFromParent: args.fetchFromParent,
+    completeModelFromParent: args.completeModelFromParent,
     now,
     previewTransport: previewTransport as unknown as PreviewProcessState['previewTransport'],
+    snapshotTransportState() {
+      return snapshotPreviewTransportState(previewTransport);
+    },
     recordAction(action) {
       recordedActions.push(action);
     },
@@ -122,6 +132,37 @@ export function installPreviewProcessGuards(args: {
   globalThis.fetch = installFetchBridge(state);
   (globalThis as Record<PropertyKey, unknown>)[PREVIEW_PROCESS_STATE] = state;
   return state;
+}
+
+function snapshotPreviewTransportState(previewTransport: PreviewTransport): LocalPreviewTransportState {
+  const internal = previewTransport as unknown as {
+    sequence: number;
+    data: Map<string, unknown>;
+    writtenPaths: Set<string>;
+    receiptsByReference: Map<string, LocalPreviewTransportReceipt>;
+  };
+  return {
+    sequence: internal.sequence ?? 0,
+    data: Object.fromEntries((internal.data ?? new Map()).entries()),
+    writtenPaths: [...(internal.writtenPaths ?? new Set())],
+    receiptsByReference: Object.fromEntries((internal.receiptsByReference ?? new Map()).entries())
+  };
+}
+
+function restorePreviewTransportState(
+  previewTransport: PreviewTransport,
+  state: LocalPreviewTransportState
+): void {
+  const internal = previewTransport as unknown as {
+    sequence: number;
+    data: Map<string, unknown>;
+    writtenPaths: Set<string>;
+    receiptsByReference: Map<string, LocalPreviewTransportReceipt>;
+  };
+  internal.sequence = state.sequence;
+  internal.data = new Map(Object.entries(state.data ?? {}));
+  internal.writtenPaths = new Set(state.writtenPaths ?? []);
+  internal.receiptsByReference = new Map(Object.entries(state.receiptsByReference ?? {}));
 }
 
 export function getPreviewProcessState(): PreviewProcessState | undefined {

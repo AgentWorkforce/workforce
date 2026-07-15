@@ -18,9 +18,40 @@ export interface LocalPreviewMemoryEntry extends MemoryItem {
   scope: 'workspace' | 'user' | 'global';
 }
 
+export interface LocalPreviewTransportReceipt {
+  id: string;
+  timestamp: string;
+}
+
+export interface LocalPreviewTransportState {
+  sequence: number;
+  data: Record<string, unknown>;
+  writtenPaths: string[];
+  receiptsByReference: Record<string, LocalPreviewTransportReceipt>;
+}
+
+export interface LocalPreviewModelState {
+  fixtureCursor: number;
+}
+
 export interface LocalPreviewState {
   files?: Record<string, string>;
   memory?: LocalPreviewMemoryEntry[];
+  transport?: LocalPreviewTransportState;
+  model?: LocalPreviewModelState;
+}
+
+export interface LocalModelFixture {
+  output: string;
+  sourcePath?: string;
+}
+
+export interface LocalSourceFidelity {
+  state: 'historical' | 'current' | 'fixture' | 'simulated' | 'unavailable';
+  inputs: 'historical' | 'current' | 'fixture' | 'simulated' | 'unavailable';
+  http: 'historical' | 'current' | 'fixture' | 'simulated' | 'unavailable';
+  model: 'historical' | 'current' | 'fixture' | 'simulated' | 'unavailable';
+  extensions?: Record<string, unknown>;
 }
 
 export interface ExecuteLocalRunOptions {
@@ -30,7 +61,12 @@ export interface ExecuteLocalRunOptions {
   inputs?: Record<string, string>;
   state?: LocalPreviewState;
   httpFixtures?: readonly LocalHttpFixture[];
+  modelFixtures?: readonly LocalModelFixture[];
   replayProvenance?: Record<string, unknown>;
+  sourceFidelity?: LocalSourceFidelity;
+  modelAdapter?: {
+    complete: (prompt: string, opts?: { maxTokens?: number }) => Promise<string>;
+  };
   now?: () => Date;
 }
 
@@ -44,6 +80,7 @@ export interface ExecuteLocalRunResult {
 export interface LocalPreviewGuardConfig {
   policy: EffectPolicyV1;
   fixtures: readonly LocalHttpFixture[];
+  transportState?: LocalPreviewTransportState;
   clockNow?: string;
 }
 
@@ -53,6 +90,7 @@ export interface LocalPreviewWorkerPayload {
   inputs?: Record<string, string>;
   state?: LocalPreviewState;
   replayProvenance?: Record<string, unknown>;
+  sourceFidelity?: LocalSourceFidelity;
 }
 
 export interface LocalPreviewWorkerInitMessage {
@@ -87,6 +125,22 @@ export interface LocalPreviewFetchResponseMessage {
   error?: string;
 }
 
+export interface LocalPreviewModelRequestMessage {
+  type: 'model';
+  requestId: string;
+  prompt: string;
+  maxTokens?: number;
+}
+
+export interface LocalPreviewModelResponseMessage {
+  type: 'model-response';
+  requestId: string;
+  ok: boolean;
+  action: PreviewAction;
+  output?: string;
+  error?: string;
+}
+
 export interface LocalPreviewWorkerResultMessage {
   type: 'result';
   result: LocalPreviewWorkerResult;
@@ -94,11 +148,13 @@ export interface LocalPreviewWorkerResultMessage {
 
 export type LocalPreviewWorkerInboundMessage =
   | LocalPreviewWorkerInitMessage
-  | LocalPreviewFetchResponseMessage;
+  | LocalPreviewFetchResponseMessage
+  | LocalPreviewModelResponseMessage;
 
 export type LocalPreviewWorkerOutboundMessage =
   | LocalPreviewWorkerReadyMessage
   | LocalPreviewFetchRequestMessage
+  | LocalPreviewModelRequestMessage
   | LocalPreviewWorkerResultMessage;
 
 export interface LocalPreviewWorkerSuccess extends ExecuteLocalRunResult {
@@ -117,11 +173,13 @@ export interface PreviewProcessState {
   activateUserImportGuard: () => void;
   cleanup: () => void;
   fetchFromParent: (request: LocalPreviewFetchRequestMessage) => Promise<LocalPreviewFetchResponseMessage>;
+  completeModelFromParent: (request: LocalPreviewModelRequestMessage) => Promise<LocalPreviewModelResponseMessage>;
   now: () => Date;
   previewTransport: {
     actions: PreviewAction[];
     accesses: PreviewAction[];
   };
+  snapshotTransportState: () => LocalPreviewTransportState;
   recordAction: (action: PreviewAction) => void;
   recordedActions: PreviewAction[];
 }

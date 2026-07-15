@@ -160,6 +160,61 @@ test('runInvoke: watch reruns the same source when authored files change', async
   });
 });
 
+test('runInvoke: watch reruns preserve simulated provider receipts for later threaded replies', async () => {
+  await withAgent({
+    'agent.ts': `
+      import { defineAgent } from '@agentworkforce/runtime';
+      import { slackClient } from '@relayfile/relay-helpers';
+      import { marker } from './marker.ts';
+      export default defineAgent({
+        schedules: [{ name: 'scan', cron: '0 9 * * *' }],
+        handler: async (ctx) => {
+          const slack = slackClient();
+          const existing = await ctx.files.read('/tmp/thread-ref.txt').catch(() => '');
+          if (!existing) {
+            const header = await slack.post('C123', marker);
+            await ctx.files.write('/tmp/thread-ref.txt', header.ref);
+            return;
+          }
+          await slack.post('C123', marker, { replyTo: existing });
+        }
+      });
+    `,
+    'marker.ts': `export const marker = 'header';\n`
+  }, async (dir, agentPath) => {
+    const relayfileDir = path.join(dir, 'node_modules', '@relayfile');
+    await mkdir(relayfileDir, { recursive: true });
+    await symlink(
+      path.resolve(process.cwd(), '..', 'delivery', 'node_modules', '@relayfile', 'relay-helpers'),
+      path.join(relayfileDir, 'relay-helpers')
+    );
+
+    const io = collectingIO();
+    let waits = 0;
+    const previousExitCode = process.exitCode;
+    const result = await runInvoke([agentPath, '--schedule', 'scan', '--watch'], io, {
+      waitForWatchChange: async () => {
+        waits += 1;
+        if (waits === 1) {
+          await writeFile(path.join(dir, 'marker.ts'), `export const marker = 'reply';\n`, 'utf8');
+          return 'change';
+        }
+        return 'stop';
+      }
+    });
+    const exitCode = process.exitCode;
+    process.exitCode = previousExitCode;
+
+    assert.ok(result && !Array.isArray(result));
+    assert.equal(exitCode, 0);
+    const write = result.actions.find((entry) => entry.kind === 'provider.write' && entry.provider === 'slack');
+    const data = write?.data as Record<string, unknown> | undefined;
+    const body = data?.body as Record<string, unknown> | undefined;
+    assert.equal(body?.parentRef, '/slack/channels/C123/messages/preview-slack-messages-0001.json');
+    assert.equal(body?.thread_ts, 'preview-slack-messages-0001');
+  });
+});
+
 test('runInvoke: case file executes with assertions and fixture-backed HTTP/model preview', async () => {
   await withAgent({
     'agent.ts': `
@@ -210,6 +265,43 @@ expect:
     assert.equal(result.status, 'succeeded');
     assert.ok(result.actions.some((action) => action.kind === 'http.read'));
     assert.ok(result.actions.some((action) => action.kind === 'model.complete'));
+  });
+});
+
+test('runInvoke: case model fixtures fail clearly when exhausted', async () => {
+  await withAgent({
+    'agent.ts': `
+      import { defineAgent } from '@agentworkforce/runtime';
+      export default defineAgent({
+        schedules: [{ name: 'scan', cron: '0 9 * * *' }],
+        handler: async (ctx) => {
+          ctx.log('info', await ctx.llm.complete('first'));
+          ctx.log('info', await ctx.llm.complete('second'));
+        }
+      });
+    `,
+    'case.yaml': `
+schemaVersion: 1
+id: test.model-fixture
+kind: scheduled
+event:
+  schedule: scan
+policy:
+  model: fixture
+model:
+  - output: first-output
+`
+  }, async (dir, agentPath) => {
+    const io = collectingIO();
+    const previousExitCode = process.exitCode;
+    const result = await runInvoke([agentPath, '--case', path.join(dir, 'case.yaml')], io);
+    const exitCode = process.exitCode;
+    process.exitCode = previousExitCode;
+
+    assert.ok(result && !Array.isArray(result));
+    assert.equal(exitCode, 1);
+    assert.equal(result.status, 'failed');
+    assert.match(String(result.error ?? ''), /model fixture 2 requested but only 1 fixture\(s\) are available/);
   });
 });
 
@@ -1061,7 +1153,8 @@ test('runInvoke: replay bundle preserves provenance and unavailable state fideli
         files: {
           'event.json': { fidelity: 'historical' },
           'run.json': { fidelity: 'historical' },
-          'state/manifest.json': { fidelity: 'unavailable' }
+          'state/manifest.json': { fidelity: 'unavailable' },
+          'inputs.json': { fidelity: 'historical' }
         }
       },
       files: {
@@ -1076,7 +1169,8 @@ test('runInvoke: replay bundle preserves provenance and unavailable state fideli
             files: {
               'event.json': { fidelity: 'historical' },
               'run.json': { fidelity: 'historical' },
-              'state/manifest.json': { fidelity: 'unavailable' }
+              'state/manifest.json': { fidelity: 'unavailable' },
+              'inputs.json': { fidelity: 'historical' }
             }
           }
         },
@@ -1110,6 +1204,10 @@ test('runInvoke: replay bundle preserves provenance and unavailable state fideli
         'state/manifest.json': {
           fidelity: 'unavailable',
           content: { available: false }
+        },
+        'inputs.json': {
+          fidelity: 'historical',
+          content: { SLACK_CHANNEL: 'C123' }
         }
       }
     }, null, 2)
@@ -1126,8 +1224,15 @@ test('runInvoke: replay bundle preserves provenance and unavailable state fideli
     assert.equal(result.eventId, 'evt_hosted_123');
     const extensions = result.extensions as Record<string, unknown>;
     const stateSource = extensions.stateSource as Record<string, unknown>;
+    const sourceFidelity = extensions.sourceFidelity as Record<string, unknown>;
     const provenance = extensions.provenance as Record<string, unknown>;
     assert.equal(stateSource.fidelity, 'unavailable');
+    assert.deepEqual(sourceFidelity, {
+      state: 'unavailable',
+      inputs: 'historical',
+      http: 'unavailable',
+      model: 'unavailable'
+    });
     assert.equal(provenance.sourceRunId, 'run_hosted_123');
     assert.equal(provenance.sourceEventId, 'evt_hosted_123');
   });

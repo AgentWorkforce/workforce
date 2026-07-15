@@ -17,6 +17,8 @@ function previewRequest(args: {
   tempDir: string;
   id: string;
   allowedHttp: Array<{ method: string; urlGlob: string }>;
+  model?: 'stub' | 'fixture' | 'live';
+  personaModel?: string;
 }): RunRequestV1 {
   return {
     schemaVersion: 1,
@@ -34,7 +36,7 @@ function previewRequest(args: {
         description: `${args.id} persona`,
         skills: [],
         harness: 'claude',
-        model: 'local-preview-stub',
+        model: args.personaModel ?? 'local-preview-stub',
         systemPrompt: 'test',
         harnessSettings: { reasoning: 'medium', timeoutSeconds: 300 },
         cloud: true,
@@ -59,7 +61,7 @@ function previewRequest(args: {
     policy: {
       reads: 'live',
       writes: 'preview',
-      model: 'stub',
+      model: args.model ?? 'stub',
       shell: 'simulate',
       compose: 'preview',
       allowedHttp: args.allowedHttp
@@ -286,6 +288,110 @@ test('executeLocalRun: redirected live read is denied before blocked target fetc
   } finally {
     allowedServer.close();
     blockedServer.close();
+    await rm(tempDir, { recursive: true, force: true });
+  }
+});
+
+test('executeLocalRun: model stub stays deterministic inside the worker', async () => {
+  const tempDir = await mkdtemp(path.join(os.tmpdir(), 'wf-preview-model-stub-'));
+  const bundlePath = path.join(tempDir, 'bundle.mjs');
+  await writeFile(
+    bundlePath,
+    `
+      export default async function handler(ctx) {
+        ctx.log('info', await ctx.llm.complete('Return ONLY compact JSON with this shape:\\n[{"id":1,"title":"Agent"}]'));
+      }
+    `,
+    'utf8'
+  );
+
+  try {
+    const result = await executeLocalRun({
+      request: previewRequest({ tempDir, id: 'model-stub', allowedHttp: [], model: 'stub' }),
+      bundlePath
+    });
+    assert.equal(result.exitCode, 0);
+    assert.equal(result.record.status, 'succeeded');
+    const action = result.record.actions.find((entry) => entry.kind === 'model.complete');
+    assert.equal(action?.data?.source, 'simulated');
+    const logs = ((result.record.extensions as Record<string, unknown>).logs ?? []) as string[];
+    assert.ok(logs.some((line) => line.includes('Agent infrastructure stories worth monitoring.')));
+  } finally {
+    await rm(tempDir, { recursive: true, force: true });
+  }
+});
+
+test('executeLocalRun: model fixture mode consumes explicit deterministic fixtures', async () => {
+  const tempDir = await mkdtemp(path.join(os.tmpdir(), 'wf-preview-model-fixture-'));
+  const bundlePath = path.join(tempDir, 'bundle.mjs');
+  await writeFile(
+    bundlePath,
+    `
+      export default async function handler(ctx) {
+        ctx.log('info', await ctx.llm.complete('fixture please'));
+      }
+    `,
+    'utf8'
+  );
+
+  try {
+    const result = await executeLocalRun({
+      request: previewRequest({ tempDir, id: 'model-fixture', allowedHttp: [], model: 'fixture' }),
+      bundlePath,
+      modelFixtures: [{ output: 'fixture-output' }]
+    });
+    assert.equal(result.exitCode, 0);
+    assert.equal(result.record.status, 'succeeded');
+    const action = result.record.actions.find((entry) => entry.kind === 'model.complete');
+    assert.equal(action?.data?.source, 'fixture');
+    assert.equal(result.state.model?.fixtureCursor, 1);
+    const logs = ((result.record.extensions as Record<string, unknown>).logs ?? []) as string[];
+    assert.ok(logs.some((line) => line.includes('fixture-output')));
+  } finally {
+    await rm(tempDir, { recursive: true, force: true });
+  }
+});
+
+test('executeLocalRun: model live mode uses the parent-side adapter without exposing credentials to the worker', async () => {
+  const tempDir = await mkdtemp(path.join(os.tmpdir(), 'wf-preview-model-live-'));
+  const bundlePath = path.join(tempDir, 'bundle.mjs');
+  const previousOpenAi = process.env.OPENAI_API_KEY;
+  await writeFile(
+    bundlePath,
+    `
+      export default async function handler(ctx) {
+        const output = await ctx.llm.complete('live please');
+        if (process.env.OPENAI_API_KEY) throw new Error('worker unexpectedly received OPENAI_API_KEY');
+        ctx.log('info', output);
+      }
+    `,
+    'utf8'
+  );
+
+  try {
+    process.env.OPENAI_API_KEY = 'sk-live-parent-only-secret';
+    const result = await executeLocalRun({
+      request: previewRequest({
+        tempDir,
+        id: 'model-live',
+        allowedHttp: [],
+        model: 'live',
+        personaModel: 'openai/gpt-5.5'
+      }),
+      bundlePath,
+      modelAdapter: {
+        complete: async (prompt) => `live-output:${prompt}`
+      }
+    });
+    assert.equal(result.exitCode, 0);
+    assert.equal(result.record.status, 'succeeded');
+    const action = result.record.actions.find((entry) => entry.kind === 'model.complete');
+    assert.equal(action?.data?.source, 'current');
+    const logs = ((result.record.extensions as Record<string, unknown>).logs ?? []) as string[];
+    assert.ok(logs.some((line) => line.includes('live-output:live please')));
+  } finally {
+    if (previousOpenAi === undefined) delete process.env.OPENAI_API_KEY;
+    else process.env.OPENAI_API_KEY = previousOpenAi;
     await rm(tempDir, { recursive: true, force: true });
   }
 });

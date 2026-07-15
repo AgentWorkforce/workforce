@@ -27,6 +27,11 @@ export interface ParsedCaseExpectation {
   providerActions: ParsedCaseExpectationProviderAction[];
 }
 
+export interface ParsedCaseModelFixture {
+  output?: string;
+  file?: string;
+}
+
 export interface ParsedInvokeCase {
   schemaVersion: 1;
   id: string;
@@ -36,6 +41,7 @@ export interface ParsedInvokeCase {
   inputs: Record<string, string>;
   policy: Partial<EffectPolicyV1>;
   http: ParsedCaseHttpFixture[];
+  model: ParsedCaseModelFixture[];
   expect: ParsedCaseExpectation;
   casePath: string;
 }
@@ -59,6 +65,7 @@ function normalizeCase(casePath: string, value: unknown): ParsedInvokeCase {
     'inputs',
     'policy',
     'http',
+    'model',
     'expect'
   ]);
   if (root.schemaVersion !== 1) throw new Error('$.schemaVersion: expected 1');
@@ -83,6 +90,7 @@ function normalizeCase(casePath: string, value: unknown): ParsedInvokeCase {
     inputs: normalizeStringMap(root.inputs, '$.inputs'),
     policy: normalizePolicy(root.policy, '$.policy'),
     http: normalizeHttpFixtures(root.http, casePath),
+    model: normalizeModelFixtures(root.model, casePath),
     expect: normalizeExpectation(root.expect, '$.expect'),
     casePath
   };
@@ -169,6 +177,26 @@ function normalizeHttpFixtures(value: unknown, casePath: string): ParsedCaseHttp
       method: expectString(record.method, `$.http[${index}].method`),
       match: expectString(record.match, `$.http[${index}].match`),
       file: path.resolve(path.dirname(casePath), expectString(record.file, `$.http[${index}].file`))
+    };
+  });
+}
+
+function normalizeModelFixtures(value: unknown, casePath: string): ParsedCaseModelFixture[] {
+  if (value === undefined) return [];
+  return expectArray(value, '$.model').map((entry, index) => {
+    const record = expectRecord(entry, `$.model[${index}]`);
+    assertOnlyKeys(record, `$.model[${index}]`, ['output', 'file']);
+    const output = optionalString(record.output);
+    const file = optionalString(record.file);
+    if (!output && !file) {
+      throw new Error(`$.model[${index}]: expected one of output or file`);
+    }
+    if (output && file) {
+      throw new Error(`$.model[${index}]: choose exactly one of output or file`);
+    }
+    return {
+      ...(output ? { output } : {}),
+      ...(file ? { file: path.resolve(path.dirname(casePath), file) } : {})
     };
   });
 }

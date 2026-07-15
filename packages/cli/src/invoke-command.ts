@@ -9,11 +9,13 @@ import {
   resolveLocalEffectPolicy,
   type EffectPolicyV1,
   type LocalHttpFixture,
+  type LocalModelFixture,
   type LocalPreviewState,
   type RunRecordV2
 } from '@agentworkforce/runtime';
 import {
   parseInvokeCase,
+  type ParsedCaseModelFixture,
   type ParsedCaseExpectationProviderAction,
   type ParsedInvokeCase
 } from './invoke/case-file.js';
@@ -111,7 +113,7 @@ export async function runInvoke(
   try {
     return opts.watch
       ? await runInvokeWatchLoop(opts, io, internals)
-      : await runInvokeOnce(opts, io);
+      : (await runInvokeOnce(opts, io)).output;
   } catch (error) {
     io.stderr(`invoke: ${error instanceof Error ? error.message : String(error)}\n`);
     process.exitCode = 1;
@@ -268,8 +270,9 @@ function parseJson(text: string, label: string): unknown {
 
 async function runInvokeOnce(
   opts: InvokeOptions,
-  io: RunInvokeIO
-): Promise<RunRecordV2 | RunRecordV2[]> {
+  io: RunInvokeIO,
+  initialState?: LocalPreviewState
+): Promise<{ output: RunRecordV2 | RunRecordV2[]; state?: LocalPreviewState }> {
   const target = await prepareInvokeTarget(opts.personaPath);
   for (const warning of target.warnings) io.stderr(`warn: ${warning}\n`);
 
@@ -284,7 +287,8 @@ async function runInvokeOnce(
       outDir: buildDir
     });
 
-    const seededFiles = await loadSeeds(opts.seeds);
+    const seededFiles = initialState ? undefined : await loadSeeds(opts.seeds);
+    const initialPreviewState = initialState ?? (seededFiles ? { files: seededFiles } : undefined);
     const initialPolicy = resolveLocalEffectPolicy({
       ...(opts.reads ? { reads: opts.reads } : {}),
       ...(opts.model ? { model: opts.model } : {}),
@@ -292,30 +296,31 @@ async function runInvokeOnce(
     });
 
     let output: RunRecordV2 | RunRecordV2[];
+    let state: LocalPreviewState | undefined;
     if (opts.source.kind === 'case') {
-      output = await runCaseInvoke(
+      ({ output, state } = await runCaseInvoke(
         target.compiled,
         bundle.bundlePath,
         opts as InvokeOptions & { source: { kind: 'case'; path: string } },
         initialPolicy,
-        seededFiles
-      );
+        initialPreviewState
+      ));
     } else if (opts.source.kind === 'schedule') {
-      output = await runScheduleInvoke(
+      ({ output, state } = await runScheduleInvoke(
         target.compiled,
         bundle.bundlePath,
         opts as InvokeOptions & { source: { kind: 'schedule'; name: string } },
         initialPolicy,
-        seededFiles
-      );
+        initialPreviewState
+      ));
     } else {
-      output = await runFixtureInvoke(
+      ({ output, state } = await runFixtureInvoke(
         target.compiled,
         bundle.bundlePath,
         opts as InvokeOptions & { source: { kind: 'fixture'; path: string } },
         initialPolicy,
-        seededFiles
-      );
+        initialPreviewState
+      ));
     }
 
     io.stderr(renderHumanSummary(output));
@@ -327,7 +332,7 @@ async function runInvokeOnce(
       io.stdout(json);
     }
     process.exitCode = deriveExitCode(output);
-    return output;
+    return { output, state };
   } finally {
     await rm(buildDir, { recursive: true, force: true });
   }
@@ -339,7 +344,9 @@ async function runInvokeWatchLoop(
   internals: InvokeInternals
 ): Promise<RunRecordV2 | RunRecordV2[]> {
   const waitForWatchChange = internals.waitForWatchChange ?? waitForWatchedFilesChange;
-  let latest = await runInvokeOnce(opts, io);
+  let run = await runInvokeOnce(opts, io);
+  let latest = run.output;
+  let state = run.state;
 
   while (true) {
     const watchFiles = await collectWatchedFiles(opts);
@@ -347,7 +354,9 @@ async function runInvokeWatchLoop(
     const next = await waitForWatchChange(watchFiles);
     if (next === 'stop') return latest;
     io.stderr('watch: change detected, rerunning preview...\n');
-    latest = await runInvokeOnce(opts, io);
+    run = await runInvokeOnce(opts, io, state);
+    latest = run.output;
+    state = run.state;
   }
 }
 
@@ -356,8 +365,8 @@ async function runScheduleInvoke(
   bundlePath: string,
   opts: InvokeOptions & { source: { kind: 'schedule'; name: string } },
   policy: EffectPolicyV1,
-  seededFiles: Record<string, string> | undefined
-): Promise<RunRecordV2> {
+  initialState: LocalPreviewState | undefined
+): Promise<{ output: RunRecordV2; state: LocalPreviewState }> {
   const schedule = compiled.agent.schedules?.find((entry) => entry.name === opts.source.name);
   if (!schedule) {
     const valid = compiled.agent.schedules?.map((entry) => entry.name).join(', ') ?? '(none)';
@@ -371,7 +380,7 @@ async function runScheduleInvoke(
     name: schedule.name,
     cron: schedule.cron
   }).frame;
-  return (await executeLocalRun({
+  const result = await executeLocalRun({
     request: {
       schemaVersion: 1,
       agent: compiled,
@@ -379,13 +388,24 @@ async function runScheduleInvoke(
       mode: 'preview',
       inputs: opts.inputs ?? {},
       policy,
-      state: { schemaVersion: 1, kind: seededFiles ? 'fixtures' : 'empty', fidelity: seededFiles ? 'fixture' : 'simulated' }
+      state: {
+        schemaVersion: 1,
+        kind: initialState?.files ? 'fixtures' : 'empty',
+        fidelity: initialState?.files ? 'fixture' : 'simulated'
+      }
     },
     bundlePath,
     sourcePath: compiled.handlerEntry,
     inputs: opts.inputs,
-    state: seededFiles ? { files: seededFiles } : undefined
-  })).record;
+    state: initialState,
+    sourceFidelity: {
+      state: initialState?.files ? 'fixture' : 'simulated',
+      inputs: opts.inputs && Object.keys(opts.inputs).length > 0 ? 'current' : 'unavailable',
+      http: policy.reads === 'live' ? 'current' : 'unavailable',
+      model: policy.model === 'live' ? 'current' : policy.model === 'stub' ? 'simulated' : 'unavailable'
+    }
+  });
+  return { output: result.record, state: result.state };
 }
 
 async function runFixtureInvoke(
@@ -393,39 +413,55 @@ async function runFixtureInvoke(
   bundlePath: string,
   opts: InvokeOptions & { source: { kind: 'fixture'; path: string } },
   policy: EffectPolicyV1,
-  seededFiles: Record<string, string> | undefined
-): Promise<RunRecordV2 | RunRecordV2[]> {
+  initialState: LocalPreviewState | undefined
+): Promise<{ output: RunRecordV2 | RunRecordV2[]; state: LocalPreviewState | undefined }> {
   const raw = await readFile(opts.source.path, 'utf8');
   const entries = parseFixtureEnvelopes(raw, path.basename(opts.source.path));
-  let state: LocalPreviewState = seededFiles ? { files: seededFiles } : {};
+  let state: LocalPreviewState = initialState ?? {};
   const records: RunRecordV2[] = [];
   for (const entry of entries) {
-    const { event, historicalState, stateFidelity, replayProvenance } = normalizeFixtureEntry(entry);
+    const normalized = normalizeFixtureEntry(entry);
+    const { event, historicalState, stateFidelity, replayProvenance } = normalized;
     const replaySource = stateFidelity !== undefined;
+    const inputs = normalized.historicalInputs ? { ...normalized.historicalInputs, ...(opts.inputs ?? {}) } : (opts.inputs ?? {});
     const result = await executeLocalRun({
       request: {
         schemaVersion: 1,
         agent: compiled,
         event,
         mode: replaySource ? 'replay' : 'preview',
-        inputs: opts.inputs ?? {},
+        inputs,
         policy,
         state: {
           schemaVersion: 1,
-          kind: replaySource ? 'replay' : seededFiles ? 'fixtures' : 'empty',
-          fidelity: stateFidelity ?? (seededFiles ? 'fixture' : 'simulated')
+          kind: replaySource ? 'replay' : initialState?.files ? 'fixtures' : 'empty',
+          fidelity: stateFidelity ?? (initialState?.files ? 'fixture' : 'simulated')
         }
       },
       bundlePath,
       sourcePath: compiled.handlerEntry,
-      inputs: opts.inputs,
+      inputs,
       state: mergeState(state, historicalState),
-      ...(replayProvenance ? { replayProvenance } : {})
+      ...(replayProvenance ? { replayProvenance } : {}),
+      sourceFidelity: normalized.sourceFidelity ?? {
+        state: stateFidelity ?? (initialState?.files ? 'fixture' : 'simulated'),
+        inputs: normalized.historicalInputs
+          ? Object.keys(opts.inputs ?? {}).length > 0 ? 'current' : 'historical'
+          : opts.inputs && Object.keys(opts.inputs).length > 0 ? 'current' : 'unavailable',
+        http: replaySource ? 'unavailable' : policy.reads === 'live' ? 'current' : 'unavailable',
+        model: replaySource
+          ? 'unavailable'
+          : policy.model === 'live'
+            ? 'current'
+            : policy.model === 'stub'
+              ? 'simulated'
+              : 'unavailable'
+      }
     });
     state = result.state;
     records.push(result.record);
   }
-  return records.length === 1 ? records[0] : records;
+  return { output: records.length === 1 ? records[0] : records, state };
 }
 
 async function runCaseInvoke(
@@ -433,10 +469,11 @@ async function runCaseInvoke(
   bundlePath: string,
   opts: InvokeOptions & { source: { kind: 'case'; path: string } },
   basePolicy: EffectPolicyV1,
-  seededFiles: Record<string, string> | undefined
-): Promise<RunRecordV2> {
+  initialState: LocalPreviewState | undefined
+): Promise<{ output: RunRecordV2; state: LocalPreviewState }> {
   const parsedCase = await parseInvokeCase(opts.source.path);
   const httpFixtures = await loadCaseHttpFixtures(parsedCase);
+  const modelFixtures = await loadCaseModelFixtures(parsedCase);
   const policy = resolveLocalEffectPolicy({
     ...basePolicy,
     ...parsedCase.policy,
@@ -446,7 +483,7 @@ async function runCaseInvoke(
     )
   });
   const inputs = { ...parsedCase.inputs, ...(opts.inputs ?? {}) };
-  let state: LocalPreviewState = seededFiles ? { files: seededFiles } : {};
+  let state: LocalPreviewState = initialState ?? {};
   const records: RunRecordV2[] = [];
   const allLogs: string[] = [];
 
@@ -462,13 +499,32 @@ async function runCaseInvoke(
         mode: 'preview',
         inputs,
         policy,
-        state: { schemaVersion: 1, kind: 'fixtures', fidelity: 'fixture' }
+        state: {
+          schemaVersion: 1,
+          kind: 'fixtures',
+          fidelity: 'fixture'
+        }
       },
       bundlePath,
       sourcePath: compiled.handlerEntry,
       inputs,
       state,
-      httpFixtures
+      httpFixtures,
+      modelFixtures,
+      sourceFidelity: {
+        state: 'fixture',
+        inputs: Object.keys(parsedCase.inputs).length > 0
+          ? Object.keys(opts.inputs ?? {}).length > 0 ? 'current' : 'fixture'
+          : Object.keys(opts.inputs ?? {}).length > 0 ? 'current' : 'unavailable',
+        http: httpFixtures.length > 0 ? 'fixture' : policy.reads === 'live' ? 'current' : 'unavailable',
+        model: modelFixtures.length > 0
+          ? 'fixture'
+          : policy.model === 'live'
+            ? 'current'
+            : policy.model === 'stub'
+              ? 'simulated'
+              : 'unavailable'
+      }
     });
     state = result.state;
     records.push(result.record);
@@ -481,7 +537,7 @@ async function runCaseInvoke(
     process.exitCode = 1;
     throw new Error(failures.join('\n'));
   }
-  return aggregate;
+  return { output: aggregate, state };
 }
 
 function aggregateCaseRecords(
@@ -599,11 +655,25 @@ async function loadCaseHttpFixtures(parsedCase: ParsedInvokeCase): Promise<Local
   })));
 }
 
+async function loadCaseModelFixtures(parsedCase: ParsedInvokeCase): Promise<LocalModelFixture[]> {
+  return await Promise.all(parsedCase.model.map(async (fixture) => ({
+    output: fixture.output ?? await readFile(fixture.file!, 'utf8'),
+    ...(fixture.file ? { sourcePath: fixture.file } : {})
+  })));
+}
+
 function normalizeFixtureEntry(entry: unknown): {
   event: ReturnType<typeof decodeEventFrame>['frame'];
   historicalState?: LocalPreviewState;
   stateFidelity?: 'historical' | 'unavailable';
   replayProvenance?: Record<string, unknown>;
+  historicalInputs?: Record<string, string>;
+  sourceFidelity?: {
+    state: 'historical' | 'current' | 'fixture' | 'simulated' | 'unavailable';
+    inputs: 'historical' | 'current' | 'fixture' | 'simulated' | 'unavailable';
+    http: 'historical' | 'current' | 'fixture' | 'simulated' | 'unavailable';
+    model: 'historical' | 'current' | 'fixture' | 'simulated' | 'unavailable';
+  };
 } {
   const replayBundle = unwrapReplayBundle(entry);
   if (replayBundle) return replayBundle;
@@ -627,6 +697,13 @@ function unwrapReplayBundle(entry: unknown): {
   historicalState?: LocalPreviewState;
   stateFidelity?: 'historical' | 'unavailable';
   replayProvenance?: Record<string, unknown>;
+  historicalInputs?: Record<string, string>;
+  sourceFidelity?: {
+    state: 'historical' | 'current' | 'fixture' | 'simulated' | 'unavailable';
+    inputs: 'historical' | 'current' | 'fixture' | 'simulated' | 'unavailable';
+    http: 'historical' | 'current' | 'fixture' | 'simulated' | 'unavailable';
+    model: 'historical' | 'current' | 'fixture' | 'simulated' | 'unavailable';
+  };
 } | null {
   const bundle = asRecord(entry);
   const files = asRecord(bundle?.files);
@@ -641,8 +718,17 @@ function unwrapReplayBundle(entry: unknown): {
     stateFile?.fidelity,
     asRecord(asRecord(manifest?.files)?.['state/manifest.json'])?.fidelity
   );
+  const inputsFile = asRecord(files['inputs.json']) ?? asRecord(files['inputs/manifest.json']);
+  const inputsFidelity = normalizeReplayFidelity(
+    inputsFile?.fidelity,
+    asRecord(asRecord(manifest?.files)?.['inputs.json'])?.fidelity,
+    asRecord(asRecord(manifest?.files)?.['inputs/manifest.json'])?.fidelity
+  );
   const historicalState = stateFidelity === 'historical'
     ? normalizeHistoricalState(asRecord(stateFile?.content) ?? {})
+    : undefined;
+  const historicalInputs = inputsFidelity === 'historical'
+    ? normalizeHistoricalInputs(asRecord(inputsFile?.content) ?? {})
     : undefined;
   const replayProvenance = extractReplayBundleProvenance(manifest, files);
 
@@ -650,7 +736,15 @@ function unwrapReplayBundle(entry: unknown): {
     event: decodeEventFrame(eventFile.content).frame,
     ...(historicalState ? { historicalState } : {}),
     ...(stateFidelity ? { stateFidelity } : {}),
+    ...(historicalInputs ? { historicalInputs } : {}),
     ...(replayProvenance ? { replayProvenance } : {})
+    ,
+    sourceFidelity: {
+      state: stateFidelity ?? 'unavailable',
+      inputs: historicalInputs ? 'historical' : inputsFidelity ?? 'unavailable',
+      http: 'unavailable',
+      model: 'unavailable'
+    }
   };
 }
 
@@ -672,6 +766,12 @@ function normalizeHistoricalState(value: Record<string, unknown>): LocalPreviewS
         }
       : {})
   };
+}
+
+function normalizeHistoricalInputs(value: Record<string, unknown>): Record<string, string> {
+  return Object.fromEntries(
+    Object.entries(value).filter((entry): entry is [string, string] => typeof entry[1] === 'string')
+  );
 }
 
 function extractReplayBundleProvenance(
@@ -717,7 +817,9 @@ function mergeState(
   if (!overlay) return base;
   return {
     ...(base.files || overlay.files ? { files: { ...(base.files ?? {}), ...(overlay.files ?? {}) } } : {}),
-    ...(base.memory || overlay.memory ? { memory: [...(overlay.memory ?? base.memory ?? [])] } : {})
+    ...(base.memory || overlay.memory ? { memory: [...(overlay.memory ?? base.memory ?? [])] } : {}),
+    ...(base.transport || overlay.transport ? { transport: overlay.transport ?? base.transport } : {}),
+    ...(base.model || overlay.model ? { model: overlay.model ?? base.model } : {})
   };
 }
 
@@ -743,6 +845,9 @@ async function collectWatchedFiles(opts: InvokeOptions): Promise<string[]> {
     files.add(opts.source.path);
     const parsedCase = await parseInvokeCase(opts.source.path);
     for (const fixture of parsedCase.http) files.add(fixture.file);
+    for (const fixture of parsedCase.model) {
+      if (fixture.file) files.add(fixture.file);
+    }
   }
   for (const localFile of Object.values(opts.seeds ?? {})) {
     files.add(path.resolve(localFile));

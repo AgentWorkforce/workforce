@@ -3,6 +3,7 @@ import { copyFile, mkdir, mkdtemp, realpath, rm, symlink } from 'node:fs/promise
 import { createRequire } from 'node:module';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { createDefaultLlm } from './cloud-llm.js';
 import {
   isCredentialLikeValue,
   redactLocalPreviewText
@@ -14,6 +15,8 @@ import type {
   LocalPreviewFetchRequestMessage,
   LocalPreviewFetchResponseMessage,
   LocalPreviewGuardConfig,
+  LocalPreviewModelRequestMessage,
+  LocalPreviewModelResponseMessage,
   LocalPreviewMemoryEntry,
   LocalPreviewState,
   LocalPreviewWorkerInboundMessage,
@@ -27,6 +30,7 @@ export type {
   ExecuteLocalRunOptions,
   ExecuteLocalRunResult,
   LocalHttpFixture,
+  LocalModelFixture,
   LocalPreviewMemoryEntry,
   LocalPreviewState
 } from './local-preview-contract.js';
@@ -46,6 +50,7 @@ const WORKER_ENV_KEEP = new Set([
   'TZ',
   'USER',
   'WF_LOCAL_PREVIEW_FETCH_TIMEOUT_MS',
+  'WF_LOCAL_PREVIEW_MODEL_TIMEOUT_MS',
   'WF_LOCAL_PREVIEW_FORCE_KILL_TIMEOUT_MS',
   'WF_LOCAL_PREVIEW_OVERALL_TIMEOUT_MS',
   'WF_LOCAL_PREVIEW_READY_TIMEOUT_MS'
@@ -91,6 +96,7 @@ export async function executeLocalRun(
   const control: LocalPreviewGuardConfig = {
     policy: options.request.policy,
     fixtures: options.httpFixtures ?? [],
+    ...(options.state?.transport ? { transportState: options.state.transport } : {}),
     ...(options.now ? { clockNow: options.now().toISOString() } : {})
   };
   const payload: LocalPreviewWorkerPayload = {
@@ -101,8 +107,16 @@ export async function executeLocalRun(
     bundlePath: options.bundlePath,
     inputs: sanitizedInputs.ctxInputs,
     ...(options.state ? { state: options.state } : {}),
-    ...(options.replayProvenance ? { replayProvenance: options.replayProvenance } : {})
+    ...(options.replayProvenance ? { replayProvenance: options.replayProvenance } : {}),
+    ...(options.sourceFidelity ? { sourceFidelity: options.sourceFidelity } : {})
   };
+  const liveModelAdapter = options.modelAdapter ?? createDefaultLlm({
+    persona: options.request.agent.persona,
+    env: process.env,
+    log: () => undefined
+  });
+  const modelFixtures = options.modelFixtures ?? [];
+  let modelFixtureCursor = options.state?.model?.fixtureCursor ?? 0;
 
   const stagedBundle = await stageWorkerBundle(options.bundlePath);
   try {
@@ -115,12 +129,161 @@ export async function executeLocalRun(
         type: 'init',
         config: control,
         payload
+      },
+      onModelRequest: async (request) => {
+        const sourceFidelity = payload.sourceFidelity?.model
+          ?? (options.request.policy.model === 'live'
+            ? 'current'
+            : options.request.policy.model === 'fixture'
+              ? 'fixture'
+              : 'simulated');
+        if (options.request.policy.model === 'fixture') {
+          const fixture = modelFixtures[modelFixtureCursor];
+          if (!fixture) {
+            return {
+              type: 'model-response',
+              requestId: request.requestId,
+              ok: false,
+              action: {
+                kind: 'model.complete',
+                status: 'denied',
+                data: {
+                  mode: 'fixture',
+                  promptChars: request.prompt.length,
+                  source: 'unavailable',
+                  fixtureIndex: modelFixtureCursor + 1
+                },
+                extensions: {
+                  sourceFidelity: 'unavailable'
+                }
+              },
+              error: modelFixtures.length === 0
+                ? 'invoke: model fixture mode requires explicit case model fixtures'
+                : `invoke: model fixture ${modelFixtureCursor + 1} requested but only ${modelFixtures.length} fixture(s) are available`
+            };
+          }
+          modelFixtureCursor += 1;
+          return {
+            type: 'model-response',
+            requestId: request.requestId,
+            ok: true,
+            action: {
+              kind: 'model.complete',
+              status: 'previewed',
+              data: {
+                mode: 'fixture',
+                promptChars: request.prompt.length,
+                outputChars: fixture.output.length,
+                source: 'fixture',
+                fixtureIndex: modelFixtureCursor,
+                ...(fixture.sourcePath ? { sourceDetail: fixture.sourcePath } : {})
+              },
+              extensions: {
+                sourceFidelity: sourceFidelity
+              }
+            },
+            output: fixture.output
+          };
+        }
+
+        if (options.request.policy.model !== 'live') {
+          return {
+            type: 'model-response',
+            requestId: request.requestId,
+            ok: false,
+            action: {
+              kind: 'model.complete',
+              status: 'denied',
+              data: {
+                mode: options.request.policy.model,
+                promptChars: request.prompt.length,
+                source: 'unavailable'
+              },
+              extensions: {
+                sourceFidelity: 'unavailable'
+              }
+            },
+            error: `invoke: preview worker unexpectedly requested parent model bridge in ${options.request.policy.model} mode`
+          };
+        }
+
+        if (!liveModelAdapter) {
+          return {
+            type: 'model-response',
+            requestId: request.requestId,
+            ok: false,
+            action: {
+              kind: 'model.complete',
+              status: 'denied',
+              data: {
+                mode: 'live',
+                promptChars: request.prompt.length,
+                source: 'unavailable'
+              },
+              extensions: {
+                sourceFidelity: 'unavailable'
+              }
+            },
+            error: 'invoke: live model mode requires a parent-side model adapter with supported current credentials'
+          };
+        }
+
+        try {
+          const output = await promiseWithTimeout(
+            liveModelAdapter.complete(request.prompt, request.maxTokens ? { maxTokens: request.maxTokens } : undefined),
+            localPreviewModelTimeoutMs(),
+            'invoke: parent model adapter timed out'
+          );
+          return {
+            type: 'model-response',
+            requestId: request.requestId,
+            ok: true,
+            action: {
+              kind: 'model.complete',
+              status: 'previewed',
+              data: {
+                mode: 'live',
+                promptChars: request.prompt.length,
+                outputChars: output.length,
+                source: 'current'
+              },
+              extensions: {
+                sourceFidelity: sourceFidelity
+              }
+            },
+            output
+          };
+        } catch (error) {
+          const message = redactLocalPreviewText(error instanceof Error ? error.message : String(error));
+          return {
+            type: 'model-response',
+            requestId: request.requestId,
+            ok: false,
+            action: {
+              kind: 'model.complete',
+              status: 'denied',
+              data: {
+                mode: 'live',
+                promptChars: request.prompt.length,
+                source: 'current'
+              },
+              extensions: {
+                sourceFidelity: 'current'
+              }
+            },
+            error: `invoke: parent model adapter failed: ${message}`
+          };
+        }
       }
     });
 
     if (!workerResult.ok) {
       throw new Error(workerResult.stack ? `${workerResult.error}\n${workerResult.stack}` : workerResult.error);
     }
+    workerResult.state = {
+      ...workerResult.state,
+      model: { fixtureCursor: modelFixtureCursor }
+    };
     return workerResult;
   } finally {
     if (process.env.WF_KEEP_LOCAL_PREVIEW_STAGE !== '1') {
@@ -134,6 +297,7 @@ async function runPreviewWorker(args: {
   extraReadRoots: readonly string[];
   env: NodeJS.ProcessEnv;
   init: LocalPreviewWorkerInitMessage;
+  onModelRequest: (request: LocalPreviewModelRequestMessage) => Promise<LocalPreviewModelResponseMessage>;
 }): Promise<LocalPreviewWorkerResult> {
   const permissionArgs = await buildWorkerPermissionArgs(args.bundlePath, args.extraReadRoots);
   const child = spawnPreviewWorkerProcess(
@@ -163,6 +327,12 @@ async function runPreviewWorker(args: {
     }
     if (message?.type === 'result') {
       result = message.result;
+      return;
+    }
+    if (message?.type === 'model') {
+      const work = respondToModel(child, message, args.onModelRequest)
+        .finally(() => pendingResponses.delete(work));
+      pendingResponses.set(work, new AbortController());
       return;
     }
     if (message?.type !== 'fetch') return;
@@ -214,6 +384,15 @@ async function respondToFetch(
   await sendToChild(child, response);
 }
 
+async function respondToModel(
+  child: import('node:child_process').ChildProcess,
+  request: LocalPreviewModelRequestMessage,
+  onModelRequest: (request: LocalPreviewModelRequestMessage) => Promise<LocalPreviewModelResponseMessage>
+): Promise<void> {
+  const response = await onModelRequest(request);
+  await sendToChild(child, response);
+}
+
 async function resolveParentFetch(
   config: LocalPreviewGuardConfig,
   request: LocalPreviewFetchRequestMessage,
@@ -234,7 +413,11 @@ async function resolveParentFetch(
         data: {
           method,
           url: request.url,
-          source: fixture.sourcePath ?? 'fixture'
+          source: 'fixture',
+          ...(fixture.sourcePath ? { sourceDetail: fixture.sourcePath } : {})
+        },
+        extensions: {
+          sourceFidelity: 'fixture'
         }
       },
       response: {
@@ -321,7 +504,10 @@ async function resolveLiveParentFetch(
         data: {
           method,
           url,
-          source: 'live'
+          source: 'current'
+        },
+        extensions: {
+          sourceFidelity: 'current'
         }
       },
       response: {
@@ -344,7 +530,10 @@ async function resolveLiveParentFetch(
         data: {
           method,
           url,
-          source: 'live'
+          source: 'current'
+        },
+        extensions: {
+          sourceFidelity: 'current'
         }
       },
       response: {
@@ -683,10 +872,34 @@ function localPreviewFetchTimeoutMs(): number {
   return readTimeoutEnv('WF_LOCAL_PREVIEW_FETCH_TIMEOUT_MS', 10_000);
 }
 
+function localPreviewModelTimeoutMs(): number {
+  return readTimeoutEnv('WF_LOCAL_PREVIEW_MODEL_TIMEOUT_MS', 30_000);
+}
+
 function localPreviewForceKillTimeoutMs(): number {
   return readTimeoutEnv('WF_LOCAL_PREVIEW_FORCE_KILL_TIMEOUT_MS', 1_000);
 }
 
 function localPreviewKillSettleTimeoutMs(): number {
   return readTimeoutEnv('WF_LOCAL_PREVIEW_KILL_SETTLE_TIMEOUT_MS', 1_000);
+}
+
+async function promiseWithTimeout<T>(
+  value: Promise<T>,
+  timeoutMs: number,
+  message: string
+): Promise<T> {
+  return await new Promise<T>((resolve, reject) => {
+    const timeout = setTimeout(() => reject(new Error(message)), timeoutMs);
+    value.then(
+      (result) => {
+        clearTimeout(timeout);
+        resolve(result);
+      },
+      (error) => {
+        clearTimeout(timeout);
+        reject(error);
+      }
+    );
+  });
 }

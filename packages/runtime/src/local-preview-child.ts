@@ -1,6 +1,8 @@
 import type {
   LocalPreviewFetchRequestMessage,
   LocalPreviewFetchResponseMessage,
+  LocalPreviewModelRequestMessage,
+  LocalPreviewModelResponseMessage,
   LocalPreviewWorkerInboundMessage,
   LocalPreviewWorkerInitMessage,
   LocalPreviewWorkerReadyMessage,
@@ -15,11 +17,19 @@ const pendingFetches = new Map<string, {
   reject: (error: Error) => void;
   timeout: ReturnType<typeof setTimeout>;
 }>();
+const pendingModels = new Map<string, {
+  resolve: (value: LocalPreviewModelResponseMessage) => void;
+  reject: (error: Error) => void;
+  timeout: ReturnType<typeof setTimeout>;
+}>();
 const LOCAL_PREVIEW_FETCH_IPC_TIMEOUT_MS = readTimeoutEnv('WF_LOCAL_PREVIEW_FETCH_TIMEOUT_MS', 10_000);
+const LOCAL_PREVIEW_MODEL_IPC_TIMEOUT_MS = readTimeoutEnv('WF_LOCAL_PREVIEW_MODEL_TIMEOUT_MS', 30_000);
 
 process.on('message', (message: LocalPreviewWorkerInboundMessage) => {
   if (message?.type === 'fetch-response') {
     resolvePendingFetch(message);
+  } else if (message?.type === 'model-response') {
+    resolvePendingModel(message);
   }
 });
 
@@ -28,13 +38,18 @@ process.on('disconnect', () => {
     pending.reject(new Error('invoke: preview worker parent disconnected during fetch'));
   }
   pendingFetches.clear();
+  for (const pending of pendingModels.values()) {
+    pending.reject(new Error('invoke: preview worker parent disconnected during model'));
+  }
+  pendingModels.clear();
 });
 
 await sendReady();
 const init = await receiveInitMessage();
 installPreviewProcessGuards({
   config: init.config,
-  fetchFromParent: sendFetchToParent
+  fetchFromParent: sendFetchToParent,
+  completeModelFromParent: sendModelToParent
 });
 
 try {
@@ -66,6 +81,8 @@ function receiveInitMessage(): Promise<LocalPreviewWorkerInitMessage> {
       }
       if (message.type === 'fetch-response') {
         resolvePendingFetch(message);
+      } else if (message.type === 'model-response') {
+        resolvePendingModel(message);
       }
     };
     const onDisconnect = () => {
@@ -118,6 +135,30 @@ async function sendReady(): Promise<void> {
   });
 }
 
+function sendModelToParent(
+  request: LocalPreviewModelRequestMessage
+): Promise<LocalPreviewModelResponseMessage> {
+  return new Promise((resolve, reject) => {
+    if (typeof process.send !== 'function') {
+      reject(new Error('invoke: preview worker missing parent IPC channel'));
+      return;
+    }
+    const timeout = setTimeout(() => {
+      pendingModels.delete(request.requestId);
+      reject(new Error(
+        `invoke: preview worker model IPC timeout after ${LOCAL_PREVIEW_MODEL_IPC_TIMEOUT_MS}ms`
+      ));
+    }, LOCAL_PREVIEW_MODEL_IPC_TIMEOUT_MS);
+    pendingModels.set(request.requestId, { resolve, reject, timeout });
+    process.send(request, (error) => {
+      if (!error) return;
+      clearTimeout(timeout);
+      pendingModels.delete(request.requestId);
+      reject(error);
+    });
+  });
+}
+
 async function sendResult(result: LocalPreviewWorkerResult): Promise<void> {
   if (typeof process.send !== 'function') {
     throw new Error('invoke: preview worker missing parent IPC channel');
@@ -138,6 +179,14 @@ function resolvePendingFetch(message: LocalPreviewFetchResponseMessage): void {
   const pending = pendingFetches.get(message.requestId);
   if (!pending) return;
   pendingFetches.delete(message.requestId);
+  clearTimeout(pending.timeout);
+  pending.resolve(message);
+}
+
+function resolvePendingModel(message: LocalPreviewModelResponseMessage): void {
+  const pending = pendingModels.get(message.requestId);
+  if (!pending) return;
+  pendingModels.delete(message.requestId);
   clearTimeout(pending.timeout);
   pending.resolve(message);
 }

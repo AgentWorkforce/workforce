@@ -152,18 +152,35 @@ export async function executeLocalRunInWorkerProcess(
   };
 
   const llm = {
-    async complete(prompt: string) {
-      const output = stubModelOutput(prompt);
-      recordAction({
-        kind: 'model.complete',
-        status: 'previewed',
-        data: {
-          mode: payload.request.policy.model,
-          promptChars: prompt.length,
-          outputChars: output.length
-        }
+    async complete(prompt: string, opts?: { maxTokens?: number }) {
+      if (payload.request.policy.model === 'stub') {
+        const output = stubModelOutput(prompt);
+        recordAction({
+          kind: 'model.complete',
+          status: 'previewed',
+          data: {
+            mode: 'stub',
+            promptChars: prompt.length,
+            outputChars: output.length,
+            source: 'simulated'
+          },
+          extensions: {
+            sourceFidelity: 'simulated'
+          }
+        });
+        return output;
+      }
+      const response = await previewState.completeModelFromParent({
+        type: 'model',
+        requestId: `model_${randomUUID()}`,
+        prompt,
+        ...(opts?.maxTokens ? { maxTokens: opts.maxTokens } : {})
       });
-      return output;
+      recordAction(redactLocalPreviewValue(response.action));
+      if (!response.ok || response.output === undefined) {
+        throw new Error(response.error ?? 'invoke: parent model bridge failed');
+      }
+      return response.output;
     }
   };
 
@@ -360,6 +377,7 @@ export async function executeLocalRunInWorkerProcess(
     extensions: {
       logs,
       stateSource: payload.request.state,
+      ...(payload.sourceFidelity ? { sourceFidelity: payload.sourceFidelity } : {}),
       ...(payload.replayProvenance ? { provenance: payload.replayProvenance } : {})
     },
     ...(error ? { error } : {})
@@ -372,7 +390,8 @@ export async function executeLocalRunInWorkerProcess(
     logs,
     state: {
       files: Object.fromEntries(files.entries()),
-      memory
+      memory,
+      transport: previewState.snapshotTransportState()
     }
   };
 }
