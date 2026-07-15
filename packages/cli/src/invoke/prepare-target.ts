@@ -1,4 +1,5 @@
 import path from 'node:path';
+import { stat } from 'node:fs/promises';
 import type { PersonaSpec } from '@agentworkforce/persona-kit';
 import {
   compileAgentSource,
@@ -12,6 +13,18 @@ export interface PreparedInvokeTarget {
   warnings: string[];
 }
 
+const SIBLING_PERSONA_FILENAMES = [
+  'persona.ts',
+  'persona.tsx',
+  'persona.mts',
+  'persona.cts',
+  'persona.js',
+  'persona.jsx',
+  'persona.mjs',
+  'persona.cjs',
+  'persona.json'
+] as const;
+
 export async function prepareInvokeTarget(inputPath: string): Promise<PreparedInvokeTarget> {
   const absPath = path.resolve(inputPath);
   try {
@@ -20,6 +33,15 @@ export async function prepareInvokeTarget(inputPath: string): Promise<PreparedIn
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error);
     if (!/missing top-level "intent"/.test(message)) throw error;
+  }
+
+  const siblingPersona = await findSiblingPersonaForHandler(absPath);
+  if (siblingPersona) {
+    return {
+      compiled: siblingPersona.compiled,
+      personaPath: siblingPersona.personaPath,
+      warnings: []
+    };
   }
 
   const extracted = await extractAgentSpec(absPath);
@@ -43,6 +65,26 @@ export async function prepareInvokeTarget(inputPath: string): Promise<PreparedIn
   };
 }
 
+async function findSiblingPersonaForHandler(
+  handlerPath: string
+): Promise<{ compiled: CompiledAgentV1; personaPath: string } | undefined> {
+  const dir = path.dirname(handlerPath);
+  for (const filename of SIBLING_PERSONA_FILENAMES) {
+    const personaPath = path.join(dir, filename);
+    if (samePath(personaPath, handlerPath)) continue;
+    if (!(await isRegularFile(personaPath))) continue;
+    try {
+      const compiled = await compileAgentSource(personaPath);
+      if (samePath(compiled.handlerEntry, handlerPath)) {
+        return { compiled, personaPath };
+      }
+    } catch {
+      continue;
+    }
+  }
+  return undefined;
+}
+
 function syntheticInvokePersona(sourcePath: string): PersonaSpec {
   const id = path.basename(sourcePath).replace(/\.[^.]+$/u, '');
   return {
@@ -58,4 +100,20 @@ function syntheticInvokePersona(sourcePath: string): PersonaSpec {
     cloud: true,
     onEvent: `./${path.basename(sourcePath)}`
   };
+}
+
+async function isRegularFile(filePath: string): Promise<boolean> {
+  try {
+    return (await stat(filePath)).isFile();
+  } catch {
+    return false;
+  }
+}
+
+function samePath(left: string, right: string): boolean {
+  const normalize = (value: string) => path.normalize(value);
+  if (process.platform === 'win32') {
+    return normalize(left).toLowerCase() === normalize(right).toLowerCase();
+  }
+  return normalize(left) === normalize(right);
 }

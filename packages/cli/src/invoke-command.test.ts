@@ -14,6 +14,7 @@ import {
   type RunInvokeIO
 } from './invoke-command.js';
 import { parseInvokeCase } from './invoke/case-file.js';
+import { prepareInvokeTarget } from './invoke/prepare-target.js';
 import type { RunRecordV2 } from '@agentworkforce/runtime';
 
 function collectingIO(): RunInvokeIO & { out: string[]; err: string[] } {
@@ -164,6 +165,107 @@ test('runInvoke: bare Agent source runs by schedule and emits a RunRecordV2', as
     assert.equal(result.eventContract, 'cron.tick@1');
     assert.ok(result.actions.some((action) => action.kind === 'memory.save'));
     assert.match(io.err.join(''), /preview: 1 run\(s\) — 1 ok, 0 failed/);
+  });
+});
+
+test('prepareInvokeTarget: matching sibling persona source is used for bare Agent handlers', async () => {
+  await withAgent({
+    'agent.ts': `
+      import { defineAgent } from '@agentworkforce/runtime';
+      export default defineAgent({
+        schedules: [{ name: 'scan', cron: '0 9 * * *' }],
+        handler: async () => {}
+      });
+    `,
+    'persona.ts': `
+      import { definePersona } from '@agentworkforce/persona-kit';
+      export default definePersona({
+        id: 'hn-monitor',
+        intent: 'review',
+        description: 'Real sibling persona.',
+        model: 'claude-haiku-4-5-20251001',
+        inputs: { SLACK_CHANNEL: 'C123' },
+        capabilities: {
+          liveReads: { mode: 'hn' }
+        },
+        harnessSettings: { reasoning: 'medium', timeoutSeconds: 300 },
+        onEvent: './agent.ts'
+      });
+    `
+  }, async (dir, agentPath) => {
+    const prepared = await prepareInvokeTarget(agentPath);
+    assert.equal(prepared.personaPath, path.join(dir, 'persona.ts'));
+    assert.equal(prepared.compiled.sourceKind, 'split');
+    assert.equal(prepared.compiled.handlerEntry, agentPath);
+    assert.equal(prepared.compiled.persona.id, 'hn-monitor');
+    assert.equal(prepared.compiled.persona.model, 'claude-haiku-4-5-20251001');
+    assert.deepEqual(prepared.compiled.persona.inputs, {
+      SLACK_CHANNEL: { default: 'C123' }
+    });
+    assert.deepEqual(prepared.compiled.persona.capabilities, {
+      liveReads: { mode: 'hn' }
+    });
+    assert.deepEqual(prepared.warnings, []);
+  });
+});
+
+test('prepareInvokeTarget: unrelated sibling persona source is ignored and bare Agent fallback stays synthetic', async () => {
+  await withAgent({
+    'agent.ts': `
+      import { defineAgent } from '@agentworkforce/runtime';
+      export default defineAgent({
+        schedules: [{ name: 'scan', cron: '0 9 * * *' }],
+        handler: async () => {}
+      });
+    `,
+    'other-agent.ts': `
+      import { defineAgent } from '@agentworkforce/runtime';
+      export default defineAgent({
+        schedules: [{ name: 'other', cron: '0 10 * * *' }],
+        handler: async () => {}
+      });
+    `,
+    'persona.ts': `
+      import { definePersona } from '@agentworkforce/persona-kit';
+      export default {
+        id: 'other-persona',
+        intent: 'review',
+        description: 'Points at a different agent.',
+        harnessSettings: { reasoning: 'medium', timeoutSeconds: 300 },
+        onEvent: './other-agent.ts'
+      };
+    `
+  }, async (_dir, agentPath) => {
+    const prepared = await prepareInvokeTarget(agentPath);
+    assert.equal(prepared.personaPath, agentPath);
+    assert.equal(prepared.compiled.sourceKind, 'single-file');
+    assert.equal(prepared.compiled.handlerEntry, agentPath);
+    assert.equal(prepared.compiled.persona.id, 'agent');
+    assert.match(prepared.compiled.persona.description ?? '', /Synthetic local preview persona/);
+    assert.deepEqual(prepared.warnings, [
+      `invoke synthesized a minimal preview persona for bare Agent source ${agentPath}`
+    ]);
+  });
+});
+
+test('prepareInvokeTarget: bare Agent source without sibling persona keeps existing synthetic fallback', async () => {
+  await withAgent({
+    'agent.ts': `
+      import { defineAgent } from '@agentworkforce/runtime';
+      export default defineAgent({
+        schedules: [{ name: 'scan', cron: '0 9 * * *' }],
+        handler: async () => {}
+      });
+    `
+  }, async (_dir, agentPath) => {
+    const prepared = await prepareInvokeTarget(agentPath);
+    assert.equal(prepared.personaPath, agentPath);
+    assert.equal(prepared.compiled.sourceKind, 'single-file');
+    assert.equal(prepared.compiled.handlerEntry, agentPath);
+    assert.equal(prepared.compiled.persona.id, 'agent');
+    assert.deepEqual(prepared.warnings, [
+      `invoke synthesized a minimal preview persona for bare Agent source ${agentPath}`
+    ]);
   });
 });
 
