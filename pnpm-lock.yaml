@@ -98,6 +98,8 @@ importers:
         specifier: ^0.25.0
         version: 0.25.12
 
+  packages/events: {}
+
   packages/local-surface:
     dependencies:
       '@agent-relay/fleet':
@@ -166,6 +168,9 @@ importers:
       '@agent-relay/events':
         specifier: ^6.3.3
         version: 6.3.6
+      '@agentworkforce/events':
+        specifier: workspace:*
+        version: link:../events
       '@agentworkforce/persona-kit':
         specifier: workspace:*
         version: link:../persona-kit
