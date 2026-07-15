@@ -147,6 +147,10 @@ function stripProviderPrefix(model: string): string {
   return idx >= 0 ? model.slice(idx + 1) : model;
 }
 
+function normalizeOpencodeModel(model: string): string {
+  return model.includes('/') ? model : `opencode/${model}`;
+}
+
 function hasAnyPermission(p: PersonaPermissions | undefined): boolean {
   if (!p) return false;
   return Boolean(p.allow?.length || p.deny?.length || p.mode);
@@ -558,7 +562,7 @@ export function buildInteractiveSpec(input: BuildInteractiveSpecInput): Interact
       const agentConfig = {
         agent: {
           [personaId]: {
-            model,
+            model: normalizeOpencodeModel(model),
             ...(systemPrompt ? { prompt: systemPrompt } : {}),
             mode: 'primary',
             permission: { '*': 'allow' }
@@ -675,8 +679,8 @@ export interface NonInteractiveSpec {
  * - `claude`: appends `--print --output-format text <task>`.
  * - `codex`:  prefixes `exec`, appends `--skip-git-repo-check`, then a prompt
  *   built from any `initialPrompt` joined with the user task.
- * - `opencode`: prefixes `run`, appends `--model <m> --format default
- *   [--dir <cwd>] [--title <n>] <task>`.
+ * - `opencode`: prefixes `run`, appends `--format default
+ *   [--title <n>] <task>`; model selection stays in the generated agent config.
  * - `grok`: appends `--output-format plain [--cwd <cwd>] --always-approve
  *   --single <prompt>`, where prompt includes the persona system prompt plus
  *   the one-shot task.
@@ -712,8 +716,12 @@ export function buildNonInteractiveSpec(
       };
     }
     case 'opencode': {
-      const args = ['run', ...interactive.args, '--model', input.model, '--format', 'default'];
-      if (input.workingDirectory) args.push('--dir', input.workingDirectory);
+      // The generated opencode.json already selects the persona model through
+      // `--agent`. Avoid overriding it with `--model`: that CLI flag requires
+      // provider/model syntax, and bare persona model values are normalized in
+      // the generated agent config. The child process is spawned with cwd set
+      // separately, and `opencode run` does not support `--dir`.
+      const args = ['run', ...interactive.args, '--format', 'default'];
       if (input.name) args.push('--title', input.name);
       args.push(input.task);
       return {
