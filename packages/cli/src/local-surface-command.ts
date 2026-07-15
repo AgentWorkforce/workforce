@@ -302,13 +302,24 @@ async function runLocalSurfaceWithOptions(opts: LocalSurfaceOptions): Promise<vo
  * the slug would 404/500 at the API call regardless, so there is no valid
  * request to make until the persona has been `agentworkforce deploy`ed to
  * this workspace at least once — which is also exactly the condition Cloud's
- * dispatch-time relevance filter needs (a deployed `agents` row with real
- * watch config; cloud#2623, dfd446511) for events to ever arrive. Mirrors
- * `modes/cloud/index.ts`'s `findExistingAgent`/`parseAgentLike` matching
- * (there is no server-side `?personaId=<slug>` filter — `agents.personaId`
- * is a UUID, so the workspace's deployments list is fetched and matched
- * client-side against `deployedName`/`personaSlug`/`personaId`) and
- * `parseExistingAgent`'s active-first, newest-first tiebreak.
+ * dispatch-time relevance filter needs for events to ever arrive.
+ *
+ * The winning match must be EXACTLY `status === 'active'` — cloud's real
+ * dispatch gate (`webhook-consumers.config.ts`, cloud#2623) is
+ * `eq(agents.status, "active")`, not merely "not destroyed". `agents.status`
+ * has a third real value: `persona-deploy.ts` sets `status = 'error'` on a
+ * failed deploy. A `!== 'destroyed'` check would let an errored-deployment
+ * persona resolve a UUID, opt in, and report full success while cloud never
+ * routes it a single event — exactly the silent-failure mode this check
+ * exists to prevent. Mirrors `modes/cloud/index.ts`'s `findExistingAgent`/
+ * `parseAgentLike` matching (no server-side `?personaId=<slug>` filter since
+ * `agents.personaId` is a UUID, so the workspace's deployments list is
+ * fetched and matched client-side against
+ * `deployedName`/`personaSlug`/`personaId`) and `parseExistingAgent`'s
+ * active-first, newest-first tiebreak — but where that helper treats any
+ * non-destroyed row as "exists" (for the on-exists prompt, where `starting`/
+ * `error` still means "don't stomp on it"), dispatch relevance needs the
+ * stricter exact-`active` gate.
  */
 async function resolveDeployedPersonaUuid(input: {
   cloudUrl: string;
@@ -323,18 +334,20 @@ async function resolveDeployedPersonaUuid(input: {
   });
   const matches = deployments.filter(
     (agent) =>
-      agent.status !== 'destroyed' &&
-      (agent.deployedName === input.personaSlug ||
-        agent.personaSlug === input.personaSlug ||
-        agent.personaId === input.personaSlug)
+      agent.deployedName === input.personaSlug ||
+      agent.personaSlug === input.personaSlug ||
+      agent.personaId === input.personaSlug
   );
-  if (matches.length === 0) {
-    throw new Error(
+  const notActiveDeployment = () =>
+    new Error(
       `persona "${input.personaSlug}" has no active cloud-side deployment in workspace ${input.workspace}. ` +
-        "Cloud only routes local-surface events to a persona's deployed `agents` row (real watch config from " +
-        '`agentworkforce deploy`) — opting into local-surface requires the persona to already be deployed there. ' +
-        `Run: agentworkforce deploy ${input.personaSlug} --mode cloud --workspace ${input.workspace} — then re-run.`
+        "Cloud only routes local-surface events to a persona's deployed `agents` row with status " +
+        "'active' (`agentworkforce deploy`) — opting into local-surface requires the persona to already be " +
+        `actively deployed there. Run: agentworkforce deploy ${input.personaSlug} --mode cloud --workspace ` +
+        `${input.workspace} — then re-run.`
     );
+  if (matches.length === 0) {
+    throw notActiveDeployment();
   }
   matches.sort((a, b) => {
     const aActive = a.status === 'active' ? 1 : 0;
@@ -342,7 +355,11 @@ async function resolveDeployedPersonaUuid(input: {
     if (aActive !== bActive) return bActive - aActive;
     return Date.parse(b.createdAt || '') - Date.parse(a.createdAt || '');
   });
-  const personaUuid = matches[0]!.personaId.trim();
+  const winner = matches[0]!;
+  if (winner.status !== 'active') {
+    throw notActiveDeployment();
+  }
+  const personaUuid = winner.personaId.trim();
   if (!personaUuid) {
     throw new Error(
       `matched a deployment for persona "${input.personaSlug}" but its personaId field was empty — ` +

@@ -203,6 +203,26 @@ test('runLocalSurface treats a destroyed-only deployment the same as no deployme
   }
 });
 
+// Regression: the check must match cloud's real dispatch gate exactly
+// (`eq(agents.status, "active")`, webhook-consumers.config.ts) — a looser
+// `!== 'destroyed'` filter would let a persona whose latest deploy errored
+// (persona-deploy.ts sets `status = 'error'` on failure) resolve a UUID,
+// opt in, and report full success while cloud never routes it an event.
+test('runLocalSurface treats an error-status-only deployment the same as no deployment', async () => {
+  const { errors, restore } = withMockedDeps({
+    fetchDeployments: (async () => [deployedAgent({ status: 'error' })]) as never
+  });
+  try {
+    process.exitCode = undefined;
+    await runLocalSurface(['/personas/demo.json']);
+    assert.equal(process.exitCode, 1);
+    assert.ok(errors.some((line) => line.includes('no active cloud-side deployment')));
+  } finally {
+    restore();
+    process.exitCode = undefined;
+  }
+});
+
 test('runLocalSurface matches the deployment by personaSlug/deployedName, not the raw slug against personaId', async () => {
   let capturedBody: unknown;
   const { restore } = withMockedDeps({
