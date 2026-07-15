@@ -16,6 +16,17 @@ test('local EffectPolicyV1 defaults are fixture/stub/preview safe', () => {
     compose: 'preview',
     allowedHttp: []
   });
+  assert.throws(
+    () => LOCAL_EFFECT_POLICY_DEFAULTS.allowedHttp.push({ method: 'GET', urlGlob: '*' }),
+    TypeError
+  );
+});
+
+test('local policy resolver copies HTTP defaults instead of sharing mutable state', () => {
+  const first = resolveLocalEffectPolicy();
+  const second = resolveLocalEffectPolicy();
+  assert.notEqual(first.allowedHttp, LOCAL_EFFECT_POLICY_DEFAULTS.allowedHttp);
+  assert.notEqual(first.allowedHttp, second.allowedHttp);
 });
 
 test('local effect policy cannot be escalated to live writes, shell, or compose', () => {

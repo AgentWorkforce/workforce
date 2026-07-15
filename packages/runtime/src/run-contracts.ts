@@ -35,13 +35,15 @@ export interface EffectPolicyV1 {
 }
 
 /** Safe policy floor used by local invoke before case-specific narrowing. */
+const EMPTY_ALLOWED_HTTP = Object.freeze([]) as unknown as EffectPolicyV1['allowedHttp'];
+
 export const LOCAL_EFFECT_POLICY_DEFAULTS: Readonly<EffectPolicyV1> = Object.freeze({
   reads: 'fixtures',
   writes: 'preview',
   model: 'stub',
   shell: 'simulate',
   compose: 'preview',
-  allowedHttp: []
+  allowedHttp: EMPTY_ALLOWED_HTTP
 });
 
 export interface StateSourceV1 {
@@ -138,7 +140,8 @@ export function resolveLocalEffectPolicy(
     model: requested.model ?? LOCAL_EFFECT_POLICY_DEFAULTS.model,
     shell: requested.shell === 'deny' ? 'deny' : 'simulate',
     compose: requested.compose === 'deny' ? 'deny' : 'preview',
-    allowedHttp: requested.allowedHttp ? requested.allowedHttp.map((rule) => ({ ...rule })) : [],
+    allowedHttp: (requested.allowedHttp ?? LOCAL_EFFECT_POLICY_DEFAULTS.allowedHttp)
+      .map((rule) => ({ ...rule })),
     ...(requested.allowedProviders ? { allowedProviders: [...requested.allowedProviders] } : {})
   };
 }
