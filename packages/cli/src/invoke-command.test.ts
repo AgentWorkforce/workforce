@@ -310,8 +310,250 @@ test('runInvoke: raw node:https import fails closed before handler import', asyn
 
     assert.equal(result, undefined);
     assert.equal(exitCode, 1);
-    assert.match(io.err.join(''), /preview bundles may not import node:https/);
+    assert.match(io.err.join(''), /raw module import node:https/);
   });
+});
+
+test('runInvoke: dynamic computed node:http import is denied with zero raw hits', async () => {
+  let rawHits = 0;
+  const server = createServer((_req, res) => {
+    rawHits += 1;
+    res.statusCode = 204;
+    res.end();
+  });
+  await new Promise<void>((resolve) => server.listen(0, '127.0.0.1', () => resolve()));
+  const address = server.address();
+  assert.ok(address && typeof address === 'object');
+  const url = `http://127.0.0.1:${address.port}/escape`;
+
+  try {
+    await withAgent({
+      'agent.ts': `
+        import { defineAgent } from '@agentworkforce/runtime';
+        export default defineAgent({
+          schedules: [{ name: 'scan', cron: '0 9 * * *' }],
+          handler: async () => {
+            const mod = await import('node:' + 'http');
+            const req = mod.request('${url}', { method: 'POST' });
+            req.end('escape');
+          }
+        });
+      `
+    }, async (_dir, agentPath) => {
+      const io = collectingIO();
+      const previousExitCode = process.exitCode;
+      const result = await runInvoke([agentPath, '--schedule', 'scan', '--reads', 'live'], io);
+      const exitCode = process.exitCode;
+      process.exitCode = previousExitCode;
+
+      assert.ok(result && !Array.isArray(result));
+      assert.equal(exitCode, 1);
+      assert.equal(rawHits, 0);
+      assert.match(String(result.error ?? ''), /raw module import node:http/);
+    });
+  } finally {
+    server.close();
+  }
+});
+
+test('runInvoke: bare http import is denied before handler execution', async () => {
+  await withAgent({
+    'agent.ts': `
+      import http from 'http';
+      import { defineAgent } from '@agentworkforce/runtime';
+      export default defineAgent({
+        schedules: [{ name: 'scan', cron: '0 9 * * *' }],
+        handler: async () => {
+          http.globalAgent.destroy();
+        }
+      });
+    `
+  }, async (_dir, agentPath) => {
+    const io = collectingIO();
+    const previousExitCode = process.exitCode;
+    const result = await runInvoke([agentPath, '--schedule', 'scan'], io);
+    const exitCode = process.exitCode;
+    process.exitCode = previousExitCode;
+
+    assert.equal(result, undefined);
+    assert.equal(exitCode, 1);
+    assert.match(io.err.join(''), /raw module import http/);
+  });
+});
+
+test('runInvoke: createRequire http escape is denied with zero raw hits', async () => {
+  let rawHits = 0;
+  const server = createServer((_req, res) => {
+    rawHits += 1;
+    res.statusCode = 204;
+    res.end();
+  });
+  await new Promise<void>((resolve) => server.listen(0, '127.0.0.1', () => resolve()));
+  const address = server.address();
+  assert.ok(address && typeof address === 'object');
+  const url = `http://127.0.0.1:${address.port}/escape`;
+
+  try {
+    await withAgent({
+      'agent.ts': `
+        import { createRequire } from 'node:module';
+        import { defineAgent } from '@agentworkforce/runtime';
+        const require = createRequire(import.meta.url);
+        export default defineAgent({
+          schedules: [{ name: 'scan', cron: '0 9 * * *' }],
+          handler: async () => {
+            const http = require('http');
+            const req = http.request('${url}', { method: 'POST' });
+            req.end('escape');
+          }
+        });
+      `
+    }, async (_dir, agentPath) => {
+      const io = collectingIO();
+      const previousExitCode = process.exitCode;
+      const result = await runInvoke([agentPath, '--schedule', 'scan', '--reads', 'live'], io);
+      const exitCode = process.exitCode;
+      process.exitCode = previousExitCode;
+
+      assert.ok(result && !Array.isArray(result));
+      assert.equal(exitCode, 1);
+      assert.equal(rawHits, 0);
+      assert.match(String(result.error ?? ''), /raw module import http/);
+    });
+  } finally {
+    server.close();
+  }
+});
+
+test('runInvoke: helper module importing raw network builtin fails closed', async () => {
+  await withAgent({
+    'agent.ts': `
+      import { defineAgent } from '@agentworkforce/runtime';
+      import { escape } from './helper.ts';
+      export default defineAgent({
+        schedules: [{ name: 'scan', cron: '0 9 * * *' }],
+        handler: async () => {
+          escape();
+        }
+      });
+    `,
+    'helper.ts': `
+      import http from 'node:http';
+      export function escape() {
+        http.globalAgent.destroy();
+      }
+    `
+  }, async (_dir, agentPath) => {
+    const io = collectingIO();
+    const previousExitCode = process.exitCode;
+    const result = await runInvoke([agentPath, '--schedule', 'scan'], io);
+    const exitCode = process.exitCode;
+    process.exitCode = previousExitCode;
+
+    assert.equal(result, undefined);
+    assert.equal(exitCode, 1);
+    assert.match(io.err.join(''), /raw module import node:http/);
+  });
+});
+
+test('runInvoke: child_process import is denied before handler execution', async () => {
+  await withAgent({
+    'agent.ts': `
+      import { execFile } from 'node:child_process';
+      import { defineAgent } from '@agentworkforce/runtime';
+      export default defineAgent({
+        schedules: [{ name: 'scan', cron: '0 9 * * *' }],
+        handler: async () => {
+          execFile('echo', ['nope']);
+        }
+      });
+    `
+  }, async (_dir, agentPath) => {
+    const io = collectingIO();
+    const previousExitCode = process.exitCode;
+    const result = await runInvoke([agentPath, '--schedule', 'scan'], io);
+    const exitCode = process.exitCode;
+    process.exitCode = previousExitCode;
+
+    assert.equal(result, undefined);
+    assert.equal(exitCode, 1);
+    assert.match(io.err.join(''), /raw module import node:child_process/);
+  });
+});
+
+test('runInvoke: sanitized worker env blocks token exfiltration and leaves parent env untouched', async () => {
+  const previousRelayfileToken = process.env.RELAYFILE_TOKEN;
+  process.env.RELAYFILE_TOKEN = 'xoxb-sensitive-token';
+
+  try {
+    await withAgent({
+      'agent.ts': `
+        import { defineAgent } from '@agentworkforce/runtime';
+        export default defineAgent({
+          schedules: [{ name: 'scan', cron: '0 9 * * *' }],
+          handler: async (ctx) => {
+            ctx.log('info', process.env.RELAYFILE_TOKEN ?? 'missing');
+          }
+        });
+      `
+    }, async (_dir, agentPath) => {
+      const io = collectingIO();
+      const previousExitCode = process.exitCode;
+      const result = await runInvoke([agentPath, '--schedule', 'scan'], io);
+      const exitCode = process.exitCode;
+      process.exitCode = previousExitCode;
+
+      assert.ok(result && !Array.isArray(result));
+      assert.equal(exitCode, 0);
+      const logs = ((result.extensions as Record<string, unknown>).logs ?? []) as string[];
+      assert.ok(logs.some((line) => line.includes('missing')));
+      assert.ok(logs.every((line) => !line.includes('xoxb-sensitive-token')));
+      assert.equal(process.env.RELAYFILE_TOKEN, 'xoxb-sensitive-token');
+    });
+  } finally {
+    process.env.RELAYFILE_TOKEN = previousRelayfileToken;
+  }
+});
+
+test('runInvoke: failed malicious run cleans up so a later safe run still succeeds', async () => {
+  const firstIO = collectingIO();
+  const previousExitCode = process.exitCode;
+
+  await withAgent({
+    'agent.ts': `
+      import http from 'http';
+      import { defineAgent } from '@agentworkforce/runtime';
+      export default defineAgent({
+        schedules: [{ name: 'scan', cron: '0 9 * * *' }],
+        handler: async () => {
+          http.globalAgent.destroy();
+        }
+      });
+    `
+  }, async (_dir, agentPath) => {
+    const first = await runInvoke([agentPath, '--schedule', 'scan'], firstIO);
+    assert.equal(first, undefined);
+    assert.equal(process.exitCode, 1);
+  });
+
+  const secondIO = collectingIO();
+  await withAgent({
+    'agent.ts': `
+      import { defineAgent } from '@agentworkforce/runtime';
+      export default defineAgent({
+        schedules: [{ name: 'scan', cron: '0 9 * * *' }],
+        handler: async (ctx) => {
+          await ctx.memory.save('ok', { scope: 'workspace' });
+        }
+      });
+    `
+  }, async (_dir, agentPath) => {
+    const second = await runInvoke([agentPath, '--schedule', 'scan'], secondIO);
+    assert.ok(second && !Array.isArray(second));
+    assert.equal(second.status, 'succeeded');
+  });
+
+  process.exitCode = previousExitCode;
 });
 
 test('runInvoke: replay bundle preserves provenance and unavailable state fidelity', async () => {
