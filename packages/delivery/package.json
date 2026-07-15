@@ -1,6 +1,6 @@
 {
   "name": "@agentworkforce/delivery",
-  "version": "4.1.17",
+  "version": "4.1.18",
   "private": false,
   "type": "module",
   "main": "dist/index.js",
