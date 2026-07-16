@@ -49,6 +49,16 @@
         "where": {
           "type": "string"
         },
+        "paths": {
+          "type": "array",
+          "items": {
+            "type": "string",
+            "minLength": 1,
+            "pattern": "^/(?:[^\\r\\n\\u2028\\u2029]*\\S)?$"
+          },
+          "description": "Optional Relayfile path globs used to scope wake routing before an agent is provisioned. Paths are absolute (leading `/`) and provider-specific.",
+          "minItems": 1
+        },
         "maxConcurrency": {
           "type": "integer",
           "description": "Optional delivery backpressure hint for this trigger. Positive integers are preserved by the parser; invalid values are treated as unset so older or malformed specs do not block delivery.",
@@ -58,7 +68,7 @@
       "required": [
         "on"
       ],
-      "description": "A single event trigger declared by an **agent** (`agent.ts`). `on` is a Relayfile-adapter-normalized event name (e.g. `pull_request.opened`, `issue.create`, `message.created`). `match` and `where` are filter sugars the deploy CLI lints against a known registry; unknown values warn but do not fail parse, so the cloud runtime stays the source of truth.\n\nTriggers live on the agent ( {@link  AgentSpec.triggers } ), not the persona — the persona only declares which providers it connects to ( {@link  PersonaIntegrationConfig } ). The deploy CLI joins the two: events from `agent.triggers[provider]`, connection/scope from `persona.integrations[provider]`.\n\nExamples:   { on: \"pull_request.opened\" }   { on: \"pull_request_review_comment.created\", match: \"@mention\" }   { on: \"check_run.completed\", where: \"conclusion=failure\" }   { on: \"message.created\", maxConcurrency: 1 }"
+      "description": "A single event trigger declared by an **agent** (`agent.ts`). `on` is a Relayfile-adapter-normalized event name (e.g. `pull_request.opened`, `issue.create`, `message.created`). `match` and `where` are filter sugars the deploy CLI lints against a known registry; unknown values warn but do not fail parse, so the cloud runtime stays the source of truth.\n\nTriggers live on the agent ( {@link  AgentSpec.triggers } ), not the persona — the persona only declares which providers it connects to ( {@link  PersonaIntegrationConfig } ). The deploy CLI joins the two: events from `agent.triggers[provider]`, connection/scope from `persona.integrations[provider]`.\n\nExamples:   { on: \"pull_request.opened\" }   { on: \"pull_request_review_comment.created\", match: \"@mention\" }   { on: \"check_run.completed\", where: \"conclusion=failure\" }   { on: \"message.created\", paths: [\"/slack/channels/C_REVIEW/**\"] }   { on: \"message.created\", maxConcurrency: 1 }"
     },
     "PersonaSchedule": {
       "type": "object",
@@ -85,8 +95,11 @@
         "paths": {
           "type": "array",
           "items": {
-            "type": "string"
-          }
+            "type": "string",
+            "minLength": 1,
+            "pattern": "^/(?:[^\\r\\n\\u2028\\u2029]*\\S)?$"
+          },
+          "minItems": 1
         },
         "events": {
           "type": "array",

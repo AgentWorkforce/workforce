@@ -194,12 +194,18 @@ export type McpServerSpec =
  *   { on: "pull_request.opened" }
  *   { on: "pull_request_review_comment.created", match: "@mention" }
  *   { on: "check_run.completed", where: "conclusion=failure" }
+ *   { on: "message.created", paths: ["/slack/channels/C_REVIEW/**"] }
  *   { on: "message.created", maxConcurrency: 1 }
  */
 export interface PersonaIntegrationTrigger {
   on: string;
   match?: string;
   where?: string;
+  /**
+   * Optional Relayfile path globs used to scope wake routing before an agent is
+   * provisioned. Paths are absolute (leading `/`) and provider-specific.
+   */
+  paths?: string[];
   /**
    * Optional delivery backpressure hint for this trigger. Positive integers are
    * preserved by the parser; invalid values are treated as unset so older or

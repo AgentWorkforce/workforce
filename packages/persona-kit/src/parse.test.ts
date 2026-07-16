@@ -774,17 +774,26 @@ test('parseAgentSpec validates launchedBy plus provider-keyed triggers, schedule
     triggers: {
       github: [
         { on: 'pull_request.opened' },
-        { on: 'issue_comment.created', match: '@mention', maxConcurrency: 1 }
+        {
+          on: 'issue_comment.created',
+          match: '@mention',
+          paths: ['/github/repos/AgentWorkforce/workforce/issues/**'],
+          maxConcurrency: 1
+        }
       ],
-      slack: [{ on: 'app_mention' }]
+      slack: [{ on: 'app_mention', paths: ['/slack/channels/C_REVIEW/**'] }]
     },
     schedules: [{ name: 'nightly', cron: '0 2 * * *', tz: 'UTC' }],
     watch: [{ paths: ['/github/x.json'], events: ['created'] }]
   });
   assert.equal(agent.triggers?.github.length, 2);
   assert.equal(agent.triggers?.github[1].match, '@mention');
+  assert.deepEqual(agent.triggers?.github[1].paths, [
+    '/github/repos/AgentWorkforce/workforce/issues/**'
+  ]);
   assert.equal(agent.triggers?.github[1].maxConcurrency, 1);
   assert.equal(agent.triggers?.slack[0].on, 'app_mention');
+  assert.deepEqual(agent.triggers?.slack[0].paths, ['/slack/channels/C_REVIEW/**']);
   assert.equal(agent.schedules?.[0].name, 'nightly');
   assert.equal(agent.watch?.[0].paths[0], '/github/x.json');
   assert.equal(agent.launchedBy, 'team-dispatcher');
@@ -837,6 +846,38 @@ test('parseAgentSpec rejects malformed triggers maps with precise field paths', 
     () => parseAgentSpec({ triggers: { github: [{ on: 'issue.opened', where: 1 }] } }),
     /triggers\.github\[0\]\.where must be a non-empty string if provided/
   );
+  assert.throws(
+    () => parseAgentSpec({ triggers: { github: [{ on: 'issue.opened', paths: '/*' }] } }),
+    /triggers\.github\[0\]\.paths must be a non-empty array/
+  );
+  assert.throws(
+    () => parseAgentSpec({ triggers: { github: [{ on: 'issue.opened', paths: [] }] } }),
+    /triggers\.github\[0\]\.paths must be a non-empty array/
+  );
+  assert.throws(
+    () => parseAgentSpec({ triggers: { github: [{ on: 'issue.opened', paths: [''] }] } }),
+    /triggers\.github\[0\]\.paths\[0\] must be a non-empty string/
+  );
+  assert.throws(
+    () => parseAgentSpec({ triggers: { github: [{ on: 'issue.opened', paths: ['/github/** '] }] } }),
+    /triggers\.github\[0\]\.paths\[0\] must not have leading or trailing whitespace/
+  );
+  assert.throws(
+    () => parseAgentSpec({ triggers: { github: [{ on: 'issue.opened', paths: ['github/**'] }] } }),
+    /triggers\.github\[0\]\.paths\[0\] must start with \//
+  );
+  const triggerWithInternalSpace = parseAgentSpec({
+    triggers: { github: [{ on: 'issue.opened', paths: ['/ github/**'] }] }
+  });
+  assert.deepEqual(triggerWithInternalSpace.triggers?.github[0].paths, ['/ github/**']);
+  for (const separator of ['\r', '\n', '\u2028', '\u2029']) {
+    assert.throws(
+      () => parseAgentSpec({
+        triggers: { github: [{ on: 'issue.opened', paths: [`/github/${separator}issues/**`] }] }
+      }),
+      /triggers\.github\[0\]\.paths\[0\] must not contain line separators/
+    );
+  }
   // An empty agent (no listeners) parses to {}; the deploy CLI enforces "at least one".
   assert.deepEqual(parseAgentSpec({}), {});
 });
@@ -1038,12 +1079,23 @@ test('parseWatch rejects malformed relayfile watch rules with precise field path
   assert.throws(() => parseWatch([{ events: ['created'] }], 'watch'), /watch\[0\]\.paths must be a non-empty array/);
   assert.throws(() => parseWatch([{ paths: [], events: ['created'] }], 'watch'), /watch\[0\]\.paths must be a non-empty array/);
   assert.throws(() => parseWatch([{ paths: [42], events: ['created'] }], 'watch'), /watch\[0\]\.paths\[0\] must be a non-empty string/);
+  assert.throws(() => parseWatch([{ paths: ['/x '], events: ['created'] }], 'watch'), /watch\[0\]\.paths\[0\] must not have leading or trailing whitespace/);
   assert.throws(() => parseWatch([{ paths: ['relative/**'], events: ['created'] }], 'watch'), /watch\[0\]\.paths\[0\] must start with \//);
   assert.throws(() => parseWatch([{ paths: ['/x'] }], 'watch'), /watch\[0\]\.events must be a non-empty array/);
   assert.throws(() => parseWatch([{ paths: ['/x'], events: [] }], 'watch'), /watch\[0\]\.events must be a non-empty array/);
   assert.throws(() => parseWatch([{ paths: ['/x'], events: ['changed'] }], 'watch'), /watch\[0\]\.events\[0\] must be one of: created, updated, deleted/);
   assert.throws(() => parseWatch([{ paths: ['/x'], events: ['created'], debounceMs: -1 }], 'watch'), /watch\[0\]\.debounceMs must be a non-negative number/);
   assert.throws(() => parseWatch([{ paths: ['/x'], events: ['created'], match: '' }], 'watch'), /watch\[0\]\.match must be a non-empty string/);
+  assert.deepEqual(
+    parseWatch([{ paths: ['/ github/**'], events: ['created'] }], 'watch')?.[0].paths,
+    ['/ github/**']
+  );
+  for (const separator of ['\r', '\n', '\u2028', '\u2029']) {
+    assert.throws(
+      () => parseWatch([{ paths: [`/github/${separator}issues/**`], events: ['created'] }], 'watch'),
+      /watch\[0\]\.paths\[0\] must not contain line separators/
+    );
+  }
 });
 
 test('parsePersonaSpec round-trips mount.enabled=false (watch now lives on the agent)', () => {
