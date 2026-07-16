@@ -58,7 +58,7 @@
     "@agentworkforce/events": "workspace:*",
     "@agentworkforce/persona-kit": "workspace:*",
     "@relayfile/adapter-core": "^0.5.1",
-    "@relayfile/relay-helpers": "^0.4.6",
+    "@relayfile/relay-helpers": "^0.4.7",
     "agent-trajectories": "^0.5.3"
   }
 }

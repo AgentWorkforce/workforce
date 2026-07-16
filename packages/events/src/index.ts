@@ -15,6 +15,10 @@ export {
   EVENT_SUMMARY_SCHEMA
 } from './schemas.js';
 export {
+  addEventContractJsonSchemaKeywords,
+  COMPOSIO_TRIGGER_COORDINATES_KEYWORD
+} from './contract-schema-keywords.js';
+export {
   EVENT_CONTRACTS,
   EVENT_CONTRACT_JSON_SCHEMAS,
   getEventContract,

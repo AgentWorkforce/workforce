@@ -974,8 +974,171 @@ export function renderHumanSummary(output: RunRecordV2 | RunRecordV2[]): string 
   const lines = [`preview: ${records.length} run(s) — ${records.length - failed} ok, ${failed} failed`];
   for (const record of records) {
     lines.push(`  [${record.status === 'succeeded' ? 'ok' : 'FAIL'}] ${record.eventContract} ${record.runId} (${record.actions.length} action(s))`);
+    lines.push(
+      `    policy: reads=${record.policy.reads} writes=${record.policy.writes} model=${record.policy.model} shell=${record.policy.shell} compose=${record.policy.compose}`
+    );
+    const fidelity = recordSourceFidelity(record);
+    if (fidelity) {
+      lines.push(`    fidelity: ${Object.entries(fidelity).map(([key, value]) => `${key}=${value}`).join(' ')}`);
+    }
+    lines.push('    trace:');
+    if (record.actions.length === 0) {
+      lines.push('      (no effects)');
+    } else {
+      record.actions.forEach((action, index) => {
+        lines.push(...renderHumanAction(record, action, index + 1));
+      });
+    }
+    lines.push(...renderHumanStateChanges(record));
+    if (typeof record.error === 'string' && record.error) {
+      lines.push(`    error: ${record.error}`);
+    }
   }
   return `${lines.join('\n')}\n`;
+}
+
+function renderHumanAction(
+  record: RunRecordV2,
+  action: RunRecordV2['actions'][number],
+  sequence: number
+): string[] {
+  const data = asRecord(action.data) ?? {};
+  const prefix = `      ${String(sequence).padStart(2, '0')}.`;
+
+  if (action.kind === 'provider.write') {
+    return renderHumanProviderWrite(prefix, action, data);
+  }
+
+  if (action.kind === 'http.read' || action.kind === 'provider.read') {
+    const decision = action.status === 'denied' ? 'DENY' : 'ALLOW';
+    const fidelity = actionFidelity(record, action, data);
+    const provider = action.provider ? ` ${action.provider}${action.resource ? `.${action.resource}` : ''}` : '';
+    const method = typeof data.method === 'string' ? ` ${data.method}` : '';
+    const target = typeof data.url === 'string'
+      ? ` ${data.url}`
+      : typeof data.path === 'string'
+        ? ` ${data.path}`
+        : '';
+    const lines = [`${prefix} [${decision}] ${action.kind}${provider}${method}${target} fidelity=${fidelity}`];
+    const parameters = asRecord(data.parameters);
+    if (action.kind === 'provider.read' && parameters) {
+      lines.push(`          parameters: ${JSON.stringify(parameters)}`);
+    }
+    return lines;
+  }
+
+  if (action.kind === 'model.complete') {
+    const mode = typeof data.mode === 'string' ? data.mode : record.policy.model;
+    const source = typeof data.source === 'string' ? data.source : 'unknown';
+    const fidelity = actionFidelity(record, action, data);
+    const sizes = [
+      typeof data.promptChars === 'number' ? `promptChars=${data.promptChars}` : '',
+      typeof data.outputChars === 'number' ? `outputChars=${data.outputChars}` : ''
+    ].filter(Boolean).join(' ');
+    return [
+      `${prefix} [${humanActionStatus(action)}] model.complete mode=${mode} source=${source} fidelity=${fidelity}${sizes ? ` ${sizes}` : ''}`
+    ];
+  }
+
+  const details = Object.keys(data).length > 0 ? ` ${JSON.stringify(data)}` : '';
+  return [`${prefix} [${humanActionStatus(action)}] ${action.kind}${details}`];
+}
+
+function renderHumanProviderWrite(
+  prefix: string,
+  action: RunRecordV2['actions'][number],
+  data: Record<string, unknown>
+): string[] {
+  const provider = action.provider ?? 'unknown';
+  const resource = action.resource ?? 'unknown';
+  const method = typeof data.method === 'string' ? data.method : 'write';
+  const pathValue = typeof data.path === 'string' ? data.path : undefined;
+  const parameters = asRecord(data.parameters);
+  const body = asRecord(data.body);
+  const receipt = asRecord(data.simulatedReceipt);
+  const lines = [
+    `${prefix} [${humanActionStatus(action)}] provider.write ${provider}.${resource}`,
+    `          method: ${method}`
+  ];
+  if (pathValue) lines.push(`          path: ${pathValue}`);
+  if (parameters) lines.push(`          parameters: ${JSON.stringify(parameters)}`);
+
+  if (provider === 'slack') {
+    const channel = slackChannel(parameters, pathValue);
+    const parentRef = typeof body?.parentRef === 'string' ? body.parentRef : undefined;
+    const threadTs = typeof body?.thread_ts === 'string' ? body.thread_ts : undefined;
+    const isReply = resource === 'replies' || parentRef !== undefined || threadTs !== undefined;
+    lines.push(`          slack message: ${isReply ? 'reply' : 'parent'}`);
+    lines.push(`          channel: ${channel ?? '(unknown)'}`);
+    lines.push(
+      `          linkage: parentRef=${parentRef ?? '(none)'} thread_ts=${threadTs ?? '(none)'} receipt=${typeof receipt?.id === 'string' ? receipt.id : '(none)'}`
+    );
+    if (typeof body?.text === 'string') lines.push(`          text (exact): ${JSON.stringify(body.text)}`);
+  }
+
+  if (body) lines.push(`          body: ${JSON.stringify(body)}`);
+  if (receipt) lines.push(`          simulated receipt: ${JSON.stringify(receipt)}`);
+  lines.push(`          provider data: ${JSON.stringify(data)}`);
+  return lines;
+}
+
+function humanActionStatus(action: RunRecordV2['actions'][number]): string {
+  if (action.status === 'denied') return 'DENIED';
+  if (action.status === 'previewed') return 'PREVIEW';
+  if (action.status === 'sandboxed') return 'SANDBOX';
+  return 'EXECUTED';
+}
+
+function recordSourceFidelity(record: RunRecordV2): Record<string, string> | undefined {
+  const extensions = asRecord(record.extensions);
+  const sourceFidelity = asRecord(extensions?.sourceFidelity);
+  if (!sourceFidelity) return undefined;
+  const entries = Object.entries(sourceFidelity).filter((entry): entry is [string, string] =>
+    typeof entry[1] === 'string'
+  );
+  return entries.length > 0 ? Object.fromEntries(entries) : undefined;
+}
+
+function actionFidelity(
+  record: RunRecordV2,
+  action: RunRecordV2['actions'][number],
+  data: Record<string, unknown>
+): string {
+  const extensions = asRecord(action.extensions);
+  if (typeof extensions?.sourceFidelity === 'string') return extensions.sourceFidelity;
+  if (typeof data.source === 'string') return data.source;
+  const sourceFidelity = recordSourceFidelity(record);
+  if (action.kind === 'http.read' && sourceFidelity?.http) return sourceFidelity.http;
+  if (action.kind === 'model.complete' && sourceFidelity?.model) return sourceFidelity.model;
+  if (action.kind === 'provider.read' && sourceFidelity?.state) return sourceFidelity.state;
+  if (action.status === 'denied') return 'unavailable';
+  return 'unknown';
+}
+
+function slackChannel(
+  parameters: Record<string, unknown> | null,
+  pathValue: string | undefined
+): string | undefined {
+  const parameterChannel = parameters?.channelId ?? parameters?.channel;
+  if (typeof parameterChannel === 'string') return parameterChannel;
+  const match = pathValue?.match(/^\/slack\/channels\/([^/]+)/u);
+  return match?.[1] ? decodeURIComponent(match[1]) : undefined;
+}
+
+function renderHumanStateChanges(record: RunRecordV2): string[] {
+  const files = record.stateDiff.files ?? [];
+  const memory = record.stateDiff.memory ?? [];
+  const providers = record.stateDiff.providers ?? [];
+  if (files.length === 0 && memory.length === 0 && providers.length === 0) return [];
+
+  const lines = ['    state changes:'];
+  for (const file of files) {
+    const change = file.before === undefined ? 'created' : file.after === undefined ? 'deleted' : 'updated';
+    lines.push(`      file ${change}: ${file.path}`);
+  }
+  for (const entry of memory) lines.push(`      memory: ${JSON.stringify(entry)}`);
+  for (const entry of providers) lines.push(`      provider: ${JSON.stringify(entry)}`);
+  return lines;
 }
 
 function expectValue(flag: string, value: string | undefined): string {

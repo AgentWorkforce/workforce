@@ -85,8 +85,8 @@ importers:
         specifier: workspace:*
         version: link:../runtime
       '@relayfile/relay-helpers':
-        specifier: ^0.4.6
-        version: 0.4.6(@relayfile/sdk@0.7.40)
+        specifier: ^0.4.7
+        version: 0.4.7(@relayfile/sdk@0.7.40)
 
   packages/deploy:
     dependencies:
@@ -193,8 +193,8 @@ importers:
         specifier: ^0.5.1
         version: 0.5.1(@relayfile/sdk@0.7.40)
       '@relayfile/relay-helpers':
-        specifier: ^0.4.6
-        version: 0.4.6(@relayfile/sdk@0.7.40)
+        specifier: ^0.4.7
+        version: 0.4.7(@relayfile/sdk@0.7.40)
       agent-trajectories:
         specifier: ^0.5.3
         version: 0.5.3
@@ -1060,21 +1060,21 @@ packages:
     peerDependencies:
       '@relayfile/sdk': '>=0.6.0 <1'
 
-  '@relayfile/adapter-core@0.5.5':
-    resolution: {integrity: sha512-CvI5DTmuP0tdXvhYmiPBBazGUzlr9/0g/aUsII23v07Zx86a4+J9KV0D/I2X1/uqI4KVC4mjpveyHkoGyX5SQQ==}
+  '@relayfile/adapter-core@0.5.6':
+    resolution: {integrity: sha512-u5SMeaz2y1IzidXsMLufoBOg9Y1eTUnzQLSs9AmNK5aiqxdEQXvTRwWxJ0t47fic4vX8TV1JlryGNXL72e5TJQ==}
     engines: {node: '>=18'}
     hasBin: true
     peerDependencies:
       '@relayfile/sdk': '>=0.6.0 <1'
 
-  '@relayfile/adapter-linear@0.4.5':
-    resolution: {integrity: sha512-IRsOyHu3yCITeumek1wOy1Tb0DTAMNh5zRhBY7N6BMsqMflBDJ3XHCaAxwvC2pMUdc4KHFc/zNGyHsWOOLy+6w==}
+  '@relayfile/adapter-linear@0.4.6':
+    resolution: {integrity: sha512-/7TprCjuhM3PpLHoWh1fG/mbI+Z1ICfgxflNAQDf87syvZDnLqybr3Spj33VJ+nZ5dV6g5OVcacn/pVUo5wAag==}
     engines: {node: '>=18'}
     peerDependencies:
       '@relayfile/sdk': '>=0.6.0 <1'
 
-  '@relayfile/adapter-reddit@0.2.4':
-    resolution: {integrity: sha512-mBohPpQJrbHMMWsvk4wP+SEmZyO4+WXkt8n74Mjpr4U7fwsC6afGR4qhf85CCW9y1ZA3QsNQ/wXU9hCcGfK92w==}
+  '@relayfile/adapter-reddit@0.2.5':
+    resolution: {integrity: sha512-kNI3r4nKQROa9lv0TB2rIUsqDubxhz8D19B/zFDqgvG6AvRd065/J0RoHSizDK0xD2UjsctoJTKNRgi4V8culA==}
     engines: {node: '>=18'}
     peerDependencies:
       '@relayfile/sdk': '>=0.6.0 <1'
@@ -1087,8 +1087,8 @@ packages:
     resolution: {integrity: sha512-eWy52O7Dt1Vwy162IJCbGAoSFFejNVVOy4eMrNEmIWld+YMdpR0hEvuplKP0O75xwD8be4PJcADoedi3X1R9Ng==}
     engines: {node: '>=18'}
 
-  '@relayfile/relay-helpers@0.4.6':
-    resolution: {integrity: sha512-kf5zShWiRN5+h2v+dpNrfO26aZRJkSic6bI3mixqE6aHRtsGZt/1KQKImKFpgG1qmm18XNVY4sXU4ZXIXtUSxg==}
+  '@relayfile/relay-helpers@0.4.7':
+    resolution: {integrity: sha512-eIPG8Vv4Wl5UekKXMc5DOP/rq3D1jrIVu95K/CjSzu9C/u19b6T/es6m1XImb0oCpyyDDfvg0MCSMuaDjKFnlA==}
 
   '@relayfile/sdk@0.7.40':
     resolution: {integrity: sha512-9qPQ/qSexD11x/CKZlbZUFC7KDdxJ2yYBQd1nuzcoHNqnvErplq5bDBy5Dqr1AXID9i1Q7sMxnY8M1raMTQsAg==}
@@ -3485,7 +3485,7 @@ snapshots:
       minimatch: 10.2.5
       yaml: 2.9.0
 
-  '@relayfile/adapter-core@0.5.5(@relayfile/sdk@0.7.40)':
+  '@relayfile/adapter-core@0.5.6(@relayfile/sdk@0.7.40)':
     dependencies:
       '@relayfile/sdk': 0.7.40
       '@scalar/postman-to-openapi': 0.6.3
@@ -3493,14 +3493,14 @@ snapshots:
       minimatch: 10.2.5
       yaml: 2.9.0
 
-  '@relayfile/adapter-linear@0.4.5(@relayfile/sdk@0.7.40)':
+  '@relayfile/adapter-linear@0.4.6(@relayfile/sdk@0.7.40)':
     dependencies:
-      '@relayfile/adapter-core': 0.5.5(@relayfile/sdk@0.7.40)
+      '@relayfile/adapter-core': 0.5.6(@relayfile/sdk@0.7.40)
       '@relayfile/sdk': 0.7.40
 
-  '@relayfile/adapter-reddit@0.2.4(@relayfile/sdk@0.7.40)':
+  '@relayfile/adapter-reddit@0.2.5(@relayfile/sdk@0.7.40)':
     dependencies:
-      '@relayfile/adapter-core': 0.5.5(@relayfile/sdk@0.7.40)
+      '@relayfile/adapter-core': 0.5.6(@relayfile/sdk@0.7.40)
       '@relayfile/sdk': 0.7.40
 
   '@relayfile/core@0.7.40': {}
@@ -3510,11 +3510,11 @@ snapshots:
       '@parcel/watcher': 2.5.6
       ignore: 7.0.5
 
-  '@relayfile/relay-helpers@0.4.6(@relayfile/sdk@0.7.40)':
+  '@relayfile/relay-helpers@0.4.7(@relayfile/sdk@0.7.40)':
     dependencies:
-      '@relayfile/adapter-core': 0.5.5(@relayfile/sdk@0.7.40)
-      '@relayfile/adapter-linear': 0.4.5(@relayfile/sdk@0.7.40)
-      '@relayfile/adapter-reddit': 0.2.4(@relayfile/sdk@0.7.40)
+      '@relayfile/adapter-core': 0.5.6(@relayfile/sdk@0.7.40)
+      '@relayfile/adapter-linear': 0.4.6(@relayfile/sdk@0.7.40)
+      '@relayfile/adapter-reddit': 0.2.5(@relayfile/sdk@0.7.40)
     transitivePeerDependencies:
       - '@relayfile/sdk'
 

@@ -2,7 +2,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import { EventEmitter } from 'node:events';
 import { createServer } from 'node:http';
-import { copyFile, cp, mkdir, mkdtemp, readdir, rm, writeFile } from 'node:fs/promises';
+import { copyFile, cp, mkdir, mkdtemp, readdir, realpath, rm, symlink, writeFile } from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
@@ -20,6 +20,7 @@ function previewRequest(args: {
   allowedHttp: Array<{ method: string; urlGlob: string }>;
   model?: 'stub' | 'fixture' | 'live';
   personaModel?: string;
+  writes?: 'deny' | 'preview';
 }): RunRequestV1 {
   return {
     schemaVersion: 1,
@@ -61,7 +62,7 @@ function previewRequest(args: {
     inputs: {},
     policy: {
       reads: 'live',
-      writes: 'preview',
+      writes: args.writes ?? 'preview',
       model: args.model ?? 'stub',
       shell: 'simulate',
       compose: 'preview',
@@ -74,6 +75,49 @@ function previewRequest(args: {
     }
   } as unknown as RunRequestV1;
 }
+
+test('executeLocalRun: authored writes deny blocks context mutations and fails caught attempts', async () => {
+  const tempDir = await mkdtemp(path.join(os.tmpdir(), 'wf-preview-writes-deny-'));
+  const bundlePath = path.join(tempDir, 'bundle.mjs');
+  await writeFile(
+    bundlePath,
+    `export default async function handler(ctx) {
+      await Promise.allSettled([
+        ctx.files.write('/preview/files.txt', 'blocked files write'),
+        ctx.sandbox.writeFile('/preview/sandbox.txt', 'blocked sandbox write'),
+        ctx.memory.save('blocked memory'),
+        ctx.relay.post('general', 'blocked relay post'),
+        ctx.schedule.at(new Date('2026-07-16T10:00:00.000Z'), { blocked: true }),
+        ctx.schedule.cancel('blocked-schedule')
+      ]);
+    }\n`,
+    'utf8'
+  );
+
+  try {
+    const result = await executeLocalRun({
+      request: previewRequest({
+        tempDir,
+        id: 'writes-deny-test',
+        allowedHttp: [],
+        writes: 'deny'
+      }),
+      bundlePath
+    });
+
+    assert.equal(result.exitCode, 1);
+    assert.equal(result.record.status, 'failed');
+    assert.match(String(result.record.error ?? ''), /denied 6 write effects/);
+    assert.equal(result.record.actions.filter((action) => action.status === 'denied').length, 6);
+    assert.equal(result.record.actions.some((action) => action.status === 'previewed'), false);
+    assert.deepEqual(result.record.stateDiff.files, []);
+    assert.deepEqual(result.record.stateDiff.memory, []);
+    assert.deepEqual(result.state.files, {});
+    assert.deepEqual(result.state.memory, []);
+  } finally {
+    await rm(tempDir, { recursive: true, force: true });
+  }
+});
 
 test('executeLocalRun: empty live allowlist denies GET before network', async () => {
   let hits = 0;
@@ -638,6 +682,139 @@ test('executeLocalRun: no-close child stop path still rejects promptly and clean
   }
 });
 
+test('executeLocalRun: installed runtime artifact resists authored authorizer rebinding under writes deny', async () => {
+  await withInstalledRuntimeCopy(async (consumerRoot, installed) => {
+    let sentinelHits = 0;
+    const sentinel = createServer((_req, res) => {
+      sentinelHits += 1;
+      res.statusCode = 500;
+      res.end('installed custom transport escaped');
+    });
+    await new Promise<void>((resolve) => sentinel.listen(0, '127.0.0.1', () => resolve()));
+    const address = sentinel.address();
+    assert.ok(address && typeof address === 'object');
+    const previousCwd = process.cwd();
+    const tempDir = await mkdtemp(path.join(consumerRoot, 'installed-writes-deny-'));
+    const bundlePath = path.join(tempDir, 'bundle.mjs');
+    await writeFile(
+      bundlePath,
+      `import {
+        PreviewTransport,
+        bindRelayWriteAuthorizer,
+        slackClient
+      } from '@relayfile/relay-helpers';
+      export default async function handler(ctx) {
+        const explicitTransport = new PreviewTransport();
+        let customTransportWrites = 0;
+        const customTransport = {
+          async read() { return undefined; },
+          async list() { return []; },
+          async write() {
+            customTransportWrites += 1;
+            await fetch('http://127.0.0.1:${address.port}/installed-custom', {
+              method: 'POST',
+              body: 'escaped'
+            });
+            return { path: '/escaped', absolutePath: '/escaped' };
+          }
+        };
+        let authoredAuthorizerCalled = false;
+        if (typeof bindRelayWriteAuthorizer !== 'function') {
+          throw new Error('public Relay write authorizer binder is missing');
+        }
+        let authoredBindingOutcome = 'returned';
+        let restoreAuthoredAuthorizer = () => {};
+        try {
+          restoreAuthoredAuthorizer = bindRelayWriteAuthorizer(() => {
+            authoredAuthorizerCalled = true;
+            return { allowed: true, transport: customTransport };
+          });
+        } catch (error) {
+          authoredBindingOutcome = String(error?.code ?? error?.name ?? error);
+        }
+        const legacyAuthorizerKey = Symbol.for('agentworkforce.relay-write-authorizer');
+        let legacyOverwriteAttempted = false;
+        let legacyDeleteAttempted = false;
+        try {
+          legacyOverwriteAttempted = true;
+          globalThis[legacyAuthorizerKey] = () => ({ allowed: true, transport: customTransport });
+        } catch {}
+        try {
+          legacyDeleteAttempted = true;
+          delete globalThis[legacyAuthorizerKey];
+        } catch {}
+        const outcomes = await Promise.allSettled([
+          slackClient().post('C123', 'installed process write'),
+          slackClient({ transport: explicitTransport }).post(
+            'C124',
+            'installed xoxb-123456789012-123456789012-INSTALLED must be redacted'
+          ),
+          slackClient({ transport: customTransport }).post('C125', 'installed custom write'),
+          ctx.files.write('/preview/installed.txt', 'must not persist'),
+          ctx.relay.post('general', 'must not receive a simulated receipt')
+        ]);
+        restoreAuthoredAuthorizer();
+        ctx.log('info', 'installed.transport.audit', {
+          authoredAuthorizerCalled,
+          authoredBindingOutcome,
+          binderType: typeof bindRelayWriteAuthorizer,
+          explicitActions: explicitTransport.actions.length,
+          customTransportWrites,
+          legacyDeleteAttempted,
+          legacyOverwriteAttempted,
+          rejected: outcomes.filter((outcome) => outcome.status === 'rejected').length
+        });
+      }\n`,
+      'utf8'
+    );
+
+    try {
+      process.chdir(consumerRoot);
+      const result = await installed.executeLocalRun({
+        request: previewRequest({
+          tempDir,
+          id: 'installed-writes-deny',
+          allowedHttp: [],
+          writes: 'deny'
+        }),
+        bundlePath
+      });
+      assert.equal(result.exitCode, 1);
+      assert.equal(result.record.status, 'failed');
+      assert.equal(result.record.actions.filter((action) => action.status === 'denied').length, 5);
+      assert.equal(
+        result.record.actions.filter((action) =>
+          action.status === 'denied' && action.kind === 'provider.write'
+        ).length,
+        4
+      );
+      assert.equal(result.record.actions.some((action) => action.status === 'previewed'), false);
+      assert.deepEqual(result.record.stateDiff.files, []);
+      assert.equal(result.state.transport?.sequence, 0);
+      assert.deepEqual(result.state.transport?.receiptsByReference, {});
+      assert.doesNotMatch(JSON.stringify(result.record), /simulatedReceipt/);
+      assert.doesNotMatch(JSON.stringify(result.record), /xoxb-123456789012/);
+      assert.equal(sentinelHits, 0);
+      const logs = ((result.record.extensions as Record<string, unknown>).logs ?? []) as string[];
+      assert.ok(logs.some((line) =>
+        line.includes('installed.transport.audit')
+        && line.includes('"authoredAuthorizerCalled":false')
+        && line.includes('"authoredBindingOutcome":"returned"')
+        && line.includes('"binderType":"function"')
+        && line.includes('"explicitActions":0')
+        && line.includes('"customTransportWrites":0')
+        && line.includes('"legacyDeleteAttempted":true')
+        && line.includes('"legacyOverwriteAttempted":true')
+        && line.includes('"rejected":5')
+      ));
+    } finally {
+      process.chdir(previousCwd);
+      sentinel.close();
+      await rm(tempDir, { recursive: true, force: true });
+    }
+  });
+});
+
 test('executeLocalRun: installed runtime stages under the invocation workspace and grants consumer/runtime roots', async () => {
   await withInstalledRuntimeCopy(async (consumerRoot, installed) => {
     class ReadyChild extends EventEmitter {
@@ -803,9 +980,32 @@ async function withInstalledRuntimeCopy<T>(
   const runtimePackageRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
   const consumerRoot = await mkdtemp(path.join(runtimePackageRoot, '.installed-preview-consumer-'));
   const installedRuntimeRoot = path.join(consumerRoot, 'node_modules', '@agentworkforce', 'runtime');
+  const installedRelayHelpersRoot = path.join(consumerRoot, 'node_modules', '@relayfile', 'relay-helpers');
   await mkdir(path.dirname(installedRuntimeRoot), { recursive: true });
+  await mkdir(path.dirname(installedRelayHelpersRoot), { recursive: true });
   await cp(path.join(runtimePackageRoot, 'dist'), path.join(installedRuntimeRoot, 'dist'), { recursive: true });
   await copyFile(path.join(runtimePackageRoot, 'package.json'), path.join(installedRuntimeRoot, 'package.json'));
+  await cp(
+    path.join(runtimePackageRoot, 'node_modules', '@relayfile', 'relay-helpers', 'dist'),
+    path.join(installedRelayHelpersRoot, 'dist'),
+    { recursive: true }
+  );
+  await copyFile(
+    path.join(runtimePackageRoot, 'node_modules', '@relayfile', 'relay-helpers', 'package.json'),
+    path.join(installedRelayHelpersRoot, 'package.json')
+  );
+  const relayHelpersSourceRoot = await realpath(
+    path.join(runtimePackageRoot, 'node_modules', '@relayfile', 'relay-helpers')
+  );
+  const installedRelayDependenciesRoot = path.join(installedRelayHelpersRoot, 'node_modules', '@relayfile');
+  await mkdir(installedRelayDependenciesRoot, { recursive: true });
+  for (const dependency of ['adapter-core', 'adapter-linear', 'adapter-reddit']) {
+    await symlink(
+      await realpath(path.join(path.dirname(relayHelpersSourceRoot), dependency)),
+      path.join(installedRelayDependenciesRoot, dependency),
+      'dir'
+    );
+  }
   try {
     const installed = await import(`${pathToFileURL(path.join(installedRuntimeRoot, 'dist', 'local-preview.js')).href}?installed=${Date.now()}`) as {
       executeLocalRun: typeof executeLocalRun;

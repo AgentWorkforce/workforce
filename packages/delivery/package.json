@@ -33,6 +33,6 @@
   },
   "dependencies": {
     "@agentworkforce/runtime": "workspace:*",
-    "@relayfile/relay-helpers": "^0.4.6"
+    "@relayfile/relay-helpers": "^0.4.7"
   }
 }

@@ -2,7 +2,7 @@ import { randomUUID } from 'node:crypto';
 import { pathToFileURL } from 'node:url';
 import type { EventFrameV1 } from '@agentworkforce/events';
 import { buildCtx } from './ctx.js';
-import { getPreviewProcessState, transportActionToPreviewAction } from './local-preview-hooks.js';
+import { getPreviewProcessState } from './local-preview-hooks.js';
 import { redactLocalPreviewValue } from './local-preview-redaction.js';
 import type {
   ExecuteLocalRunResult,
@@ -50,6 +50,20 @@ export async function executeLocalRunInWorkerProcess(
     previewState.recordAction(redactLocalPreviewValue(action));
   };
 
+  const denyWrite = (
+    kind: string,
+    data: Record<string, unknown>,
+    details: Pick<PreviewAction, 'provider' | 'resource'> = {}
+  ): never => {
+    recordAction({
+      kind,
+      status: 'denied',
+      ...details,
+      data
+    });
+    throw new Error(`invoke policy denied ${kind}`);
+  };
+
   const log: WorkforceCtx['log'] = (level, message, attrs) => {
     const payloadLine = redactLocalPreviewValue({
       t: previewState.now().toISOString(),
@@ -84,6 +98,9 @@ export async function executeLocalRunInWorkerProcess(
       return value;
     },
     async writeFile(filePath, contents) {
+      if (payload.request.policy.writes === 'deny') {
+        denyWrite('files.write', { path: filePath, bytes: contents.length, channel: 'ctx.sandbox' });
+      }
       files.set(filePath, contents);
       recordAction({
         kind: 'files.write',
@@ -100,6 +117,9 @@ export async function executeLocalRunInWorkerProcess(
       return value;
     },
     async write(filePath, contents) {
+      if (payload.request.policy.writes === 'deny') {
+        denyWrite('files.write', { path: filePath, bytes: contents.length, channel: 'ctx.files' });
+      }
       files.set(filePath, contents);
       recordAction({
         kind: 'files.write',
@@ -111,6 +131,13 @@ export async function executeLocalRunInWorkerProcess(
 
   const memoryCtx: MemoryContext = {
     async save(content, opts) {
+      if (payload.request.policy.writes === 'deny') {
+        denyWrite('memory.save', {
+          bytes: content.length,
+          scope: opts?.scope ?? 'workspace',
+          tags: [...(opts?.tags ?? [])]
+        });
+      }
       const entry: LocalPreviewMemoryEntry = {
         id: `mem_${++memorySeq}`,
         content,
@@ -219,6 +246,12 @@ export async function executeLocalRunInWorkerProcess(
 
   const schedule: ScheduleContext = {
     async at(when, triggerPayload) {
+      if (payload.request.policy.writes === 'deny') {
+        denyWrite('schedule.at', {
+          when: when.toISOString(),
+          payload: triggerPayload
+        });
+      }
       recordAction({
         kind: 'schedule.at',
         status: 'previewed',
@@ -230,6 +263,9 @@ export async function executeLocalRunInWorkerProcess(
       });
     },
     async cancel(name) {
+      if (payload.request.policy.writes === 'deny') {
+        denyWrite('schedule.cancel', { name });
+      }
       recordAction({
         kind: 'schedule.cancel',
         status: 'previewed',
@@ -240,6 +276,13 @@ export async function executeLocalRunInWorkerProcess(
 
   const relay: RelayContext = {
     async dm(to, text) {
+      if (payload.request.policy.writes === 'deny') {
+        denyWrite(
+          'provider.write',
+          { to, text, channel: 'ctx.relay' },
+          { provider: 'relaycast', resource: 'messages' }
+        );
+      }
       const messageId = `relay_${++relaySeq}`;
       recordAction({
         kind: 'provider.write',
@@ -251,6 +294,13 @@ export async function executeLocalRunInWorkerProcess(
       return { ok: true, messageId };
     },
     async post(channel, text) {
+      if (payload.request.policy.writes === 'deny') {
+        denyWrite(
+          'provider.write',
+          { channel, text, channelType: 'ctx.relay' },
+          { provider: 'relaycast', resource: 'messages' }
+        );
+      }
       const messageId = `relay_${++relaySeq}`;
       recordAction({
         kind: 'provider.write',
@@ -334,11 +384,9 @@ export async function executeLocalRunInWorkerProcess(
     error = caught instanceof Error ? caught.message : String(caught);
   }
 
-  for (const action of previewState.previewTransport.actions) {
-    recordAction(transportActionToPreviewAction(action as unknown as never));
-  }
-  for (const access of previewState.previewTransport.accesses) {
-    recordAction(transportActionToPreviewAction(access as unknown as never));
+  const deniedWriteCount = previewState.recordedActions.filter(isDeniedWriteAction).length;
+  if (deniedWriteCount > 0 && !error) {
+    error = `invoke policy denied ${deniedWriteCount} write effect${deniedWriteCount === 1 ? '' : 's'}`;
   }
 
   const actionTraces = buildActionTraces(runId, previewState.recordedActions, previewState.now);
@@ -394,6 +442,16 @@ export async function executeLocalRunInWorkerProcess(
       transport: previewState.snapshotTransportState()
     }
   };
+}
+
+function isDeniedWriteAction(action: PreviewAction): boolean {
+  if (action.status !== 'denied') return false;
+  return action.kind === 'provider.write'
+    || action.kind === 'files.write'
+    || action.kind === 'memory.save'
+    || action.kind === 'schedule.at'
+    || action.kind === 'schedule.cancel'
+    || action.kind.endsWith('.write');
 }
 
 function buildActionTraces(
