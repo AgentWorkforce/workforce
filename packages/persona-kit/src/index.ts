@@ -227,6 +227,7 @@ export {
   type BuildInteractiveSpecInput,
   type InteractiveConfigFile,
   type InteractiveSpec,
+  type NonInteractivePrompt,
   type NonInteractiveSpec,
   type RelayMcpConfig,
   resolvePersonaRelayMcp,

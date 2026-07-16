@@ -1,4 +1,3 @@
-import { spawn } from 'node:child_process';
 import { constants } from 'node:fs';
 import { accessSync, statSync } from 'node:fs';
 import { access, mkdir, readFile, stat, writeFile } from 'node:fs/promises';
@@ -25,6 +24,7 @@ import {
 } from './relay-mcp.js';
 import { createDefaultLlm } from './cloud-llm.js';
 import { SandboxNotAvailableError } from './errors.js';
+import { spawnAndCapture, spawnNonInteractiveAndCapture } from './harness-process.js';
 import type {
   FilesContext,
   HarnessRunArgs,
@@ -606,9 +606,10 @@ function createProcessHarnessRunner(args: CloudDefaultOptions & {
       WORKFORCE_DEPLOYMENT_ID: args.deployment.id,
       WORKFORCE_WORKSPACE_ID: args.workspaceId
     };
-    const result = await spawnAndCapture({
+    const result = await spawnNonInteractiveAndCapture({
       bin: spec.bin,
       args: spawnArgs,
+      prompt: spec.prompt,
       cwd,
       env: childEnv,
       timeoutMs: args.persona.harnessSettings.timeoutSeconds
@@ -707,83 +708,6 @@ function sidecarForPersona(
     };
   }
   return undefined;
-}
-
-async function spawnAndCapture(args: {
-  bin: string;
-  args: string[];
-  cwd: string;
-  env: NodeJS.ProcessEnv;
-  timeoutMs?: number;
-}): Promise<{ output: string; stderr: string; exitCode: number }> {
-  return new Promise((resolve) => {
-    const child = spawn(args.bin, args.args, {
-      cwd: args.cwd,
-      env: args.env,
-      stdio: ['ignore', 'pipe', 'pipe'],
-      shell: false
-    });
-    let stdout = '';
-    let stderr = '';
-    let forceKillTimeout: NodeJS.Timeout | undefined;
-    child.stdout?.setEncoding('utf8');
-    child.stderr?.setEncoding('utf8');
-    child.stdout?.on('data', (chunk: string) => {
-      stdout += chunk;
-    });
-    child.stderr?.on('data', (chunk: string) => {
-      stderr += chunk;
-    });
-    const timeout =
-      args.timeoutMs !== undefined
-        ? setTimeout(() => {
-            child.kill('SIGTERM');
-            forceKillTimeout = setTimeout(() => child.kill('SIGKILL'), 1000);
-          }, args.timeoutMs)
-        : undefined;
-    const clearTimers = () => {
-      if (timeout) clearTimeout(timeout);
-      if (forceKillTimeout) clearTimeout(forceKillTimeout);
-    };
-    child.on('error', (err) => {
-      clearTimers();
-      resolve({ output: stdout, stderr: `${stderr}${err.message}\n`, exitCode: 1 });
-    });
-    child.on('close', (code, signal) => {
-      clearTimers();
-      resolve({
-        output: stdout,
-        stderr,
-        exitCode: typeof code === 'number' ? code : signal ? signalExitCode(signal) : 1
-      });
-    });
-  });
-}
-
-function signalExitCode(signal: NodeJS.Signals): number {
-  const code = signal.startsWith('SIG') ? signalCode(signal.slice(3)) : undefined;
-  return code ? 128 + code : 1;
-}
-
-function signalCode(name: string): number | undefined {
-  const signals: Record<string, number> = {
-    HUP: 1,
-    INT: 2,
-    QUIT: 3,
-    ILL: 4,
-    TRAP: 5,
-    ABRT: 6,
-    BUS: 7,
-    FPE: 8,
-    KILL: 9,
-    USR1: 10,
-    SEGV: 11,
-    USR2: 12,
-    PIPE: 13,
-    ALRM: 14,
-    TERM: 15
-  };
-  return signals[name];
 }
 
 /**
