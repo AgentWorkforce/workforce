@@ -16,6 +16,7 @@ import type {
 } from './types.js';
 import { attachTrajectoryRecorder, createTrajectoryRecorder } from './trajectory.js';
 import { buildRelayContext } from './relay.js';
+import { NO_REPLY_MARKER, sanitizeNoReplyOutput } from './no-reply.js';
 
 type AgentInputValue = string | number | boolean | null | undefined;
 
@@ -162,7 +163,37 @@ export function buildCtx(options: CtxBuildOptions): WorkforceCtx {
     workspaceId: options.workspaceId,
     agentName,
     llm: options.llm ?? UNAVAILABLE_LLM,
-    harness: { run: options.harnessRunner },
+    harness: {
+      async run(args) {
+        const result = await options.harnessRunner(args);
+        const sanitizedOutput = sanitizeNoReplyOutput(result.output);
+        const sanitizedStderr = result.stderr === undefined
+          ? undefined
+          : sanitizeNoReplyOutput(result.stderr);
+        const containsMarker =
+          sanitizedOutput.containsMarker || (sanitizedStderr?.containsMarker ?? false);
+
+        if (containsMarker) {
+          const exactMarker =
+            result.exitCode === 0 &&
+            result.output.trim() === NO_REPLY_MARKER &&
+            !(result.stderr?.includes(NO_REPLY_MARKER) ?? false);
+          log(
+            exactMarker ? 'info' : 'warn',
+            exactMarker ? 'harness.no_reply.suppressed' : 'harness.no_reply.marker_leak',
+            { containsMarker: true }
+          );
+        }
+
+        return {
+          ...result,
+          output: sanitizedOutput.output,
+          ...(sanitizedStderr ? { stderr: sanitizedStderr.output } : {}),
+          containsMarker,
+          suppressed: sanitizedOutput.suppressed
+        };
+      }
+    },
     sandbox: options.sandbox,
     files,
     credentials: credentialsFromEnv(),

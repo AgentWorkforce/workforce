@@ -7,6 +7,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- Add the reserved `[[NO_REPLY]]` harness contract for successful silent runs,
+  including marker leak sanitization and observability.
+
 ## [4.1.26] - 2026-07-16
 
 ### Fixed

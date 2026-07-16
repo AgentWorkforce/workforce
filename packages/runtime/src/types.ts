@@ -155,6 +155,17 @@ export interface HarnessRunResult {
    * `spawn ... ENOENT`, etc.) is visible to callers that only read `output`.
    */
   output: string;
+  /**
+   * True when the raw harness output contained the reserved `[[NO_REPLY]]`
+   * marker. The runtime always strips the marker before returning `output`;
+   * mixed-content occurrences are also logged as leaks.
+   */
+  containsMarker?: boolean;
+  /**
+   * True when stripping `[[NO_REPLY]]` leaves no user-visible output. This is
+   * a successful silent result when {@link exitCode} is 0, not a failure.
+   */
+  suppressed?: boolean;
   /** Process exit code; 0 on success. */
   exitCode: number;
   /**
