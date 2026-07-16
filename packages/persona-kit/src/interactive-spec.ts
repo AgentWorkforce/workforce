@@ -662,11 +662,24 @@ export function buildInteractiveSpec(input: BuildInteractiveSpecInput): Interact
   }
 }
 
+/** Off-argv delivery for a one-shot harness prompt. Keeping the potentially
+ * large per-run task out of `args` avoids Linux's 128 KiB single-argument
+ * limit as well as the combined argv + env limit. */
+export type NonInteractivePrompt =
+  | { readonly mode: 'stdin'; readonly contents: string }
+  | {
+      readonly mode: 'file';
+      readonly contents: string;
+      readonly flag: '--prompt-file';
+    };
+
 /** Result of translating a persona's runtime into a one-shot, non-interactive
- * spawnable command. Caller writes `configFiles` before spawning. */
+ * spawnable command. Caller writes `configFiles` and delivers `prompt` using
+ * its declared off-argv mode before spawning. */
 export interface NonInteractiveSpec {
   bin: string;
   args: readonly string[];
+  prompt: NonInteractivePrompt;
   configFiles: readonly InteractiveConfigFile[];
   warnings: readonly string[];
 }
@@ -674,16 +687,17 @@ export interface NonInteractiveSpec {
 /**
  * Translate a persona's runtime into a non-interactive, one-shot command.
  * Layers harness-specific non-interactive flags on top of {@link buildInteractiveSpec},
- * then appends the user task. Pure — no I/O.
+ * then declares how the caller must deliver the user task off argv. Pure — no I/O.
  *
- * - `claude`: appends `--print --output-format text <task>`.
- * - `codex`:  prefixes `exec`, appends `--skip-git-repo-check`, then a prompt
- *   built from any `initialPrompt` joined with the user task.
+ * - `claude`: appends `--print --output-format text`; task is written to stdin.
+ * - `codex`:  prefixes `exec`, appends `--skip-git-repo-check -`; stdin receives
+ *   a prompt built from any `initialPrompt` joined with the user task.
  * - `opencode`: prefixes `run`, appends `--format default
- *   [--title <n>] <task>`; model selection stays in the generated agent config.
+ *   [--title <n>]`; task is written to stdin and model selection stays in the
+ *   generated agent config.
  * - `grok`: appends `--output-format plain [--cwd <cwd>] --always-approve
- *   --single <prompt>`, where prompt includes the persona system prompt plus
- *   the one-shot task.
+ *   --prompt-file <temp-path>` at spawn time, where the temporary file contains
+ *   the persona system prompt plus the one-shot task.
  */
 export function buildNonInteractiveSpec(
   input: BuildInteractiveSpecInput & {
@@ -696,10 +710,10 @@ export function buildNonInteractiveSpec(
   switch (input.harness) {
     case 'claude': {
       const args = [...interactive.args, '--print', '--output-format', 'text'];
-      args.push(input.task);
       return {
         bin: interactive.bin,
         args,
+        prompt: { mode: 'stdin', contents: input.task },
         configFiles: interactive.configFiles,
         warnings: interactive.warnings
       };
@@ -710,7 +724,8 @@ export function buildNonInteractiveSpec(
         : input.task;
       return {
         bin: interactive.bin,
-        args: ['exec', ...interactive.args, '--skip-git-repo-check', prompt],
+        args: ['exec', ...interactive.args, '--skip-git-repo-check', '-'],
+        prompt: { mode: 'stdin', contents: prompt },
         configFiles: interactive.configFiles,
         warnings: interactive.warnings
       };
@@ -723,10 +738,10 @@ export function buildNonInteractiveSpec(
       // separately, and `opencode run` does not support `--dir`.
       const args = ['run', ...interactive.args, '--format', 'default'];
       if (input.name) args.push('--title', input.name);
-      args.push(input.task);
       return {
         bin: interactive.bin,
         args,
+        prompt: { mode: 'stdin', contents: input.task },
         configFiles: interactive.configFiles,
         warnings: interactive.warnings
       };
@@ -740,10 +755,10 @@ export function buildNonInteractiveSpec(
       if (!args.includes('--always-approve')) {
         args.push('--always-approve');
       }
-      args.push('--single', prompt);
       return {
         bin: interactive.bin,
         args,
+        prompt: { mode: 'file', contents: prompt, flag: '--prompt-file' },
         configFiles: interactive.configFiles,
         warnings: interactive.warnings
       };

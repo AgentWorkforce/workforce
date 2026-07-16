@@ -68,7 +68,8 @@ import {
   injectClaudeAgentRelayMcpConfig,
   injectCodexSubcommandArgs,
   resolveAgentRelayBrokerMcpArgs,
-  resolveRelayMcpFromEnv as resolveRelayMcpFromEnvShared
+  resolveRelayMcpFromEnv as resolveRelayMcpFromEnvShared,
+  spawnNonInteractiveAndCapture
 } from '@agentworkforce/runtime';
 import {
   listBuiltInPersonas,
@@ -4502,50 +4503,16 @@ async function runPersonaImprover(args: {
   const timeoutMs = selection.harnessSettings.timeoutSeconds
     ? selection.harnessSettings.timeoutSeconds * 1000
     : undefined;
-  let captureResult: { exitCode: number | null; stderr: string };
+  let captureResult: { exitCode: number; stderr: string };
   try {
-    captureResult = await new Promise<{ exitCode: number | null; stderr: string }>(
-      (resolveResult) => {
-        const child = spawn(spec.bin, [...spec.args], {
-          cwd,
-          env: childEnv,
-          stdio: ['ignore', 'pipe', 'pipe'],
-          shell: false
-        });
-        let stderrBuf = '';
-        let forceKillTimeout: NodeJS.Timeout | undefined;
-        child.stdout?.setEncoding('utf8');
-        child.stderr?.setEncoding('utf8');
-        child.stderr?.on('data', (chunk: string) => {
-          stderrBuf += chunk;
-        });
-        // SIGTERM first; if the harness traps or ignores it, escalate to
-        // SIGKILL after a 1s grace so the timeout is actually enforced.
-        const timeout =
-          timeoutMs !== undefined
-            ? setTimeout(() => {
-                child.kill('SIGTERM');
-                forceKillTimeout = setTimeout(() => {
-                  if (!child.killed) child.kill('SIGKILL');
-                }, 1000);
-              }, timeoutMs)
-            : undefined;
-        const clearTimers = () => {
-          if (timeout) clearTimeout(timeout);
-          if (forceKillTimeout) clearTimeout(forceKillTimeout);
-        };
-        child.on('error', (err) => {
-          clearTimers();
-          resolveResult({ exitCode: 1, stderr: `${stderrBuf}${err.message}\n` });
-        });
-        child.on('close', (code, signal) => {
-          clearTimers();
-          const exitCode =
-            typeof code === 'number' ? code : signal ? signalExitCode(signal) : null;
-          resolveResult({ exitCode, stderr: stderrBuf });
-        });
-      }
-    );
+    captureResult = await spawnNonInteractiveAndCapture({
+      bin: spec.bin,
+      args: [...spec.args],
+      prompt: spec.prompt,
+      cwd,
+      env: childEnv,
+      ...(timeoutMs !== undefined ? { timeoutMs } : {})
+    });
   } finally {
     // Always restore — a synchronous spawn() throw or unexpected promise
     // rejection must not leave orphaned `opencode.json` (or any other
@@ -4554,7 +4521,7 @@ async function runPersonaImprover(args: {
   }
   if (captureResult.exitCode !== 0) {
     throw new Error(
-      `improver exited with code=${captureResult.exitCode ?? 'null'}.${captureResult.stderr ? ` stderr: ${captureResult.stderr.slice(0, 400)}` : ''}`
+      `improver exited with code=${captureResult.exitCode}.${captureResult.stderr ? ` stderr: ${captureResult.stderr.slice(0, 400)}` : ''}`
     );
   }
   let raw: string;

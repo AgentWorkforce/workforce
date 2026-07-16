@@ -343,9 +343,9 @@ test('opencode non-interactive spec omits cwd/model flags and normalizes the age
     '--format',
     'default',
     '--title',
-    'daily-ship',
-    'say pong'
+    'daily-ship'
   ]);
+  assert.deepEqual(result.prompt, { mode: 'stdin', contents: 'say pong' });
   assert.ok(!result.args.includes('--dir'));
   assert.ok(!result.args.includes('--model'));
 
@@ -413,7 +413,7 @@ test('grok warns for unsupported permission fields', () => {
   ]);
 });
 
-test('grok non-interactive spec uses single-shot mode with cwd and always-approve', () => {
+test('grok non-interactive spec uses a prompt file with cwd and always-approve', () => {
   const result = buildNonInteractiveSpec({
     harness: 'grok',
     personaId: 'daily-ship',
@@ -432,10 +432,13 @@ test('grok non-interactive spec uses single-shot mode with cwd and always-approv
     'plain',
     '--cwd',
     '/tmp/project',
-    '--always-approve',
-    '--single',
-    'Reply pong.\n\nUser task:\nsay pong'
+    '--always-approve'
   ]);
+  assert.deepEqual(result.prompt, {
+    mode: 'file',
+    contents: 'Reply pong.\n\nUser task:\nsay pong',
+    flag: '--prompt-file'
+  });
   assert.deepEqual(result.configFiles, [
     { path: 'AGENTS.md', contents: 'Reply pong.\n' }
   ]);
@@ -458,10 +461,13 @@ test('grok non-interactive spec still adds always-approve for unsupported permis
     'grok-build-0.1',
     '--output-format',
     'plain',
-    '--always-approve',
-    '--single',
-    'say pong'
+    '--always-approve'
   ]);
+  assert.deepEqual(result.prompt, {
+    mode: 'file',
+    contents: 'say pong',
+    flag: '--prompt-file'
+  });
   assert.deepEqual(result.warnings, [
     'persona declares permissions.mode "plan" but the grok harness only supports bypassPermissions via --always-approve; proceeding with Grok defaults.'
   ]);
@@ -534,7 +540,44 @@ test('claude non-interactive spec omits unsupported --name while preserving run 
   assert.equal(args[outputIdx + 1], 'text');
   assert.ok(promptIdx >= 0);
   assert.equal(args[promptIdx + 1], 'Reply pong.');
-  assert.equal(args[args.length - 1], 'say pong');
+  assert.ok(!args.includes('say pong'));
+  assert.deepEqual(result.prompt, { mode: 'stdin', contents: 'say pong' });
+});
+
+test('non-interactive tasks stay off argv and argv remains below Linux per-argument limits', () => {
+  const marker = 'TASK_CANARY_d7e9b9b0';
+  const task = `${marker}\n${'x'.repeat(200_000)}`;
+  const cases = [
+    { harness: 'claude' as const, model: 'claude-sonnet-4-6', promptMode: 'stdin' },
+    { harness: 'codex' as const, model: 'openai-codex/gpt-5.3-codex', promptMode: 'stdin' },
+    { harness: 'opencode' as const, model: 'opencode/minimax-m2.5', promptMode: 'stdin' },
+    { harness: 'grok' as const, model: 'grok-build-0.1', promptMode: 'file' }
+  ];
+
+  for (const entry of cases) {
+    const result = buildNonInteractiveSpec({
+      harness: entry.harness,
+      personaId: 'argv-budget-test',
+      model: entry.model,
+      systemPrompt: 'short system prompt',
+      task,
+      name: 'argv-budget-test',
+      workingDirectory: '/tmp/project'
+    });
+    const argvBytes = [result.bin, ...result.args].reduce(
+      (total, arg) => total + Buffer.byteLength(arg) + 1,
+      0
+    );
+    const largestArgBytes = Math.max(...result.args.map((arg) => Buffer.byteLength(arg)));
+
+    assert.equal(result.prompt.mode, entry.promptMode, entry.harness);
+    assert.ok(result.prompt.contents.includes(marker), entry.harness);
+    assert.ok(result.args.every((arg) => !arg.includes(marker)), entry.harness);
+    // Linux rejects any single argv element at 128 KiB (MAX_ARG_STRLEN),
+    // independently of the larger combined argv + env budget.
+    assert.ok(largestArgBytes < 128 * 1024, `${entry.harness}: largest arg=${largestArgBytes}`);
+    assert.ok(argvBytes < 128 * 1024, `${entry.harness}: argv total=${argvBytes}`);
+  }
 });
 
 test('opencode omits agent.prompt when systemPrompt is empty', () => {

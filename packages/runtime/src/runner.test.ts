@@ -203,8 +203,12 @@ test('cloud harness runner materializes AGENTS.md for grok personas', async () =
       '#!/usr/bin/env node',
       'const fs = require("node:fs");',
       'const path = require("node:path");',
+      'const args = process.argv.slice(2);',
+      'const promptFlag = args.indexOf("--prompt-file");',
+      'const promptPath = args[promptFlag + 1];',
+      'const prompt = fs.readFileSync(promptPath, "utf8");',
       'const agents = fs.readFileSync(path.join(process.cwd(), "AGENTS.md"), "utf8");',
-      'process.stdout.write(JSON.stringify({ args: process.argv.slice(2), agents }));'
+      'process.stdout.write(JSON.stringify({ args, agents, prompt, promptPath }));'
     ].join('\n'),
     'utf8'
   );
@@ -233,8 +237,13 @@ test('cloud harness runner materializes AGENTS.md for grok personas', async () =
 
     const result = await defaults.harnessRunner({ prompt: 'say hello' });
     assert.equal(result.exitCode, 0);
-    const parsed = JSON.parse(result.output) as { args: string[]; agents: string };
-    assert.deepEqual(parsed.args, [
+    const parsed = JSON.parse(result.output) as {
+      args: string[];
+      agents: string;
+      prompt: string;
+      promptPath: string;
+    };
+    assert.deepEqual(parsed.args.slice(0, -2), [
       '--no-auto-update',
       '--model',
       'grok-build-0.1',
@@ -242,10 +251,12 @@ test('cloud harness runner materializes AGENTS.md for grok personas', async () =
       'plain',
       '--cwd',
       root,
-      '--always-approve',
-      '--single',
-      'Grok system prompt\n\nUser task:\nsay hello'
+      '--always-approve'
     ]);
+    assert.equal(parsed.args.at(-2), '--prompt-file');
+    assert.equal(parsed.args.at(-1), parsed.promptPath);
+    assert.equal(parsed.prompt, 'Grok system prompt\n\nUser task:\nsay hello');
+    await assert.rejects(() => readFile(parsed.promptPath, 'utf8'), { code: 'ENOENT' });
     assert.equal(parsed.agents, 'Grok agents sidecar\n');
     assert.ok(logs.find((l) => l.message === 'harness.sidecar.materialized'));
   } finally {
@@ -278,8 +289,13 @@ async function writeArgCaptureHarness(
     [
       '#!/usr/bin/env node',
       "const fs = require('node:fs');",
-      `fs.writeFileSync(${JSON.stringify(capturePath)}, JSON.stringify({ argv: process.argv.slice(2) }, null, 2));`,
-      "process.stdout.write('ok\\n');"
+      "process.stdin.setEncoding('utf8');",
+      "let stdin = '';",
+      "process.stdin.on('data', (chunk) => { stdin += chunk; });",
+      "process.stdin.on('end', () => {",
+      `  fs.writeFileSync(${JSON.stringify(capturePath)}, JSON.stringify({ argv: process.argv.slice(2), stdin }, null, 2));`,
+      "  process.stdout.write('ok\\n');",
+      "});"
     ].join('\n'),
     'utf8'
   );
@@ -408,7 +424,10 @@ test('cloud default codex harness injects agent-relay MCP args from broker helpe
     const result = await defaults.harnessRunner({ prompt: 'do the work' });
     assert.equal(result.exitCode, 0);
 
-    const captured = JSON.parse(await readFile(capturePath, 'utf8')) as { argv: string[] };
+    const captured = JSON.parse(await readFile(capturePath, 'utf8')) as {
+      argv: string[];
+      stdin: string;
+    };
     assert.deepEqual(captured.argv.slice(0, 9), [
       'exec',
       '--config',
@@ -450,7 +469,8 @@ test('cloud default codex harness injects agent-relay MCP args from broker helpe
       JSON.parse(brokerCaptured.argv[existingArgsIdx + 1]),
       captured.argv.slice(11, -1)
     );
-    assert.equal(captured.argv.at(-1), 'coordinate with the team\n\nUser task:\ndo the work');
+    assert.equal(captured.argv.at(-1), '-');
+    assert.equal(captured.stdin, 'coordinate with the team\n\nUser task:\ndo the work');
     assert.equal(
       brokerCaptured.argv[brokerCaptured.argv.indexOf('--workspaces-json') + 1],
       '{"workspaces":[{"id":"ws-relay"}]}'
@@ -585,7 +605,10 @@ test('cloud default codex harness falls back when broker returns no args', async
     const result = await defaults.harnessRunner({ prompt: 'do the work' });
     assert.equal(result.exitCode, 0);
 
-    const captured = JSON.parse(await readFile(capturePath, 'utf8')) as { argv: string[] };
+    const captured = JSON.parse(await readFile(capturePath, 'utf8')) as {
+      argv: string[];
+      stdin: string;
+    };
     assert.ok(captured.argv.includes('mcp_servers.relaycast.command="npx"'));
     assert.equal(captured.argv.includes('mcp_servers.agent-relay.command="npx"'), false);
   } finally {
@@ -634,12 +657,16 @@ test('cloud default claude harness merges agent-relay MCP config from broker hel
     const result = await defaults.harnessRunner({ prompt: 'do the work' });
     assert.equal(result.exitCode, 0);
 
-    const captured = JSON.parse(await readFile(capturePath, 'utf8')) as { argv: string[] };
+    const captured = JSON.parse(await readFile(capturePath, 'utf8')) as {
+      argv: string[];
+      stdin: string;
+    };
     assert.equal(captured.argv.filter((arg) => arg === '--mcp-config').length, 1);
     assert.ok(captured.argv.includes('--strict-mcp-config'));
     assert.ok(captured.argv.includes('--print'));
     assert.ok(captured.argv.includes('--output-format'));
-    assert.equal(captured.argv.at(-1), 'do the work');
+    assert.notEqual(captured.argv.at(-1), 'do the work');
+    assert.equal(captured.stdin, 'do the work');
 
     const mcpConfigIdx = captured.argv.indexOf('--mcp-config');
     const payload = JSON.parse(captured.argv[mcpConfigIdx + 1]) as {

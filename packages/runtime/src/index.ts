@@ -71,6 +71,16 @@ export {
 // builders and tests.
 export { buildRelayContext, DEFAULT_RELAYCAST_URL } from './relay.js';
 
+// Shared process launcher for one-shot harness commands. Prompts are delivered
+// off argv through stdin or a private temporary file according to the spec.
+export {
+  spawnAndCapture,
+  spawnNonInteractiveAndCapture,
+  type CapturedProcessResult,
+  type SpawnAndCaptureArgs,
+  type SpawnNonInteractiveAndCaptureArgs
+} from './harness-process.js';
+
 // Runtime envelope helpers shared by provider-triggered agents.
 export {
   unwrapResourceRecord
