@@ -157,7 +157,7 @@ if (agentTriggerPaths?.type === 'array') {
     agentTriggerPaths.items = {
       ...agentTriggerPaths.items,
       minLength: 1,
-      pattern: '^/'
+      pattern: '^/(?:.*\\S)?$'
     };
   }
 }

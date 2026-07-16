@@ -859,6 +859,10 @@ test('parseAgentSpec rejects malformed triggers maps with precise field paths', 
     /triggers\.github\[0\]\.paths\[0\] must be a non-empty string/
   );
   assert.throws(
+    () => parseAgentSpec({ triggers: { github: [{ on: 'issue.opened', paths: ['/github/** '] }] } }),
+    /triggers\.github\[0\]\.paths\[0\] must not have leading or trailing whitespace/
+  );
+  assert.throws(
     () => parseAgentSpec({ triggers: { github: [{ on: 'issue.opened', paths: ['github/**'] }] } }),
     /triggers\.github\[0\]\.paths\[0\] must start with \//
   );
@@ -1063,6 +1067,7 @@ test('parseWatch rejects malformed relayfile watch rules with precise field path
   assert.throws(() => parseWatch([{ events: ['created'] }], 'watch'), /watch\[0\]\.paths must be a non-empty array/);
   assert.throws(() => parseWatch([{ paths: [], events: ['created'] }], 'watch'), /watch\[0\]\.paths must be a non-empty array/);
   assert.throws(() => parseWatch([{ paths: [42], events: ['created'] }], 'watch'), /watch\[0\]\.paths\[0\] must be a non-empty string/);
+  assert.throws(() => parseWatch([{ paths: ['/x '], events: ['created'] }], 'watch'), /watch\[0\]\.paths\[0\] must not have leading or trailing whitespace/);
   assert.throws(() => parseWatch([{ paths: ['relative/**'], events: ['created'] }], 'watch'), /watch\[0\]\.paths\[0\] must start with \//);
   assert.throws(() => parseWatch([{ paths: ['/x'] }], 'watch'), /watch\[0\]\.events must be a non-empty array/);
   assert.throws(() => parseWatch([{ paths: ['/x'], events: [] }], 'watch'), /watch\[0\]\.events must be a non-empty array/);

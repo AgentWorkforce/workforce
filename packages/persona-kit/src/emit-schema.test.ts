@@ -169,7 +169,7 @@ test('agent schema exposes launchedBy/triggers/schedules/watch', async () => {
     : undefined, 1);
   assert.deepEqual(triggerPaths && triggerPaths !== true
     ? triggerPaths.items
-    : undefined, { type: 'string', minLength: 1, pattern: '^/' });
+    : undefined, { type: 'string', minLength: 1, pattern: '^/(?:.*\\S)?$' });
   const maxConcurrency = trigger.properties?.maxConcurrency;
   assert.equal(maxConcurrency && maxConcurrency !== true
     ? maxConcurrency.type
@@ -200,7 +200,11 @@ test('agent schema exposes launchedBy/triggers/schedules/watch', async () => {
   );
   assert.throws(
     () => assertSchema({ triggers: { slack: [{ on: 'message.created', paths: ['slack/**'] }] } }, schema, schema, 'agent'),
-    /agent\.triggers\.slack\[0\]\.paths\[0\] must match \^\//
+    /agent\.triggers\.slack\[0\]\.paths\[0\] must match/
+  );
+  assert.throws(
+    () => assertSchema({ triggers: { slack: [{ on: 'message.created', paths: ['/slack/** '] }] } }, schema, schema, 'agent'),
+    /agent\.triggers\.slack\[0\]\.paths\[0\] must match/
   );
   assert.throws(
     () => assertSchema({ triggers: { slack: [{ on: 'message.created', maxConcurrency: 0 }] } }, schema, schema, 'agent'),

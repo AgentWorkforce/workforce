@@ -553,6 +553,9 @@ function parseAbsolutePathList(value: unknown, context: string): string[] {
     if (typeof path !== 'string' || !path.trim()) {
       throw new Error(`${pathContext} must be a non-empty string`);
     }
+    if (path !== path.trim()) {
+      throw new Error(`${pathContext} must not have leading or trailing whitespace`);
+    }
     if (!path.startsWith('/')) {
       throw new Error(`${pathContext} must start with /`);
     }

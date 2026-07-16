@@ -54,7 +54,7 @@
           "items": {
             "type": "string",
             "minLength": 1,
-            "pattern": "^/"
+            "pattern": "^/(?:.*\\S)?$"
           },
           "description": "Optional Relayfile path globs used to scope wake routing before an agent is provisioned. Paths are absolute (leading `/`) and provider-specific.",
           "minItems": 1
