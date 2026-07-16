@@ -7,6 +7,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Breaking Changes
+
+- `buildNonInteractiveSpec` no longer includes the one-shot task in `args`.
+  Consumers must deliver the new required `prompt` descriptor through stdin or
+  a prompt file as directed; spawning only `bin` and `args` now omits the task.
+
+### Fixed
+
+- Keep large one-shot harness prompts off argv to avoid Linux
+  `MAX_ARG_STRLEN`/`E2BIG` failures.
+
 ## [4.1.23] - 2026-07-15
 
 ### Added

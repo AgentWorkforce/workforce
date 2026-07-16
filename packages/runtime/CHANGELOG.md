@@ -7,6 +7,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- Deliver one-shot Claude, Codex, and OpenCode prompts through stdin and Grok
+  prompts through a private temporary file instead of oversized argv elements.
+
 ## [4.1.24] - 2026-07-16
 
 ### Fixed
