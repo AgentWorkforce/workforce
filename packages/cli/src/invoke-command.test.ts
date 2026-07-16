@@ -333,7 +333,7 @@ test('runInvoke: watch reruns preserve simulated provider receipts for later thr
     const relayfileDir = path.join(dir, 'node_modules', '@relayfile');
     await mkdir(relayfileDir, { recursive: true });
     await symlink(
-      path.resolve(process.cwd(), '..', 'delivery', 'node_modules', '@relayfile', 'relay-helpers'),
+      path.resolve(process.cwd(), '..', 'runtime', 'node_modules', '@relayfile', 'relay-helpers'),
       path.join(relayfileDir, 'relay-helpers')
     );
 
@@ -817,7 +817,7 @@ test('runInvoke: preview transport binds before import and blocks ambient Slack 
       const relayfileDir = path.join(dir, 'node_modules', '@relayfile');
       await mkdir(relayfileDir, { recursive: true });
       await symlink(
-        path.resolve(process.cwd(), '..', 'delivery', 'node_modules', '@relayfile', 'relay-helpers'),
+        path.resolve(process.cwd(), '..', 'runtime', 'node_modules', '@relayfile', 'relay-helpers'),
         path.join(relayfileDir, 'relay-helpers')
       );
       const io = collectingIO();
@@ -863,12 +863,31 @@ test('runInvoke: authored writes deny blocks every local write channel without r
     await withAgent({
       'agent.ts': `
         import { defineAgent } from '@agentworkforce/runtime';
-        import { slackClient } from '@relayfile/relay-helpers';
+        import { PreviewTransport, slackClient } from '@relayfile/relay-helpers';
         export default defineAgent({
           schedules: [{ name: 'scan', cron: '0 9 * * *' }],
           handler: async (ctx) => {
-            await Promise.allSettled([
+            const explicitTransport = new PreviewTransport();
+            let customTransportWrites = 0;
+            const customTransport = {
+              async read() { return undefined; },
+              async list() { return []; },
+              async write() {
+                customTransportWrites += 1;
+                await fetch('http://127.0.0.1:${address.port}/custom-transport', {
+                  method: 'POST',
+                  body: 'custom transport write escaped'
+                });
+                return { path: '/escaped', absolutePath: '/escaped' };
+              }
+            };
+            const outcomes = await Promise.allSettled([
               slackClient().post('C123', 'Provider sentinel must be denied'),
+              slackClient({ transport: explicitTransport }).post(
+                'C124',
+                'Explicit xoxb-123456789012-123456789012-SENTINEL must be denied'
+              ),
+              slackClient({ transport: customTransport }).post('C125', 'Custom transport must be denied'),
               ctx.relay.post('general', 'Relay sentinel must be denied'),
               ctx.files.write('/preview/files.txt', 'Files sentinel must be denied'),
               ctx.sandbox.writeFile('/preview/sandbox.txt', 'Sandbox sentinel must be denied'),
@@ -876,6 +895,11 @@ test('runInvoke: authored writes deny blocks every local write channel without r
               ctx.schedule.at(new Date('2026-07-16T12:00:00.000Z'), { denied: true }),
               ctx.schedule.cancel('denied-schedule')
             ]);
+            ctx.log('info', 'transport.audit', {
+              explicitActions: explicitTransport.actions.length,
+              customTransportWrites,
+              rejected: outcomes.filter((outcome) => outcome.status === 'rejected').length
+            });
           }
         });
       `,
@@ -904,7 +928,7 @@ expect:
       const relayfileDir = path.join(dir, 'node_modules', '@relayfile');
       await mkdir(relayfileDir, { recursive: true });
       await symlink(
-        path.resolve(process.cwd(), '..', 'delivery', 'node_modules', '@relayfile', 'relay-helpers'),
+        path.resolve(process.cwd(), '..', 'runtime', 'node_modules', '@relayfile', 'relay-helpers'),
         path.join(relayfileDir, 'relay-helpers')
       );
 
@@ -918,13 +942,20 @@ expect:
       const exitCode = process.exitCode;
       process.exitCode = previousExitCode;
 
-      assert.ok(result && !Array.isArray(result));
+      assert.ok(result && !Array.isArray(result), io.err.join(''));
       assert.equal(exitCode, 1);
       assert.equal(result.status, 'failed');
       assert.equal(result.policy.writes, 'deny');
       assert.equal(sentinelHits, 0);
       const deniedWrites = result.actions.filter((action) => action.status === 'denied');
-      assert.equal(deniedWrites.length, 7);
+      assert.equal(deniedWrites.length, 9);
+      assert.equal(deniedWrites.filter((action) => action.kind === 'provider.write').length, 4);
+      assert.equal(
+        deniedWrites.filter((action) =>
+          action.kind === 'provider.write' && action.provider === 'slack'
+        ).length,
+        3
+      );
       assert.equal(
         result.actions.some((action) =>
           action.status === 'previewed' && [
@@ -941,6 +972,13 @@ expect:
       assert.deepEqual(result.stateDiff.memory, []);
       assert.doesNotMatch(JSON.stringify(result), /simulatedReceipt/);
       assert.doesNotMatch(JSON.stringify(result), /51N7INEL|xoxb-123456789012/);
+      const logs = ((result.extensions as Record<string, unknown>).logs ?? []) as string[];
+      assert.ok(logs.some((line) =>
+        line.includes('transport.audit')
+        && line.includes('"explicitActions":0')
+        && line.includes('"customTransportWrites":0')
+        && line.includes('"rejected":9')
+      ));
     });
   } finally {
     sentinel.close();
@@ -950,6 +988,92 @@ expect:
     process.env.RELAY_API_KEY = env.RELAY_API_KEY;
     process.env.SLACK_BOT_TOKEN = env.SLACK_BOT_TOKEN;
     process.env.CLOUD_API_ACCESS_TOKEN = env.CLOUD_API_ACCESS_TOKEN;
+  }
+});
+
+test('runInvoke: preview writes redirect explicit and custom transports to the canonical recorder', async () => {
+  let sentinelHits = 0;
+  const sentinel = createServer((_req, res) => {
+    sentinelHits += 1;
+    res.statusCode = 500;
+    res.end('custom transport write escaped');
+  });
+  await new Promise<void>((resolve) => sentinel.listen(0, '127.0.0.1', () => resolve()));
+  const address = sentinel.address();
+  assert.ok(address && typeof address === 'object');
+
+  try {
+    await withAgent({
+      'agent.ts': `
+        import { defineAgent } from '@agentworkforce/runtime';
+        import { PreviewTransport, slackClient } from '@relayfile/relay-helpers';
+        export default defineAgent({
+          schedules: [{ name: 'scan', cron: '0 9 * * *' }],
+          handler: async (ctx) => {
+            const explicitTransport = new PreviewTransport();
+            let customTransportWrites = 0;
+            const customTransport = {
+              async read() { return undefined; },
+              async list() { return []; },
+              async write() {
+                customTransportWrites += 1;
+                await fetch('http://127.0.0.1:${address.port}/custom-preview', {
+                  method: 'POST',
+                  body: 'escaped'
+                });
+                return { path: '/escaped', absolutePath: '/escaped' };
+              }
+            };
+            const explicitReceipt = await slackClient({ transport: explicitTransport }).post(
+              'C124',
+              'Canonical explicit preview'
+            );
+            const customReceipt = await slackClient({ transport: customTransport }).post(
+              'C125',
+              'Canonical custom preview'
+            );
+            ctx.log('info', 'transport.preview.audit', {
+              explicitActions: explicitTransport.actions.length,
+              customTransportWrites,
+              explicitReceipt: explicitReceipt.ref,
+              customReceipt: customReceipt.ref
+            });
+          }
+        });
+      `
+    }, async (dir, agentPath) => {
+      const relayfileDir = path.join(dir, 'node_modules', '@relayfile');
+      await mkdir(relayfileDir, { recursive: true });
+      await symlink(
+        path.resolve(process.cwd(), '..', 'runtime', 'node_modules', '@relayfile', 'relay-helpers'),
+        path.join(relayfileDir, 'relay-helpers')
+      );
+
+      const io = collectingIO();
+      const previousExitCode = process.exitCode;
+      const result = await runInvoke([agentPath, '--schedule', 'scan'], io);
+      const exitCode = process.exitCode;
+      process.exitCode = previousExitCode;
+
+      assert.ok(result && !Array.isArray(result), io.err.join(''));
+      assert.equal(exitCode, 0);
+      assert.equal(result.status, 'succeeded');
+      assert.equal(sentinelHits, 0);
+      const writes = result.actions.filter((action) => action.kind === 'provider.write');
+      assert.equal(writes.length, 2);
+      assert.ok(writes.every((action) => action.status === 'previewed'));
+      assert.ok(writes.every((action) => action.data?.simulatedReceipt));
+      const logs = ((result.extensions as Record<string, unknown>).logs ?? []) as string[];
+      assert.ok(logs.some((line) =>
+        line.includes('transport.preview.audit')
+        && line.includes('"explicitActions":0')
+        && line.includes('"customTransportWrites":0')
+        && line.includes('preview-slack-messages-0001')
+        && line.includes('preview-slack-messages-0002')
+      ));
+    });
+  } finally {
+    sentinel.close();
   }
 });
 
@@ -969,7 +1093,7 @@ test('runInvoke: one provider read produces one action and one trace span', asyn
     const relayfileDir = path.join(dir, 'node_modules', '@relayfile');
     await mkdir(relayfileDir, { recursive: true });
     await symlink(
-      path.resolve(process.cwd(), '..', 'delivery', 'node_modules', '@relayfile', 'relay-helpers'),
+      path.resolve(process.cwd(), '..', 'runtime', 'node_modules', '@relayfile', 'relay-helpers'),
       path.join(relayfileDir, 'relay-helpers')
     );
 
@@ -979,10 +1103,86 @@ test('runInvoke: one provider read produces one action and one trace span', asyn
     const exitCode = process.exitCode;
     process.exitCode = previousExitCode;
 
-    assert.ok(result && !Array.isArray(result));
+    assert.ok(result && !Array.isArray(result), io.err.join(''));
     assert.equal(exitCode, 0);
     assert.equal(result.actions.filter((action) => action.kind === 'provider.read').length, 1);
     assert.equal(result.trace.filter((span) => span.kind === 'provider.read').length, 1);
+  });
+});
+
+test('runInvoke: real handler preserves one monotonic interleaved effect stream', async () => {
+  await withAgent({
+    'agent.ts': `
+      import { defineAgent } from '@agentworkforce/runtime';
+      import { slackClient } from '@relayfile/relay-helpers';
+      export default defineAgent({
+        schedules: [{ name: 'scan', cron: '0 9 * * *' }],
+        handler: async (ctx) => {
+          const slack = slackClient();
+          await slack.messages.list({ channelId: 'C123' });
+          await ctx.files.write('/preview/interleaved.json', '{"step":1}');
+          await fetch('https://example.test/interleaved');
+          await ctx.llm.complete('interleaved model call');
+          const parent = await slack.post('C123', 'Interleaved parent');
+          await ctx.memory.save('interleaved memory');
+          await slack.post('C123', 'Interleaved reply', { replyTo: parent.ref });
+        }
+      });
+    `,
+    'case.yaml': `
+schemaVersion: 1
+id: test.monotonic-effects
+kind: scheduled
+event:
+  schedule: scan
+policy:
+  reads: fixtures
+  writes: preview
+  model: stub
+http:
+  - method: GET
+    match: interleaved
+    file: ./fixture.json
+expect:
+  status: succeeded
+`,
+    'fixture.json': '{"ok":true}\n'
+  }, async (dir, agentPath) => {
+    const relayfileDir = path.join(dir, 'node_modules', '@relayfile');
+    await mkdir(relayfileDir, { recursive: true });
+    await symlink(
+      path.resolve(process.cwd(), '..', 'runtime', 'node_modules', '@relayfile', 'relay-helpers'),
+      path.join(relayfileDir, 'relay-helpers')
+    );
+
+    const io = collectingIO();
+    const previousExitCode = process.exitCode;
+    const result = await runInvoke([agentPath, '--case', path.join(dir, 'case.yaml')], io);
+    const exitCode = process.exitCode;
+    process.exitCode = previousExitCode;
+
+    assert.ok(result && !Array.isArray(result), io.err.join(''));
+    assert.equal(exitCode, 0);
+    assert.deepEqual(result.actions.map((action) => action.kind), [
+      'provider.read',
+      'files.write',
+      'http.read',
+      'model.complete',
+      'provider.write',
+      'memory.save',
+      'provider.write'
+    ]);
+    assert.deepEqual(result.trace.slice(1, -1).map((span) => span.kind), result.actions.map((action) => action.kind));
+    assert.equal(result.actions.filter((action) => action.kind === 'provider.read').length, 1);
+    assert.equal(result.trace.filter((span) => span.kind === 'provider.read').length, 1);
+    assert.equal(result.actions[4]?.resource, 'messages');
+    assert.equal(result.actions[6]?.resource, 'messages');
+
+    const human = io.err.join('');
+    const numberedKinds = [...human.matchAll(/\d{2}\. \[[^\]]+\] ([a-z.]+)/gu)].map((match) => match[1]);
+    assert.deepEqual(numberedKinds, result.actions.map((action) => action.kind));
+    assert.match(human, /text \(exact\): "Interleaved parent"/);
+    assert.match(human, /text \(exact\): "Interleaved reply"/);
   });
 });
 

@@ -1,9 +1,11 @@
 import addFormatsModule from 'ajv-formats';
 import { Ajv2020, type ErrorObject, type ValidateFunction } from 'ajv/dist/2020.js';
+import { addEventContractJsonSchemaKeywords } from './contract-schema-keywords.js';
 import type { JsonSchema, ValidationIssue, ValidationResult } from './types.js';
 
 const ajv = new Ajv2020({ allErrors: true, strict: true });
 (addFormatsModule as unknown as (instance: Ajv2020) => Ajv2020)(ajv);
+addEventContractJsonSchemaKeywords(ajv);
 
 const validators = new WeakMap<object, ValidateFunction>();
 

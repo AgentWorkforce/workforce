@@ -2,7 +2,7 @@ import { randomUUID } from 'node:crypto';
 import { pathToFileURL } from 'node:url';
 import type { EventFrameV1 } from '@agentworkforce/events';
 import { buildCtx } from './ctx.js';
-import { getPreviewProcessState, transportActionToPreviewAction } from './local-preview-hooks.js';
+import { getPreviewProcessState } from './local-preview-hooks.js';
 import { redactLocalPreviewValue } from './local-preview-redaction.js';
 import type {
   ExecuteLocalRunResult,
@@ -382,13 +382,6 @@ export async function executeLocalRunInWorkerProcess(
     await (handler as WorkforceHandler)(ctx, event);
   } catch (caught) {
     error = caught instanceof Error ? caught.message : String(caught);
-  }
-
-  // PreviewTransport.actions is the authoritative ordered effect stream and
-  // already contains read/list accesses. Iterating accesses separately would
-  // duplicate each provider read in both the Run actions and trace.
-  for (const action of previewState.previewTransport.actions) {
-    recordAction(transportActionToPreviewAction(action as unknown as never));
   }
 
   const deniedWriteCount = previewState.recordedActions.filter(isDeniedWriteAction).length;

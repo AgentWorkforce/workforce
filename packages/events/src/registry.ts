@@ -3,6 +3,7 @@ import { validateJsonSchema, withoutSchemaIdentifiers } from './json-schema.js';
 import { EVENT_FRAME_V1_SCHEMA, EVENT_SUMMARY_SCHEMA } from './schemas.js';
 import type { EventContract, EventFrameV1, JsonSchema, ValidationIssue, ValidationResult } from './types.js';
 import { validateEventFrameV1 } from './validate.js';
+import { COMPOSIO_TRIGGER_COORDINATES_KEYWORD } from './contract-schema-keywords.js';
 
 const OPEN_PAYLOAD_SCHEMA = Object.freeze({}) satisfies JsonSchema;
 const COMPOSIO_TRIGGER_MESSAGE_PAYLOAD_SCHEMA = Object.freeze({
@@ -64,6 +65,8 @@ function contract<TPayload = unknown>(config: {
   resourceKind: string;
   fixture: EventFrameV1;
   payloadSchema?: JsonSchema;
+  payloadRequired?: boolean;
+  validateFrame?: (frame: EventFrameV1) => readonly ValidationIssue[];
 }): EventContract<TPayload> {
   return Object.freeze({
     id: config.id,
@@ -85,10 +88,13 @@ function contract<TPayload = unknown>(config: {
       if (frame.resource.kind !== config.resourceKind) errors.push({ path: '$.resource.kind', message: `must equal ${config.resourceKind}`, keyword: 'const' });
       const summary = validateJsonSchema(EVENT_SUMMARY_SCHEMA, frame.summary, '$.summary');
       if (!summary.valid) errors.push(...summary.errors);
-      if (frame.payload !== undefined) {
+      if (config.payloadRequired && frame.payload === undefined) {
+        errors.push({ path: '$.payload', message: 'is required', keyword: 'required' });
+      } else if (frame.payload !== undefined) {
         const payload = validateJsonSchema(config.payloadSchema ?? OPEN_PAYLOAD_SCHEMA, frame.payload, '$.payload');
         if (!payload.valid) errors.push(...payload.errors);
       }
+      if (config.validateFrame) errors.push(...config.validateFrame(frame));
       return errors.length === 0 ? { valid: true, errors: [] } : { valid: false, errors };
     }
   });
@@ -169,6 +175,8 @@ export const EVENT_CONTRACTS = Object.freeze([
     trigger: 'trigger.message',
     resourceKind: 'composio.trigger',
     payloadSchema: COMPOSIO_TRIGGER_MESSAGE_PAYLOAD_SCHEMA,
+    payloadRequired: true,
+    validateFrame: validateComposioTriggerCoordinates,
     fixture: example('composio.trigger.message', 'composio', 'trigger.message', 'composio.trigger', {
       id: '018f4b16-52f9-7d33-a7d6-8f9a324db8c1',
       occurredAt: '2026-07-15T09:00:00.000Z',
@@ -239,6 +247,12 @@ export const EVENT_CONTRACT_JSON_SCHEMAS = Object.freeze(Object.fromEntries(
         withoutSchemaIdentifiers(EVENT_FRAME_V1_SCHEMA),
         {
           type: 'object',
+          ...(entry.id === 'composio.trigger.message'
+            ? {
+                required: ['payload', 'delivery'],
+                [COMPOSIO_TRIGGER_COORDINATES_KEYWORD]: true
+              }
+            : {}),
           properties: {
             type: { const: entry.id },
             contractVersion: { const: entry.version },
@@ -249,6 +263,18 @@ export const EVENT_CONTRACT_JSON_SCHEMAS = Object.freeze(Object.fromEntries(
                 kind: { const: entry.resourceKind }
               }
             },
+            ...(entry.id === 'composio.trigger.message'
+              ? {
+                  delivery: {
+                    type: 'object',
+                    required: ['id', 'dedupeKey'],
+                    properties: {
+                      id: { type: 'string', minLength: 1 },
+                      dedupeKey: { type: 'string', minLength: 1 }
+                    }
+                  }
+                }
+              : {}),
             summary: entry.summarySchema,
             ...(entry.payloadSchema ? { payload: entry.payloadSchema } : {})
           }
@@ -257,3 +283,44 @@ export const EVENT_CONTRACT_JSON_SCHEMAS = Object.freeze(Object.fromEntries(
     } satisfies JsonSchema
   ])
 ));
+
+function validateComposioTriggerCoordinates(frame: EventFrameV1): readonly ValidationIssue[] {
+  const payload = isRecord(frame.payload) ? frame.payload : undefined;
+  const metadata = payload && isRecord(payload.metadata) ? payload.metadata : undefined;
+  const triggerId = nonEmptyString(metadata?.trigger_id);
+  const payloadId = nonEmptyString(payload?.id);
+  const timestamp = nonEmptyString(payload?.timestamp);
+  const errors: ValidationIssue[] = [];
+
+  if (triggerId) {
+    if (frame.resource.id !== triggerId) {
+      errors.push({ path: '$.resource.id', message: 'must equal $.payload.metadata.trigger_id', keyword: 'coordinates' });
+    }
+    const expectedPath = `/composio/triggers/${encodeURIComponent(triggerId)}`;
+    if (frame.resource.path !== expectedPath) {
+      errors.push({ path: '$.resource.path', message: 'must be the canonical path for $.payload.metadata.trigger_id', keyword: 'coordinates' });
+    }
+  }
+  if (timestamp && frame.occurredAt !== timestamp) {
+    errors.push({ path: '$.occurredAt', message: 'must equal $.payload.timestamp', keyword: 'coordinates' });
+  }
+  if (!frame.delivery) {
+    errors.push({ path: '$.delivery', message: 'is required', keyword: 'required' });
+  } else if (payloadId) {
+    if (frame.delivery.id !== payloadId) {
+      errors.push({ path: '$.delivery.id', message: 'must equal $.payload.id', keyword: 'coordinates' });
+    }
+    if (frame.delivery.dedupeKey !== payloadId) {
+      errors.push({ path: '$.delivery.dedupeKey', message: 'must equal $.payload.id', keyword: 'coordinates' });
+    }
+  }
+  return errors;
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === 'object' && value !== null && !Array.isArray(value);
+}
+
+function nonEmptyString(value: unknown): string | undefined {
+  return typeof value === 'string' && value.length > 0 ? value : undefined;
+}

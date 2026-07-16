@@ -2,7 +2,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import { EventEmitter } from 'node:events';
 import { createServer } from 'node:http';
-import { copyFile, cp, mkdir, mkdtemp, readdir, rm, writeFile } from 'node:fs/promises';
+import { copyFile, cp, mkdir, mkdtemp, readdir, realpath, rm, symlink, writeFile } from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
@@ -684,16 +684,51 @@ test('executeLocalRun: no-close child stop path still rejects promptly and clean
 
 test('executeLocalRun: installed runtime artifact enforces authored writes deny', async () => {
   await withInstalledRuntimeCopy(async (consumerRoot, installed) => {
+    let sentinelHits = 0;
+    const sentinel = createServer((_req, res) => {
+      sentinelHits += 1;
+      res.statusCode = 500;
+      res.end('installed custom transport escaped');
+    });
+    await new Promise<void>((resolve) => sentinel.listen(0, '127.0.0.1', () => resolve()));
+    const address = sentinel.address();
+    assert.ok(address && typeof address === 'object');
     const previousCwd = process.cwd();
     const tempDir = await mkdtemp(path.join(consumerRoot, 'installed-writes-deny-'));
     const bundlePath = path.join(tempDir, 'bundle.mjs');
     await writeFile(
       bundlePath,
-      `export default async function handler(ctx) {
-        await Promise.allSettled([
+      `import { PreviewTransport, slackClient } from '@relayfile/relay-helpers';
+      export default async function handler(ctx) {
+        const explicitTransport = new PreviewTransport();
+        let customTransportWrites = 0;
+        const customTransport = {
+          async read() { return undefined; },
+          async list() { return []; },
+          async write() {
+            customTransportWrites += 1;
+            await fetch('http://127.0.0.1:${address.port}/installed-custom', {
+              method: 'POST',
+              body: 'escaped'
+            });
+            return { path: '/escaped', absolutePath: '/escaped' };
+          }
+        };
+        const outcomes = await Promise.allSettled([
+          slackClient().post('C123', 'installed process write'),
+          slackClient({ transport: explicitTransport }).post(
+            'C124',
+            'installed xoxb-123456789012-123456789012-INSTALLED must be redacted'
+          ),
+          slackClient({ transport: customTransport }).post('C125', 'installed custom write'),
           ctx.files.write('/preview/installed.txt', 'must not persist'),
           ctx.relay.post('general', 'must not receive a simulated receipt')
         ]);
+        ctx.log('info', 'installed.transport.audit', {
+          explicitActions: explicitTransport.actions.length,
+          customTransportWrites,
+          rejected: outcomes.filter((outcome) => outcome.status === 'rejected').length
+        });
       }\n`,
       'utf8'
     );
@@ -711,12 +746,30 @@ test('executeLocalRun: installed runtime artifact enforces authored writes deny'
       });
       assert.equal(result.exitCode, 1);
       assert.equal(result.record.status, 'failed');
-      assert.equal(result.record.actions.filter((action) => action.status === 'denied').length, 2);
+      assert.equal(result.record.actions.filter((action) => action.status === 'denied').length, 5);
+      assert.equal(
+        result.record.actions.filter((action) =>
+          action.status === 'denied' && action.kind === 'provider.write'
+        ).length,
+        4
+      );
       assert.equal(result.record.actions.some((action) => action.status === 'previewed'), false);
       assert.deepEqual(result.record.stateDiff.files, []);
+      assert.equal(result.state.transport?.sequence, 0);
+      assert.deepEqual(result.state.transport?.receiptsByReference, {});
       assert.doesNotMatch(JSON.stringify(result.record), /simulatedReceipt/);
+      assert.doesNotMatch(JSON.stringify(result.record), /xoxb-123456789012/);
+      assert.equal(sentinelHits, 0);
+      const logs = ((result.record.extensions as Record<string, unknown>).logs ?? []) as string[];
+      assert.ok(logs.some((line) =>
+        line.includes('installed.transport.audit')
+        && line.includes('"explicitActions":0')
+        && line.includes('"customTransportWrites":0')
+        && line.includes('"rejected":5')
+      ));
     } finally {
       process.chdir(previousCwd);
+      sentinel.close();
       await rm(tempDir, { recursive: true, force: true });
     }
   });
@@ -887,9 +940,32 @@ async function withInstalledRuntimeCopy<T>(
   const runtimePackageRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
   const consumerRoot = await mkdtemp(path.join(runtimePackageRoot, '.installed-preview-consumer-'));
   const installedRuntimeRoot = path.join(consumerRoot, 'node_modules', '@agentworkforce', 'runtime');
+  const installedRelayHelpersRoot = path.join(consumerRoot, 'node_modules', '@relayfile', 'relay-helpers');
   await mkdir(path.dirname(installedRuntimeRoot), { recursive: true });
+  await mkdir(path.dirname(installedRelayHelpersRoot), { recursive: true });
   await cp(path.join(runtimePackageRoot, 'dist'), path.join(installedRuntimeRoot, 'dist'), { recursive: true });
   await copyFile(path.join(runtimePackageRoot, 'package.json'), path.join(installedRuntimeRoot, 'package.json'));
+  await cp(
+    path.join(runtimePackageRoot, 'node_modules', '@relayfile', 'relay-helpers', 'dist'),
+    path.join(installedRelayHelpersRoot, 'dist'),
+    { recursive: true }
+  );
+  await copyFile(
+    path.join(runtimePackageRoot, 'node_modules', '@relayfile', 'relay-helpers', 'package.json'),
+    path.join(installedRelayHelpersRoot, 'package.json')
+  );
+  const relayHelpersSourceRoot = await realpath(
+    path.join(runtimePackageRoot, 'node_modules', '@relayfile', 'relay-helpers')
+  );
+  const installedRelayDependenciesRoot = path.join(installedRelayHelpersRoot, 'node_modules', '@relayfile');
+  await mkdir(installedRelayDependenciesRoot, { recursive: true });
+  for (const dependency of ['adapter-core', 'adapter-linear', 'adapter-reddit']) {
+    await symlink(
+      await realpath(path.join(path.dirname(relayHelpersSourceRoot), dependency)),
+      path.join(installedRelayDependenciesRoot, dependency),
+      'dir'
+    );
+  }
   try {
     const installed = await import(`${pathToFileURL(path.join(installedRuntimeRoot, 'dist', 'local-preview.js')).href}?installed=${Date.now()}`) as {
       executeLocalRun: typeof executeLocalRun;

@@ -1,13 +1,16 @@
 import { Buffer } from 'node:buffer';
 import { createRequire, syncBuiltinESMExports } from 'node:module';
+import * as relayHelpers from '@relayfile/relay-helpers';
 import {
   bindPreviewTransport,
   PreviewTransport,
   type RelayTransport,
+  type RelayTransportRequest,
   type RelayTransportWriteRequest,
   type TransportPreviewAction
 } from '@relayfile/relay-helpers';
 import type { PreviewAction } from './run-contracts.js';
+import { redactLocalPreviewValue } from './local-preview-redaction.js';
 import type {
   LocalPreviewFetchRequestMessage,
   LocalPreviewFetchResponseMessage,
@@ -63,10 +66,34 @@ export function installPreviewProcessGuards(args: {
   const previewTransport = new PreviewTransport();
   if (args.config.transportState) restorePreviewTransportState(previewTransport, args.config.transportState);
   const recordedActions: PreviewAction[] = [];
-  const boundTransport = args.config.policy.writes === 'deny'
-    ? denyWriteTransport(previewTransport, recordedActions)
-    : previewTransport;
-  const restoreTransport = bindPreviewTransport(boundTransport);
+  const appendAction = (action: PreviewAction): void => {
+    recordedActions.push(redactLocalPreviewValue(action));
+  };
+  const recordingTransport = recordPreviewTransportActions(previewTransport, appendAction);
+  const bindRelayWriteAuthorizer = requireRelayWriteAuthorizerBinder();
+  const restoreWriteAuthorizer = bindRelayWriteAuthorizer((request) => {
+    if (args.config.policy.writes !== 'deny') {
+      return { allowed: true, transport: recordingTransport };
+    }
+    appendAction({
+      kind: 'provider.write',
+      status: 'denied',
+      provider: request.provider,
+      resource: request.resource,
+      data: {
+        operation: 'write',
+        parameters: { ...request.parameters },
+        path: request.path,
+        body: request.body,
+        method: 'write'
+      }
+    });
+    return {
+      allowed: false,
+      reason: 'local write policy denies provider writes'
+    };
+  });
+  const restoreTransport = bindPreviewTransport(recordingTransport);
   const clockNow = args.config.clockNow;
   const now = clockNow ? () => new Date(clockNow) : () => new Date();
   const originalFetch = globalThis.fetch.bind(globalThis);
@@ -165,6 +192,7 @@ export function installPreviewProcessGuards(args: {
       childProcess.spawnSync = originalChildProcess.spawnSync;
       syncBuiltinESMExports();
       restoreTransport();
+      restoreWriteAuthorizer();
       delete (globalThis as Record<PropertyKey, unknown>)[PREVIEW_PROCESS_STATE];
     },
     fetchFromParent: args.fetchFromParent,
@@ -175,7 +203,7 @@ export function installPreviewProcessGuards(args: {
       return snapshotPreviewTransportState(previewTransport);
     },
     recordAction(action) {
-      recordedActions.push(action);
+      appendAction(action);
     },
     recordedActions
   };
@@ -225,33 +253,71 @@ export function installPreviewProcessGuards(args: {
   return state;
 }
 
-function denyWriteTransport(
+function recordPreviewTransportActions(
   previewTransport: PreviewTransport,
-  recordedActions: PreviewAction[]
+  recordAction: (action: PreviewAction) => void
 ): RelayTransport {
-  return {
-    read: (request) => previewTransport.read(request),
-    list: (request) => previewTransport.list(request),
-    async write(request: RelayTransportWriteRequest): Promise<never> {
-      const parameters = { ...request.parameters };
-      recordedActions.push({
-        kind: 'provider.write',
-        status: 'denied',
-        provider: request.provider,
-        resource: request.resource,
-        data: {
-          operation: 'write',
-          parameters,
-          path: request.path,
-          body: request.body,
-          method: 'write'
-        }
-      });
-      throw new Error(
-        `invoke policy denied provider write: ${request.provider}.${request.resource}`
-      );
+  let actionCursor = previewTransport.actions.length;
+  const flush = (): void => {
+    while (actionCursor < previewTransport.actions.length) {
+      const action = previewTransport.actions[actionCursor++];
+      if (action) recordAction(transportActionToPreviewAction(action));
     }
   };
+  const capture = <T>(operation: () => Promise<T>): Promise<T> => {
+    let pending: Promise<T>;
+    try {
+      pending = operation();
+      // PreviewTransport currently records synchronously before returning its
+      // settled promise. Flush here so provider effects share the exact call-time
+      // stream with context, HTTP, and model effects.
+      flush();
+    } catch (error) {
+      flush();
+      throw error;
+    }
+    return pending.then(
+      (value) => {
+        flush();
+        return value;
+      },
+      (error: unknown) => {
+        flush();
+        throw error;
+      }
+    );
+  };
+  return {
+    read<T = unknown>(request: RelayTransportRequest) {
+      return capture(() => previewTransport.read<T>(request));
+    },
+    list<T = unknown>(request: RelayTransportRequest) {
+      return capture(() => previewTransport.list<T>(request));
+    },
+    write(request: RelayTransportWriteRequest) {
+      return capture(() => previewTransport.write(request));
+    }
+  };
+}
+
+type RelayWriteAuthorizerBinder = (
+  authorizer: (
+    request: Readonly<RelayTransportWriteRequest>
+  ) =>
+    | { allowed: false; reason?: string }
+    | { allowed: true; transport?: RelayTransport }
+) => () => void;
+
+function requireRelayWriteAuthorizerBinder(): RelayWriteAuthorizerBinder {
+  const binder = (relayHelpers as unknown as {
+    bindRelayWriteAuthorizer?: RelayWriteAuthorizerBinder;
+  }).bindRelayWriteAuthorizer;
+  if (typeof binder !== 'function') {
+    throw new Error(
+      'invoke: @relayfile/relay-helpers 0.4.7 or newer is required for final-write policy enforcement'
+    );
+  }
+  return binder;
 }
 
 function snapshotPreviewTransportState(previewTransport: PreviewTransport): LocalPreviewTransportState {

@@ -2,7 +2,9 @@ import assert from 'node:assert/strict';
 import test from 'node:test';
 import addFormatsModule from 'ajv-formats';
 import { Ajv2020 } from 'ajv/dist/2020.js';
+import type { EventFrameV1 } from './types.js';
 import {
+  addEventContractJsonSchemaKeywords,
   decodeEventFrame,
   EVENT_CONTRACTS,
   EVENT_CONTRACT_JSON_SCHEMAS,
@@ -32,7 +34,7 @@ test('every registry entry exports schema and validating example fixtures', () =
   }
 });
 
-test('Composio V3 trigger contract validates the canonical envelope and identity coordinates', () => {
+test('Composio V3 trigger contract requires its payload and canonical identity coordinates', () => {
   const contract = EVENT_CONTRACTS.find((entry) => entry.id === 'composio.trigger.message');
   assert.ok(contract);
   const fixture = contract.fixtureExamples[0];
@@ -50,14 +52,48 @@ test('Composio V3 trigger contract validates the canonical envelope and identity
   assert.equal(fixture.delivery?.dedupeKey, payload.id);
   assert.deepEqual(contract.validate(fixture), { valid: true, errors: [] });
 
-  assert.equal(contract.validate({ ...fixture, payload: { ...payload, id: '' } }).valid, false);
-  assert.equal(contract.validate({ ...fixture, payload: { ...payload, type: 'composio.trigger.other' } }).valid, false);
-  assert.equal(contract.validate({
-    ...fixture,
-    payload: { ...payload, metadata: { ...metadata, trigger_id: undefined } }
-  }).valid, false);
-  assert.equal(contract.validate({ ...fixture, payload: { ...payload, data: [] } }).valid, false);
-  assert.equal(contract.validate({ ...fixture, payload: { ...payload, timestamp: 'not-a-timestamp' } }).valid, false);
+  const schema = EVENT_CONTRACT_JSON_SCHEMAS['composio.trigger.message@1'];
+  assert.ok(schema);
+  const ajv = new Ajv2020({ allErrors: true, strict: true });
+  (addFormatsModule as unknown as (instance: Ajv2020) => Ajv2020)(ajv);
+  addEventContractJsonSchemaKeywords(ajv);
+  const validateSchema = ajv.compile(schema);
+
+  const invalidFrames: EventFrameV1[] = [
+    { ...fixture, payload: undefined },
+    { ...fixture, payload: [] },
+    { ...fixture, payload: { ...payload, id: undefined } },
+    { ...fixture, payload: { ...payload, id: '' } },
+    { ...fixture, payload: { ...payload, type: undefined } },
+    { ...fixture, payload: { ...payload, type: 'composio.trigger.other' } },
+    { ...fixture, payload: { ...payload, metadata: undefined } },
+    { ...fixture, payload: { ...payload, metadata: [] } },
+    { ...fixture, payload: { ...payload, metadata: { ...metadata, trigger_slug: undefined } } },
+    { ...fixture, payload: { ...payload, metadata: { ...metadata, trigger_slug: '' } } },
+    { ...fixture, payload: { ...payload, metadata: { ...metadata, trigger_id: undefined } } },
+    { ...fixture, payload: { ...payload, metadata: { ...metadata, trigger_id: '' } } },
+    { ...fixture, payload: { ...payload, metadata: { ...metadata, connected_account_id: undefined } } },
+    { ...fixture, payload: { ...payload, metadata: { ...metadata, connected_account_id: '' } } },
+    { ...fixture, payload: { ...payload, data: undefined } },
+    { ...fixture, payload: { ...payload, data: [] } },
+    { ...fixture, payload: { ...payload, data: null } },
+    { ...fixture, payload: { ...payload, timestamp: undefined } },
+    { ...fixture, payload: { ...payload, timestamp: 'not-a-timestamp' } },
+    { ...fixture, payload: { ...payload, timestamp: 42 } },
+    { ...fixture, resource: { ...fixture.resource, id: 'different-trigger' } },
+    { ...fixture, resource: { ...fixture.resource, path: '/composio/triggers/different-trigger' } },
+    { ...fixture, occurredAt: '2026-07-15T09:00:01.000Z' },
+    { ...fixture, delivery: undefined },
+    { ...fixture, delivery: { ...fixture.delivery, id: undefined } },
+    { ...fixture, delivery: { ...fixture.delivery, id: 'different-delivery' } },
+    { ...fixture, delivery: { ...fixture.delivery, dedupeKey: undefined } },
+    { ...fixture, delivery: { ...fixture.delivery, dedupeKey: 'different-delivery' } }
+  ];
+  for (const invalid of invalidFrames) {
+    assert.equal(contract.validate(invalid).valid, false, JSON.stringify(invalid));
+    assert.equal(safeParseEventFrame(invalid).success, false, JSON.stringify(invalid));
+    assert.equal(validateSchema(invalid), false, JSON.stringify(invalid));
+  }
 
   const forwardCompatible = {
     ...fixture,
@@ -69,11 +105,14 @@ test('Composio V3 trigger contract validates the canonical envelope and identity
     }
   };
   assert.deepEqual(contract.validate(forwardCompatible), { valid: true, errors: [] });
+  assert.equal(safeParseEventFrame(forwardCompatible).success, true);
+  assert.equal(validateSchema(forwardCompatible), true, JSON.stringify(validateSchema.errors));
 });
 
 test('all exported contract schemas register together without identifier collisions', () => {
   const ajv = new Ajv2020({ strict: true });
   (addFormatsModule as unknown as (instance: Ajv2020) => Ajv2020)(ajv);
+  addEventContractJsonSchemaKeywords(ajv);
   for (const schema of Object.values(EVENT_CONTRACT_JSON_SCHEMAS)) ajv.addSchema(schema);
 });
 
