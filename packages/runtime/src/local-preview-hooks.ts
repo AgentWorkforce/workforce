@@ -1,6 +1,12 @@
 import { Buffer } from 'node:buffer';
 import { createRequire, syncBuiltinESMExports } from 'node:module';
-import { bindPreviewTransport, PreviewTransport, type TransportPreviewAction } from '@relayfile/relay-helpers';
+import {
+  bindPreviewTransport,
+  PreviewTransport,
+  type RelayTransport,
+  type RelayTransportWriteRequest,
+  type TransportPreviewAction
+} from '@relayfile/relay-helpers';
 import type { PreviewAction } from './run-contracts.js';
 import type {
   LocalPreviewFetchRequestMessage,
@@ -56,8 +62,11 @@ export function installPreviewProcessGuards(args: {
 
   const previewTransport = new PreviewTransport();
   if (args.config.transportState) restorePreviewTransportState(previewTransport, args.config.transportState);
-  const restoreTransport = bindPreviewTransport(previewTransport);
   const recordedActions: PreviewAction[] = [];
+  const boundTransport = args.config.policy.writes === 'deny'
+    ? denyWriteTransport(previewTransport, recordedActions)
+    : previewTransport;
+  const restoreTransport = bindPreviewTransport(boundTransport);
   const clockNow = args.config.clockNow;
   const now = clockNow ? () => new Date(clockNow) : () => new Date();
   const originalFetch = globalThis.fetch.bind(globalThis);
@@ -214,6 +223,35 @@ export function installPreviewProcessGuards(args: {
   globalThis.fetch = installFetchBridge(state);
   (globalThis as Record<PropertyKey, unknown>)[PREVIEW_PROCESS_STATE] = state;
   return state;
+}
+
+function denyWriteTransport(
+  previewTransport: PreviewTransport,
+  recordedActions: PreviewAction[]
+): RelayTransport {
+  return {
+    read: (request) => previewTransport.read(request),
+    list: (request) => previewTransport.list(request),
+    async write(request: RelayTransportWriteRequest): Promise<never> {
+      const parameters = { ...request.parameters };
+      recordedActions.push({
+        kind: 'provider.write',
+        status: 'denied',
+        provider: request.provider,
+        resource: request.resource,
+        data: {
+          operation: 'write',
+          parameters,
+          path: request.path,
+          body: request.body,
+          method: 'write'
+        }
+      });
+      throw new Error(
+        `invoke policy denied provider write: ${request.provider}.${request.resource}`
+      );
+    }
+  };
 }
 
 function snapshotPreviewTransportState(previewTransport: PreviewTransport): LocalPreviewTransportState {

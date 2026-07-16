@@ -20,6 +20,7 @@ function previewRequest(args: {
   allowedHttp: Array<{ method: string; urlGlob: string }>;
   model?: 'stub' | 'fixture' | 'live';
   personaModel?: string;
+  writes?: 'deny' | 'preview';
 }): RunRequestV1 {
   return {
     schemaVersion: 1,
@@ -61,7 +62,7 @@ function previewRequest(args: {
     inputs: {},
     policy: {
       reads: 'live',
-      writes: 'preview',
+      writes: args.writes ?? 'preview',
       model: args.model ?? 'stub',
       shell: 'simulate',
       compose: 'preview',
@@ -74,6 +75,49 @@ function previewRequest(args: {
     }
   } as unknown as RunRequestV1;
 }
+
+test('executeLocalRun: authored writes deny blocks context mutations and fails caught attempts', async () => {
+  const tempDir = await mkdtemp(path.join(os.tmpdir(), 'wf-preview-writes-deny-'));
+  const bundlePath = path.join(tempDir, 'bundle.mjs');
+  await writeFile(
+    bundlePath,
+    `export default async function handler(ctx) {
+      await Promise.allSettled([
+        ctx.files.write('/preview/files.txt', 'blocked files write'),
+        ctx.sandbox.writeFile('/preview/sandbox.txt', 'blocked sandbox write'),
+        ctx.memory.save('blocked memory'),
+        ctx.relay.post('general', 'blocked relay post'),
+        ctx.schedule.at(new Date('2026-07-16T10:00:00.000Z'), { blocked: true }),
+        ctx.schedule.cancel('blocked-schedule')
+      ]);
+    }\n`,
+    'utf8'
+  );
+
+  try {
+    const result = await executeLocalRun({
+      request: previewRequest({
+        tempDir,
+        id: 'writes-deny-test',
+        allowedHttp: [],
+        writes: 'deny'
+      }),
+      bundlePath
+    });
+
+    assert.equal(result.exitCode, 1);
+    assert.equal(result.record.status, 'failed');
+    assert.match(String(result.record.error ?? ''), /denied 6 write effects/);
+    assert.equal(result.record.actions.filter((action) => action.status === 'denied').length, 6);
+    assert.equal(result.record.actions.some((action) => action.status === 'previewed'), false);
+    assert.deepEqual(result.record.stateDiff.files, []);
+    assert.deepEqual(result.record.stateDiff.memory, []);
+    assert.deepEqual(result.state.files, {});
+    assert.deepEqual(result.state.memory, []);
+  } finally {
+    await rm(tempDir, { recursive: true, force: true });
+  }
+});
 
 test('executeLocalRun: empty live allowlist denies GET before network', async () => {
   let hits = 0;
@@ -636,6 +680,46 @@ test('executeLocalRun: no-close child stop path still rejects promptly and clean
     process.env.WF_LOCAL_PREVIEW_KILL_SETTLE_TIMEOUT_MS = previousKillSettle;
     await rm(tempDir, { recursive: true, force: true });
   }
+});
+
+test('executeLocalRun: installed runtime artifact enforces authored writes deny', async () => {
+  await withInstalledRuntimeCopy(async (consumerRoot, installed) => {
+    const previousCwd = process.cwd();
+    const tempDir = await mkdtemp(path.join(consumerRoot, 'installed-writes-deny-'));
+    const bundlePath = path.join(tempDir, 'bundle.mjs');
+    await writeFile(
+      bundlePath,
+      `export default async function handler(ctx) {
+        await Promise.allSettled([
+          ctx.files.write('/preview/installed.txt', 'must not persist'),
+          ctx.relay.post('general', 'must not receive a simulated receipt')
+        ]);
+      }\n`,
+      'utf8'
+    );
+
+    try {
+      process.chdir(consumerRoot);
+      const result = await installed.executeLocalRun({
+        request: previewRequest({
+          tempDir,
+          id: 'installed-writes-deny',
+          allowedHttp: [],
+          writes: 'deny'
+        }),
+        bundlePath
+      });
+      assert.equal(result.exitCode, 1);
+      assert.equal(result.record.status, 'failed');
+      assert.equal(result.record.actions.filter((action) => action.status === 'denied').length, 2);
+      assert.equal(result.record.actions.some((action) => action.status === 'previewed'), false);
+      assert.deepEqual(result.record.stateDiff.files, []);
+      assert.doesNotMatch(JSON.stringify(result.record), /simulatedReceipt/);
+    } finally {
+      process.chdir(previousCwd);
+      await rm(tempDir, { recursive: true, force: true });
+    }
+  });
 });
 
 test('executeLocalRun: installed runtime stages under the invocation workspace and grants consumer/runtime roots', async () => {

@@ -19,6 +19,7 @@ test('every registry entry exports schema and validating example fixtures', () =
     'github.pull_request.opened',
     'slack.message.created',
     'linear.issue.created',
+    'composio.trigger.message',
     'relaycast.message'
   ]);
   for (const contract of EVENT_CONTRACTS) {
@@ -29,6 +30,45 @@ test('every registry entry exports schema and validating example fixtures', () =
       assert.deepEqual(contract.validate(fixture), { valid: true, errors: [] });
     }
   }
+});
+
+test('Composio V3 trigger contract validates the canonical envelope and identity coordinates', () => {
+  const contract = EVENT_CONTRACTS.find((entry) => entry.id === 'composio.trigger.message');
+  assert.ok(contract);
+  const fixture = contract.fixtureExamples[0];
+  const payload = fixture.payload as Record<string, unknown>;
+  const metadata = payload.metadata as Record<string, unknown>;
+
+  assert.equal(contract.version, 1);
+  assert.equal(contract.provider, 'composio');
+  assert.equal(contract.trigger, 'trigger.message');
+  assert.equal(contract.resourceKind, 'composio.trigger');
+  assert.equal(fixture.resource.id, metadata.trigger_id);
+  assert.equal(fixture.resource.path, `/composio/triggers/${encodeURIComponent(String(metadata.trigger_id))}`);
+  assert.equal(fixture.occurredAt, payload.timestamp);
+  assert.equal(fixture.delivery?.id, payload.id);
+  assert.equal(fixture.delivery?.dedupeKey, payload.id);
+  assert.deepEqual(contract.validate(fixture), { valid: true, errors: [] });
+
+  assert.equal(contract.validate({ ...fixture, payload: { ...payload, id: '' } }).valid, false);
+  assert.equal(contract.validate({ ...fixture, payload: { ...payload, type: 'composio.trigger.other' } }).valid, false);
+  assert.equal(contract.validate({
+    ...fixture,
+    payload: { ...payload, metadata: { ...metadata, trigger_id: undefined } }
+  }).valid, false);
+  assert.equal(contract.validate({ ...fixture, payload: { ...payload, data: [] } }).valid, false);
+  assert.equal(contract.validate({ ...fixture, payload: { ...payload, timestamp: 'not-a-timestamp' } }).valid, false);
+
+  const forwardCompatible = {
+    ...fixture,
+    payload: {
+      ...payload,
+      metadata: { ...metadata, future_metadata: { retained: true } },
+      data: { future_provider_field: true },
+      future_envelope_field: 'retained'
+    }
+  };
+  assert.deepEqual(contract.validate(forwardCompatible), { valid: true, errors: [] });
 });
 
 test('all exported contract schemas register together without identifier collisions', () => {

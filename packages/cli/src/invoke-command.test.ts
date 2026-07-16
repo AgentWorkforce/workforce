@@ -360,6 +360,14 @@ test('runInvoke: watch reruns preserve simulated provider receipts for later thr
     const body = data?.body as Record<string, unknown> | undefined;
     assert.equal(body?.parentRef, '/slack/channels/C123/messages/preview-slack-messages-0001.json');
     assert.equal(body?.thread_ts, 'preview-slack-messages-0001');
+    const human = io.err.join('');
+    assert.match(human, /slack message: parent/);
+    assert.match(human, /slack message: reply/);
+    assert.match(human, /channel: C123/);
+    assert.match(human, /text \(exact\): "header"/);
+    assert.match(human, /text \(exact\): "reply"/);
+    assert.match(human, /parentRef=\/slack\/channels\/C123\/messages\/preview-slack-messages-0001\.json/);
+    assert.match(human, /thread_ts=preview-slack-messages-0001/);
   });
 });
 
@@ -413,6 +421,10 @@ expect:
     assert.equal(result.status, 'succeeded');
     assert.ok(result.actions.some((action) => action.kind === 'http.read'));
     assert.ok(result.actions.some((action) => action.kind === 'model.complete'));
+    const human = io.err.join('');
+    assert.match(human, /\[ALLOW\] http\.read GET https:\/\/example\.test\/front-page fidelity=fixture/);
+    assert.match(human, /model\.complete mode=stub source=simulated fidelity=simulated/);
+    assert.match(human, /state changes:\n\s+memory:/);
   });
 });
 
@@ -819,6 +831,159 @@ test('runInvoke: preview transport binds before import and blocks ambient Slack 
     process.env.RELAYFILE_URL = previousRelayfileUrl;
     process.env.RELAYFILE_WORKSPACE_ID = previousRelayfileWorkspace;
   }
+});
+
+test('runInvoke: authored writes deny blocks every local write channel without receipts or state mutation', async () => {
+  let sentinelHits = 0;
+  const sentinel = createServer((_req, res) => {
+    sentinelHits += 1;
+    res.statusCode = 500;
+    res.end('write escaped preview');
+  });
+  await new Promise<void>((resolve) => sentinel.listen(0, '127.0.0.1', () => resolve()));
+  const address = sentinel.address();
+  assert.ok(address && typeof address === 'object');
+
+  const env = {
+    RELAYFILE_TOKEN: process.env.RELAYFILE_TOKEN,
+    RELAYFILE_URL: process.env.RELAYFILE_URL,
+    RELAYFILE_WORKSPACE_ID: process.env.RELAYFILE_WORKSPACE_ID,
+    RELAY_API_KEY: process.env.RELAY_API_KEY,
+    SLACK_BOT_TOKEN: process.env.SLACK_BOT_TOKEN,
+    CLOUD_API_ACCESS_TOKEN: process.env.CLOUD_API_ACCESS_TOKEN
+  };
+  process.env.RELAYFILE_TOKEN = 'rf_live_51N7INEL_PRODUCTION_SHAPED';
+  process.env.RELAYFILE_URL = `http://127.0.0.1:${address.port}`;
+  process.env.RELAYFILE_WORKSPACE_ID = 'rf_ws_production';
+  process.env.RELAY_API_KEY = 'rk_live_51N7INEL_PRODUCTION_SHAPED';
+  process.env.SLACK_BOT_TOKEN = 'xoxb-123456789012-123456789012-SENTINEL';
+  process.env.CLOUD_API_ACCESS_TOKEN = 'wft_live_51N7INEL_PRODUCTION_SHAPED';
+
+  try {
+    await withAgent({
+      'agent.ts': `
+        import { defineAgent } from '@agentworkforce/runtime';
+        import { slackClient } from '@relayfile/relay-helpers';
+        export default defineAgent({
+          schedules: [{ name: 'scan', cron: '0 9 * * *' }],
+          handler: async (ctx) => {
+            await Promise.allSettled([
+              slackClient().post('C123', 'Provider sentinel must be denied'),
+              ctx.relay.post('general', 'Relay sentinel must be denied'),
+              ctx.files.write('/preview/files.txt', 'Files sentinel must be denied'),
+              ctx.sandbox.writeFile('/preview/sandbox.txt', 'Sandbox sentinel must be denied'),
+              ctx.memory.save('Memory sentinel must be denied'),
+              ctx.schedule.at(new Date('2026-07-16T12:00:00.000Z'), { denied: true }),
+              ctx.schedule.cancel('denied-schedule')
+            ]);
+          }
+        });
+      `,
+      'writes-deny.case.yaml': `
+schemaVersion: 1
+id: safety.authored-writes-deny
+kind: scheduled
+event:
+  schedule: scan
+policy:
+  reads: fixtures
+  writes: deny
+  model: stub
+  shell: simulate
+  compose: preview
+expect:
+  status: failed
+  effectsContain:
+    - provider.write
+    - files.write
+    - memory.save
+    - schedule.at
+    - schedule.cancel
+`
+    }, async (dir, agentPath) => {
+      const relayfileDir = path.join(dir, 'node_modules', '@relayfile');
+      await mkdir(relayfileDir, { recursive: true });
+      await symlink(
+        path.resolve(process.cwd(), '..', 'delivery', 'node_modules', '@relayfile', 'relay-helpers'),
+        path.join(relayfileDir, 'relay-helpers')
+      );
+
+      const io = collectingIO();
+      const previousExitCode = process.exitCode;
+      const result = await runInvoke([
+        agentPath,
+        '--case',
+        path.join(dir, 'writes-deny.case.yaml')
+      ], io);
+      const exitCode = process.exitCode;
+      process.exitCode = previousExitCode;
+
+      assert.ok(result && !Array.isArray(result));
+      assert.equal(exitCode, 1);
+      assert.equal(result.status, 'failed');
+      assert.equal(result.policy.writes, 'deny');
+      assert.equal(sentinelHits, 0);
+      const deniedWrites = result.actions.filter((action) => action.status === 'denied');
+      assert.equal(deniedWrites.length, 7);
+      assert.equal(
+        result.actions.some((action) =>
+          action.status === 'previewed' && [
+            'provider.write',
+            'files.write',
+            'memory.save',
+            'schedule.at',
+            'schedule.cancel'
+          ].includes(action.kind)
+        ),
+        false
+      );
+      assert.deepEqual(result.stateDiff.files, []);
+      assert.deepEqual(result.stateDiff.memory, []);
+      assert.doesNotMatch(JSON.stringify(result), /simulatedReceipt/);
+      assert.doesNotMatch(JSON.stringify(result), /51N7INEL|xoxb-123456789012/);
+    });
+  } finally {
+    sentinel.close();
+    process.env.RELAYFILE_TOKEN = env.RELAYFILE_TOKEN;
+    process.env.RELAYFILE_URL = env.RELAYFILE_URL;
+    process.env.RELAYFILE_WORKSPACE_ID = env.RELAYFILE_WORKSPACE_ID;
+    process.env.RELAY_API_KEY = env.RELAY_API_KEY;
+    process.env.SLACK_BOT_TOKEN = env.SLACK_BOT_TOKEN;
+    process.env.CLOUD_API_ACCESS_TOKEN = env.CLOUD_API_ACCESS_TOKEN;
+  }
+});
+
+test('runInvoke: one provider read produces one action and one trace span', async () => {
+  await withAgent({
+    'agent.ts': `
+      import { defineAgent } from '@agentworkforce/runtime';
+      import { slackClient } from '@relayfile/relay-helpers';
+      export default defineAgent({
+        schedules: [{ name: 'scan', cron: '0 9 * * *' }],
+        handler: async () => {
+          await slackClient().messages.list({ channelId: 'C123' });
+        }
+      });
+    `
+  }, async (dir, agentPath) => {
+    const relayfileDir = path.join(dir, 'node_modules', '@relayfile');
+    await mkdir(relayfileDir, { recursive: true });
+    await symlink(
+      path.resolve(process.cwd(), '..', 'delivery', 'node_modules', '@relayfile', 'relay-helpers'),
+      path.join(relayfileDir, 'relay-helpers')
+    );
+
+    const io = collectingIO();
+    const previousExitCode = process.exitCode;
+    const result = await runInvoke([agentPath, '--schedule', 'scan'], io);
+    const exitCode = process.exitCode;
+    process.exitCode = previousExitCode;
+
+    assert.ok(result && !Array.isArray(result));
+    assert.equal(exitCode, 0);
+    assert.equal(result.actions.filter((action) => action.kind === 'provider.read').length, 1);
+    assert.equal(result.trace.filter((span) => span.kind === 'provider.read').length, 1);
+  });
 });
 
 test('runInvoke: live GET is allowed while POST is denied and never reaches the sentinel', async () => {
@@ -1667,7 +1832,7 @@ test('runInvoke: replay bundle preserves provenance and unavailable state fideli
   });
 });
 
-test('renderHumanSummary: renders single or multi-record previews', () => {
+test('renderHumanSummary: renders ordered read, model, state, and exact Slack preview details', () => {
   const record: RunRecordV2 = {
     runId: 'run_1',
     status: 'succeeded',
@@ -1684,11 +1849,77 @@ test('renderHumanSummary: renders single or multi-record previews', () => {
     eventId: 'evt_1',
     eventContract: 'cron.tick@1',
     trace: [],
-    actions: [],
+    actions: [
+      {
+        kind: 'provider.read',
+        status: 'previewed',
+        provider: 'slack',
+        resource: 'messages',
+        data: { method: 'list', path: '/slack/channels/C123/messages', parameters: { channelId: 'C123' } }
+      },
+      {
+        kind: 'model.complete',
+        status: 'previewed',
+        data: { mode: 'stub', source: 'simulated', promptChars: 10, outputChars: 20 },
+        extensions: { sourceFidelity: 'simulated' }
+      },
+      {
+        kind: 'provider.write',
+        status: 'previewed',
+        provider: 'slack',
+        resource: 'messages',
+        data: {
+          method: 'write',
+          path: '/slack/channels/C123/messages/preview-parent.json',
+          parameters: { channelId: 'C123' },
+          body: { text: 'Exact parent\nwith second line' },
+          simulatedReceipt: { id: 'preview-parent', timestamp: '2000-01-01T00:00:00.000Z' }
+        }
+      },
+      {
+        kind: 'provider.write',
+        status: 'previewed',
+        provider: 'slack',
+        resource: 'replies',
+        data: {
+          method: 'write',
+          path: '/slack/channels/C123/messages/preview-parent/replies/preview-reply.json',
+          parameters: { channelId: 'C123', messageTs: 'preview-parent' },
+          body: {
+            text: 'Exact threaded reply',
+            parentRef: '/slack/channels/C123/messages/preview-parent.json',
+            thread_ts: 'preview-parent'
+          },
+          simulatedReceipt: { id: 'preview-reply', timestamp: '2000-01-01T00:00:01.000Z' }
+        }
+      }
+    ],
     artifacts: { artifacts: [] },
-    stateDiff: {}
+    stateDiff: {
+      files: [{ path: '/preview/state.json', after: '{"ok":true}' }],
+      memory: [{ id: 'mem_1', scope: 'workspace' }]
+    },
+    extensions: {
+      sourceFidelity: {
+        state: 'fixture',
+        inputs: 'current',
+        http: 'fixture',
+        model: 'simulated'
+      }
+    }
   };
-  assert.match(renderHumanSummary(record), /preview: 1 run\(s\) — 1 ok, 0 failed/);
+  const rendered = renderHumanSummary(record);
+  assert.match(rendered, /preview: 1 run\(s\) — 1 ok, 0 failed/);
+  assert.ok(rendered.indexOf('01. [ALLOW] provider.read') < rendered.indexOf('02. [PREVIEW] model.complete'));
+  assert.ok(rendered.indexOf('02. [PREVIEW] model.complete') < rendered.indexOf('03. [PREVIEW] provider.write'));
+  assert.match(rendered, /provider\.read slack\.messages list \/slack\/channels\/C123\/messages fidelity=fixture/);
+  assert.match(rendered, /model\.complete mode=stub source=simulated fidelity=simulated promptChars=10 outputChars=20/);
+  assert.match(rendered, /slack message: parent/);
+  assert.match(rendered, /text \(exact\): "Exact parent\\nwith second line"/);
+  assert.match(rendered, /slack message: reply/);
+  assert.match(rendered, /channel: C123/);
+  assert.match(rendered, /parentRef=\/slack\/channels\/C123\/messages\/preview-parent\.json thread_ts=preview-parent receipt=preview-reply/);
+  assert.match(rendered, /state changes:\n\s+file created: \/preview\/state\.json\n\s+memory:/);
   assert.match(renderHumanSummary([record, { ...record, runId: 'run_2', status: 'failed' }]), /preview: 2 run\(s\) — 1 ok, 1 failed/);
 });
 

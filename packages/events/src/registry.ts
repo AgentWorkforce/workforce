@@ -5,6 +5,30 @@ import type { EventContract, EventFrameV1, JsonSchema, ValidationIssue, Validati
 import { validateEventFrameV1 } from './validate.js';
 
 const OPEN_PAYLOAD_SCHEMA = Object.freeze({}) satisfies JsonSchema;
+const COMPOSIO_TRIGGER_MESSAGE_PAYLOAD_SCHEMA = Object.freeze({
+  type: 'object',
+  required: ['id', 'type', 'metadata', 'data', 'timestamp'],
+  properties: {
+    id: { type: 'string', minLength: 1 },
+    type: { const: 'composio.trigger.message' },
+    metadata: {
+      type: 'object',
+      required: ['trigger_slug', 'trigger_id', 'connected_account_id'],
+      properties: {
+        trigger_slug: { type: 'string', minLength: 1 },
+        trigger_id: { type: 'string', minLength: 1 },
+        connected_account_id: { type: 'string', minLength: 1 }
+      },
+      additionalProperties: true
+    },
+    data: {
+      type: 'object',
+      additionalProperties: true
+    },
+    timestamp: { type: 'string', format: 'date-time' }
+  },
+  additionalProperties: true
+}) satisfies JsonSchema;
 
 function example(
   id: string,
@@ -137,6 +161,46 @@ export const EVENT_CONTRACTS = Object.freeze([
       resource: { path: '/linear/issues/ENG-1.json', kind: 'linear.issue', id: 'ENG-1', provider: 'linear' },
       summary: { title: 'ENG-1 created', actor: 'user@example.com' },
       payload: { action: 'create', issue: { identifier: 'ENG-1', title: 'Ship it' } }
+    })
+  }),
+  contract({
+    id: 'composio.trigger.message',
+    provider: 'composio',
+    trigger: 'trigger.message',
+    resourceKind: 'composio.trigger',
+    payloadSchema: COMPOSIO_TRIGGER_MESSAGE_PAYLOAD_SCHEMA,
+    fixture: example('composio.trigger.message', 'composio', 'trigger.message', 'composio.trigger', {
+      id: '018f4b16-52f9-7d33-a7d6-8f9a324db8c1',
+      occurredAt: '2026-07-15T09:00:00.000Z',
+      resource: {
+        path: '/composio/triggers/trg%2Fgithub%2Fissue',
+        kind: 'composio.trigger',
+        id: 'trg/github/issue',
+        provider: 'composio'
+      },
+      summary: { title: 'Composio trigger GITHUB_ISSUE_CREATED' },
+      delivery: {
+        id: 'delivery_composio_1',
+        dedupeKey: 'delivery_composio_1'
+      },
+      payload: {
+        id: 'delivery_composio_1',
+        type: 'composio.trigger.message',
+        metadata: {
+          trigger_slug: 'GITHUB_ISSUE_CREATED',
+          trigger_id: 'trg/github/issue',
+          connected_account_id: 'ca_composio_123',
+          log_id: 'log_123',
+          auth_config_id: 'ac_123',
+          user_id: 'untrusted_vendor_user'
+        },
+        data: {
+          action: 'opened',
+          issue: { number: 42, title: 'Canonical Composio delivery' }
+        },
+        timestamp: '2026-07-15T09:00:00.000Z',
+        vendor_extension: { retained: true }
+      }
     })
   }),
   contract({
