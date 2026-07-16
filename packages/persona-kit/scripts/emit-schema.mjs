@@ -146,21 +146,22 @@ if (
   };
 }
 
-const agentTriggerPaths = agentTrigger?.properties?.paths;
-if (agentTriggerPaths?.type === 'array') {
-  agentTriggerPaths.minItems = 1;
-  if (
-    agentTriggerPaths.items &&
-    typeof agentTriggerPaths.items === 'object' &&
-    !Array.isArray(agentTriggerPaths.items)
-  ) {
-    agentTriggerPaths.items = {
-      ...agentTriggerPaths.items,
-      minLength: 1,
-      pattern: '^/(?:.*\\S)?$'
-    };
+const absolutePathArrayConstraint = {
+  minItems: 1,
+  items: {
+    type: 'string',
+    minLength: 1,
+    pattern: '^/(?:[^\\r\\n\\u2028\\u2029]*\\S)?$'
   }
+};
+
+function applyAbsolutePathArrayConstraint(pathsSchema) {
+  if (pathsSchema?.type !== 'array') return;
+  Object.assign(pathsSchema, absolutePathArrayConstraint);
 }
+
+applyAbsolutePathArrayConstraint(agentTrigger?.properties?.paths);
+applyAbsolutePathArrayConstraint(agentSchema.definitions?.WatchRule?.properties?.paths);
 
 const agentSerialized = `${JSON.stringify(agentSchema, null, 2)}\n`;
 let existingAgent = '';

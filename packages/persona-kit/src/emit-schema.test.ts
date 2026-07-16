@@ -159,6 +159,18 @@ test('agent schema exposes launchedBy/triggers/schedules/watch', async () => {
   assert.equal(watchRule.properties?.paths && watchRule.properties.paths !== true
     ? watchRule.properties.paths.type
     : undefined, 'array');
+  const absolutePathItems = {
+    type: 'string',
+    minLength: 1,
+    pattern: '^/(?:[^\\r\\n\\u2028\\u2029]*\\S)?$'
+  };
+  const watchPaths = watchRule.properties?.paths;
+  assert.equal(watchPaths && watchPaths !== true
+    ? watchPaths.minItems
+    : undefined, 1);
+  assert.deepEqual(watchPaths && watchPaths !== true
+    ? watchPaths.items
+    : undefined, absolutePathItems);
   const trigger = definitions.PersonaIntegrationTrigger;
   const triggerPaths = trigger.properties?.paths;
   assert.equal(triggerPaths && triggerPaths !== true
@@ -169,7 +181,7 @@ test('agent schema exposes launchedBy/triggers/schedules/watch', async () => {
     : undefined, 1);
   assert.deepEqual(triggerPaths && triggerPaths !== true
     ? triggerPaths.items
-    : undefined, { type: 'string', minLength: 1, pattern: '^/(?:.*\\S)?$' });
+    : undefined, absolutePathItems);
   const maxConcurrency = trigger.properties?.maxConcurrency;
   assert.equal(maxConcurrency && maxConcurrency !== true
     ? maxConcurrency.type
@@ -184,11 +196,12 @@ test('agent schema exposes launchedBy/triggers/schedules/watch', async () => {
         slack: [
           {
             on: 'message.created',
-            paths: ['/slack/channels/C_REVIEW/**'],
+            paths: ['/ slack/channels/C_REVIEW/**'],
             maxConcurrency: 1
           }
         ]
-      }
+      },
+      watch: [{ paths: ['/ github/**'], events: ['created'] }]
     },
     schema,
     schema,
@@ -206,6 +219,36 @@ test('agent schema exposes launchedBy/triggers/schedules/watch', async () => {
     () => assertSchema({ triggers: { slack: [{ on: 'message.created', paths: ['/slack/** '] }] } }, schema, schema, 'agent'),
     /agent\.triggers\.slack\[0\]\.paths\[0\] must match/
   );
+  assert.throws(
+    () => assertSchema({ watch: [{ paths: [], events: ['created'] }] }, schema, schema, 'agent'),
+    /agent\.watch\[0\]\.paths must have at least 1 item/
+  );
+  assert.throws(
+    () => assertSchema({ watch: [{ paths: ['watch/**'], events: ['created'] }] }, schema, schema, 'agent'),
+    /agent\.watch\[0\]\.paths\[0\] must match/
+  );
+  assert.throws(
+    () => assertSchema({ watch: [{ paths: [' /watch/**'], events: ['created'] }] }, schema, schema, 'agent'),
+    /agent\.watch\[0\]\.paths\[0\] must match/
+  );
+  assert.throws(
+    () => assertSchema({ watch: [{ paths: ['/watch/** '], events: ['created'] }] }, schema, schema, 'agent'),
+    /agent\.watch\[0\]\.paths\[0\] must match/
+  );
+  for (const separator of ['\r', '\n', '\u2028', '\u2029']) {
+    assert.throws(
+      () => assertSchema({
+        triggers: { slack: [{ on: 'message.created', paths: [`/slack/${separator}channels/**`] }] }
+      }, schema, schema, 'agent'),
+      /agent\.triggers\.slack\[0\]\.paths\[0\] must match/
+    );
+    assert.throws(
+      () => assertSchema({
+        watch: [{ paths: [`/github/${separator}issues/**`], events: ['created'] }]
+      }, schema, schema, 'agent'),
+      /agent\.watch\[0\]\.paths\[0\] must match/
+    );
+  }
   assert.throws(
     () => assertSchema({ triggers: { slack: [{ on: 'message.created', maxConcurrency: 0 }] } }, schema, schema, 'agent'),
     /agent\.triggers\.slack\[0\]\.maxConcurrency must be >= 1/

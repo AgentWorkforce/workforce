@@ -54,7 +54,7 @@
           "items": {
             "type": "string",
             "minLength": 1,
-            "pattern": "^/(?:.*\\S)?$"
+            "pattern": "^/(?:[^\\r\\n\\u2028\\u2029]*\\S)?$"
           },
           "description": "Optional Relayfile path globs used to scope wake routing before an agent is provisioned. Paths are absolute (leading `/`) and provider-specific.",
           "minItems": 1
@@ -95,8 +95,11 @@
         "paths": {
           "type": "array",
           "items": {
-            "type": "string"
-          }
+            "type": "string",
+            "minLength": 1,
+            "pattern": "^/(?:[^\\r\\n\\u2028\\u2029]*\\S)?$"
+          },
+          "minItems": 1
         },
         "events": {
           "type": "array",

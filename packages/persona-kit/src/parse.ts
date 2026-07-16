@@ -556,6 +556,9 @@ function parseAbsolutePathList(value: unknown, context: string): string[] {
     if (path !== path.trim()) {
       throw new Error(`${pathContext} must not have leading or trailing whitespace`);
     }
+    if (/[\r\n\u2028\u2029]/u.test(path)) {
+      throw new Error(`${pathContext} must not contain line separators`);
+    }
     if (!path.startsWith('/')) {
       throw new Error(`${pathContext} must start with /`);
     }
