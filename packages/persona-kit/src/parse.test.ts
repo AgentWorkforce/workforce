@@ -774,17 +774,26 @@ test('parseAgentSpec validates launchedBy plus provider-keyed triggers, schedule
     triggers: {
       github: [
         { on: 'pull_request.opened' },
-        { on: 'issue_comment.created', match: '@mention', maxConcurrency: 1 }
+        {
+          on: 'issue_comment.created',
+          match: '@mention',
+          paths: ['/github/repos/AgentWorkforce/workforce/issues/**'],
+          maxConcurrency: 1
+        }
       ],
-      slack: [{ on: 'app_mention' }]
+      slack: [{ on: 'app_mention', paths: ['/slack/channels/C_REVIEW/**'] }]
     },
     schedules: [{ name: 'nightly', cron: '0 2 * * *', tz: 'UTC' }],
     watch: [{ paths: ['/github/x.json'], events: ['created'] }]
   });
   assert.equal(agent.triggers?.github.length, 2);
   assert.equal(agent.triggers?.github[1].match, '@mention');
+  assert.deepEqual(agent.triggers?.github[1].paths, [
+    '/github/repos/AgentWorkforce/workforce/issues/**'
+  ]);
   assert.equal(agent.triggers?.github[1].maxConcurrency, 1);
   assert.equal(agent.triggers?.slack[0].on, 'app_mention');
+  assert.deepEqual(agent.triggers?.slack[0].paths, ['/slack/channels/C_REVIEW/**']);
   assert.equal(agent.schedules?.[0].name, 'nightly');
   assert.equal(agent.watch?.[0].paths[0], '/github/x.json');
   assert.equal(agent.launchedBy, 'team-dispatcher');
@@ -836,6 +845,22 @@ test('parseAgentSpec rejects malformed triggers maps with precise field paths', 
   assert.throws(
     () => parseAgentSpec({ triggers: { github: [{ on: 'issue.opened', where: 1 }] } }),
     /triggers\.github\[0\]\.where must be a non-empty string if provided/
+  );
+  assert.throws(
+    () => parseAgentSpec({ triggers: { github: [{ on: 'issue.opened', paths: '/*' }] } }),
+    /triggers\.github\[0\]\.paths must be a non-empty array if provided/
+  );
+  assert.throws(
+    () => parseAgentSpec({ triggers: { github: [{ on: 'issue.opened', paths: [] }] } }),
+    /triggers\.github\[0\]\.paths must be a non-empty array if provided/
+  );
+  assert.throws(
+    () => parseAgentSpec({ triggers: { github: [{ on: 'issue.opened', paths: [''] }] } }),
+    /triggers\.github\[0\]\.paths\[0\] must be a non-empty string/
+  );
+  assert.throws(
+    () => parseAgentSpec({ triggers: { github: [{ on: 'issue.opened', paths: ['github/**'] }] } }),
+    /triggers\.github\[0\]\.paths\[0\] must start with \//
   );
   // An empty agent (no listeners) parses to {}; the deploy CLI enforces "at least one".
   assert.deepEqual(parseAgentSpec({}), {});

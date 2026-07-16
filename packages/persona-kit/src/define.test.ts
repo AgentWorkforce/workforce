@@ -126,11 +126,18 @@ test('TypedTriggerMap gives per-provider event autocomplete; arbitrary providers
       { on: 'AgentSessionEvent.prompted' },
       { on: 'AppUserNotification.issueCommentMention' }
     ],
-    slack: [{ on: 'message.created', maxConcurrency: 1 }],
+    slack: [
+      {
+        on: 'message.created',
+        paths: ['/slack/channels/C_REVIEW/**'],
+        maxConcurrency: 1
+      }
+    ],
     customProvider: [{ on: 'custom.event' }]
   };
   assert.equal(triggers.github?.[1]?.on, 'off_registry.github_event');
   assert.equal(triggers.slack?.[0]?.maxConcurrency, 1);
+  assert.deepEqual(triggers.slack?.[0]?.paths, ['/slack/channels/C_REVIEW/**']);
   assert.equal(triggers.customProvider?.[0]?.on, 'custom.event');
 });
 

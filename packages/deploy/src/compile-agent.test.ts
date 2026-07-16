@@ -98,6 +98,43 @@ test('unknown capability extensions survive source-to-persistence projection', a
   }
 });
 
+test('trigger paths survive source-to-persistence projection for wake scoping', async () => {
+  const dir = await mkdtemp(path.join(tmpdir(), 'compiled-agent-trigger-paths-'));
+  try {
+    const sourcePath = path.join(dir, 'agent.ts');
+    const source = PRESET
+      .replace('integrations: { github: {} },', 'integrations: { github: {}, slack: {} },')
+      .replace(
+        "triggers: { github: [{ on: 'pull_request.opened' }] },",
+        "triggers: {\n" +
+          "    github: [{ on: 'pull_request.opened', paths: ['/github/repos/AgentWorkforce/workforce/pulls/**'] }],\n" +
+          "    slack: [{ on: 'message.created', paths: ['/slack/channels/C_REVIEW/**'] }]\n" +
+          '  },'
+      );
+    await writeFile(sourcePath, source);
+
+    const compiled = await compileAgentSource(sourcePath);
+    const persisted = projectCompiledAgentForPersistence(compiled);
+
+    assert.deepEqual(persisted.agent.triggers, {
+      github: [
+        {
+          on: 'pull_request.opened',
+          paths: ['/github/repos/AgentWorkforce/workforce/pulls/**']
+        }
+      ],
+      slack: [
+        {
+          on: 'message.created',
+          paths: ['/slack/channels/C_REVIEW/**']
+        }
+      ]
+    });
+  } finally {
+    await rm(dir, { recursive: true, force: true });
+  }
+});
+
 test('split persona plus agent form remains supported', async () => {
   const dir = await mkdtemp(path.join(tmpdir(), 'compiled-agent-split-'));
   try {

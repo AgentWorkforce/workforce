@@ -160,6 +160,16 @@ test('agent schema exposes launchedBy/triggers/schedules/watch', async () => {
     ? watchRule.properties.paths.type
     : undefined, 'array');
   const trigger = definitions.PersonaIntegrationTrigger;
+  const triggerPaths = trigger.properties?.paths;
+  assert.equal(triggerPaths && triggerPaths !== true
+    ? triggerPaths.type
+    : undefined, 'array');
+  assert.equal(triggerPaths && triggerPaths !== true
+    ? triggerPaths.minItems
+    : undefined, 1);
+  assert.deepEqual(triggerPaths && triggerPaths !== true
+    ? triggerPaths.items
+    : undefined, { type: 'string', minLength: 1, pattern: '^/' });
   const maxConcurrency = trigger.properties?.maxConcurrency;
   assert.equal(maxConcurrency && maxConcurrency !== true
     ? maxConcurrency.type
@@ -168,7 +178,30 @@ test('agent schema exposes launchedBy/triggers/schedules/watch', async () => {
     ? maxConcurrency.minimum
     : undefined, 1);
 
-  assertSchema({ triggers: { slack: [{ on: 'message.created', maxConcurrency: 1 }] } }, schema, schema, 'agent');
+  assertSchema(
+    {
+      triggers: {
+        slack: [
+          {
+            on: 'message.created',
+            paths: ['/slack/channels/C_REVIEW/**'],
+            maxConcurrency: 1
+          }
+        ]
+      }
+    },
+    schema,
+    schema,
+    'agent'
+  );
+  assert.throws(
+    () => assertSchema({ triggers: { slack: [{ on: 'message.created', paths: [] }] } }, schema, schema, 'agent'),
+    /agent\.triggers\.slack\[0\]\.paths must have at least 1 item/
+  );
+  assert.throws(
+    () => assertSchema({ triggers: { slack: [{ on: 'message.created', paths: ['slack/**'] }] } }, schema, schema, 'agent'),
+    /agent\.triggers\.slack\[0\]\.paths\[0\] must match \^\//
+  );
   assert.throws(
     () => assertSchema({ triggers: { slack: [{ on: 'message.created', maxConcurrency: 0 }] } }, schema, schema, 'agent'),
     /agent\.triggers\.slack\[0\]\.maxConcurrency must be >= 1/
@@ -190,6 +223,9 @@ type SchemaNode = Record<string, unknown> & {
   const?: unknown;
   type?: string | string[];
   minimum?: number;
+  minItems?: number;
+  minLength?: number;
+  pattern?: string;
   properties?: Record<string, SchemaNode | boolean>;
   additionalProperties?: SchemaNode | boolean;
   required?: string[];
@@ -232,6 +268,12 @@ function assertSchema(value: unknown, schema: SchemaNode, root: SchemaNode, path
   if (typeof schema.minimum === 'number' && typeof value === 'number' && value < schema.minimum) {
     throw new Error(`${path} must be >= ${schema.minimum}`);
   }
+  if (typeof schema.minLength === 'number' && typeof value === 'string' && value.length < schema.minLength) {
+    throw new Error(`${path} must have at least ${schema.minLength} character(s)`);
+  }
+  if (schema.pattern && typeof value === 'string' && !new RegExp(schema.pattern).test(value)) {
+    throw new Error(`${path} must match ${schema.pattern}`);
+  }
   if (schema.type === 'object' || schema.properties || schema.additionalProperties || schema.required) {
     if (!isObject(value)) {
       throw new Error(`${path} must be an object`);
@@ -255,6 +297,9 @@ function assertSchema(value: unknown, schema: SchemaNode, root: SchemaNode, path
   if (schema.type === 'array' || schema.items) {
     if (!Array.isArray(value)) {
       throw new Error(`${path} must be an array`);
+    }
+    if (typeof schema.minItems === 'number' && value.length < schema.minItems) {
+      throw new Error(`${path} must have at least ${schema.minItems} item(s)`);
     }
     if (schema.items) {
       value.forEach((item, index) =>

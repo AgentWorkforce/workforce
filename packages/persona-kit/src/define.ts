@@ -24,6 +24,7 @@ export interface TypedTrigger<P extends string> {
   on: TriggerNameFor<P>;
   match?: string;
   where?: string;
+  paths?: string[];
   maxConcurrency?: number;
 }
 

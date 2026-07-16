@@ -551,7 +551,7 @@ export function parseIntegrationTrigger(
   if (!isObject(value)) {
     throw new Error(`${context} must be an object`);
   }
-  const { on, match, where, maxConcurrency } = value;
+  const { on, match, where, paths, maxConcurrency } = value;
   if (typeof on !== 'string' || !on.trim()) {
     throw new Error(`${context}.on must be a non-empty string`);
   }
@@ -560,6 +560,22 @@ export function parseIntegrationTrigger(
   }
   if (where !== undefined && (typeof where !== 'string' || !where.trim())) {
     throw new Error(`${context}.where must be a non-empty string if provided`);
+  }
+  let parsedPaths: string[] | undefined;
+  if (paths !== undefined) {
+    if (!Array.isArray(paths) || paths.length === 0) {
+      throw new Error(`${context}.paths must be a non-empty array if provided`);
+    }
+    parsedPaths = paths.map((path, pathIdx) => {
+      const pathContext = `${context}.paths[${pathIdx}]`;
+      if (typeof path !== 'string' || !path.trim()) {
+        throw new Error(`${pathContext} must be a non-empty string`);
+      }
+      if (!path.startsWith('/')) {
+        throw new Error(`${pathContext} must start with /`);
+      }
+      return path;
+    });
   }
   // Intentionally lenient: Cloud derives this as an optional backpressure hint,
   // so invalid values mean "unset" rather than a parse failure.
@@ -573,6 +589,7 @@ export function parseIntegrationTrigger(
     on,
     ...(typeof match === 'string' ? { match } : {}),
     ...(typeof where === 'string' ? { where } : {}),
+    ...(parsedPaths ? { paths: parsedPaths } : {}),
     ...(parsedMaxConcurrency !== undefined
       ? { maxConcurrency: parsedMaxConcurrency }
       : {})

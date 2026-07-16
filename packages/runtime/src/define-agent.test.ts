@@ -11,8 +11,15 @@ test('defineAgent brands the object and wraps the handler', () => {
   const agent = defineAgent({
     launchedBy: 'team-dispatcher',
     triggers: {
-      github: [{ on: 'pull_request.opened' }, { on: 'issue_comment.created', match: '@mention' }],
-      slack: [{ on: 'app_mention' }]
+      github: [
+        { on: 'pull_request.opened' },
+        {
+          on: 'issue_comment.created',
+          match: '@mention',
+          paths: ['/github/repos/AgentWorkforce/workforce/issues/**']
+        }
+      ],
+      slack: [{ on: 'app_mention', paths: ['/slack/channels/C_REVIEW/**'] }]
     },
     schedules: [{ name: 'nightly', cron: '0 2 * * *', tz: 'UTC' }],
     handler: async () => {
@@ -23,7 +30,11 @@ test('defineAgent brands the object and wraps the handler', () => {
   assert.equal(isWorkforceAgent(agent), true);
   assert.equal(isWorkforceHandler(agent.handler), true);
   assert.equal(agent.triggers?.github?.length, 2);
+  assert.deepEqual(agent.triggers?.github?.[1]?.paths, [
+    '/github/repos/AgentWorkforce/workforce/issues/**'
+  ]);
   assert.equal(agent.triggers?.slack?.[0]?.on, 'app_mention');
+  assert.deepEqual(agent.triggers?.slack?.[0]?.paths, ['/slack/channels/C_REVIEW/**']);
   assert.equal(agent.schedules?.[0]?.name, 'nightly');
   assert.equal(agent.launchedBy, 'team-dispatcher');
   // __workforceAgent is non-enumerable so the listener declarations serialize clean.

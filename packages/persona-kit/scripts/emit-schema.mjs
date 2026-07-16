@@ -146,6 +146,22 @@ if (
   };
 }
 
+const agentTriggerPaths = agentTrigger?.properties?.paths;
+if (agentTriggerPaths?.type === 'array') {
+  agentTriggerPaths.minItems = 1;
+  if (
+    agentTriggerPaths.items &&
+    typeof agentTriggerPaths.items === 'object' &&
+    !Array.isArray(agentTriggerPaths.items)
+  ) {
+    agentTriggerPaths.items = {
+      ...agentTriggerPaths.items,
+      minLength: 1,
+      pattern: '^/'
+    };
+  }
+}
+
 const agentSerialized = `${JSON.stringify(agentSchema, null, 2)}\n`;
 let existingAgent = '';
 try {
