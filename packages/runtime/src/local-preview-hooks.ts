@@ -314,7 +314,7 @@ function requireRelayWriteAuthorizerBinder(): RelayWriteAuthorizerBinder {
   }).bindRelayWriteAuthorizer;
   if (typeof binder !== 'function') {
     throw new Error(
-      'invoke: @relayfile/relay-helpers 0.4.7 or newer is required for final-write policy enforcement'
+      'invoke: an @relayfile/relay-helpers release with final-write policy enforcement is required'
     );
   }
   return binder;
