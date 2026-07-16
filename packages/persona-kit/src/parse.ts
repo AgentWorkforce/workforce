@@ -544,6 +544,22 @@ function assertCronExpression(value: string, context: string): void {
   }
 }
 
+function parseAbsolutePathList(value: unknown, context: string): string[] {
+  if (!Array.isArray(value) || value.length === 0) {
+    throw new Error(`${context} must be a non-empty array`);
+  }
+  return value.map((path, pathIdx) => {
+    const pathContext = `${context}[${pathIdx}]`;
+    if (typeof path !== 'string' || !path.trim()) {
+      throw new Error(`${pathContext} must be a non-empty string`);
+    }
+    if (!path.startsWith('/')) {
+      throw new Error(`${pathContext} must start with /`);
+    }
+    return path;
+  });
+}
+
 export function parseIntegrationTrigger(
   value: unknown,
   context: string
@@ -561,22 +577,9 @@ export function parseIntegrationTrigger(
   if (where !== undefined && (typeof where !== 'string' || !where.trim())) {
     throw new Error(`${context}.where must be a non-empty string if provided`);
   }
-  let parsedPaths: string[] | undefined;
-  if (paths !== undefined) {
-    if (!Array.isArray(paths) || paths.length === 0) {
-      throw new Error(`${context}.paths must be a non-empty array if provided`);
-    }
-    parsedPaths = paths.map((path, pathIdx) => {
-      const pathContext = `${context}.paths[${pathIdx}]`;
-      if (typeof path !== 'string' || !path.trim()) {
-        throw new Error(`${pathContext} must be a non-empty string`);
-      }
-      if (!path.startsWith('/')) {
-        throw new Error(`${pathContext} must start with /`);
-      }
-      return path;
-    });
-  }
+  const parsedPaths = paths === undefined
+    ? undefined
+    : parseAbsolutePathList(paths, `${context}.paths`);
   // Intentionally lenient: Cloud derives this as an optional backpressure hint,
   // so invalid values mean "unset" rather than a parse failure.
   const parsedMaxConcurrency =
@@ -820,19 +823,7 @@ export function parseWatch(value: unknown, context: string): WatchRule[] | undef
       throw new Error(`${entryContext} must be an object`);
     }
     const { paths, events, debounceMs, match } = entry;
-    if (!Array.isArray(paths) || paths.length === 0) {
-      throw new Error(`${entryContext}.paths must be a non-empty array`);
-    }
-    const parsedPaths = paths.map((path, pathIdx) => {
-      const pathContext = `${entryContext}.paths[${pathIdx}]`;
-      if (typeof path !== 'string' || !path.trim()) {
-        throw new Error(`${pathContext} must be a non-empty string`);
-      }
-      if (!path.startsWith('/')) {
-        throw new Error(`${pathContext} must start with /`);
-      }
-      return path;
-    });
+    const parsedPaths = parseAbsolutePathList(paths, `${entryContext}.paths`);
 
     if (!Array.isArray(events) || events.length === 0) {
       throw new Error(`${entryContext}.events must be a non-empty array`);

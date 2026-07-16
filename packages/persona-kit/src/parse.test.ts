@@ -848,11 +848,11 @@ test('parseAgentSpec rejects malformed triggers maps with precise field paths', 
   );
   assert.throws(
     () => parseAgentSpec({ triggers: { github: [{ on: 'issue.opened', paths: '/*' }] } }),
-    /triggers\.github\[0\]\.paths must be a non-empty array if provided/
+    /triggers\.github\[0\]\.paths must be a non-empty array/
   );
   assert.throws(
     () => parseAgentSpec({ triggers: { github: [{ on: 'issue.opened', paths: [] }] } }),
-    /triggers\.github\[0\]\.paths must be a non-empty array if provided/
+    /triggers\.github\[0\]\.paths must be a non-empty array/
   );
   assert.throws(
     () => parseAgentSpec({ triggers: { github: [{ on: 'issue.opened', paths: [''] }] } }),
