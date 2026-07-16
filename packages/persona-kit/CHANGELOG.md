@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [4.1.25] - 2026-07-16
+
 ### Breaking Changes
 
 - `buildNonInteractiveSpec` no longer includes the one-shot task in `args`.
