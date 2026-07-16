@@ -682,7 +682,7 @@ test('executeLocalRun: no-close child stop path still rejects promptly and clean
   }
 });
 
-test('executeLocalRun: installed runtime artifact enforces authored writes deny', async () => {
+test('executeLocalRun: installed runtime artifact resists authored authorizer rebinding under writes deny', async () => {
   await withInstalledRuntimeCopy(async (consumerRoot, installed) => {
     let sentinelHits = 0;
     const sentinel = createServer((_req, res) => {
@@ -698,7 +698,11 @@ test('executeLocalRun: installed runtime artifact enforces authored writes deny'
     const bundlePath = path.join(tempDir, 'bundle.mjs');
     await writeFile(
       bundlePath,
-      `import { PreviewTransport, slackClient } from '@relayfile/relay-helpers';
+      `import {
+        PreviewTransport,
+        bindRelayWriteAuthorizer,
+        slackClient
+      } from '@relayfile/relay-helpers';
       export default async function handler(ctx) {
         const explicitTransport = new PreviewTransport();
         let customTransportWrites = 0;
@@ -714,6 +718,31 @@ test('executeLocalRun: installed runtime artifact enforces authored writes deny'
             return { path: '/escaped', absolutePath: '/escaped' };
           }
         };
+        let authoredAuthorizerCalled = false;
+        if (typeof bindRelayWriteAuthorizer !== 'function') {
+          throw new Error('public Relay write authorizer binder is missing');
+        }
+        let authoredBindingOutcome = 'returned';
+        let restoreAuthoredAuthorizer = () => {};
+        try {
+          restoreAuthoredAuthorizer = bindRelayWriteAuthorizer(() => {
+            authoredAuthorizerCalled = true;
+            return { allowed: true, transport: customTransport };
+          });
+        } catch (error) {
+          authoredBindingOutcome = String(error?.code ?? error?.name ?? error);
+        }
+        const legacyAuthorizerKey = Symbol.for('agentworkforce.relay-write-authorizer');
+        let legacyOverwriteAttempted = false;
+        let legacyDeleteAttempted = false;
+        try {
+          legacyOverwriteAttempted = true;
+          globalThis[legacyAuthorizerKey] = () => ({ allowed: true, transport: customTransport });
+        } catch {}
+        try {
+          legacyDeleteAttempted = true;
+          delete globalThis[legacyAuthorizerKey];
+        } catch {}
         const outcomes = await Promise.allSettled([
           slackClient().post('C123', 'installed process write'),
           slackClient({ transport: explicitTransport }).post(
@@ -724,9 +753,15 @@ test('executeLocalRun: installed runtime artifact enforces authored writes deny'
           ctx.files.write('/preview/installed.txt', 'must not persist'),
           ctx.relay.post('general', 'must not receive a simulated receipt')
         ]);
+        restoreAuthoredAuthorizer();
         ctx.log('info', 'installed.transport.audit', {
+          authoredAuthorizerCalled,
+          authoredBindingOutcome,
+          binderType: typeof bindRelayWriteAuthorizer,
           explicitActions: explicitTransport.actions.length,
           customTransportWrites,
+          legacyDeleteAttempted,
+          legacyOverwriteAttempted,
           rejected: outcomes.filter((outcome) => outcome.status === 'rejected').length
         });
       }\n`,
@@ -763,8 +798,13 @@ test('executeLocalRun: installed runtime artifact enforces authored writes deny'
       const logs = ((result.record.extensions as Record<string, unknown>).logs ?? []) as string[];
       assert.ok(logs.some((line) =>
         line.includes('installed.transport.audit')
+        && line.includes('"authoredAuthorizerCalled":false')
+        && line.includes('"authoredBindingOutcome":"returned"')
+        && line.includes('"binderType":"function"')
         && line.includes('"explicitActions":0')
         && line.includes('"customTransportWrites":0')
+        && line.includes('"legacyDeleteAttempted":true')
+        && line.includes('"legacyOverwriteAttempted":true')
         && line.includes('"rejected":5')
       ));
     } finally {

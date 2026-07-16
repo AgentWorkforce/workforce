@@ -833,7 +833,7 @@ test('runInvoke: preview transport binds before import and blocks ambient Slack 
   }
 });
 
-test('runInvoke: authored writes deny blocks every local write channel without receipts or state mutation', async () => {
+test('runInvoke: writes deny resists authored authorizer rebinding without receipts or state mutation', async () => {
   let sentinelHits = 0;
   const sentinel = createServer((_req, res) => {
     sentinelHits += 1;
@@ -863,7 +863,11 @@ test('runInvoke: authored writes deny blocks every local write channel without r
     await withAgent({
       'agent.ts': `
         import { defineAgent } from '@agentworkforce/runtime';
-        import { PreviewTransport, slackClient } from '@relayfile/relay-helpers';
+        import {
+          PreviewTransport,
+          bindRelayWriteAuthorizer,
+          slackClient
+        } from '@relayfile/relay-helpers';
         export default defineAgent({
           schedules: [{ name: 'scan', cron: '0 9 * * *' }],
           handler: async (ctx) => {
@@ -881,6 +885,32 @@ test('runInvoke: authored writes deny blocks every local write channel without r
                 return { path: '/escaped', absolutePath: '/escaped' };
               }
             };
+            let authoredAuthorizerBound = false;
+            if (typeof bindRelayWriteAuthorizer !== 'function') {
+              throw new Error('public Relay write authorizer binder is missing');
+            }
+            let authoredBindingOutcome = 'returned';
+            let restoreAuthoredAuthorizer = () => {};
+            try {
+              restoreAuthoredAuthorizer = bindRelayWriteAuthorizer(() => {
+                authoredAuthorizerBound = true;
+                return { allowed: true, transport: customTransport };
+              });
+            } catch (error) {
+              authoredBindingOutcome = String(error?.code ?? error?.name ?? error);
+            }
+            const legacyAuthorizerKey = Symbol.for('agentworkforce.relay-write-authorizer');
+            const legacyRegistry = globalThis as Record<PropertyKey, unknown>;
+            let legacyOverwriteAttempted = false;
+            let legacyDeleteAttempted = false;
+            try {
+              legacyOverwriteAttempted = true;
+              legacyRegistry[legacyAuthorizerKey] = () => ({ allowed: true, transport: customTransport });
+            } catch {}
+            try {
+              legacyDeleteAttempted = true;
+              delete legacyRegistry[legacyAuthorizerKey];
+            } catch {}
             const outcomes = await Promise.allSettled([
               slackClient().post('C123', 'Provider sentinel must be denied'),
               slackClient({ transport: explicitTransport }).post(
@@ -895,9 +925,15 @@ test('runInvoke: authored writes deny blocks every local write channel without r
               ctx.schedule.at(new Date('2026-07-16T12:00:00.000Z'), { denied: true }),
               ctx.schedule.cancel('denied-schedule')
             ]);
+            restoreAuthoredAuthorizer();
             ctx.log('info', 'transport.audit', {
+              authoredAuthorizerBound,
+              authoredBindingOutcome,
+              binderType: typeof bindRelayWriteAuthorizer,
               explicitActions: explicitTransport.actions.length,
               customTransportWrites,
+              legacyDeleteAttempted,
+              legacyOverwriteAttempted,
               rejected: outcomes.filter((outcome) => outcome.status === 'rejected').length
             });
           }
@@ -975,8 +1011,13 @@ expect:
       const logs = ((result.extensions as Record<string, unknown>).logs ?? []) as string[];
       assert.ok(logs.some((line) =>
         line.includes('transport.audit')
+        && line.includes('"authoredAuthorizerBound":false')
+        && line.includes('"authoredBindingOutcome":"returned"')
+        && line.includes('"binderType":"function"')
         && line.includes('"explicitActions":0')
         && line.includes('"customTransportWrites":0')
+        && line.includes('"legacyDeleteAttempted":true')
+        && line.includes('"legacyOverwriteAttempted":true')
         && line.includes('"rejected":9')
       ));
     });
@@ -991,7 +1032,7 @@ expect:
   }
 });
 
-test('runInvoke: preview writes redirect explicit and custom transports to the canonical recorder', async () => {
+test('runInvoke: preview writes and authored authorizer rebinding cannot replace the canonical recorder', async () => {
   let sentinelHits = 0;
   const sentinel = createServer((_req, res) => {
     sentinelHits += 1;
@@ -1006,7 +1047,11 @@ test('runInvoke: preview writes redirect explicit and custom transports to the c
     await withAgent({
       'agent.ts': `
         import { defineAgent } from '@agentworkforce/runtime';
-        import { PreviewTransport, slackClient } from '@relayfile/relay-helpers';
+        import { slackClient } from '@relayfile/relay-helpers';
+        import {
+          PreviewTransport,
+          bindRelayWriteAuthorizer
+        } from '@relayfile/relay-helpers/transport';
         export default defineAgent({
           schedules: [{ name: 'scan', cron: '0 9 * * *' }],
           handler: async (ctx) => {
@@ -1024,6 +1069,32 @@ test('runInvoke: preview writes redirect explicit and custom transports to the c
                 return { path: '/escaped', absolutePath: '/escaped' };
               }
             };
+            let authoredAuthorizerCalled = false;
+            if (typeof bindRelayWriteAuthorizer !== 'function') {
+              throw new Error('public Relay write authorizer binder is missing');
+            }
+            let authoredBindingOutcome = 'returned';
+            let restoreAuthoredAuthorizer = () => {};
+            try {
+              restoreAuthoredAuthorizer = bindRelayWriteAuthorizer(() => {
+                authoredAuthorizerCalled = true;
+                return { allowed: true, transport: customTransport };
+              });
+            } catch (error) {
+              authoredBindingOutcome = String(error?.code ?? error?.name ?? error);
+            }
+            const legacyAuthorizerKey = Symbol.for('agentworkforce.relay-write-authorizer');
+            const legacyRegistry = globalThis as Record<PropertyKey, unknown>;
+            let legacyOverwriteAttempted = false;
+            let legacyDeleteAttempted = false;
+            try {
+              legacyOverwriteAttempted = true;
+              legacyRegistry[legacyAuthorizerKey] = () => ({ allowed: true, transport: customTransport });
+            } catch {}
+            try {
+              legacyDeleteAttempted = true;
+              delete legacyRegistry[legacyAuthorizerKey];
+            } catch {}
             const explicitReceipt = await slackClient({ transport: explicitTransport }).post(
               'C124',
               'Canonical explicit preview'
@@ -1032,9 +1103,15 @@ test('runInvoke: preview writes redirect explicit and custom transports to the c
               'C125',
               'Canonical custom preview'
             );
+            restoreAuthoredAuthorizer();
             ctx.log('info', 'transport.preview.audit', {
+              authoredAuthorizerCalled,
+              authoredBindingOutcome,
+              binderType: typeof bindRelayWriteAuthorizer,
               explicitActions: explicitTransport.actions.length,
               customTransportWrites,
+              legacyDeleteAttempted,
+              legacyOverwriteAttempted,
               explicitReceipt: explicitReceipt.ref,
               customReceipt: customReceipt.ref
             });
@@ -1066,8 +1143,12 @@ test('runInvoke: preview writes redirect explicit and custom transports to the c
       const logs = ((result.extensions as Record<string, unknown>).logs ?? []) as string[];
       assert.ok(logs.some((line) =>
         line.includes('transport.preview.audit')
+        && line.includes('"authoredBindingOutcome":"returned"')
+        && line.includes('"binderType":"function"')
         && line.includes('"explicitActions":0')
         && line.includes('"customTransportWrites":0')
+        && line.includes('"legacyDeleteAttempted":true')
+        && line.includes('"legacyOverwriteAttempted":true')
         && line.includes('preview-slack-messages-0001')
         && line.includes('preview-slack-messages-0002')
       ));
