@@ -119,18 +119,13 @@ export async function extractAgentSpec(onEventPath: string): Promise<ExtractedAg
       );
     }
 
-    const source = def as {
-      launchedBy?: unknown;
-      triggers?: unknown;
-      schedules?: unknown;
-      watch?: unknown;
-    };
-    const raw = {
-      ...(source.launchedBy !== undefined ? { launchedBy: source.launchedBy } : {}),
-      ...(source.triggers !== undefined ? { triggers: source.triggers } : {}),
-      ...(source.schedules !== undefined ? { schedules: source.schedules } : {}),
-      ...(source.watch !== undefined ? { watch: source.watch } : {})
-    };
+    // A split agent module owns every authored top-level field except its
+    // executable handler and runtime brand. Pass the full declarative record
+    // through parseAgentSpec so future cloud-owned fields do not require an
+    // extract-agent allowlist update.
+    const raw = { ...(def as Record<string, unknown>) };
+    delete raw.handler;
+    delete raw.__workforceAgent;
 
     return { agent: parseAgentSpec(raw, `agent "${onEventPath}"`), raw: def };
   } finally {

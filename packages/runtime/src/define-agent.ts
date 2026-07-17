@@ -116,6 +116,8 @@ export interface AgentDefinition<
   watch?: readonly WatchRule[];
   /** Event handler. `event` is narrowed to the declared triggers/schedules. */
   handler: (ctx: WorkforceCtx, event: WorkforceEventFor<Tr, S>) => Promise<void> | void;
+  /** Forward-compatible downstream agent extensions. */
+  [key: string]: unknown;
 }
 
 /** Common-case one-file Agent: persona identity/runtime plus listeners and handler. */

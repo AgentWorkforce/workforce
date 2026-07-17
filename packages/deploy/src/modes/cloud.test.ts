@@ -1067,6 +1067,184 @@ test('cloud existing-persona stage honors destroy and cancel choices', async () 
   );
 });
 
+test('cloud update inherits stored inputs and applies current overrides, including empty strings', async () => {
+  const completeAgent = {
+    triggers: {
+      github: [
+        {
+          on: 'pull_request.opened',
+          paths: ['/github/repos/AgentWorkforce/workforce/pulls/**'],
+          futureTriggerOption: { delivery: 'batched' }
+        }
+      ]
+    },
+    watch: [
+      {
+        paths: ['/github/repos/AgentWorkforce/workforce/**'],
+        events: ['created'],
+        conditions: { branch: 'main' }
+      }
+    ]
+  } satisfies import('@agentworkforce/persona-kit').AgentSpec;
+  await launch({
+    env: {
+      WORKFORCE_DEPLOY_CLOUD_URL: 'https://cloud.example.test',
+      WORKFORCE_DEPLOY_ON_EXISTS: 'update'
+    },
+    input: {
+      agent: completeAgent,
+      inputs: { REGION: 'eu-west-1', CLEAR_ME: '' }
+    },
+    fetch(url, init) {
+      if (init?.method === 'GET' && url.endsWith('/deployments')) {
+        return okJson({
+          agents: [
+            {
+              agentId: 'agent-other',
+              deployedName: 'other-persona',
+              status: 'active',
+              inputValues: { MUST_NOT_LEAK: 'wrong-agent' }
+            },
+            {
+              agentId: 'agent-old',
+              deployedName: 'demo',
+              status: 'active',
+              inputValues: {
+                SLACK_CHANNEL: 'C_STORED',
+                REGION: 'us-east-1',
+                CLEAR_ME: 'previous'
+              }
+            }
+          ]
+        });
+      }
+      if (init?.method === 'POST' && url.endsWith('/deployments')) {
+        const body = JSON.parse(String(init.body)) as Record<string, unknown>;
+        assert.deepEqual(body.agent, completeAgent, 'the complete agent spec stays authoritative');
+        assert.deepEqual(body.inputs, {
+          SLACK_CHANNEL: 'C_STORED',
+          REGION: 'eu-west-1',
+          CLEAR_ME: ''
+        });
+        return okJson({ agentId: 'agent-old', deploymentId: 'dep-update', status: 'active' }, 201);
+      }
+      throw new Error(`unexpected URL ${url} (${init?.method})`);
+    }
+  });
+});
+
+test('cloud update without current inputs sends the stored effective input record', async () => {
+  await launch({
+    env: {
+      WORKFORCE_DEPLOY_CLOUD_URL: 'https://cloud.example.test',
+      WORKFORCE_DEPLOY_ON_EXISTS: 'update'
+    },
+    fetch(url, init) {
+      if (init?.method === 'GET' && url.endsWith('/deployments')) {
+        return okJson({
+          agents: [{
+            agentId: 'agent-old',
+            deployedName: 'demo',
+            status: 'active',
+            inputValues: { SLACK_CHANNEL: 'C_STORED', TOPIC: 'daily' }
+          }]
+        });
+      }
+      if (init?.method === 'POST' && url.endsWith('/deployments')) {
+        const body = JSON.parse(String(init.body)) as Record<string, unknown>;
+        assert.deepEqual(body.inputs, { SLACK_CHANNEL: 'C_STORED', TOPIC: 'daily' });
+        return okJson({ agentId: 'agent-old', deploymentId: 'dep-update', status: 'active' }, 201);
+      }
+      throw new Error(`unexpected URL ${url} (${init?.method})`);
+    }
+  });
+});
+
+test('cloud input inheritance is update-only and malformed stored values degrade to current inputs', async () => {
+  const destroyed = await launch({
+    env: {
+      WORKFORCE_DEPLOY_CLOUD_URL: 'https://cloud.example.test',
+      WORKFORCE_DEPLOY_ON_EXISTS: 'destroy'
+    },
+    input: { inputs: { CURRENT: 'new' } },
+    fetch(url, init) {
+      if (init?.method === 'GET' && url.endsWith('/deployments')) {
+        return okJson({
+          agents: [{
+            agentId: 'agent-old',
+            deployedName: 'demo',
+            status: 'active',
+            inputValues: { STORED: 'must-not-inherit' }
+          }]
+        });
+      }
+      if (url.endsWith('/agents/agent-old/destroy')) return okJson({ ok: true });
+      if (init?.method === 'POST' && url.endsWith('/deployments')) {
+        const body = JSON.parse(String(init.body)) as Record<string, unknown>;
+        assert.deepEqual(body.inputs, { CURRENT: 'new' });
+        return okJson({ agentId: 'agent-new', deploymentId: 'dep-new', status: 'active' }, 201);
+      }
+      throw new Error(`unexpected URL ${url} (${init?.method})`);
+    }
+  });
+  assert.equal(destroyed.handle.id, 'agent-new');
+
+  await launch({
+    env: {
+      WORKFORCE_DEPLOY_CLOUD_URL: 'https://cloud.example.test',
+      WORKFORCE_DEPLOY_ON_EXISTS: 'update'
+    },
+    input: { inputs: { CURRENT: 'safe' } },
+    fetch(url, init) {
+      if (init?.method === 'GET' && url.endsWith('/deployments')) {
+        return okJson({
+          agents: [{
+            agentId: 'agent-old',
+            deployedName: 'demo',
+            status: 'active',
+            inputValues: ['not', 'a', 'record']
+          }]
+        });
+      }
+      if (init?.method === 'POST' && url.endsWith('/deployments')) {
+        const body = JSON.parse(String(init.body)) as Record<string, unknown>;
+        assert.deepEqual(body.inputs, { CURRENT: 'safe' });
+        return okJson({ agentId: 'agent-old', deploymentId: 'dep-update', status: 'active' }, 201);
+      }
+      throw new Error(`unexpected URL ${url} (${init?.method})`);
+    }
+  });
+
+  await launch({
+    env: {
+      WORKFORCE_DEPLOY_CLOUD_URL: 'https://cloud.example.test',
+      WORKFORCE_DEPLOY_ON_EXISTS: 'update'
+    },
+    fetch(url, init) {
+      if (init?.method === 'GET' && url.endsWith('/deployments')) {
+        return okJson({
+          agents: [{
+            agentId: 'agent-old',
+            deployedName: 'demo',
+            status: 'active'
+            // Older list contracts may omit inputValues entirely.
+          }]
+        });
+      }
+      if (init?.method === 'POST' && url.endsWith('/deployments')) {
+        const body = JSON.parse(String(init.body)) as Record<string, unknown>;
+        assert.equal(
+          Object.prototype.hasOwnProperty.call(body, 'inputs'),
+          false,
+          'unknown stored inputs must remain omitted, never become an authoritative empty map'
+        );
+        return okJson({ agentId: 'agent-old', deploymentId: 'dep-update', status: 'active' }, 201);
+      }
+      throw new Error(`unexpected URL ${url} (${init?.method})`);
+    }
+  });
+});
+
 test('findExistingAgent: parses the new /deployments shape ({agentId, personaId, status})', async () => {
   // Regression for the production blocker: cloud#580 changed the list
   // shape from {agent:{id}} → {agents:[{agentId, personaId, status}]}.

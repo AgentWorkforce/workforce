@@ -61,11 +61,11 @@ test('parsePersonaSpec accepts a minimal valid flat spec', () => {
   assert.equal(spec.harnessSettings.reasoning, 'medium');
 });
 
-test('parsePersonaSpec strips unknown top-level fields silently', () => {
-  const raw = validSpec({ unknownField: 'should be dropped', extra: { nested: true } });
+test('parsePersonaSpec preserves unknown top-level fields for downstream consumers', () => {
+  const raw = validSpec({ futurePolicy: 'cloud-owned', extra: { nested: true } });
   const spec = parsePersonaSpec(raw, 'documentation');
-  assert.ok(!('unknownField' in spec), 'unknown fields are not preserved on the parsed spec');
-  assert.ok(!('extra' in spec));
+  assert.equal(spec.futurePolicy, 'cloud-owned');
+  assert.deepEqual(spec.extra, { nested: true });
 });
 
 test('parsePersonaSpec accepts deploy-v1 optional fields (connection-only integrations)', () => {
@@ -74,7 +74,10 @@ test('parsePersonaSpec accepts deploy-v1 optional fields (connection-only integr
       cloud: true,
       useSubscription: true,
       integrations: {
-        github: { scope: { repo: 'AgentWorkforce/workforce' } }
+        github: {
+          scope: { repo: 'AgentWorkforce/workforce' },
+          futureConnectionPolicy: { installationMode: 'workspace' }
+        }
       },
       memory: { enabled: true, scopes: ['workspace'], ttlDays: 30 },
       onEvent: './agent.ts'
@@ -84,6 +87,9 @@ test('parsePersonaSpec accepts deploy-v1 optional fields (connection-only integr
 
   assert.equal(spec.cloud, true);
   assert.equal(spec.integrations?.github.scope?.repo, 'AgentWorkforce/workforce');
+  assert.deepEqual(spec.integrations?.github.futureConnectionPolicy, {
+    installationMode: 'workspace'
+  });
   assert.deepEqual(spec.memory, { enabled: true, scopes: ['workspace'], ttlDays: 30 });
   assert.equal(spec.onEvent, './agent.ts');
 });
@@ -345,15 +351,29 @@ test('parseInputs rejects names that violate the env-var convention', () => {
   assert.throws(() => parseInputs({ foo: 'x' }, 'inputs'), /inputs\.foo must be an env-style name/);
 });
 
-test('parseInputs keeps a picker alongside env/optional', () => {
+test('parseInputs keeps a picker and forwards input/picker extensions', () => {
   const inputs = parseInputs(
     {
-      BENJAMIN: { env: 'BENJAMIN', optional: true, picker: { provider: 'slack', resource: 'users' } }
+      BENJAMIN: {
+        env: 'BENJAMIN',
+        optional: true,
+        futureInputPolicy: { visibility: 'workspace' },
+        picker: {
+          provider: 'slack',
+          resource: 'users',
+          futurePagination: 'cursor'
+        }
+      }
     },
     'inputs'
   );
-  assert.deepEqual(inputs?.BENJAMIN.picker, { provider: 'slack', resource: 'users' });
+  assert.deepEqual(inputs?.BENJAMIN.picker, {
+    provider: 'slack',
+    resource: 'users',
+    futurePagination: 'cursor'
+  });
   assert.equal(inputs?.BENJAMIN.optional, true);
+  assert.deepEqual(inputs?.BENJAMIN.futureInputPolicy, { visibility: 'workspace' });
 });
 
 test('parseInputs rejects a picker missing provider or resource', () => {
@@ -584,7 +604,10 @@ test('parseMemory accepts boolean + object forms and validates scopes', () => {
       scopes: ['user', 'user', 'workspace', 'global'],
       ttlDays: 7,
       autoPromote: true,
-      dedupMs: 0
+      dedupMs: 0,
+      futureMemoryPolicy: { retentionClass: 'durable' },
+      trajectories: { enabled: true, futureTrajectoryPolicy: 'cloud' },
+      aiMemory: { dbPath: '/tmp/history.db', futureRecallMode: 'hybrid' }
     },
     'memory'
   );
@@ -594,7 +617,10 @@ test('parseMemory accepts boolean + object forms and validates scopes', () => {
     scopes: ['user', 'workspace', 'global'],
     ttlDays: 7,
     autoPromote: true,
-    dedupMs: 0
+    dedupMs: 0,
+    futureMemoryPolicy: { retentionClass: 'durable' },
+    trajectories: { enabled: true, futureTrajectoryPolicy: 'cloud' },
+    aiMemory: { dbPath: '/tmp/history.db', futureRecallMode: 'hybrid' }
   });
 });
 
@@ -770,6 +796,7 @@ test('parseIntegrations rejects non-plain adapter config values', () => {
 
 test('parseAgentSpec validates launchedBy plus provider-keyed triggers, schedules, and watch', () => {
   const agent = parseAgentSpec({
+    futureDispatchPolicy: { queue: 'priority' },
     launchedBy: 'team-dispatcher',
     triggers: {
       github: [
@@ -778,13 +805,24 @@ test('parseAgentSpec validates launchedBy plus provider-keyed triggers, schedule
           on: 'issue_comment.created',
           match: '@mention',
           paths: ['/github/repos/AgentWorkforce/workforce/issues/**'],
-          maxConcurrency: 1
+          maxConcurrency: 1,
+          conditions: { labels: ['ready'] },
+          futureTriggerOption: ['cloud-owned']
         }
       ],
       slack: [{ on: 'app_mention', paths: ['/slack/channels/C_REVIEW/**'] }]
     },
-    schedules: [{ name: 'nightly', cron: '0 2 * * *', tz: 'UTC' }],
-    watch: [{ paths: ['/github/x.json'], events: ['created'] }]
+    schedules: [
+      { name: ' nightly ', cron: ' 0 2 * * * ', tz: ' UTC ', jitterSeconds: 30 }
+    ],
+    watch: [
+      {
+        paths: ['/github/x.json'],
+        events: ['created', 'updated', 'created'],
+        conditions: { changedFields: ['state'] },
+        futureWatchOption: true
+      }
+    ]
   });
   assert.equal(agent.triggers?.github.length, 2);
   assert.equal(agent.triggers?.github[1].match, '@mention');
@@ -792,11 +830,20 @@ test('parseAgentSpec validates launchedBy plus provider-keyed triggers, schedule
     '/github/repos/AgentWorkforce/workforce/issues/**'
   ]);
   assert.equal(agent.triggers?.github[1].maxConcurrency, 1);
+  assert.deepEqual(agent.triggers?.github[1].conditions, { labels: ['ready'] });
+  assert.deepEqual(agent.triggers?.github[1].futureTriggerOption, ['cloud-owned']);
   assert.equal(agent.triggers?.slack[0].on, 'app_mention');
   assert.deepEqual(agent.triggers?.slack[0].paths, ['/slack/channels/C_REVIEW/**']);
   assert.equal(agent.schedules?.[0].name, 'nightly');
+  assert.equal(agent.schedules?.[0].cron, '0 2 * * *');
+  assert.equal(agent.schedules?.[0].tz, 'UTC');
+  assert.equal(agent.schedules?.[0].jitterSeconds, 30);
   assert.equal(agent.watch?.[0].paths[0], '/github/x.json');
+  assert.deepEqual(agent.watch?.[0].events, ['created', 'updated']);
+  assert.deepEqual(agent.watch?.[0].conditions, { changedFields: ['state'] });
+  assert.equal(agent.watch?.[0].futureWatchOption, true);
   assert.equal(agent.launchedBy, 'team-dispatcher');
+  assert.deepEqual(agent.futureDispatchPolicy, { queue: 'priority' });
 });
 
 test('parseAgentSpec omits invalid trigger maxConcurrency values', () => {
@@ -895,7 +942,12 @@ test('parseIntegrations default-injects source=deployer_user when the persona om
 test('parseIntegrations round-trips all three valid IntegrationSource kinds', () => {
   const i = parseIntegrations(
     {
-      github: { source: { kind: 'deployer_user' } },
+      github: {
+        source: {
+          kind: 'deployer_user',
+          futureResolutionPolicy: { fallback: 'workspace' }
+        }
+      },
       slack: { source: { kind: 'workspace' } },
       linear: {
         source: { kind: 'workspace_service_account', name: 'release-bot' }
@@ -903,7 +955,10 @@ test('parseIntegrations round-trips all three valid IntegrationSource kinds', ()
     },
     'integrations'
   );
-  assert.deepEqual(i?.github.source, { kind: 'deployer_user' });
+  assert.deepEqual(i?.github.source, {
+    kind: 'deployer_user',
+    futureResolutionPolicy: { fallback: 'workspace' }
+  });
   assert.equal(
     (i?.github as { __agentworkforceImplicitSource?: unknown }).__agentworkforceImplicitSource,
     undefined

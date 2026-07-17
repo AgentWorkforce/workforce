@@ -82,6 +82,7 @@ interface ExistingAgentResponse {
 interface ExistingAgent {
   id: string;
   status?: string;
+  inputValues?: Record<string, string>;
 }
 
 type CloudApiClientLike = Pick<CloudApiClient, 'fetch'>;
@@ -173,6 +174,14 @@ export const cloudLauncher: ModeLauncher = {
       };
     }
 
+    const currentInputs = input.inputs ?? readInputsOverride();
+    const effectiveInputs = existingPersona.previousInputValues === undefined
+      ? currentInputs
+      : {
+          ...existingPersona.previousInputValues,
+          ...(currentInputs ?? {})
+        };
+
     const body = JSON.stringify({
       persona: input.persona,
       // Top-level agent listener spec (triggers/schedules/watch). The cloud
@@ -188,7 +197,7 @@ export const cloudLauncher: ModeLauncher = {
       // previews read snake_case, while current routes read camelCase.
       credentialSelections,
       credential_selections: credentialSelections,
-      inputs: input.inputs ?? readInputsOverride()
+      inputs: effectiveInputs
     });
 
     const endpoint = deploymentsEndpoint(cloudUrl, input.workspace);
@@ -685,7 +694,10 @@ async function handleExistingPersona(args: {
   io: ModeLaunchInput['io'];
   noPrompt: boolean;
   onExists?: OnExistsChoice;
-}): Promise<{ cancelled: false } | { cancelled: true; agentId: string }> {
+}): Promise<
+  | { cancelled: false; previousInputValues?: Record<string, string> }
+  | { cancelled: true; agentId: string }
+> {
   const existing = await findExistingAgent(args);
   if (!existing) return { cancelled: false };
   const choice = await resolveOnExists(args);
@@ -695,7 +707,16 @@ async function handleExistingPersona(args: {
   }
   if (choice === 'update') {
     args.io.info(`cloud: updating existing persona ${args.personaId}`);
-    return { cancelled: false };
+    return {
+      cancelled: false,
+      // Update requests carry a complete effective record so input-dependent
+      // derivation is correct before the server reaches its persistence merge.
+      // Present current keys (including an empty string) override stored keys;
+      // omission inherits. Fresh and destroy+redeploy paths never inherit.
+      ...(existing.inputValues !== undefined
+        ? { previousInputValues: existing.inputValues }
+        : {})
+    };
   }
 
   args.io.info(`cloud: destroying existing persona ${args.personaId} before deploy`);
@@ -905,10 +926,23 @@ function parseAgentLike(
   // persona slug doesn't trip the on-exists prompt against a tombstone.
   const status = typeof record.status === 'string' ? record.status : undefined;
   if (status === 'destroyed') return null;
+  const inputValues = parseInputValues(record);
   return {
     id,
-    ...(status ? { status } : {})
+    ...(status ? { status } : {}),
+    ...(inputValues !== undefined ? { inputValues } : {})
   };
+}
+
+function parseInputValues(record: Record<string, unknown>): Record<string, string> | undefined {
+  const hasCamel = Object.prototype.hasOwnProperty.call(record, 'inputValues');
+  const hasSnake = Object.prototype.hasOwnProperty.call(record, 'input_values');
+  if (!hasCamel && !hasSnake) return undefined;
+  const raw = hasCamel ? record.inputValues : record.input_values;
+  if (!raw || typeof raw !== 'object' || Array.isArray(raw)) return undefined;
+  const entries = Object.entries(raw);
+  if (entries.some(([, value]) => typeof value !== 'string')) return undefined;
+  return Object.fromEntries(entries) as Record<string, string>;
 }
 
 async function saveProviderCredential(args: {

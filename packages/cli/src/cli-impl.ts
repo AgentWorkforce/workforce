@@ -496,6 +496,12 @@ function resolveSpec(key: string): ResolvedTarget['spec'] | { error: string } {
   };
 }
 
+function isResolveSpecError(
+  result: ResolvedTarget['spec'] | { error: string }
+): result is { error: string } {
+  return !('id' in result) && typeof result.error === 'string';
+}
+
 function parseSelector(sel: string): ResolvedTarget {
   // Catch legacy `@<tier>` selectors and point users at the new selector form.
   // Tiers were removed; a persona's runtime fields now live at the top level.
@@ -511,7 +517,7 @@ function parseSelector(sel: string): ResolvedTarget {
   const key = sel;
   if (!key) die('Missing persona name');
   const result = resolveSpec(key);
-  if ('error' in result) die(result.error, false);
+  if (isResolveSpecError(result)) die(result.error, false);
   const kind = local.byId.has(key) ? 'local' : 'repo';
   if (kind === 'local') {
     return { kind, source: local.sources.get(result.id) ?? 'cwd', spec: result };
@@ -3259,7 +3265,7 @@ function resolveShowTarget(selector: string): { spec: PersonaSpec; source: Perso
   }
   if (!spec) {
     const result = resolveSpec(key);
-    if ('error' in result) die(result.error, false);
+    if (isResolveSpecError(result)) die(result.error, false);
     spec = result;
   }
   return { spec, source };
