@@ -26,6 +26,8 @@ export interface TypedTrigger<P extends string> {
   where?: string;
   paths?: string[];
   maxConcurrency?: number;
+  /** Forward-compatible cloud/runtime trigger extensions. */
+  [key: string]: unknown;
 }
 
 /**
@@ -185,6 +187,8 @@ export interface TypedIntegrationConfig<P extends string = string> {
   config?: AdapterConfigFor<P>;
   optional?: boolean;
   enabledByInput?: string;
+  /** Forward-compatible cloud/runtime connection extensions. */
+  [key: string]: unknown;
 }
 
 export type TypedIntegrations = {
@@ -218,6 +222,8 @@ export interface PersonaDefinitionBase {
   integrations?: TypedIntegrations;
   capabilities?: ProactiveCapabilities;
   memory?: PersonaMemory;
+  /** Forward-compatible downstream persona extensions. */
+  [key: string]: unknown;
 }
 
 type InteractivePersonaDefinition = PersonaDefinitionBase & {

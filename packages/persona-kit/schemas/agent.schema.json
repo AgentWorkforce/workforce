@@ -35,6 +35,9 @@
           "description": "Relayfile-change listeners for proactive cloud agents."
         }
       },
+      "additionalProperties": {
+        "description": "Consumer-defined agent fields are forwarded to the cloud unchanged."
+      },
       "description": "Runtime-parsed shape of an **agent** (`agent.ts`) — the \"when/how it fires\" half of a deployed agent, authored via `defineAgent(...)` in the runtime package and extracted from the bundle by the deploy CLI. The persona owns \"what the agent is\" (model, harness, skills, mcp, integration *connections*); the agent owns the listeners.\n\n`launchedBy: \"team-dispatcher\"` is the one listener-free exception: team member agents are not event-listeners themselves; they are launched by a dispatcher agent as part of a team run.\n\nThree listener kinds:  - **radio** —  {@link  triggers } : a provider-keyed map of     {@link  PersonaIntegrationTrigger }  arrays. Keys mirror    `persona.integrations` so the deploy CLI can join events→connection.  - **clock** —  {@link  schedules } : cron  {@link  PersonaSchedule } s.  - **relayfile** —  {@link  watch } :  {@link  WatchRule } s.\n\nAt least one listener is required for a cloud agent unless `launchedBy` names a supported dispatcher launch mode (enforced at deploy)."
     },
     "PersonaIntegrationTrigger": {
@@ -68,6 +71,9 @@
       "required": [
         "on"
       ],
+      "additionalProperties": {
+        "description": "Consumer-defined trigger fields are forwarded to the cloud unchanged."
+      },
       "description": "A single event trigger declared by an **agent** (`agent.ts`). `on` is a Relayfile-adapter-normalized event name (e.g. `pull_request.opened`, `issue.create`, `message.created`). `match` and `where` are filter sugars the deploy CLI lints against a known registry; unknown values warn but do not fail parse, so the cloud runtime stays the source of truth.\n\nTriggers live on the agent ( {@link  AgentSpec.triggers } ), not the persona — the persona only declares which providers it connects to ( {@link  PersonaIntegrationConfig } ). The deploy CLI joins the two: events from `agent.triggers[provider]`, connection/scope from `persona.integrations[provider]`.\n\nExamples:   { on: \"pull_request.opened\" }   { on: \"pull_request_review_comment.created\", match: \"@mention\" }   { on: \"check_run.completed\", where: \"conclusion=failure\" }   { on: \"message.created\", paths: [\"/slack/channels/C_REVIEW/**\"] }   { on: \"message.created\", maxConcurrency: 1 }"
     },
     "PersonaSchedule": {
@@ -87,6 +93,9 @@
         "name",
         "cron"
       ],
+      "additionalProperties": {
+        "description": "Consumer-defined schedule fields are forwarded to the cloud unchanged."
+      },
       "description": "Clock listener configuration declared by an **agent** ( {@link  AgentSpec.schedules } ). `name` is unique within the agent and surfaces to the handler as `event.name`. `cron` is a standard 5-field expression. `tz` defaults to `UTC` at the runtime layer (the parser keeps it optional so the spec stays close to what the author wrote)."
     },
     "WatchRule": {
@@ -118,6 +127,9 @@
         "paths",
         "events"
       ],
+      "additionalProperties": {
+        "description": "Consumer-defined watch fields are forwarded to the cloud unchanged."
+      },
       "description": "Relayfile-change listener configuration declared by an **agent** ( {@link  AgentSpec.watch } ). `paths` are absolute Relayfile glob roots (for example `/integrations/github/repos/acme/web/issues/*.json`). Runtime matching is owned by the cloud trigger router; persona-kit only validates the portable declaration shape."
     },
     "WatchEvent": {

@@ -31,6 +31,7 @@ export type DeploymentAgent = {
   deployedName: string;
   status: string;
   createdAt: string;
+  updatedAt?: string;
   lastUsedAt: string | null;
   scheduleIds: string[];
   deployedByUserId: string;
@@ -275,7 +276,7 @@ export function formatDeploymentsTable(agents: readonly DeploymentAgent[]): stri
     name: deploymentDisplayName(agent),
     agentId: compactId(agent.agentId),
     status: agent.status,
-    deployed: formatDate(agent.createdAt),
+    deployed: formatDate(agent.updatedAt ?? agent.createdAt),
     lastUsed: agent.lastUsedAt ? formatRelative(agent.lastUsedAt) : '-'
   }));
   const widths = {
@@ -325,6 +326,7 @@ function parseAgents(body: ListResponse): DeploymentAgent[] {
       throw new Error('list response contained an invalid agent entry');
     }
     const record = value as Record<string, unknown>;
+    const updatedAt = readString(record, 'updatedAt');
     return {
       agentId: readString(record, 'agentId') ?? readString(record, 'id') ?? '',
       personaId: readString(record, 'personaId') ?? readString(record, 'persona') ?? '',
@@ -332,6 +334,7 @@ function parseAgents(body: ListResponse): DeploymentAgent[] {
       deployedName: readString(record, 'deployedName') ?? readString(record, 'name') ?? '',
       status: readString(record, 'status') ?? 'unknown',
       createdAt: readString(record, 'createdAt') ?? '',
+      ...(updatedAt ? { updatedAt } : {}),
       lastUsedAt: readNullableString(record, 'lastUsedAt'),
       scheduleIds: Array.isArray(record.scheduleIds)
         ? record.scheduleIds.filter((id): id is string => typeof id === 'string')

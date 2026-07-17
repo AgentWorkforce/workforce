@@ -6,6 +6,14 @@ import test from 'node:test';
 import { compileAgentSource, projectCompiledAgentForPersistence } from './compile-agent.js';
 import { preflightPersona } from './preflight.js';
 
+const PRESET_TRIGGER_BLOCK = `  triggers: {
+    github: [{
+      on: 'pull_request.opened',
+      conditions: { labels: ['ready'] },
+      futureTriggerOption: { delivery: 'batched' }
+    }]
+  },`;
+
 const PRESET = `
 import { defineAgent } from '@agentworkforce/runtime';
 export default defineAgent({
@@ -13,6 +21,7 @@ export default defineAgent({
   intent: 'relay-orchestrator',
   tags: ['discovery'],
   description: 'Golden single-file agent.',
+  futurePersonaPolicy: { owner: 'cloud', revision: 2 },
   cloud: true,
   harness: 'claude',
   model: 'claude-haiku-4-5-20251001',
@@ -25,7 +34,7 @@ export default defineAgent({
       nested: { mode: 'golden', values: [1, 2, 3] }
     }
   },
-  triggers: { github: [{ on: 'pull_request.opened' }] },
+${PRESET_TRIGGER_BLOCK}
   handler: async () => {}
 });
 `;
@@ -39,7 +48,15 @@ test('single-file source compiles into existing persona/agent deploy fields', as
     assert.equal(compiled.sourceKind, 'single-file');
     assert.equal(compiled.handlerEntry, sourcePath);
     assert.equal(compiled.persona.onEvent, './agent.ts');
-    assert.deepEqual(compiled.agent.triggers, { github: [{ on: 'pull_request.opened' }] });
+    assert.deepEqual(compiled.agent.triggers, {
+      github: [
+        {
+          on: 'pull_request.opened',
+          conditions: { labels: ['ready'] },
+          futureTriggerOption: { delivery: 'batched' }
+        }
+      ]
+    });
     assert.match(compiled.sourceDigest, /^sha256:[a-f0-9]{64}$/);
 
     const preflight = await preflightPersona(sourcePath);
@@ -89,10 +106,66 @@ test('unknown capability extensions survive source-to-persistence projection', a
     await writeFile(sourcePath, PRESET);
     const compiled = await compileAgentSource(sourcePath);
     const persisted = projectCompiledAgentForPersistence(compiled);
+    assert.deepEqual(persisted.persona.futurePersonaPolicy, {
+      owner: 'cloud',
+      revision: 2
+    });
     assert.deepEqual(persisted.persona.capabilities?.futureCapability, {
       enabled: true,
       nested: { mode: 'golden', values: [1, 2, 3] }
     });
+    assert.deepEqual(persisted.agent.triggers?.github[0].conditions, {
+      labels: ['ready']
+    });
+    assert.deepEqual(persisted.agent.triggers?.github[0].futureTriggerOption, {
+      delivery: 'batched'
+    });
+  } finally {
+    await rm(dir, { recursive: true, force: true });
+  }
+});
+
+test('split agent top-level extensions survive source-to-persistence projection', async () => {
+  const dir = await mkdtemp(path.join(tmpdir(), 'compiled-agent-split-extensions-'));
+  try {
+    const personaPath = path.join(dir, 'persona.json');
+    const agentPath = path.join(dir, 'agent.ts');
+    await writeFile(personaPath, JSON.stringify({
+      id: 'split-extension-agent',
+      intent: 'relay-orchestrator',
+      tags: ['discovery'],
+      description: 'Split extension fixture.',
+      skills: [],
+      harness: 'claude',
+      model: 'claude-haiku-4-5-20251001',
+      systemPrompt: 'Keep extensions.',
+      harnessSettings: { reasoning: 'low', timeoutSeconds: 300 },
+      integrations: { github: {} },
+      cloud: true,
+      onEvent: './agent.ts'
+    }), 'utf8');
+    await writeFile(agentPath, `
+      import { defineAgent } from '@agentworkforce/runtime';
+      export default defineAgent({
+        futureDispatchPolicy: { queue: 'priority', revision: 3 },
+        triggers: {
+          github: [{ on: 'pull_request.opened', futureTriggerOption: true }]
+        },
+        handler: async () => {}
+      });
+    `, 'utf8');
+
+    const persisted = projectCompiledAgentForPersistence(
+      await compileAgentSource(personaPath)
+    );
+    assert.deepEqual(persisted.agent.futureDispatchPolicy, {
+      queue: 'priority',
+      revision: 3
+    });
+    assert.equal(
+      persisted.agent.triggers?.github[0].futureTriggerOption,
+      true
+    );
   } finally {
     await rm(dir, { recursive: true, force: true });
   }
@@ -105,8 +178,8 @@ test('trigger paths survive source-to-persistence projection for wake scoping', 
     const source = PRESET
       .replace('integrations: { github: {} },', 'integrations: { github: {}, slack: {} },')
       .replace(
-        "triggers: { github: [{ on: 'pull_request.opened' }] },",
-        "triggers: {\n" +
+        PRESET_TRIGGER_BLOCK,
+        "  triggers: {\n" +
           "    github: [{ on: 'pull_request.opened', paths: ['/github/repos/AgentWorkforce/workforce/pulls/**'] }],\n" +
           "    slack: [{ on: 'message.created', paths: ['/slack/channels/C_REVIEW/**'] }]\n" +
           '  },'

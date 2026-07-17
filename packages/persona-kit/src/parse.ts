@@ -60,6 +60,22 @@ export function isPlainObject(value: unknown): value is Record<string, unknown> 
   return proto === Object.prototype || proto === null;
 }
 
+/**
+ * Copy fields this parser does not own so downstream runtimes can extend the
+ * portable spec without waiting for a persona-kit release. Callers validate
+ * and project their known fields after this copy, ensuring normalized known
+ * values always win over the raw input.
+ */
+function preserveUnknownFields(
+  value: Record<string, unknown>,
+  knownFields: readonly string[]
+): Record<string, unknown> {
+  const known = new Set(knownFields);
+  return Object.fromEntries(
+    Object.entries(value).filter(([key]) => !known.has(key))
+  );
+}
+
 export function isHarness(value: unknown): value is Harness {
   return typeof value === 'string' && HARNESS_VALUES.includes(value as Harness);
 }
@@ -169,10 +185,19 @@ export function parseHarnessSettings(value: unknown, context: string): HarnessSe
     throw new Error(`${context}.timeoutSeconds must be a positive number`);
   }
 
-  const out: HarnessSettings = {
+  const out = {
+    ...preserveUnknownFields(value, [
+      'reasoning',
+      'timeoutSeconds',
+      'sandboxMode',
+      'approvalPolicy',
+      'workspaceWriteNetworkAccess',
+      'webSearch',
+      'dangerouslyBypassApprovalsAndSandbox'
+    ]),
     reasoning: reasoning as HarnessSettings['reasoning'],
     timeoutSeconds
-  };
+  } as HarnessSettings;
   if (sandboxMode !== undefined) {
     if (!CODEX_SANDBOX_MODES.includes(sandboxMode as CodexSandboxMode)) {
       throw new Error(`${context}.sandboxMode must be one of: ${CODEX_SANDBOX_MODES.join(', ')}`);
@@ -243,7 +268,12 @@ export function parseSkills(value: unknown, context: string): PersonaSkill[] {
     if (typeof description !== 'string' || !description.trim()) {
       throw new Error(`${entryContext}.description must be a non-empty string`);
     }
-    return { id, source, description };
+    return {
+      ...preserveUnknownFields(entry, ['id', 'source', 'description']),
+      id,
+      source,
+      description
+    };
   });
 }
 
@@ -290,10 +320,16 @@ export function parseMount(
     : hasPatterns
       ? true
       : undefined;
-  if (!hasPatterns && finalEnabled === undefined) {
+  const unknownFields = preserveUnknownFields(value, [
+    'enabled',
+    'ignoredPatterns',
+    'readonlyPatterns'
+  ]);
+  if (!hasPatterns && finalEnabled === undefined && Object.keys(unknownFields).length === 0) {
     return undefined;
   }
   return {
+    ...unknownFields,
     ...(finalEnabled !== undefined ? { enabled: finalEnabled } : {}),
     ...(ignoredPatterns ? { ignoredPatterns } : {}),
     ...(readonlyPatterns ? { readonlyPatterns } : {})
@@ -346,7 +382,13 @@ export function parseInputs(
       throw new Error(`${context}.${name} must be a string default or an object`);
     }
     const { description, env, default: defaultValue, optional, picker } = raw;
-    const parsed: PersonaInputSpec = {};
+    const parsed = preserveUnknownFields(raw, [
+      'description',
+      'env',
+      'default',
+      'optional',
+      'picker'
+    ]) as PersonaInputSpec;
     if (description !== undefined) {
       if (typeof description !== 'string' || !description.trim()) {
         throw new Error(`${context}.${name}.description must be a non-empty string if provided`);
@@ -388,7 +430,11 @@ export function parseInputs(
       if (typeof resource !== 'string' || !resource.trim()) {
         throw new Error(`${context}.${name}.picker.resource must be a non-empty string`);
       }
-      parsed.picker = { provider, resource };
+      parsed.picker = {
+        ...preserveUnknownFields(picker, ['provider', 'resource']),
+        provider,
+        resource
+      };
     }
     out[name] = parsed;
   }
@@ -404,7 +450,7 @@ export function parsePermissions(
   if (!isObject(value)) {
     throw new Error(`${context} must be an object if provided`);
   }
-  const out: PersonaPermissions = {};
+  const out = preserveUnknownFields(value, ['allow', 'deny', 'mode']) as PersonaPermissions;
   const { allow, deny, mode } = value;
   if (allow !== undefined) {
     if (!Array.isArray(allow) || allow.some((s) => typeof s !== 'string' || !s.trim())) {
@@ -466,7 +512,12 @@ export function parseMcpServers(
         throw new Error(`${context}.${name}.url must be a non-empty string for type=${type}`);
       }
       const headers = parseStringMap(raw.headers, `${context}.${name}.headers`);
-      out[name] = { type, url: raw.url, ...(headers ? { headers } : {}) };
+      out[name] = {
+        ...preserveUnknownFields(raw, ['type', 'url', 'headers']),
+        type,
+        url: raw.url,
+        ...(headers ? { headers } : {})
+      };
     } else if (type === 'stdio') {
       if (typeof raw.command !== 'string' || !raw.command.trim()) {
         throw new Error(`${context}.${name}.command must be a non-empty string for type=stdio`);
@@ -477,6 +528,7 @@ export function parseMcpServers(
       }
       const env = parseStringMap(raw.env, `${context}.${name}.env`);
       out[name] = {
+        ...preserveUnknownFields(raw, ['type', 'command', 'args', 'env']),
         type: 'stdio',
         command: raw.command,
         ...(args ? { args: args as string[] } : {}),
@@ -595,6 +647,13 @@ export function parseIntegrationTrigger(
       ? maxConcurrency
       : undefined;
   return {
+    ...preserveUnknownFields(value, [
+      'on',
+      'match',
+      'where',
+      'paths',
+      'maxConcurrency'
+    ]),
     on,
     ...(typeof match === 'string' ? { match } : {}),
     ...(typeof where === 'string' ? { where } : {}),
@@ -641,6 +700,7 @@ export function parseIntegrationSource(
       `${context}.kind must be one of: ${INTEGRATION_SOURCE_KINDS.join(', ')}`
     );
   }
+  const unknownFields = preserveUnknownFields(value, ['kind', 'name']);
   if (kind === 'workspace_service_account') {
     if (typeof name !== 'string' || !name) {
       throw new Error(
@@ -657,14 +717,14 @@ export function parseIntegrationSource(
         `${context}.name must be kebab-case matching ${INTEGRATION_SOURCE_NAME_RE.source}`
       );
     }
-    return { kind, name };
+    return { ...unknownFields, kind, name };
   }
   if (name !== undefined) {
     throw new Error(
       `${context}.name is only allowed when kind="workspace_service_account"`
     );
   }
-  return { kind };
+  return { ...unknownFields, kind };
 }
 
 export function parseIntegrationConfig(
@@ -686,7 +746,14 @@ export function parseIntegrationConfig(
     );
   }
 
-  const out: PersonaIntegrationConfig = {};
+  const out = preserveUnknownFields(value, [
+    'source',
+    'scope',
+    'config',
+    'optional',
+    'enabledByInput',
+    'triggers'
+  ]) as PersonaIntegrationConfig;
 
   // Default-inject `deployer_user` when the persona omits `source` so
   // pre-discriminator personas keep parsing unchanged. The cloud-side
@@ -799,6 +866,7 @@ export function parseSchedules(
       throw new Error(`${entryContext}.tz must be a non-empty string if provided`);
     }
     out.push({
+      ...preserveUnknownFields(entry, ['name', 'cron', 'tz']),
       name: trimmedName,
       cron: trimmedCron,
       ...(typeof tz === 'string' ? { tz: tz.trim() } : {})
@@ -855,6 +923,7 @@ export function parseWatch(value: unknown, context: string): WatchRule[] | undef
     }
 
     return {
+      ...preserveUnknownFields(entry, ['paths', 'events', 'debounceMs', 'match']),
       paths: parsedPaths,
       events: parsedEvents,
       ...(typeof debounceMs === 'number' ? { debounceMs } : {}),
@@ -877,7 +946,12 @@ export function parseAgentSpec(value: unknown, context = 'agent'): AgentSpec {
     throw new Error(`${context} must be an object`);
   }
   const { launchedBy, triggers, schedules, watch } = value;
-  const out: AgentSpec = {};
+  const out = preserveUnknownFields(value, [
+    'launchedBy',
+    'triggers',
+    'schedules',
+    'watch'
+  ]) as AgentSpec;
 
   if (launchedBy !== undefined) {
     if (launchedBy !== 'team-dispatcher') {
@@ -925,7 +999,15 @@ export function parseMemory(value: unknown, context: string): PersonaMemory | un
     throw new Error(`${context} must be a boolean or an object if provided`);
   }
   const { enabled, scopes, ttlDays, autoPromote, dedupMs, trajectories, aiMemory } = value;
-  const out: PersonaMemoryConfig = {};
+  const out = preserveUnknownFields(value, [
+    'enabled',
+    'scopes',
+    'ttlDays',
+    'autoPromote',
+    'dedupMs',
+    'trajectories',
+    'aiMemory'
+  ]) as PersonaMemoryConfig;
   if (enabled !== undefined) {
     if (typeof enabled !== 'boolean') {
       throw new Error(`${context}.enabled must be a boolean if provided`);
@@ -984,7 +1066,13 @@ export function parseRelay(value: unknown, context: string): PersonaRelay | unde
     throw new Error(`${context} must be a boolean or an object if provided`);
   }
   const { enabled, agentName, channels, inbox, defaultWorkspace } = value;
-  const out: PersonaRelayConfig = {};
+  const out = preserveUnknownFields(value, [
+    'enabled',
+    'agentName',
+    'channels',
+    'inbox',
+    'defaultWorkspace'
+  ]) as PersonaRelayConfig;
   if (enabled !== undefined) {
     if (typeof enabled !== 'boolean') {
       throw new Error(`${context}.enabled must be a boolean if provided`);
@@ -1035,7 +1123,10 @@ function parseTrajectoryConfig(
   if (!isObject(value)) {
     throw new Error(`${context} must be a boolean or an object if provided`);
   }
-  const out: PersonaTrajectoryConfig = {};
+  const out = preserveUnknownFields(value, [
+    'enabled',
+    'autoCompact'
+  ]) as PersonaTrajectoryConfig;
   if (value.enabled !== undefined) {
     if (typeof value.enabled !== 'boolean') {
       throw new Error(`${context}.enabled must be a boolean if provided`);
@@ -1059,7 +1150,10 @@ function parseAiMemoryConfig(
   if (!isObject(value)) {
     throw new Error(`${context} must be a boolean or an object if provided`);
   }
-  const out: PersonaAiMemoryConfig = {};
+  const out = preserveUnknownFields(value, [
+    'enabled',
+    'dbPath'
+  ]) as PersonaAiMemoryConfig;
   if (value.enabled !== undefined) {
     if (typeof value.enabled !== 'boolean') {
       throw new Error(`${context}.enabled must be a boolean if provided`);
@@ -1369,6 +1463,40 @@ export function parsePersonaSpec(value: unknown, expectedIntent: PersonaIntent):
   const parsedSandbox = parseSandbox(sandbox, `persona[${expectedIntent}].sandbox`);
 
   return {
+    ...preserveUnknownFields(value, [
+      'id',
+      'intent',
+      'tags',
+      'description',
+      'harness',
+      'model',
+      'systemPrompt',
+      'harnessSettings',
+      'skills',
+      'inputs',
+      'env',
+      'mcpServers',
+      'permissions',
+      'mount',
+      'sandbox',
+      'claudeMd',
+      'claudeMdMode',
+      'agentsMd',
+      'agentsMdMode',
+      'claudeMdContent',
+      'agentsMdContent',
+      'cloud',
+      'useSubscription',
+      'integrations',
+      'capabilities',
+      'memory',
+      'relay',
+      'onEvent',
+      // Explicit hard cuts above remain rejected rather than passed through.
+      'traits',
+      'schedules',
+      'watch'
+    ]),
     id,
     intent,
     ...(parsedTags ? { tags: parsedTags } : {}),

@@ -7,10 +7,30 @@ import {
   parsePersonaSpec,
   type GitLabMaterializationPolicy,
   type GitHubMaterializationPolicy,
+  type PersonaHttpReadCapability,
+  type PersonaHttpReadRule,
+  type ProactiveCapabilities,
   type ScopeKeysFor,
   type TypedScopeMap,
   type TypedTriggerMap
 } from './index.js';
+
+test('httpRead authoring types keep the live-network boundary closed', () => {
+  const capability: PersonaHttpReadCapability = {
+    enabled: true,
+    // @ts-expect-error httpRead is intentionally closed to unknown policy keys
+    futureNetworkPolicy: true
+  };
+  const rule: PersonaHttpReadRule = {
+    method: 'GET',
+    urlGlob: 'https://example.test/*',
+    // @ts-expect-error httpRead rules are intentionally closed to unknown keys
+    followRedirects: true
+  };
+  const capabilities: ProactiveCapabilities = { httpRead: capability };
+  assert.equal(capabilities.httpRead?.enabled, true);
+  assert.equal(rule.method, 'GET');
+});
 
 test('definePersona returns authored specs that parse successfully', () => {
   const persona = definePersona({
