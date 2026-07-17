@@ -1,4 +1,6 @@
+import { readFileSync } from 'node:fs';
 import path from 'node:path';
+import { fileURLToPath } from 'node:url';
 import {
   CloudApiClient,
   clearStoredAuth,
@@ -13,6 +15,7 @@ import {
   clearStoredWorkspaceToken,
   createTerminalIO,
   deploy,
+  isPersonaSourcePath,
   type CloudAuthRecoveryResolver,
   type DeployMode,
   type DeployOptions,
@@ -75,9 +78,7 @@ export async function runDeploy(args: readonly string[]): Promise<void> {
   }
 
   let parsed = parseDeployArgs(args);
-  if (!parsed.mode) {
-    parsed = { ...parsed, mode: 'cloud' };
-  }
+  parsed = withDefaultDeployMode(parsed);
 
   try {
     const result = await deploy(parsed, {
@@ -104,11 +105,48 @@ export async function runDeploy(args: readonly string[]): Promise<void> {
     const exit = await result.runHandle.done;
     process.exit(exit.code);
   } catch (err) {
-    process.stderr.write(
-      `\nagentworkforce deploy failed: ${err instanceof Error ? err.message : String(err)}\n`
-    );
+    process.stderr.write(`\n${formatDeployFailure(parsed.personaPath, err)}\n`);
     process.exit(1);
   }
+}
+
+/** #158: omitted mode is deterministic in TTY and non-interactive callers. */
+export function withDefaultDeployMode(opts: DeployOptions): DeployOptions {
+  return opts.mode ? opts : { ...opts, mode: 'cloud' };
+}
+
+/**
+ * Authored source support is version-sensitive. Include the implementation
+ * version and its actual package source when a .ts/.js persona fails so a
+ * PATH-selected stale global install is distinguishable from a source error.
+ * The path is intentionally user-visible local diagnostic evidence; install
+ * consistency errors in the top-level wrapper remain path-free.
+ */
+export function formatDeployFailure(
+  personaPath: string,
+  error: unknown,
+  packageJsonUrl = new URL('../package.json', import.meta.url)
+): string {
+  const message = `agentworkforce deploy failed: ${
+    error instanceof Error ? error.message : String(error)
+  }`;
+  if (!isPersonaSourcePath(personaPath)) return message;
+
+  let version = 'unknown';
+  try {
+    const pkg = JSON.parse(readFileSync(packageJsonUrl, 'utf8')) as { version?: unknown };
+    if (typeof pkg.version === 'string' && pkg.version) version = pkg.version;
+  } catch {
+    // Preserve the original deploy failure even when package metadata is
+    // unavailable in a bundled or partially installed CLI environment.
+  }
+  return [
+    message,
+    `authored-source CLI: @agentworkforce/cli ${version} from ${fileURLToPath(packageJsonUrl)}`,
+    'If this .ts/.js persona was reported as JSON, a stale agentworkforce binary is ahead on PATH.',
+    'Check: command -v agentworkforce && agentworkforce --version',
+    'Update: npm install -g agentworkforce@latest'
+  ].join('\n');
 }
 
 function createDeployAuthRecovery(opts: DeployOptions): CloudAuthRecoveryResolver {

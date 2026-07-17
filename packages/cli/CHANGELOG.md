@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- Authored `.ts`/`.js` deploy failures now report the selected CLI version and
+  package source plus a copyable PATH/update check, making stale global binary
+  selection explicit (#163).
+
 ## [4.1.25] - 2026-07-16
 
 ### Fixed

@@ -48,7 +48,8 @@ agentworkforce --version
   JSON path (slug resolved via the workspace's agents index) or a literal
   agent UUID. Exits `0` on success, `2` when the agent is unknown or
   already destroyed, `1` for any other failure.
-- `--version` — print the installed package version.
+- `--version` — print the exact validated CLI implementation version selected
+  by the top-level wrapper.
 
 ## Install
 

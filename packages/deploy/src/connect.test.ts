@@ -4,6 +4,7 @@ import type { PersonaSpec } from '@agentworkforce/persona-kit';
 import {
   collectPickerInputs,
   connectIntegrations,
+  isRetryableIntegrationGet,
   RELAYFILE_OPTIONS_MAX_PAGES,
   relayfileCatalogConfigKeyResolver,
   relayfileIntegrationResolver,
@@ -19,6 +20,13 @@ function okJson(body: unknown, status = 200): Response {
     headers: { 'content-type': 'application/json' }
   });
 }
+
+test('integration GET retry eligibility is case-insensitive', () => {
+  assert.equal(isRetryableIntegrationGet(undefined), true);
+  assert.equal(isRetryableIntegrationGet('GET'), true);
+  assert.equal(isRetryableIntegrationGet('get'), true);
+  assert.equal(isRetryableIntegrationGet('POST'), false);
+});
 
 test('relayfileIntegrationResolver isConnected reads workspace provider status by default', async () => {
   const urls: string[] = [];
@@ -413,6 +421,69 @@ test('relayfileCatalogConfigKeyResolver returns the expected configKey and cache
   assert.equal(calls, 1, 'catalog should be fetched exactly once and cached');
 });
 
+test('relayfileCatalogConfigKeyResolver retries one transient fetch failure', async () => {
+  let calls = 0;
+  const delays: number[] = [];
+  const resolver = relayfileCatalogConfigKeyResolver({
+    apiUrl: 'https://cloud.example.test',
+    workspaceToken: 'tok',
+    sleep: async (ms) => { delays.push(ms); },
+    fetch: async () => {
+      calls += 1;
+      if (calls === 1) throw new TypeError('fetch failed');
+      return okJson({ providers: [{ id: 'github', configKey: 'github-relay' }] });
+    }
+  });
+
+  assert.equal(await resolver.resolve('github'), 'github-relay');
+  assert.equal(calls, 2);
+  assert.deepEqual(delays, [100]);
+});
+
+test('relayfileIntegrationResolver retries one transient status fetch failure', async () => {
+  let calls = 0;
+  const delays: number[] = [];
+  const resolver = relayfileIntegrationResolver({
+    apiUrl: 'https://cloud.example.test',
+    workspaceId: 'ws-runtime',
+    workspaceToken: 'tok',
+    sleep: async (ms) => { delays.push(ms); },
+    fetch: async () => {
+      calls += 1;
+      if (calls === 1) throw new TypeError('fetch failed');
+      return okJson({ provider: 'github', configKey: 'github-relay', status: 'ready' });
+    }
+  });
+
+  assert.equal(
+    await resolver.isConnected({ workspace: 'ws-runtime', provider: 'github' }),
+    true
+  );
+  assert.equal(calls, 2);
+  assert.deepEqual(delays, [100]);
+});
+
+test('relayfileIntegrationResolver does not retry auth or ordinary HTTP failures', async () => {
+  for (const status of [401, 403, 503]) {
+    let calls = 0;
+    const resolver = relayfileIntegrationResolver({
+      apiUrl: 'https://cloud.example.test',
+      workspaceId: 'ws-runtime',
+      workspaceToken: 'tok',
+      sleep: async () => { throw new Error('sleep should not run for HTTP responses'); },
+      fetch: async () => {
+        calls += 1;
+        return new Response('failure', { status });
+      }
+    });
+
+    await assert.rejects(
+      resolver.isConnected({ workspace: 'ws-runtime', provider: 'github' })
+    );
+    assert.equal(calls, 1, `HTTP ${status} should not retry`);
+  }
+});
+
 test('relayfileCatalogConfigKeyResolver returns undefined for every provider when catalog fetch fails', async () => {
   const io = createBufferedIO();
   const resolver = relayfileCatalogConfigKeyResolver({
@@ -497,6 +568,27 @@ test('relayfileIntegrationResolver connect opens a session and polls until conne
   assert.ok(urls.every((url) => url.includes('/workspaces/ws-runtime/')));
   assert.equal(polls, 3);
   assert.ok(io.messages.some((message) => message.message.includes('notion connected')));
+});
+
+test('relayfileIntegrationResolver never retries a failed POST connect session', async () => {
+  let calls = 0;
+  const resolver = relayfileIntegrationResolver({
+    apiUrl: 'https://cloud.example.test',
+    workspaceId: 'ws-runtime',
+    workspaceToken: 'tok',
+    sleep: async () => { throw new Error('POST retry sleep must not run'); },
+    fetch: async () => {
+      calls += 1;
+      throw new TypeError('fetch failed');
+    },
+    openUrl: async () => { throw new Error('browser should not open'); }
+  });
+
+  await assert.rejects(
+    resolver.connect({ workspace: 'ws-runtime', provider: 'github' }),
+    /fetch failed/
+  );
+  assert.equal(calls, 1);
 });
 
 test('relayfileIntegrationResolver connects github via existing org installation without fresh install', async () => {

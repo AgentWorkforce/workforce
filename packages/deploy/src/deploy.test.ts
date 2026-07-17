@@ -715,6 +715,81 @@ test('deploy connects each missing persona integration before launch', async () 
   }
 });
 
+test('cloud deploy retries transient catalog and status fetch failures before launch', async () => {
+  const { personaPath, cleanup } = await withTempPersona(
+    basePersonaJson({ integrations: { github: {} } }),
+    githubAgentSrc()
+  );
+  const io = createBufferedIO();
+  const originalFetch = globalThis.fetch;
+  let catalogCalls = 0;
+  let statusCalls = 0;
+  let launched = false;
+  const delays: number[] = [];
+  globalThis.fetch = (async (input: string | URL | Request) => {
+    const url = String(input);
+    if (url.includes('/api/v1/integrations/catalog')) {
+      catalogCalls += 1;
+      if (catalogCalls === 1) throw new TypeError('fetch failed');
+      return new Response(JSON.stringify({
+        providers: [{ id: 'github', configKey: 'github-relay' }]
+      }), { status: 200, headers: { 'content-type': 'application/json' } });
+    }
+    if (url.includes('/integrations/github/status')) {
+      statusCalls += 1;
+      if (statusCalls === 1) throw new TypeError('fetch failed');
+      return new Response(JSON.stringify({
+        provider: 'github',
+        configKey: 'github-relay',
+        status: 'ready'
+      }), { status: 200, headers: { 'content-type': 'application/json' } });
+    }
+    throw new Error(`unexpected fetch: ${url}`);
+  }) as typeof fetch;
+
+  try {
+    const result = await deploy(
+      {
+        personaPath,
+        mode: 'cloud',
+        noConnect: true,
+        cloudUrl: 'https://cloud.example.test',
+        io
+      },
+      {
+        workspaceAuth: {
+          async resolveWorkspace() {
+            return { workspace: 'ws-test', token: 'tok' };
+          }
+        },
+        networkRetrySleep: async (ms) => { delays.push(ms); },
+        bundle: successfulBundleStager(),
+        modes: {
+          cloud: {
+            async launch() {
+              launched = true;
+              return {
+                id: 'cloud-retry',
+                async stop() { /* no-op */ },
+                done: Promise.resolve({ code: 0 })
+              };
+            }
+          }
+        }
+      }
+    );
+
+    assert.equal(launched, true);
+    assert.deepEqual(result.connectedIntegrations, ['github']);
+    assert.equal(catalogCalls, 2);
+    assert.equal(statusCalls, 2);
+    assert.deepEqual(delays, [100, 100]);
+  } finally {
+    globalThis.fetch = originalFetch;
+    await cleanup();
+  }
+});
+
 test('deploy activates optional integrations from supplied persona inputs', async () => {
   const { personaPath, cleanup } = await withTempPersona(
     basePersonaJson({
