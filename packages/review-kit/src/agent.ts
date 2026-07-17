@@ -265,6 +265,13 @@ function createParsedReviewHandler(
  * Cuts at the LAST verdict line, not the first: a model that drafts its findings
  * before writing them emits two, and the real review is the final one.
  *
+ * The match is deliberately tolerant of how the model bolds the line —
+ * `**Verdict:`, `**Verdict**:`, `**Verdict** :`, any casing. The charter asks for
+ * one exact form and the production reviewer emits it, but a stricter pattern
+ * fails OPEN in the worst way: an unmatched line publishes the entire preamble,
+ * which is the thing this function exists to prevent. Being lax here costs
+ * nothing; being strict costs the whole feature on a formatting wobble.
+ *
  * A body with no verdict line at all means the model ignored the format; return
  * it unchanged rather than nothing, because a malformed review still beats
  * silence — for an advisory agent, silence reads as approval.
@@ -272,7 +279,7 @@ function createParsedReviewHandler(
 export function reviewBody(output: string): string {
   const text = (output ?? '').trim();
   let start = -1;
-  for (const match of text.matchAll(/^\*\*Verdict:/gmu)) {
+  for (const match of text.matchAll(/^\*\*Verdict(?:\*\*)?\s*:/gimu)) {
     start = match.index ?? start;
   }
   return start >= 0 ? text.slice(start).trim() : text;

@@ -691,3 +691,20 @@ test('reviewBody passes through a body with no verdict line', () => {
   assert.equal(reviewBody('   '), '');
   assert.equal(reviewBody(''), '');
 });
+
+test('reviewBody tolerates how the model bolds the verdict line', () => {
+  // The charter asks for one exact form and production emits it, but a strict
+  // pattern fails open in the worst way: an unmatched line publishes the whole
+  // preamble. Tolerate the variants LLMs actually drift to.
+  assert.equal(reviewBody('thinking\n**Verdict**: Blocker'), '**Verdict**: Blocker');
+  assert.equal(reviewBody('thinking\n**Verdict:** Blocker'), '**Verdict:** Blocker');
+  assert.equal(reviewBody('thinking\n**Verdict** : Blocker'), '**Verdict** : Blocker');
+  assert.equal(reviewBody('thinking\n**verdict:** Blocker'), '**verdict:** Blocker');
+  assert.equal(reviewBody('thinking\n**VERDICT**: Blocker'), '**VERDICT**: Blocker');
+});
+
+test('reviewBody ignores a verdict mentioned mid-line, not at a line start', () => {
+  // The ^ anchor is what keeps prose about a verdict from being mistaken for one.
+  const prose = 'I think the **Verdict:** below is too harsh, reconsidering.';
+  assert.equal(reviewBody(prose), prose);
+});
