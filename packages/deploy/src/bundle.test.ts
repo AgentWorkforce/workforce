@@ -153,6 +153,141 @@ test('bundleStager records only actual bundled package versions in deterministic
   }
 });
 
+test('bundleStager excludes a private consumer with invalid metadata before validating bundled dependencies', async () => {
+  const dir = await mkdtemp(path.join(os.tmpdir(), 'wf-bundle-private-consumer-'));
+  try {
+    await writeFile(
+      path.join(dir, 'package.json'),
+      JSON.stringify({ name: 'workspace-root', version: '1.0.0', private: true }, null, 2),
+      'utf8'
+    );
+
+    const consumerMetadataCases: Array<{ label: string; packageJson?: string }> = [
+      { label: 'missing-package-json' },
+      {
+        label: 'missing-version',
+        packageJson: JSON.stringify({ name: 'private-author-app', private: true }, null, 2)
+      },
+      {
+        label: 'noncanonical-version',
+        packageJson: JSON.stringify(
+          { name: 'private-author-app', version: 'workspace:*', private: true },
+          null,
+          2
+        )
+      },
+      {
+        label: 'invalid-name',
+        packageJson: JSON.stringify(
+          { name: `../private/${path.basename(dir)}`, version: '1.0.0', private: true },
+          null,
+          2
+        )
+      }
+    ];
+
+    for (const metadataCase of consumerMetadataCases) {
+      const consumerRoot = path.join(dir, 'apps', metadataCase.label);
+      await mkdir(consumerRoot, { recursive: true });
+      if (metadataCase.packageJson !== undefined) {
+        await writeFile(path.join(consumerRoot, 'package.json'), metadataCase.packageJson, 'utf8');
+      }
+
+      const personaPath = path.join(consumerRoot, 'persona.json');
+      const personaSpec = persona();
+      await writeFile(personaPath, JSON.stringify(personaSpec, null, 2), 'utf8');
+      await writePackage(
+        consumerRoot,
+        'safe-dep',
+        '1.2.3',
+        'export const safeMarker = "retained-safe-dependency-marker";\n'
+      );
+      await writeFile(
+        path.join(consumerRoot, 'agent.ts'),
+        "import { safeMarker } from 'safe-dep'; export default () => safeMarker;\n",
+        'utf8'
+      );
+
+      const result = await bundleStager.stage({
+        personaPath,
+        persona: personaSpec,
+        outDir: path.join(consumerRoot, 'build')
+      });
+      const generatedPackageJsonSource = await readFile(result.packageJsonPath, 'utf8');
+      const generatedPackageJson = JSON.parse(generatedPackageJsonSource);
+
+      assert.deepEqual(
+        generatedPackageJson.bundleManifest,
+        { schemaVersion: 1, packages: [{ name: 'safe-dep', version: '1.2.3' }] },
+        metadataCase.label
+      );
+      assert.match(
+        await readFile(result.bundlePath, 'utf8'),
+        /retained-safe-dependency-marker/,
+        metadataCase.label
+      );
+      assert.equal(
+        generatedPackageJsonSource.includes(dir),
+        false,
+        `${metadataCase.label}: manifest must not leak build paths`
+      );
+    }
+  } finally {
+    await rm(dir, { recursive: true, force: true });
+  }
+});
+
+test('bundleStager stages an entry outside the private consumer package without attributing consumer metadata', async () => {
+  const dir = await mkdtemp(path.join(os.tmpdir(), 'wf-bundle-external-entry-'));
+  try {
+    await writeFile(
+      path.join(dir, 'package.json'),
+      JSON.stringify({ name: 'workspace-root', version: '1.0.0', private: true }, null, 2),
+      'utf8'
+    );
+    await writePackage(
+      dir,
+      'safe-dep',
+      '1.2.3',
+      'export const safeMarker = "external-entry-safe-dependency-marker";\n'
+    );
+
+    const consumerRoot = path.join(dir, 'apps', 'private-author');
+    const sharedRoot = path.join(dir, 'shared');
+    await mkdir(consumerRoot, { recursive: true });
+    await mkdir(sharedRoot, { recursive: true });
+    await writeFile(
+      path.join(consumerRoot, 'package.json'),
+      JSON.stringify({ name: 'private-author-app', version: 'workspace:*', private: true }, null, 2),
+      'utf8'
+    );
+    await writeFile(
+      path.join(sharedRoot, 'agent.ts'),
+      "import { safeMarker } from 'safe-dep'; export default () => safeMarker;\n",
+      'utf8'
+    );
+
+    const personaPath = path.join(consumerRoot, 'persona.json');
+    const personaSpec = persona({ onEvent: '../../shared/agent.ts' });
+    await writeFile(personaPath, JSON.stringify(personaSpec, null, 2), 'utf8');
+    const result = await bundleStager.stage({
+      personaPath,
+      persona: personaSpec,
+      outDir: path.join(consumerRoot, 'build')
+    });
+    const generatedPackageJsonSource = await readFile(result.packageJsonPath, 'utf8');
+
+    assert.deepEqual(JSON.parse(generatedPackageJsonSource).bundleManifest, {
+      schemaVersion: 1,
+      packages: [{ name: 'safe-dep', version: '1.2.3' }]
+    });
+    assert.match(await readFile(result.bundlePath, 'utf8'), /external-entry-safe-dependency-marker/);
+    assert.equal(generatedPackageJsonSource.includes(dir), false);
+  } finally {
+    await rm(dir, { recursive: true, force: true });
+  }
+});
+
 test('bundleStager resolves workspace and pnpm package symlinks', async () => {
   const dir = await mkdtemp(path.join(os.tmpdir(), 'wf-bundle-workspace-'));
   try {

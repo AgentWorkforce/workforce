@@ -293,6 +293,11 @@ async function buildBundleManifest(
   const uniquePackages = new Map<string, BundlePackageVersion>();
   for (const owner of owners) {
     if (!owner) continue;
+    // The entry owner is the author/consumer package, not a bundled
+    // dependency. Identify it by the canonical ownership root before
+    // validating publishable dependency metadata: private applications may
+    // legitimately omit a version or use workspace-only package metadata.
+    if (owner.root === entryOwner?.root) continue;
     if (owner.invalidMetadata) {
       const packageLabel = owner.invalidMetadata.name
         ? ` package "${owner.invalidMetadata.name}"`
@@ -301,7 +306,6 @@ async function buildBundleManifest(
         `bundle: bundled${packageLabel} has no valid ${owner.invalidMetadata.field} metadata`
       );
     }
-    if (owner.root === entryOwner?.root) continue;
     if (!owner.pkg) continue;
     const key = `${owner.pkg.name}\u0000${owner.pkg.version}`;
     uniquePackages.set(key, owner.pkg);
