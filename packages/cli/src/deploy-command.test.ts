@@ -75,6 +75,17 @@ test('JSON deploy failures do not imply that the selected CLI is stale', () => {
   assert.equal(message, 'agentworkforce deploy failed: invalid intent');
 });
 
+test('authored-source diagnostics preserve the original failure when CLI metadata is unavailable', () => {
+  const message = formatDeployFailure(
+    '/tmp/review/persona.ts',
+    new Error('original deploy failure'),
+    new URL('file:///missing-agentworkforce-cli-package.json')
+  );
+
+  assert.match(message, /agentworkforce deploy failed: original deploy failure/);
+  assert.match(message, /authored-source CLI: @agentworkforce\/cli unknown from /);
+});
+
 test('non-interactive deploy without --mode defaults to cloud (#158)', () => {
   const parsed = parseDeployArgs(['/tmp/review/persona.ts', '--no-prompt']);
   assert.equal(parsed.mode, undefined);

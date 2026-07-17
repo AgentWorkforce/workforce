@@ -84,8 +84,8 @@ test('reports a sanitized repair command when the nested CLI package is missing'
 
   assert.equal(exitCode, 1);
   assert.equal(stdout, '');
-  assert.match(stderr, /has no associated @agentworkforce\/cli/);
-  assert.match(stderr, /refusing to run a partial installation/);
+  assert.match(stderr, /has no resolvable @agentworkforce\/cli metadata/);
+  assert.match(stderr, /refusing to run a partial or unverified installation/);
   assert.match(stderr, /npm install -g agentworkforce@4\.1\.26/);
   assert.doesNotMatch(stderr, /MODULE_NOT_FOUND/);
   assert.doesNotMatch(stderr, new RegExp(escapeRegExp(fixture.root)));
@@ -233,6 +233,31 @@ test('fails closed on an invalid project wrapper version without leaking its pat
   assert.doesNotMatch(stderr, /WRAPPER CLI|PROJECT CLI/);
 });
 
+test('fails closed when project wrapper metadata is blocked by package exports', async (t) => {
+  const fixture = await createInstalledTree(t, {
+    wrapperVersion: '4.1.26',
+    cliVersion: '4.1.26',
+    projectWrapperVersion: '4.1.27',
+    projectCliVersion: '4.1.27',
+    projectWrapperExports: true
+  });
+
+  const { exitCode, stdout, stderr } = await runBin(
+    fixture.binPath,
+    ['agent', 'persona'],
+    { cwd: fixture.projectRoot }
+  );
+
+  assert.equal(exitCode, 1);
+  assert.equal(stdout, '');
+  assert.match(stderr, /package metadata cannot be inspected/);
+  assert.match(stderr, /refusing to run an unverified local installation/);
+  assert.match(stderr, /npm install agentworkforce/);
+  assert.doesNotMatch(stderr, /ERR_PACKAGE_PATH_NOT_EXPORTED/);
+  assert.doesNotMatch(stderr, new RegExp(escapeRegExp(fixture.projectRoot)));
+  assert.doesNotMatch(stderr, /WRAPPER CLI|PROJECT CLI/);
+});
+
 test('rejects semantic versions with leading-zero numeric identifiers', async (t) => {
   const fixture = await createInstalledTree(t, {
     wrapperVersion: '4.1.26',
@@ -297,7 +322,8 @@ async function createInstalledTree(t, {
   projectCliLayout,
   bareProjectCliVersion,
   omitCliPackage,
-  omitCliEntry
+  omitCliEntry,
+  projectWrapperExports
 }) {
   const tempParent = await mkdtemp(path.join(os.tmpdir(), 'agentworkforce install '));
   const root = path.join(tempParent, 'global tree');
@@ -350,7 +376,8 @@ async function createInstalledTree(t, {
       JSON.stringify({
         name: 'agentworkforce',
         version: projectWrapperVersion,
-        type: 'module'
+        type: 'module',
+        ...(projectWrapperExports ? { exports: { '.': './index.js' } } : {})
       })
     );
     await writeFile(

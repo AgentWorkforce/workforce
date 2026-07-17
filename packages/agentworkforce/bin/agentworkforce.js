@@ -92,7 +92,12 @@ function resolveProjectInstall(invokedWrapperPackageJsonPath, invokedWrapperVers
     wrapperPackageJsonPath = projectRequire.resolve('agentworkforce/package.json');
   } catch (error) {
     if (error?.code === 'MODULE_NOT_FOUND') return undefined;
-    throw error;
+    throw new InstallationError(
+      [
+        'project-local agentworkforce package metadata cannot be inspected; refusing to run an unverified local installation.',
+        'Repair it with: npm install agentworkforce'
+      ].join('\n')
+    );
   }
 
   if (path.resolve(wrapperPackageJsonPath) === path.resolve(invokedWrapperPackageJsonPath)) {
@@ -129,7 +134,7 @@ function resolveAssociatedCliPackageJson(localRequire, installationLabel, repair
   } catch {
     throw new InstallationError(
       [
-        `${installationLabel} has no associated @agentworkforce/cli; refusing to run a partial installation.`,
+        `${installationLabel} has no resolvable @agentworkforce/cli metadata; refusing to run a partial or unverified installation.`,
         `Repair it with: ${repairCommand}`
       ].join('\n')
     );

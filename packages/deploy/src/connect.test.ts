@@ -4,6 +4,7 @@ import type { PersonaSpec } from '@agentworkforce/persona-kit';
 import {
   collectPickerInputs,
   connectIntegrations,
+  isRetryableIntegrationGet,
   RELAYFILE_OPTIONS_MAX_PAGES,
   relayfileCatalogConfigKeyResolver,
   relayfileIntegrationResolver,
@@ -19,6 +20,13 @@ function okJson(body: unknown, status = 200): Response {
     headers: { 'content-type': 'application/json' }
   });
 }
+
+test('integration GET retry eligibility is case-insensitive', () => {
+  assert.equal(isRetryableIntegrationGet(undefined), true);
+  assert.equal(isRetryableIntegrationGet('GET'), true);
+  assert.equal(isRetryableIntegrationGet('get'), true);
+  assert.equal(isRetryableIntegrationGet('POST'), false);
+});
 
 test('relayfileIntegrationResolver isConnected reads workspace provider status by default', async () => {
   const urls: string[] = [];

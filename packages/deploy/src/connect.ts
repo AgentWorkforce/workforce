@@ -1010,7 +1010,7 @@ async function requestJson(
     }
   };
   let res: Response | undefined;
-  const retryDelays = retrySleep && (init.method === undefined || init.method === 'GET')
+  const retryDelays = retrySleep && isRetryableIntegrationGet(init.method)
     ? [100, 300]
     : [];
   for (let attempt = 0; ; attempt += 1) {
@@ -1050,6 +1050,10 @@ async function requestJson(
     throw cloudRequestError(`cloud integration request failed: ${res.status} ${body}`.trim(), res.status);
   }
   return await res.json();
+}
+
+export function isRetryableIntegrationGet(method: string | undefined): boolean {
+  return method === undefined || method.toUpperCase() === 'GET';
 }
 
 function isTransientFetchFailure(error: unknown): boolean {

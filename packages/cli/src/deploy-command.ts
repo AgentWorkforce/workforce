@@ -122,17 +122,24 @@ export function withDefaultDeployMode(opts: DeployOptions): DeployOptions {
  * The path is intentionally user-visible local diagnostic evidence; install
  * consistency errors in the top-level wrapper remain path-free.
  */
-export function formatDeployFailure(personaPath: string, error: unknown): string {
+export function formatDeployFailure(
+  personaPath: string,
+  error: unknown,
+  packageJsonUrl = new URL('../package.json', import.meta.url)
+): string {
   const message = `agentworkforce deploy failed: ${
     error instanceof Error ? error.message : String(error)
   }`;
   if (!isPersonaSourcePath(personaPath)) return message;
 
-  const packageJsonUrl = new URL('../package.json', import.meta.url);
-  const pkg = JSON.parse(readFileSync(packageJsonUrl, 'utf8')) as { version?: unknown };
-  const version = typeof pkg.version === 'string' && pkg.version
-    ? pkg.version
-    : 'unknown';
+  let version = 'unknown';
+  try {
+    const pkg = JSON.parse(readFileSync(packageJsonUrl, 'utf8')) as { version?: unknown };
+    if (typeof pkg.version === 'string' && pkg.version) version = pkg.version;
+  } catch {
+    // Preserve the original deploy failure even when package metadata is
+    // unavailable in a bundled or partially installed CLI environment.
+  }
   return [
     message,
     `authored-source CLI: @agentworkforce/cli ${version} from ${fileURLToPath(packageJsonUrl)}`,
