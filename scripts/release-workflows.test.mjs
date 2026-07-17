@@ -5,18 +5,22 @@ import test from 'node:test';
 const publishWorkflow = readFileSync('.github/workflows/publish.yml', 'utf8');
 const verifyWorkflow = readFileSync('.github/workflows/verify-publish.yml', 'utf8');
 
-function publishPackageNames() {
-  const match = publishWorkflow.match(/echo "packages=([^"]+)"/);
+function publishTargetDirectories(workflow) {
+  const match = workflow.match(/echo "packages=([^"]+)"/);
   assert.ok(match, 'publish workflow must declare its package targets');
 
-  return match[1].trim().split(/\s+/).map((directory) => {
+  return match[1].trim().split(/\s+/);
+}
+
+function publishPackageNames(workflow = publishWorkflow) {
+  return publishTargetDirectories(workflow).map((directory) => {
     const packageJson = JSON.parse(readFileSync(`packages/${directory}/package.json`, 'utf8'));
     return packageJson.name;
   });
 }
 
-function verifyPackageChoices() {
-  const lines = verifyWorkflow.replaceAll('\r\n', '\n').split('\n');
+function verifyPackageChoices(workflow = verifyWorkflow) {
+  const lines = workflow.replaceAll('\r\n', '\n').split('\n');
   const packageInput = lines.findIndex((line) => line === '      package:');
   assert.notEqual(packageInput, -1, 'verify workflow must declare the package input');
 
@@ -41,6 +45,17 @@ test('Verify Publish exposes every lockstep package exactly once', () => {
   assert.equal(new Set(published).size, published.length, 'publish targets must be unique');
   assert.equal(new Set(verified).size, verified.length, 'verify choices must be unique');
   assert.deepEqual(verified, published);
+});
+
+test('release workflow parsing tolerates CRLF and target whitespace', () => {
+  assert.deepEqual(publishTargetDirectories('echo "packages=  events persona-kit  "'), [
+    'events',
+    'persona-kit',
+  ]);
+  assert.deepEqual(
+    verifyPackageChoices(verifyWorkflow.replaceAll('\n', '\r\n')),
+    verifyPackageChoices()
+  );
 });
 
 test('scoped CLI verification checks only the supported thin-entry contract', () => {
