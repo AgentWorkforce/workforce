@@ -33,7 +33,7 @@
     "dev:cli": "node packages/cli/dist/cli.js",
     "typecheck": "pnpm -r typecheck && pnpm run typecheck:examples",
     "typecheck:examples": "tsc -p examples/tsconfig.json --noEmit",
-    "test": "pnpm -r test",
+    "test": "node --test scripts/release-workflows.test.mjs && pnpm -r test",
     "lint": "pnpm -r lint",
     "check": "pnpm run lint && pnpm run typecheck && pnpm run test"
   }

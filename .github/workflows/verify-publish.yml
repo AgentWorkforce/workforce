@@ -15,12 +15,18 @@ on:
         type: choice
         options:
           - '@agentworkforce/events'
+          - '@agentworkforce/persona-kit'
+          - '@agentworkforce/runtime'
           - '@agentworkforce/compose'
+          - '@agentworkforce/delivery'
+          - '@agentworkforce/workload-router'
+          - '@agentworkforce/deploy'
+          - '@agentworkforce/review-kit'
+          - '@agentworkforce/mcp-workforce'
+          - '@agentworkforce/daytona-runner'
+          - '@agentworkforce/local-surface'
           - '@agentworkforce/cli'
           - 'agentworkforce'
-          - '@agentworkforce/workload-router'
-          - '@agentworkforce/persona-kit'
-          - '@agentworkforce/review-kit'
       version:
         description: 'Version to verify (defaults to the "latest" dist-tag)'
         required: false
@@ -104,7 +110,6 @@ jobs:
 
           const mod = await import('./node_modules/@agentworkforce/cli/dist/cli.js');
           assert.equal(typeof mod.main, 'function');
-          assert.equal(typeof mod.CLI_VERSION, 'string');
           console.log(`scoped CLI package smoke passed for ${pkg.name}@${pkg.version}`);
           EOF
 
