@@ -33,8 +33,23 @@ export type DeploymentAgent = {
   createdAt: string;
   updatedAt?: string;
   lastUsedAt: string | null;
+  lastRunStatus?: string | null;
+  lastError?: string | null;
+  integrationWatchHealth?: DeploymentIntegrationWatchHealth | null;
   scheduleIds: string[];
   deployedByUserId: string;
+};
+
+export type DeploymentIntegrationWatchHealth = {
+  status: string;
+  reason: string | null;
+  lastSuccessfulDeliveryAt: string | null;
+  lastDeliveryAt: string | null;
+  lastFailedDeliveryAt: string | null;
+  pendingDeliveryCount: number;
+  recentFailedDeliveryCount: number;
+  recentWorkspaceDispatchFailureCount: number;
+  latestWorkspaceDispatchFailureAt: string | null;
 };
 
 type ListResponse = {
@@ -101,7 +116,7 @@ export async function runDeploymentList(args: readonly string[]): Promise<void> 
       const hint = formatHttpErrorBody(body, { url: url.toString() });
       throw new Error(`list failed: ${res.status}${hint ? ` ${hint}` : ''}`);
     }
-    const agents = parseAgents((await res.json()) as ListResponse);
+    const agents = parseDeploymentAgents((await res.json()) as ListResponse);
     if (opts.json) {
       process.stdout.write(`${JSON.stringify({ agents }, null, 2)}\n`);
     } else {
@@ -275,32 +290,46 @@ export function formatDeploymentsTable(agents: readonly DeploymentAgent[]): stri
   const rows = agents.map((agent) => ({
     name: deploymentDisplayName(agent),
     agentId: compactId(agent.agentId),
-    status: agent.status,
+    deployment: agent.status,
+    lastRun: agent.lastRunStatus ?? '-',
+    watch: agent.integrationWatchHealth?.status ?? '-',
     deployed: formatDate(agent.updatedAt ?? agent.createdAt),
     lastUsed: agent.lastUsedAt ? formatRelative(agent.lastUsedAt) : '-'
   }));
   const widths = {
     name: Math.max('name'.length, ...rows.map((r) => r.name.length)),
     agentId: Math.max('agentId'.length, ...rows.map((r) => r.agentId.length)),
-    status: Math.max('status'.length, ...rows.map((r) => r.status.length)),
+    deployment: Math.max('deployment'.length, ...rows.map((r) => r.deployment.length)),
+    lastRun: Math.max('lastRun'.length, ...rows.map((r) => r.lastRun.length)),
+    watch: Math.max('watch'.length, ...rows.map((r) => r.watch.length)),
     deployed: Math.max('deployed'.length, ...rows.map((r) => r.deployed.length)),
     lastUsed: Math.max('lastUsed'.length, ...rows.map((r) => r.lastUsed.length))
   };
   const header = [
     pad('name', widths.name),
-    pad('status', widths.status),
+    pad('deployment', widths.deployment),
+    pad('lastRun', widths.lastRun),
+    pad('watch', widths.watch),
     pad('deployed', widths.deployed),
     pad('lastUsed', widths.lastUsed),
     pad('agentId', widths.agentId)
   ].join('  ');
   const body = rows.map((row) => [
     pad(row.name, widths.name),
-    pad(row.status, widths.status),
+    pad(row.deployment, widths.deployment),
+    pad(row.lastRun, widths.lastRun),
+    pad(row.watch, widths.watch),
     pad(row.deployed, widths.deployed),
     pad(row.lastUsed, widths.lastUsed),
     pad(row.agentId, widths.agentId)
   ].join('  '));
-  return `${[header, ...body].join('\n')}\n`;
+  const table = [header, ...body].join('\n');
+  const errors = agents
+    .filter((agent) => agent.lastError)
+    .map((agent) => `  ${deploymentDisplayName(agent)}: ${formatDeploymentErrorSnippet(agent.lastError!)}`);
+  return errors.length > 0
+    ? `${table}\n\nErrors:\n${errors.join('\n')}\n`
+    : `${table}\n`;
 }
 
 export function formatDeploymentLogEntries(entries: readonly LogEntry[]): string {
@@ -319,7 +348,7 @@ export function tailLogEntriesFromNewestFiles(
   return chronological.slice(-tail);
 }
 
-function parseAgents(body: ListResponse): DeploymentAgent[] {
+export function parseDeploymentAgents(body: ListResponse): DeploymentAgent[] {
   const raw = Array.isArray(body) ? body : Array.isArray(body.agents) ? body.agents : [];
   return raw.map((value) => {
     if (!value || typeof value !== 'object' || Array.isArray(value)) {
@@ -336,6 +365,9 @@ function parseAgents(body: ListResponse): DeploymentAgent[] {
       createdAt: readString(record, 'createdAt') ?? '',
       ...(updatedAt ? { updatedAt } : {}),
       lastUsedAt: readNullableString(record, 'lastUsedAt'),
+      lastRunStatus: readNullableString(record, 'lastRunStatus'),
+      lastError: readNullableText(record, 'lastError'),
+      integrationWatchHealth: readIntegrationWatchHealth(record),
       scheduleIds: Array.isArray(record.scheduleIds)
         ? record.scheduleIds.filter((id): id is string => typeof id === 'string')
         : [],
@@ -389,7 +421,7 @@ export async function fetchDeployments(args: {
   token: string;
 }): Promise<DeploymentAgent[]> {
   const url = new URL(`${args.cloudUrl}/api/v1/workspaces/${encodeURIComponent(args.workspace)}/deployments`);
-  return parseAgents(await requestJson<ListResponse>(url, args.token, 'deployment list'));
+  return parseDeploymentAgents(await requestJson<ListResponse>(url, args.token, 'deployment list'));
 }
 
 async function fetchLogPaths(args: {
@@ -520,6 +552,52 @@ function readString(record: Record<string, unknown>, key: string): string | unde
 function readNullableString(record: Record<string, unknown>, key: string): string | null {
   const value = record[key];
   return typeof value === 'string' && value.trim() ? value.trim() : null;
+}
+
+function readNullableText(record: Record<string, unknown>, key: string): string | null {
+  const value = record[key];
+  return typeof value === 'string' && value.length > 0 ? value : null;
+}
+
+function readIntegrationWatchHealth(
+  record: Record<string, unknown>
+): DeploymentIntegrationWatchHealth | null {
+  const value = record.integrationWatchHealth;
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return null;
+  const health = value as Record<string, unknown>;
+  return {
+    status: readString(health, 'status') ?? 'unknown',
+    reason: readNullableString(health, 'reason'),
+    lastSuccessfulDeliveryAt: readNullableString(health, 'lastSuccessfulDeliveryAt'),
+    lastDeliveryAt: readNullableString(health, 'lastDeliveryAt'),
+    lastFailedDeliveryAt: readNullableString(health, 'lastFailedDeliveryAt'),
+    pendingDeliveryCount: readFiniteNumber(health, 'pendingDeliveryCount'),
+    recentFailedDeliveryCount: readFiniteNumber(health, 'recentFailedDeliveryCount'),
+    recentWorkspaceDispatchFailureCount: readFiniteNumber(
+      health,
+      'recentWorkspaceDispatchFailureCount'
+    ),
+    latestWorkspaceDispatchFailureAt: readNullableString(
+      health,
+      'latestWorkspaceDispatchFailureAt'
+    )
+  };
+}
+
+function readFiniteNumber(record: Record<string, unknown>, key: string): number {
+  const value = record[key];
+  return typeof value === 'number' && Number.isFinite(value) ? value : 0;
+}
+
+const DEPLOYMENT_ERROR_SNIPPET_LENGTH = 240;
+
+function formatDeploymentErrorSnippet(error: string): string {
+  const normalized = error
+    .replace(/[\u0000-\u001f\u007f]+/g, ' ')
+    .replace(/\s+/g, ' ')
+    .trim();
+  if (normalized.length <= DEPLOYMENT_ERROR_SNIPPET_LENGTH) return normalized;
+  return `${normalized.slice(0, DEPLOYMENT_ERROR_SNIPPET_LENGTH - 3)}...`;
 }
 
 function parseTail(value: string): number {
