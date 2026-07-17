@@ -79,7 +79,10 @@ test('bundleStager produces an executable, importable bundle from a real onEvent
     assert.match(runnerSource, /delete spec\.handler/);
     assert.match(runnerSource, /Object\.keys\(persona\)/);
     assert.match(runnerSource, /packageJson\.bundleManifest/);
-    assert.match(runnerSource, /await startRunner\({ persona, agent, deployment, handler, bundleManifest/);
+    assert.match(
+      runnerSource,
+      /await startRunner\({ persona, agent, deployment, handler, bundleManifest, \.\.\.\(agentSpec/
+    );
 
     // bundle output is ES module shape and references the runtime as external
     const bundleSource = await readFile(result.bundlePath, 'utf8');
@@ -285,6 +288,40 @@ test('bundleStager stages an entry outside the private consumer package without 
     });
     assert.match(await readFile(result.bundlePath, 'utf8'), /external-entry-safe-dependency-marker/);
     assert.equal(generatedPackageJsonSource.includes(dir), false);
+  } finally {
+    await rm(dir, { recursive: true, force: true });
+  }
+});
+
+test('bundleStager records valid legacy package names from installed artifacts', async () => {
+  const dir = await mkdtemp(path.join(os.tmpdir(), 'wf-bundle-legacy-name-'));
+  try {
+    const personaPath = path.join(dir, 'persona.json');
+    const personaSpec = persona();
+    await writeFile(personaPath, JSON.stringify(personaSpec, null, 2), 'utf8');
+    await writePackage(
+      dir,
+      'JSONStream',
+      '1.3.5',
+      'export const legacyPackageMarker = "JSONStream";\n'
+    );
+    await writeFile(
+      path.join(dir, 'agent.ts'),
+      "import { legacyPackageMarker } from 'JSONStream'; export default () => legacyPackageMarker;\n",
+      'utf8'
+    );
+
+    const result = await bundleStager.stage({
+      personaPath,
+      persona: personaSpec,
+      outDir: path.join(dir, 'build')
+    });
+    const generatedPackageJson = JSON.parse(await readFile(result.packageJsonPath, 'utf8'));
+
+    assert.deepEqual(generatedPackageJson.bundleManifest, {
+      schemaVersion: 1,
+      packages: [{ name: 'JSONStream', version: '1.3.5' }]
+    });
   } finally {
     await rm(dir, { recursive: true, force: true });
   }
