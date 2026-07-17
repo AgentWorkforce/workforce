@@ -55,7 +55,16 @@ async function fixtureBundle(dir: string): Promise<BundleResult> {
     writeFile(runnerPath, 'runner', 'utf8'),
     writeFile(bundlePath, 'bundle', 'utf8'),
     writeFile(personaCopyPath, '{"id":"demo"}', 'utf8'),
-    writeFile(packageJsonPath, '{}', 'utf8')
+    writeFile(
+      packageJsonPath,
+      JSON.stringify({
+        bundleManifest: {
+          schemaVersion: 1,
+          packages: [{ name: '@relayfile/relay-helpers', version: '0.4.9' }]
+        }
+      }),
+      'utf8'
+    )
   ]);
   return { runnerPath, bundlePath, personaCopyPath, packageJsonPath, sizeBytes: 13 };
 }
@@ -132,6 +141,13 @@ test('proxy client mints, uploads, execs, and destroys against cloud sandboxes e
     assert.equal(uploadBody.entries.length, 4);
     const runnerEntry = uploadBody.entries.find((e) => e.destination.endsWith('/runner.mjs'));
     assert.ok(runnerEntry);
+    const packageEntry = uploadBody.entries.find((e) => e.destination.endsWith('/package.json'));
+    assert.ok(packageEntry);
+    const uploadedPackageJson = JSON.parse(Buffer.from(packageEntry.source, 'base64').toString('utf8'));
+    assert.deepEqual(uploadedPackageJson.bundleManifest, {
+      schemaVersion: 1,
+      packages: [{ name: '@relayfile/relay-helpers', version: '0.4.9' }]
+    });
     assert.equal(Buffer.from(runnerEntry!.source, 'base64').toString('utf8'), 'runner');
 
     // Install exec.

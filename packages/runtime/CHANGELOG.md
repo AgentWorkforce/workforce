@@ -9,6 +9,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- Include the deployed bundle package manifest in structured `runner.started`
+  evidence (#279).
 - Add the reserved `[[NO_REPLY]]` harness contract for successful silent runs,
   including marker leak sanitization and observability.
 

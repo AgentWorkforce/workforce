@@ -62,7 +62,17 @@ async function withBundle(): Promise<{ bundle: BundleResult; cleanup: () => Prom
     writeFile(runnerPath, 'export {};', 'utf8'),
     writeFile(bundlePath, 'export default {};', 'utf8'),
     writeFile(personaCopyPath, '{}', 'utf8'),
-    writeFile(packageJsonPath, '{"type":"module"}', 'utf8')
+    writeFile(
+      packageJsonPath,
+      JSON.stringify({
+        type: 'module',
+        bundleManifest: {
+          schemaVersion: 1,
+          packages: [{ name: '@relayfile/relay-helpers', version: '0.4.9' }]
+        }
+      }),
+      'utf8'
+    )
   ]);
   return {
     bundle: {
@@ -188,7 +198,13 @@ test('cloud launcher POSTs a deploy bundle and returns the cloud handle', async 
       assert.deepEqual(body.agent, dispatcherAgentSpec);
       assert.equal((body.persona as { schedules?: unknown }).schedules, undefined);
       assert.deepEqual(body.inputs, { topic: 'AI' });
-      assert.deepEqual((body.bundle as { packageJson: unknown }).packageJson, { type: 'module' });
+      assert.deepEqual((body.bundle as { packageJson: unknown }).packageJson, {
+        type: 'module',
+        bundleManifest: {
+          schemaVersion: 1,
+          packages: [{ name: '@relayfile/relay-helpers', version: '0.4.9' }]
+        }
+      });
       return okJson({ agentId: 'agent-1', deploymentId: 'dep-1', status: 'active' }, 201);
     }
   });
