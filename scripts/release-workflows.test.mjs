@@ -9,14 +9,14 @@ function publishPackageNames() {
   const match = publishWorkflow.match(/echo "packages=([^"]+)"/);
   assert.ok(match, 'publish workflow must declare its package targets');
 
-  return match[1].split(/\s+/).map((directory) => {
+  return match[1].trim().split(/\s+/).map((directory) => {
     const packageJson = JSON.parse(readFileSync(`packages/${directory}/package.json`, 'utf8'));
     return packageJson.name;
   });
 }
 
 function verifyPackageChoices() {
-  const lines = verifyWorkflow.split('\n');
+  const lines = verifyWorkflow.replaceAll('\r\n', '\n').split('\n');
   const packageInput = lines.findIndex((line) => line === '      package:');
   assert.notEqual(packageInput, -1, 'verify workflow must declare the package input');
 
