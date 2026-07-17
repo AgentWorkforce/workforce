@@ -1,6 +1,7 @@
 export {
   defineReviewAgent,
   idempotencyMarker,
+  reviewBody,
   reviewInput,
   reviewMountPaths,
   REVIEW_KIT_VERSION,

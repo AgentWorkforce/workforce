@@ -211,7 +211,7 @@ function createParsedReviewHandler(
         `${parsed.lens} review harness failed (exit ${run.exitCode}) for PR #${pullRequest.number}`
       );
     }
-    const body = run.output.trim();
+    const body = reviewBody(run.output);
     if (!body) {
       throw new Error(`${parsed.lens} review harness produced no review for PR #${pullRequest.number}`);
     }
@@ -240,6 +240,42 @@ function createParsedReviewHandler(
       }
     );
   };
+}
+
+/**
+ * The review is what follows the verdict line — everything before it is thinking.
+ *
+ * `run.output` is the harness's raw stdout, so it carries whatever the model said
+ * on its way to an answer: "Evidence confirmed.", "I have all evidence needed.",
+ * a draft findings list, "Writing the review now." Posting that verbatim buries
+ * the findings under the search that produced them.
+ *
+ * This cannot be fixed in the charter. A charter can forbid a preamble, and the
+ * model still emits one, because you cannot instruct a model not to think — only
+ * decline to publish the thinking. Measured on a real reviewer against a
+ * 150-word cap: 537 words, then 256 after the ban was sharpened, then 191, then
+ * 187 after the whole contract was moved to the top of the charter where it is
+ * read first. Stripping in code took the same reviewer to 153 on the next run.
+ * The findings were always inside budget; only the preamble was not.
+ *
+ * So the charter owns the SHAPE (which it gets right reliably) and the kit owns
+ * the BOUNDARY. Same reason `agents/review` strips its own trailing `READY`
+ * sentinel rather than trusting the model to omit it.
+ *
+ * Cuts at the LAST verdict line, not the first: a model that drafts its findings
+ * before writing them emits two, and the real review is the final one.
+ *
+ * A body with no verdict line at all means the model ignored the format; return
+ * it unchanged rather than nothing, because a malformed review still beats
+ * silence — for an advisory agent, silence reads as approval.
+ */
+export function reviewBody(output: string): string {
+  const text = (output ?? '').trim();
+  let start = -1;
+  for (const match of text.matchAll(/^\*\*Verdict:/gmu)) {
+    start = match.index ?? start;
+  }
+  return start >= 0 ? text.slice(start).trim() : text;
 }
 
 export function idempotencyMarker(lens: string, headSha: string): string {
