@@ -16,6 +16,7 @@ import {
   defineReviewPersona,
   prDiff,
   readPullRequest,
+  reviewBody,
   reviewInput
 } from './index.js';
 import { createReviewHandler } from './agent.js';
@@ -651,3 +652,59 @@ async function withRelayfileTransportEnv(
     }
   }
 }
+
+test('reviewBody strips the model preamble and keeps the review', () => {
+  // Shape observed in production: the harness stdout carries the model's
+  // thinking, then the review. Only the review should reach the PR.
+  const output = [
+    'Evidence confirmed. The 8 probe commits added only comment lines.',
+    'I have all evidence needed. Writing the review now.',
+    '',
+    '**Verdict: Blocker.** Second stat-math path outside lib/aggregates.ts.',
+    '',
+    '- **Blocker** — `lib/recentForm.ts:15` — duplicate math. Fix: use computeStandings.'
+  ].join('\n');
+
+  const body = reviewBody(output);
+  assert.ok(body.startsWith('**Verdict: Blocker.**'), 'must open on the verdict line');
+  assert.ok(!body.includes('Evidence confirmed'), 'preamble must be gone');
+  assert.ok(!body.includes('Writing the review now'), 'narration must be gone');
+  assert.ok(body.includes('lib/recentForm.ts:15'), 'findings must survive');
+});
+
+test('reviewBody cuts at the LAST verdict line so a drafted review loses to the real one', () => {
+  // A model that drafts before writing emits two verdict lines; the real
+  // review is the final one.
+  const output = [
+    '**Verdict: Note.** draft — I might downgrade this.',
+    'Actually, checking the published-only rule changes it.',
+    '**Verdict: Blocker.** ignores the published-only filter.'
+  ].join('\n');
+
+  assert.equal(reviewBody(output), '**Verdict: Blocker.** ignores the published-only filter.');
+});
+
+test('reviewBody passes through a body with no verdict line', () => {
+  // The model ignored the format. A malformed review still beats silence —
+  // for an advisory agent, silence reads as approval.
+  assert.equal(reviewBody('no verdict here, just prose'), 'no verdict here, just prose');
+  assert.equal(reviewBody('   '), '');
+  assert.equal(reviewBody(''), '');
+});
+
+test('reviewBody tolerates how the model bolds the verdict line', () => {
+  // The charter asks for one exact form and production emits it, but a strict
+  // pattern fails open in the worst way: an unmatched line publishes the whole
+  // preamble. Tolerate the variants LLMs actually drift to.
+  assert.equal(reviewBody('thinking\n**Verdict**: Blocker'), '**Verdict**: Blocker');
+  assert.equal(reviewBody('thinking\n**Verdict:** Blocker'), '**Verdict:** Blocker');
+  assert.equal(reviewBody('thinking\n**Verdict** : Blocker'), '**Verdict** : Blocker');
+  assert.equal(reviewBody('thinking\n**verdict:** Blocker'), '**verdict:** Blocker');
+  assert.equal(reviewBody('thinking\n**VERDICT**: Blocker'), '**VERDICT**: Blocker');
+});
+
+test('reviewBody ignores a verdict mentioned mid-line, not at a line start', () => {
+  // The ^ anchor is what keeps prose about a verdict from being mistaken for one.
+  const prose = 'I think the **Verdict:** below is too harsh, reconsidering.';
+  assert.equal(reviewBody(prose), prose);
+});
