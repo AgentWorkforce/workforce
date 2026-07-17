@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [4.1.27] - 2026-07-17
+
 ### Added
 
 - Add the reserved `[[NO_REPLY]]` harness contract for successful silent runs,
