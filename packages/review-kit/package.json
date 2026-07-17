@@ -1,6 +1,6 @@
 {
   "name": "@agentworkforce/review-kit",
-  "version": "4.1.31",
+  "version": "4.1.32",
   "private": false,
   "type": "module",
   "main": "dist/index.js",

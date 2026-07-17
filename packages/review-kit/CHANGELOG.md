@@ -4,6 +4,8 @@ All notable changes to `@agentworkforce/review-kit` will be documented in this f
 
 ## [Unreleased]
 
+## [4.1.32] - 2026-07-17
+
 ### Fixed
 
 - Skip non-pull-request events before requesting a gateway expansion, while
