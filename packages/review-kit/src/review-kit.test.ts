@@ -5,11 +5,12 @@ import { join } from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 import test from 'node:test';
 import { extractAgentSpec } from '@agentworkforce/deploy';
-import type {
-  HarnessRunArgs,
-  WorkforceCtx,
-  WorkforceEvent,
-  WritebackResult
+import {
+  envelopeToAgentEvent,
+  type HarnessRunArgs,
+  type WorkforceCtx,
+  type WorkforceEvent,
+  type WritebackResult
 } from '@agentworkforce/runtime';
 import {
   defineReviewAgent,
@@ -189,6 +190,74 @@ test('trap 6: a missing writeback receipt is logged as unconfirmed and never thr
     fixture.logs.some((entry) => entry.message === 'review-kit.delivery.unconfirmed'),
     true
   );
+});
+
+test('non-PR events skip before requesting an unavailable expansion', async () => {
+  const fixture = handlerFixture();
+  const event = envelopeToAgentEvent({
+    id: 'evt-manual',
+    workspace: 'workspace-1',
+    type: 'cron.tick',
+    occurredAt: '2026-07-17T15:18:00Z',
+    name: 'manual',
+    cron: 'manual'
+  });
+  assert.ok(event);
+
+  await assert.rejects(
+    () => event.expand('full'),
+    /expand\("full"\) is unavailable/u,
+    'the real cron event shape has no gateway expansion loader'
+  );
+  await assert.doesNotReject(() => fixture.handler(fixture.ctx, event));
+
+  assert.equal(fixture.harnessRuns(), 0);
+  assert.equal(fixture.writes.length, 0);
+  assert.deepEqual(fixture.logs.at(-1), {
+    level: 'info',
+    message: 'review-kit.skipped',
+    fields: {
+      lens: 'maintainability',
+      reason: 'non-pull-request-event',
+      eventType: 'cron.tick'
+    }
+  });
+});
+
+test('PR expansion failures still surface instead of being mistaken for non-PR events', async () => {
+  const fixture = handlerFixture();
+  const expansionFailure = new Error('github gateway expansion failed');
+  const event = {
+    type: 'github.pull_request.opened',
+    expand: async () => {
+      throw expansionFailure;
+    }
+  } as unknown as WorkforceEvent;
+
+  await assert.rejects(() => fixture.handler(fixture.ctx, event), expansionFailure);
+  assert.equal(fixture.logs.some((entry) => entry.message === 'review-kit.skipped'), false);
+  assert.equal(fixture.harnessRuns(), 0);
+  assert.equal(fixture.writes.length, 0);
+});
+
+test('expanded but malformed PR payloads retain the unreadable-pull-request guard', async () => {
+  const fixture = handlerFixture();
+
+  await assert.doesNotReject(() =>
+    fixture.handler(fixture.ctx, fixture.eventForData({ malformed: true }))
+  );
+
+  assert.equal(fixture.harnessRuns(), 0);
+  assert.equal(fixture.writes.length, 0);
+  assert.deepEqual(fixture.logs.at(-1), {
+    level: 'info',
+    message: 'review-kit.skipped',
+    fields: {
+      lens: 'maintainability',
+      reason: 'unreadable-pull-request',
+      keys: 'malformed'
+    }
+  });
 });
 
 test('plumbing: repository, label, and draft guards skip before requiring a mount', async () => {

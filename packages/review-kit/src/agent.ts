@@ -124,6 +124,15 @@ function createParsedReviewHandler(
       event: event.type
     });
 
+    if (!event.type.startsWith('github.pull_request.')) {
+      ctx.log?.('info', 'review-kit.skipped', {
+        lens: parsed.lens,
+        reason: 'non-pull-request-event',
+        eventType: event.type
+      });
+      return;
+    }
+
     const payload = (await event.expand('full')).data;
     const pullRequest = readPullRequest(payload);
     if (!pullRequest) {
