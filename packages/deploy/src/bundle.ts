@@ -422,7 +422,7 @@ async function readPackageRootMetadata(directory: string): Promise<PackageRootMe
 }
 
 function isValidPackageName(value: unknown): value is string {
-  return typeof value === 'string' && validatePackageName(value).validForNewPackages;
+  return typeof value === 'string' && validatePackageName(value).validForOldPackages;
 }
 
 function isExactPackageVersion(value: unknown): value is string {
