@@ -132,5 +132,5 @@ work is not claimed by this iteration.
 ## Delivery
 
 - Branch: `codex/issue-279-bundle-versions`
-- Commit: pending
-- Draft PR: pending
+- Implementation commit: `790ee7b` (`feat(deploy): record bundled package versions`)
+- Draft PR: https://github.com/AgentWorkforce/workforce/pull/280
