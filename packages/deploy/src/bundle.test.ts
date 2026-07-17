@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
+import { mkdir, mkdtemp, readFile, rm, symlink, writeFile } from 'node:fs/promises';
 import { createRequire } from 'node:module';
 import path from 'node:path';
 import os from 'node:os';
@@ -76,7 +76,8 @@ test('bundleStager produces an executable, importable bundle from a real onEvent
     assert.match(runnerSource, /WORKFORCE_AGENT_CONTEXT/);
     assert.match(runnerSource, /WORKFORCE_DEPLOYMENT_CONTEXT/);
     assert.match(runnerSource, /exported\.launchedBy/);
-    assert.match(runnerSource, /await startRunner\({ persona, agent, deployment, handler/);
+    assert.match(runnerSource, /packageJson\.bundleManifest/);
+    assert.match(runnerSource, /await startRunner\({ persona, agent, deployment, handler, bundleManifest/);
 
     // bundle output is ES module shape and references the runtime as external
     const bundleSource = await readFile(result.bundlePath, 'utf8');
@@ -86,7 +87,8 @@ test('bundleStager produces an executable, importable bundle from a real onEvent
     // package.json pins the exact installed runtime version — never a
     // wildcard a sandbox's npm install could silently satisfy with a
     // stale pre-baked/cached copy.
-    const generatedPackageJson = JSON.parse(await readFile(result.packageJsonPath, 'utf8'));
+    const generatedPackageJsonSource = await readFile(result.packageJsonPath, 'utf8');
+    const generatedPackageJson = JSON.parse(generatedPackageJsonSource);
     const runtimeDep = generatedPackageJson.dependencies['@agentworkforce/runtime'];
     const installedRuntimePackageJsonPath = require.resolve('@agentworkforce/runtime/package.json');
     const installedRuntimeVersion = JSON.parse(
@@ -94,6 +96,210 @@ test('bundleStager produces an executable, importable bundle from a real onEvent
     ).version;
     assert.equal(runtimeDep, installedRuntimeVersion);
     assert.notEqual(runtimeDep, '*');
+    assert.deepEqual(generatedPackageJson.bundleManifest, { schemaVersion: 1, packages: [] });
+    assert.equal(generatedPackageJsonSource.includes(dir), false, 'artifact metadata must not leak build paths');
+  } finally {
+    await rm(dir, { recursive: true, force: true });
+  }
+});
+
+test('bundleStager records only actual bundled package versions in deterministic order', async () => {
+  const dir = await mkdtemp(path.join(os.tmpdir(), 'wf-bundle-manifest-'));
+  try {
+    const personaPath = path.join(dir, 'persona.json');
+    const personaSpec = persona();
+    await writeFile(personaPath, JSON.stringify(personaSpec, null, 2), 'utf8');
+
+    await writePackage(dir, '@relayfile/relay-helpers', '0.4.9', 'export const relayVersion = "0.4.9";\n');
+    await writePackage(dir, 'alpha-bundled', '2.3.4', 'export const alpha = "alpha";\n');
+    await writePackage(dir, 'unused-declaration', '9.9.9', 'export const unused = true;\n');
+    await writeFile(
+      path.join(dir, 'agent.ts'),
+      [
+        "import { relayVersion } from '@relayfile/relay-helpers';",
+        "import { alpha } from 'alpha-bundled';",
+        'export default async function handler() {',
+        '  return `${relayVersion}:${alpha}`;',
+        '}',
+        ''
+      ].join('\n'),
+      'utf8'
+    );
+
+    const result = await bundleStager.stage({
+      personaPath,
+      persona: personaSpec,
+      outDir: path.join(dir, 'build')
+    });
+    const generatedPackageJsonSource = await readFile(result.packageJsonPath, 'utf8');
+    const generatedPackageJson = JSON.parse(generatedPackageJsonSource);
+
+    assert.deepEqual(generatedPackageJson.bundleManifest, {
+      schemaVersion: 1,
+      packages: [
+        { name: '@relayfile/relay-helpers', version: '0.4.9' },
+        { name: 'alpha-bundled', version: '2.3.4' }
+      ]
+    });
+    assert.equal(generatedPackageJsonSource.includes(dir), false, 'manifest must not leak build paths');
+    assert.equal(generatedPackageJson.dependencies['@agentworkforce/runtime'], resolveInstalledRuntimeVersion());
+  } finally {
+    await rm(dir, { recursive: true, force: true });
+  }
+});
+
+test('bundleStager resolves workspace and pnpm package symlinks', async () => {
+  const dir = await mkdtemp(path.join(os.tmpdir(), 'wf-bundle-workspace-'));
+  try {
+    const personaPath = path.join(dir, 'persona.json');
+    const personaSpec = persona();
+    await writeFile(personaPath, JSON.stringify(personaSpec, null, 2), 'utf8');
+
+    const workspacePackage = path.join(dir, 'packages', 'adapter-core');
+    await mkdir(workspacePackage, { recursive: true });
+    await writeFile(
+      path.join(workspacePackage, 'package.json'),
+      JSON.stringify({ name: '@relayfile/adapter-core', version: '0.5.7', type: 'module', main: 'index.js' }, null, 2),
+      'utf8'
+    );
+    await writeFile(path.join(workspacePackage, 'index.js'), 'export const adapterVersion = "0.5.7";\n', 'utf8');
+    const symlinkParent = path.join(dir, 'node_modules', '@relayfile');
+    await mkdir(symlinkParent, { recursive: true });
+    await symlink(workspacePackage, path.join(symlinkParent, 'adapter-core'), 'dir');
+
+    const pnpmPackage = path.join(
+      dir,
+      'node_modules',
+      '.pnpm',
+      '@relayfile+relay-helpers@0.4.9',
+      'node_modules',
+      '@relayfile',
+      'relay-helpers'
+    );
+    await mkdir(pnpmPackage, { recursive: true });
+    await writeFile(
+      path.join(pnpmPackage, 'package.json'),
+      JSON.stringify({ name: '@relayfile/relay-helpers', version: '0.4.9', type: 'module', main: 'index.js' }, null, 2),
+      'utf8'
+    );
+    await writeFile(path.join(pnpmPackage, 'index.js'), 'export const relayVersion = "0.4.9";\n', 'utf8');
+    await symlink(pnpmPackage, path.join(symlinkParent, 'relay-helpers'), 'dir');
+
+    await writeFile(
+      path.join(dir, 'agent.ts'),
+      [
+        "import { adapterVersion } from '@relayfile/adapter-core';",
+        "import { relayVersion } from '@relayfile/relay-helpers';",
+        'export default async function handler() {',
+        '  return `${adapterVersion}:${relayVersion}`;',
+        '}',
+        ''
+      ].join('\n'),
+      'utf8'
+    );
+
+    const result = await bundleStager.stage({
+      personaPath,
+      persona: personaSpec,
+      outDir: path.join(dir, 'build')
+    });
+    const generatedPackageJson = JSON.parse(await readFile(result.packageJsonPath, 'utf8'));
+
+    assert.deepEqual(generatedPackageJson.bundleManifest, {
+      schemaVersion: 1,
+      packages: [
+        { name: '@relayfile/adapter-core', version: '0.5.7' },
+        { name: '@relayfile/relay-helpers', version: '0.4.9' }
+      ]
+    });
+    const bundledSource = await readFile(result.bundlePath, 'utf8');
+    assert.match(bundledSource, /0\.5\.7/);
+  } finally {
+    await rm(dir, { recursive: true, force: true });
+  }
+});
+
+test('bundleStager fails closed without leaking paths when bundled package version metadata is absent', async () => {
+  const dir = await mkdtemp(path.join(os.tmpdir(), 'wf-bundle-versionless-'));
+  try {
+    const personaPath = path.join(dir, 'persona.json');
+    const personaSpec = persona();
+    await writeFile(personaPath, JSON.stringify(personaSpec, null, 2), 'utf8');
+    const versionlessPackage = path.join(dir, 'node_modules', 'versionless-package');
+    await mkdir(versionlessPackage, { recursive: true });
+    await writeFile(
+      path.join(versionlessPackage, 'package.json'),
+      JSON.stringify({ name: 'versionless-package', type: 'module', main: 'index.js' }, null, 2),
+      'utf8'
+    );
+    await writeFile(path.join(versionlessPackage, 'index.js'), 'export const versionless = true;\n', 'utf8');
+    await writeFile(
+      path.join(dir, 'agent.ts'),
+      "import { versionless } from 'versionless-package'; export default () => versionless;\n",
+      'utf8'
+    );
+
+    await assert.rejects(
+      () => bundleStager.stage({
+        personaPath,
+        persona: personaSpec,
+        outDir: path.join(dir, 'build')
+      }),
+      (error: unknown) => {
+        assert.ok(error instanceof Error);
+        assert.match(error.message, /bundled package "versionless-package" has no valid "version" metadata/);
+        assert.equal(error.message.includes(dir), false);
+        return true;
+      }
+    );
+  } finally {
+    await rm(dir, { recursive: true, force: true });
+  }
+});
+
+test('bundleStager preserves distinct versions of the same package from the actual bundle graph', async () => {
+  const dir = await mkdtemp(path.join(os.tmpdir(), 'wf-bundle-duplicates-'));
+  try {
+    const personaPath = path.join(dir, 'persona.json');
+    const personaSpec = persona();
+    await writeFile(personaPath, JSON.stringify(personaSpec, null, 2), 'utf8');
+    await writePackage(dir, '@relayfile/adapter-core', '0.5.1', 'export const rootAdapter = "0.5.1";\n');
+    await writePackage(
+      dir,
+      'duplicate-host',
+      '1.0.0',
+      "import { nestedAdapter } from '@relayfile/adapter-core'; export const nested = nestedAdapter;\n"
+    );
+    const hostRoot = path.join(dir, 'node_modules', 'duplicate-host');
+    await writePackage(
+      hostRoot,
+      '@relayfile/adapter-core',
+      '0.5.6',
+      'export const nestedAdapter = "0.5.6";\n'
+    );
+    await writeFile(
+      path.join(dir, 'agent.ts'),
+      [
+        "import { rootAdapter } from '@relayfile/adapter-core';",
+        "import { nested } from 'duplicate-host';",
+        'export default async function handler() { return `${rootAdapter}:${nested}`; }',
+        ''
+      ].join('\n'),
+      'utf8'
+    );
+
+    const result = await bundleStager.stage({
+      personaPath,
+      persona: personaSpec,
+      outDir: path.join(dir, 'build')
+    });
+    const generatedPackageJson = JSON.parse(await readFile(result.packageJsonPath, 'utf8'));
+
+    assert.deepEqual(generatedPackageJson.bundleManifest.packages, [
+      { name: '@relayfile/adapter-core', version: '0.5.1' },
+      { name: '@relayfile/adapter-core', version: '0.5.6' },
+      { name: 'duplicate-host', version: '1.0.0' }
+    ]);
   } finally {
     await rm(dir, { recursive: true, force: true });
   }
@@ -226,3 +432,24 @@ test('runtimeContextEnv defaults to clock when the agent has no integration trig
   });
   assert.equal(JSON.parse(env.WORKFORCE_DEPLOYMENT_CONTEXT).triggerKind, 'clock');
 });
+
+async function writePackage(
+  root: string,
+  name: string,
+  version: string,
+  source: string
+): Promise<void> {
+  const packageDir = path.join(root, 'node_modules', ...name.split('/'));
+  await mkdir(packageDir, { recursive: true });
+  await writeFile(
+    path.join(packageDir, 'package.json'),
+    JSON.stringify({ name, version, type: 'module', main: 'index.js' }, null, 2),
+    'utf8'
+  );
+  await writeFile(path.join(packageDir, 'index.js'), source, 'utf8');
+}
+
+function resolveInstalledRuntimeVersion(): string {
+  const installedRuntimePackageJsonPath = require.resolve('@agentworkforce/runtime/package.json');
+  return require(installedRuntimePackageJsonPath).version as string;
+}

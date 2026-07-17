@@ -7,6 +7,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- Record exact versions for package inputs bundled into `agent.bundle.mjs` in
+  a deterministic, path-free `package.json` manifest (#279).
+
 ## [4.1.26] - 2026-07-16
 
 ### Fixed

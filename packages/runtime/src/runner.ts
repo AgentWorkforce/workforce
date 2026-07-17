@@ -40,6 +40,12 @@ export interface StartRunnerOptions {
    */
   agentSpec?: AgentSpec;
   /**
+   * Exact package versions whose source contributed bytes to the deployed
+   * agent bundle. Generated deploy runners read this from package.json and
+   * pass it through unchanged for startup observability.
+   */
+  bundleManifest?: BundleManifest;
+  /**
    * Workspace identifier. Resolved from `WORKFORCE_WORKSPACE_ID` env when
    * not supplied. The runner refuses to start without one.
    */
@@ -63,6 +69,16 @@ export interface StartRunnerOptions {
    * otherwise cwd).
    */
   harnessRunner?: (args: HarnessRunArgs) => Promise<HarnessRunResult>;
+}
+
+export interface BundlePackageVersion {
+  readonly name: string;
+  readonly version: string;
+}
+
+export interface BundleManifest {
+  readonly schemaVersion: 1;
+  readonly packages: readonly BundlePackageVersion[];
 }
 
 /**
@@ -138,7 +154,8 @@ export async function startRunner(options: StartRunnerOptions): Promise<void> {
     workspaceId,
     schedules: options.agentSpec?.schedules?.map((s) => s.name) ?? [],
     triggers: options.agentSpec?.triggers ? Object.keys(options.agentSpec.triggers) : [],
-    integrations: options.persona.integrations ? Object.keys(options.persona.integrations) : []
+    integrations: options.persona.integrations ? Object.keys(options.persona.integrations) : [],
+    ...(options.bundleManifest ? { bundleManifest: options.bundleManifest } : {})
   });
 
   const recorder = getTrajectoryRecorder(ctx);

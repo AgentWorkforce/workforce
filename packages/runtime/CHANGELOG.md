@@ -7,6 +7,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- Include the deployed bundle package manifest in structured `runner.started`
+  evidence (#279).
+
 ## [4.1.26] - 2026-07-16
 
 ### Fixed

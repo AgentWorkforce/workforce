@@ -101,6 +101,34 @@ test('startRunner dispatches a cron envelope to the handler', async () => {
   assert.ok(logs.find((l) => l.message === 'runner.handler.ok'));
 });
 
+test('startRunner surfaces the supplied bundle manifest in runner.started structured evidence', async () => {
+  const logs: Array<{ level: string; message: string; attrs?: Record<string, unknown> }> = [];
+  const bundleManifest = {
+    schemaVersion: 1 as const,
+    packages: [
+      { name: '@relayfile/adapter-core', version: '0.5.7' },
+      { name: '@relayfile/relay-helpers', version: '0.4.9' }
+    ]
+  };
+
+  await startRunner({
+    persona,
+    agent: runtimeAgent,
+    deployment: runtimeDeployment,
+    workspaceId: 'ws-test',
+    handler: handler(async () => {}),
+    bundleManifest,
+    subsystems: {
+      sandbox: stubSandbox,
+      log: (level, message, attrs) => logs.push({ level, message, attrs })
+    },
+    envelopes: streamOf([])
+  });
+
+  const started = logs.find((entry) => entry.message === 'runner.started');
+  assert.deepEqual(started?.attrs?.bundleManifest, bundleManifest);
+});
+
 test('startRunner logs and continues when the handler throws', async () => {
   const logs: Array<{ level: string; message: string }> = [];
   let invocations = 0;
