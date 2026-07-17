@@ -4,6 +4,12 @@ All notable changes to `@agentworkforce/review-kit` will be documented in this f
 
 ## [Unreleased]
 
+## [4.1.30] - 2026-07-17
+
+### Added
+
+- **Strip the model's preamble from the review** (#287)
+
 ## [4.1.29] - 2026-07-17
 
 ### Added
