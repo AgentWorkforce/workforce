@@ -81,6 +81,17 @@ function tightenWorkspaceServiceAccountName(node) {
 }
 tightenWorkspaceServiceAccountName(schema);
 
+// httpRead grants live network access during local preview, so it is the
+// deliberately closed exception to the otherwise extension-safe persona
+// records. Keep the generated contract aligned with parse.ts's allowlists.
+for (const definitionName of [
+  'PersonaHttpReadCapability',
+  'PersonaHttpReadRule'
+]) {
+  const definition = schema.definitions?.[definitionName];
+  if (definition) definition.additionalProperties = false;
+}
+
 // Post-process: tighten the persona `tags[]` items to match parseTags
 // (non-empty, ≤64 chars). The TS type widens to `readonly string[]` after
 // cloud#553 — the generator emits a bare `{ "type": "string" }` because

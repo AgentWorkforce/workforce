@@ -85,12 +85,17 @@ tests 2; pass 2; fail 0
 
 ## Full verification evidence
 
+Before final delivery, current `origin/main` at
+`e1f60c4c653b13c75e255f3d9e43a9ec08386bad` was merged into the draft branch
+so GitHub could construct a conflict-free pull-request merge ref. The gates
+below are the final post-integration results.
+
 ```bash
 pnpm --filter @agentworkforce/deploy test
 ```
 
 ```text
-tests 238; pass 238; fail 0
+tests 242; pass 242; fail 0
 ```
 
 This is the full deploy suite, including cloud and sandbox artifact transport.
@@ -100,7 +105,7 @@ pnpm --filter @agentworkforce/runtime exec tsc -p tsconfig.json && node --test p
 ```
 
 ```text
-tests 13; pass 13; fail 0
+tests 14; pass 14; fail 0
 ```
 
 The runner suite includes exact structured
@@ -114,9 +119,9 @@ git diff --check
 ```
 
 ```text
-build: passed for 19 of 20 workspace projects
-lint: passed for 19 of 20 workspace projects
-typecheck: passed for 19 of 20 workspace projects and examples/tsconfig.json
+build: passed for 20 of 21 workspace projects
+lint: passed for 20 of 21 workspace projects
+typecheck: passed for 20 of 21 workspace projects and examples/tsconfig.json
 git diff --check: passed
 ```
 

@@ -188,6 +188,19 @@ importers:
 
   packages/personas-core: {}
 
+  packages/review-kit:
+    dependencies:
+      '@agentworkforce/persona-kit':
+        specifier: workspace:*
+        version: link:../persona-kit
+      '@agentworkforce/runtime':
+        specifier: workspace:*
+        version: link:../runtime
+    devDependencies:
+      '@agentworkforce/deploy':
+        specifier: workspace:*
+        version: link:../deploy
+
   packages/runtime:
     dependencies:
       '@agent-assistant/proactive':

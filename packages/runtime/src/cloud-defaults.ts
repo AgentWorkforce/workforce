@@ -25,6 +25,7 @@ import {
 import { createDefaultLlm } from './cloud-llm.js';
 import { SandboxNotAvailableError } from './errors.js';
 import { spawnAndCapture, spawnNonInteractiveAndCapture } from './harness-process.js';
+import { appendNoReplyPromptContract } from './no-reply.js';
 import type {
   FilesContext,
   HarnessRunArgs,
@@ -497,7 +498,9 @@ function createProcessHarnessRunner(args: CloudDefaultOptions & {
       args.log('warn', 'harness.config.dropped', { warning });
     }
 
-    const renderedSystemPrompt = renderPersonaInputs(personaSystemPrompt, inputResolution.values);
+    const renderedSystemPrompt = appendNoReplyPromptContract(
+      renderPersonaInputs(personaSystemPrompt, inputResolution.values)
+    );
     const cwd = resolveWorkspacePath(args.workspaceRoot, run.cwd ?? args.workspaceRoot);
     await assertDirectory(cwd);
     const task = run.prompt;

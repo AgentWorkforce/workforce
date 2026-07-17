@@ -216,20 +216,10 @@ let candidate;
 let agentSpec;
 if (exported && exported.__workforceAgent) {
   candidate = exported.handler;
-  agentSpec = {
-    ...(exported.launchedBy !== undefined ? { launchedBy: exported.launchedBy } : {}),
-    ...(exported.triggers ? { triggers: exported.triggers } : {}),
-    ...(exported.schedules ? { schedules: exported.schedules } : {}),
-    ...(exported.watch ? { watch: exported.watch } : {})
-  };
+  agentSpec = projectAgentSpec(exported);
 } else if (exported && typeof exported.handler === 'function') {
   candidate = exported.handler;
-  agentSpec = {
-    ...(exported.launchedBy !== undefined ? { launchedBy: exported.launchedBy } : {}),
-    ...(exported.triggers ? { triggers: exported.triggers } : {}),
-    ...(exported.schedules ? { schedules: exported.schedules } : {}),
-    ...(exported.watch ? { watch: exported.watch } : {})
-  };
+  agentSpec = projectAgentSpec(exported);
 } else {
   candidate = exported;
 }
@@ -239,6 +229,18 @@ if (typeof candidate !== 'function') {
   );
 }
 const handler = candidate.__workforceHandler ? candidate : wrapHandler(candidate);
+
+function projectAgentSpec(value) {
+  const spec = { ...value };
+  delete spec.handler;
+  delete spec.__workforceAgent;
+  // In a single-file agent, root fields not belonging to a listener are
+  // persona-owned and already appear in persona.json. Removing those keys
+  // keeps the split form extension-safe without duplicating combined persona
+  // extensions into the runtime agent block.
+  for (const key of Object.keys(persona)) delete spec[key];
+  return spec;
+}
 
 const agent = readRuntimeContext('WORKFORCE_AGENT_CONTEXT');
 const deployment = readRuntimeContext('WORKFORCE_DEPLOYMENT_CONTEXT');

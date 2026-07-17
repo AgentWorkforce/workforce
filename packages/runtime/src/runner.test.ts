@@ -283,12 +283,53 @@ test('cloud harness runner materializes AGENTS.md for grok personas', async () =
     ]);
     assert.equal(parsed.args.at(-2), '--prompt-file');
     assert.equal(parsed.args.at(-1), parsed.promptPath);
-    assert.equal(parsed.prompt, 'Grok system prompt\n\nUser task:\nsay hello');
+    assert.equal(
+      parsed.prompt,
+      'Grok system prompt\n\nWhen no visible reply is useful, make the final message exactly [[NO_REPLY]].\n\nUser task:\nsay hello'
+    );
     await assert.rejects(() => readFile(parsed.promptPath, 'utf8'), { code: 'ENOENT' });
     assert.equal(parsed.agents, 'Grok agents sidecar\n');
     assert.ok(logs.find((l) => l.message === 'harness.sidecar.materialized'));
   } finally {
     restoreEnv(envSnapshot);
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
+test('cloud harness runner injects the no-reply contract into opencode config', async () => {
+  const root = await mkdtemp(path.join(os.tmpdir(), 'workforce-opencode-cloud-'));
+  const binDir = path.join(root, 'bin');
+  const capturePath = path.join(root, 'opencode-capture.json');
+  await writeArgCaptureHarness(binDir, 'opencode', capturePath);
+
+  const defaults = createCloudRuntimeDefaults({
+    persona: {
+      ...persona,
+      harness: 'opencode',
+      model: 'opencode/minimax-m2.5',
+      systemPrompt: 'OpenCode system prompt'
+    },
+    agent: runtimeAgent,
+    deployment: runtimeDeployment,
+    workspaceId: 'ws-test',
+    log: () => {},
+    env: {
+      PATH: `${binDir}${path.delimiter}${process.env.PATH ?? ''}`,
+      WORKFORCE_SANDBOX_ROOT: root
+    }
+  });
+
+  try {
+    const result = await defaults.harnessRunner({ prompt: 'say hello' });
+    assert.equal(result.exitCode, 0);
+    const config = JSON.parse(await readFile(path.join(root, 'opencode.json'), 'utf8')) as {
+      agent: Record<string, { prompt: string }>;
+    };
+    assert.equal(
+      config.agent.demo.prompt,
+      'OpenCode system prompt\n\nWhen no visible reply is useful, make the final message exactly [[NO_REPLY]].'
+    );
+  } finally {
     await rm(root, { recursive: true, force: true });
   }
 });
@@ -498,7 +539,10 @@ test('cloud default codex harness injects agent-relay MCP args from broker helpe
       captured.argv.slice(11, -1)
     );
     assert.equal(captured.argv.at(-1), '-');
-    assert.equal(captured.stdin, 'coordinate with the team\n\nUser task:\ndo the work');
+    assert.equal(
+      captured.stdin,
+      'coordinate with the team\n\nWhen no visible reply is useful, make the final message exactly [[NO_REPLY]].\n\nUser task:\ndo the work'
+    );
     assert.equal(
       brokerCaptured.argv[brokerCaptured.argv.indexOf('--workspaces-json') + 1],
       '{"workspaces":[{"id":"ws-relay"}]}'
@@ -695,6 +739,12 @@ test('cloud default claude harness merges agent-relay MCP config from broker hel
     assert.ok(captured.argv.includes('--output-format'));
     assert.notEqual(captured.argv.at(-1), 'do the work');
     assert.equal(captured.stdin, 'do the work');
+    const systemPromptIdx = captured.argv.indexOf('--append-system-prompt');
+    assert.notEqual(systemPromptIdx, -1);
+    assert.equal(
+      captured.argv[systemPromptIdx + 1],
+      'coordinate with the team\n\nWhen no visible reply is useful, make the final message exactly [[NO_REPLY]].'
+    );
 
     const mcpConfigIdx = captured.argv.indexOf('--mcp-config');
     const payload = JSON.parse(captured.argv[mcpConfigIdx + 1]) as {

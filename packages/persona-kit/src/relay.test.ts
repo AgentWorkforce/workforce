@@ -11,15 +11,47 @@ test('parseRelay accepts the boolean shorthand', () => {
 
 test('parseRelay parses and normalizes the object form', () => {
   const r = parseRelay(
-    { enabled: true, agentName: ' granola ', channels: ['#eng', 'eng', 'ops'], inbox: ['@self'] },
+    {
+      enabled: true,
+      agentName: ' granola ',
+      channels: ['#eng', 'eng', 'ops'],
+      inbox: ['@self'],
+      futureDeliveryPolicy: { durability: 'persisted' }
+    },
     'p.relay'
   );
   assert.deepEqual(r, {
     enabled: true,
     agentName: 'granola',
     channels: ['#eng', 'eng', 'ops'],
-    inbox: ['@self']
+    inbox: ['@self'],
+    futureDeliveryPolicy: { durability: 'persisted' }
   });
+});
+
+test('parsePersonaSpec forwards extensions across other open record families', () => {
+  const spec = parsePersonaSpec(
+    {
+      id: 'extension-safe',
+      intent: 'documentation',
+      description: 'x',
+      onEvent: './agent.ts',
+      skills: [{
+        id: 'docs',
+        source: 'https://example.com/docs',
+        description: 'read docs',
+        futureSkillPolicy: 'verified'
+      }],
+      harnessSettings: {
+        reasoning: 'medium',
+        timeoutSeconds: 300,
+        futureHarnessPolicy: { tenancy: 'workspace' }
+      }
+    },
+    'documentation'
+  );
+  assert.deepEqual(spec.harnessSettings.futureHarnessPolicy, { tenancy: 'workspace' });
+  assert.equal(spec.skills[0]?.futureSkillPolicy, 'verified');
 });
 
 test('parseRelay rejects malformed shapes', () => {

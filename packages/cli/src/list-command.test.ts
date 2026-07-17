@@ -41,6 +41,7 @@ test('formatDeploymentsTable renders agent rows', () => {
       deployedName: 'Weekly Digest',
       status: 'active',
       createdAt: '2026-05-13T09:11:00.000Z',
+      updatedAt: '2026-07-17T08:45:00.000Z',
       lastUsedAt: null,
       scheduleIds: ['sched-1'],
       deployedByUserId: 'user-1'
@@ -50,6 +51,24 @@ test('formatDeploymentsTable renders agent rows', () => {
   assert.match(out, /b2f1\.\.\.e8c2/);
   assert.match(out, /Weekly Digest/);
   assert.doesNotMatch(out, /7133e815/);
+  assert.match(out, /2026-07-17 08:45 UTC/);
+  assert.doesNotMatch(out, /2026-05-13 09:11 UTC/);
+});
+
+test('formatDeploymentsTable falls back to createdAt when updatedAt is absent', () => {
+  const out = formatDeploymentsTable([
+    {
+      agentId: 'agent-1',
+      personaId: 'persona-1',
+      personaSlug: 'demo',
+      deployedName: 'Demo',
+      status: 'active',
+      createdAt: '2026-05-13T09:11:00.000Z',
+      lastUsedAt: null,
+      scheduleIds: [],
+      deployedByUserId: 'user-1'
+    }
+  ]);
   assert.match(out, /2026-05-13 09:11 UTC/);
 });
 
