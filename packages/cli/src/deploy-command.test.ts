@@ -3,9 +3,11 @@ import assert from 'node:assert/strict';
 import path from 'node:path';
 import {
   configureDeployCommandForTest,
+  formatDeployFailure,
   parseDeployArgs,
   runLogin,
-  runLogout
+  runLogout,
+  withDefaultDeployMode
 } from './deploy-command.js';
 import { createBufferedIO } from '@agentworkforce/deploy';
 
@@ -53,6 +55,31 @@ function trapExit(throwOnExit = true): ExitTrap {
   };
   return trap;
 }
+
+test('authored-source deploy failures identify the selected CLI version and source', () => {
+  const message = formatDeployFailure(
+    '/tmp/review/persona.ts',
+    new SyntaxError('Unexpected token e in JSON at position 0')
+  );
+
+  assert.match(message, /agentworkforce deploy failed: Unexpected token e in JSON/);
+  assert.match(message, /authored-source CLI: @agentworkforce\/cli \d+\.\d+\.\d+ from /);
+  assert.match(message, /packages\/cli\/package\.json/);
+  assert.match(message, /stale agentworkforce binary is ahead on PATH/);
+  assert.match(message, /command -v agentworkforce && agentworkforce --version/);
+  assert.match(message, /npm install -g agentworkforce@latest/);
+});
+
+test('JSON deploy failures do not imply that the selected CLI is stale', () => {
+  const message = formatDeployFailure('/tmp/review/persona.json', new Error('invalid intent'));
+  assert.equal(message, 'agentworkforce deploy failed: invalid intent');
+});
+
+test('non-interactive deploy without --mode defaults to cloud (#158)', () => {
+  const parsed = parseDeployArgs(['/tmp/review/persona.ts', '--no-prompt']);
+  assert.equal(parsed.mode, undefined);
+  assert.equal(withDefaultDeployMode(parsed).mode, 'cloud');
+});
 
 test('runLogin uses cloud SDK auth, picks a workspace, and pins the canonical relay workspace key', async () => {
   const calls: string[] = [];

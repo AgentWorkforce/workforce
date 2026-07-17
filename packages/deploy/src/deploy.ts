@@ -71,6 +71,8 @@ export interface DeployResolvers {
   integrationOptions?: IntegrationOptionsResolver;
   bundle?: BundleStager;
   modes?: Partial<Record<DeployMode, ModeLauncher>>;
+  /** Deterministic override for transient integration GET retry delays. */
+  networkRetrySleep?: (ms: number) => Promise<void>;
 }
 
 export interface CloudAuthRecoveryResolver {
@@ -226,7 +228,8 @@ export async function deploy(opts: DeployOptions, resolvers: DeployResolvers = {
       ? relayfileCatalogConfigKeyResolver({
           apiUrl: normalizeCloudUrl(cloudUrl ?? defaultApiUrl()),
           workspaceToken: () => activeToken,
-          io
+          io,
+          ...(resolvers.networkRetrySleep ? { sleep: resolvers.networkRetrySleep } : {})
         })
       : undefined);
 
@@ -258,7 +261,8 @@ export async function deploy(opts: DeployOptions, resolvers: DeployResolvers = {
       workspace,
       token: () => activeToken,
       cloudUrl,
-      io
+      io,
+      ...(resolvers.networkRetrySleep ? { sleep: resolvers.networkRetrySleep } : {})
     }),
     ...(resolvers.authRecovery
       ? {
@@ -560,12 +564,14 @@ function defaultIntegrationResolver(args: {
   token: string | (() => string | Promise<string>);
   cloudUrl?: string;
   io: DeployIO;
+  sleep?: (ms: number) => Promise<void>;
 }): IntegrationConnectResolver {
   const relayfile = relayfileIntegrationResolver({
     apiUrl: normalizeCloudUrl(args.cloudUrl ?? defaultApiUrl()),
     workspaceId: args.workspace,
     workspaceToken: args.token,
-    io: args.io
+    io: args.io,
+    ...(args.sleep ? { sleep: args.sleep } : {})
   });
   if (args.mode === 'cloud') return relayfile;
 

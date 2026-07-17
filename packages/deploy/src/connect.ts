@@ -147,6 +147,7 @@ export function relayfileIntegrationResolver(opts: {
 
       const status = await fetchIntegrationStatusForScope({
         fetchImpl,
+        retrySleep: sleepImpl,
         apiUrl,
         token,
         workspaceId,
@@ -166,6 +167,7 @@ const fallbackSource = workspaceFallbackSource(
 
       const fallbackStatus = await fetchIntegrationStatusForScope({
         fetchImpl,
+        retrySleep: sleepImpl,
         apiUrl,
         token,
         workspaceId,
@@ -279,6 +281,7 @@ const fallbackSource = workspaceFallbackSource(
         const pollToken = await resolveWorkspaceToken(opts.workspaceToken);
         const statusArgs = {
           fetchImpl,
+          retrySleep: sleepImpl,
           apiUrl,
           token: pollToken,
           workspaceId,
@@ -995,16 +998,31 @@ async function requestJson(
   fetchImpl: typeof fetch,
   url: string,
   token: string,
-  init: RequestInit = {}
+  init: RequestInit = {},
+  retrySleep?: (ms: number) => Promise<void>
 ): Promise<unknown> {
-  const res = await fetchImpl(url, {
+  const requestInit: RequestInit = {
     ...init,
     headers: {
       authorization: `Bearer ${token}`,
       'content-type': 'application/json',
       ...(init.headers ?? {})
     }
-  });
+  };
+  let res: Response | undefined;
+  const retryDelays = retrySleep && (init.method === undefined || init.method === 'GET')
+    ? [100, 300]
+    : [];
+  for (let attempt = 0; ; attempt += 1) {
+    try {
+      res = await fetchImpl(url, requestInit);
+      break;
+    } catch (error) {
+      const delay = retryDelays[attempt];
+      if (delay === undefined || !isTransientFetchFailure(error)) throw error;
+      await retrySleep!(delay);
+    }
+  }
   if (res.status === 401) {
     throw cloudRequestError(
       'cloud integration request failed: unauthorized. Your active workspace session is invalid or expired. Run `agentworkforce login --workspace <id-or-slug>` to refresh, then retry.',
@@ -1032,6 +1050,22 @@ async function requestJson(
     throw cloudRequestError(`cloud integration request failed: ${res.status} ${body}`.trim(), res.status);
   }
   return await res.json();
+}
+
+function isTransientFetchFailure(error: unknown): boolean {
+  if (!(error instanceof TypeError)) return false;
+  if (/fetch failed|network|socket|terminated/i.test(error.message)) return true;
+  const code = (error.cause as { code?: unknown } | undefined)?.code;
+  return typeof code === 'string' && [
+    'EAI_AGAIN',
+    'ECONNRESET',
+    'ECONNREFUSED',
+    'ENETUNREACH',
+    'ENOTFOUND',
+    'ETIMEDOUT',
+    'UND_ERR_CONNECT_TIMEOUT',
+    'UND_ERR_SOCKET'
+  ].includes(code);
 }
 
 function isIntegrationAuthFailure(message: string): boolean {
@@ -1063,6 +1097,7 @@ async function resolveWorkspaceToken(token: string | (() => string | Promise<str
  */
 async function fetchIntegrationsForScope(args: {
   fetchImpl: typeof fetch;
+  retrySleep?: (ms: number) => Promise<void>;
   apiUrl: string;
   token: string;
   workspaceId: string;
@@ -1072,7 +1107,7 @@ async function fetchIntegrationsForScope(args: {
   if (args.source.kind === 'deployer_user') {
     const url = `${args.apiUrl}/api/v1/me/integrations`;
     try {
-      return await requestJson(args.fetchImpl, url, args.token);
+      return await requestJson(args.fetchImpl, url, args.token, {}, args.retrySleep);
     } catch (err) {
       // Only fall back when the endpoint itself is missing (older cloud that
       // hasn't shipped cloud#988). Any other failure — auth, 5xx, network —
@@ -1087,7 +1122,9 @@ async function fetchIntegrationsForScope(args: {
         return await requestJson(
           args.fetchImpl,
           `${args.apiUrl}/api/v1/workspaces/${encodeURIComponent(args.workspaceId)}/integrations`,
-          args.token
+          args.token,
+          {},
+          args.retrySleep
         );
       }
       throw err;
@@ -1096,12 +1133,15 @@ async function fetchIntegrationsForScope(args: {
   return await requestJson(
     args.fetchImpl,
     `${args.apiUrl}/api/v1/workspaces/${encodeURIComponent(args.workspaceId)}/integrations`,
-    args.token
+    args.token,
+    {},
+    args.retrySleep
   );
 }
 
 async function fetchIntegrationStatusForScope(args: {
   fetchImpl: typeof fetch;
+  retrySleep?: (ms: number) => Promise<void>;
   apiUrl: string;
   token: string;
   workspaceId: string;
@@ -1119,7 +1159,7 @@ async function fetchIntegrationStatusForScope(args: {
     url.searchParams.set('serviceAccountName', args.source.name);
   }
   try {
-    return await requestJson(args.fetchImpl, url.toString(), args.token);
+    return await requestJson(args.fetchImpl, url.toString(), args.token, {}, args.retrySleep);
   } catch (err) {
     if (isCloudRequestError(err) && (err.status === 404 || err.status === 405)) {
       args.io?.warn?.(
@@ -1283,14 +1323,22 @@ export function relayfileCatalogConfigKeyResolver(opts: {
   workspaceToken: string | (() => string | Promise<string>);
   fetch?: typeof fetch;
   io?: Pick<DeployIO, 'warn'>;
+  sleep?: (ms: number) => Promise<void>;
 }): ProviderConfigKeyResolver {
   const fetchImpl = opts.fetch ?? fetch;
+  const sleepImpl = opts.sleep ?? ((ms: number) => new Promise<void>((resolve) => setTimeout(resolve, ms)));
   const apiUrl = opts.apiUrl.replace(/\/+$/, '');
   let cache: Promise<Map<string, string>> | null = null;
 
   const load = async (): Promise<Map<string, string>> => {
     const token = await resolveWorkspaceToken(opts.workspaceToken);
-    const body = await requestJson(fetchImpl, `${apiUrl}/api/v1/integrations/catalog`, token);
+    const body = await requestJson(
+      fetchImpl,
+      `${apiUrl}/api/v1/integrations/catalog`,
+      token,
+      {},
+      sleepImpl
+    );
     const entries = Array.isArray(body)
       ? body
       : body && typeof body === 'object' && Array.isArray((body as { providers?: unknown }).providers)
