@@ -219,6 +219,146 @@ test('bundleStager resolves workspace and pnpm package symlinks', async () => {
   }
 });
 
+test('bundleStager fails closed for a workspace symlink whose target lacks package metadata', async () => {
+  const dir = await mkdtemp(path.join(os.tmpdir(), 'wf-bundle-missing-workspace-'));
+  try {
+    const personaPath = path.join(dir, 'persona.json');
+    const personaSpec = persona();
+    await writeFile(personaPath, JSON.stringify(personaSpec, null, 2), 'utf8');
+    await writeFile(
+      path.join(dir, 'package.json'),
+      JSON.stringify({ name: 'author-project', version: '1.0.0', type: 'module' }, null, 2),
+      'utf8'
+    );
+
+    const workspacePackage = path.join(dir, 'packages', 'missing-workspace');
+    await mkdir(workspacePackage, { recursive: true });
+    await writeFile(
+      path.join(workspacePackage, 'index.js'),
+      'export const workspaceMarker = "missing-workspace-marker";\n',
+      'utf8'
+    );
+    const nodeModules = path.join(dir, 'node_modules');
+    await mkdir(nodeModules, { recursive: true });
+    await symlink(workspacePackage, path.join(nodeModules, 'missing-workspace'), 'dir');
+    await writeFile(
+      path.join(dir, 'agent.ts'),
+      "import { workspaceMarker } from 'missing-workspace'; export default () => workspaceMarker;\n",
+      'utf8'
+    );
+
+    await assert.rejects(
+      () => bundleStager.stage({
+        personaPath,
+        persona: personaSpec,
+        outDir: path.join(dir, 'build-missing')
+      }),
+      (error: unknown) => {
+        assert.ok(error instanceof Error);
+        assert.match(
+          error.message,
+          /bundled package "missing-workspace" has no valid package\.json metadata/
+        );
+        assert.equal(error.message.includes(dir), false, 'failure must not leak the project path');
+        assert.equal(error.message.includes(workspacePackage), false, 'failure must not leak the target path');
+        return true;
+      }
+    );
+
+    await writeFile(path.join(workspacePackage, 'package.json'), '{ not valid json', 'utf8');
+    await assert.rejects(
+      () => bundleStager.stage({
+        personaPath,
+        persona: personaSpec,
+        outDir: path.join(dir, 'build-invalid')
+      }),
+      (error: unknown) => {
+        assert.ok(error instanceof Error);
+        assert.equal(
+          error.message,
+          'bundle: bundled package "missing-workspace" has no valid package.json metadata'
+        );
+        assert.equal(error.message.includes(dir), false, 'failure must not leak the project path');
+        assert.equal(error.message.includes(workspacePackage), false, 'failure must not leak the target path');
+        return true;
+      }
+    );
+
+    await writeFile(
+      path.join(workspacePackage, 'package.json'),
+      JSON.stringify(
+        { name: 'missing-workspace', version: '2.4.6', type: 'module', main: 'index.js' },
+        null,
+        2
+      ),
+      'utf8'
+    );
+    const result = await bundleStager.stage({
+      personaPath,
+      persona: personaSpec,
+      outDir: path.join(dir, 'build-valid')
+    });
+    const generatedPackageJson = JSON.parse(await readFile(result.packageJsonPath, 'utf8'));
+    assert.deepEqual(generatedPackageJson.bundleManifest.packages, [
+      { name: 'missing-workspace', version: '2.4.6' }
+    ]);
+    assert.match(await readFile(result.bundlePath, 'utf8'), /missing-workspace-marker/);
+  } finally {
+    await rm(dir, { recursive: true, force: true });
+  }
+});
+
+test('bundleStager never attributes a metadata-less symlink target to an unrelated ancestor package', async () => {
+  const dir = await mkdtemp(path.join(os.tmpdir(), 'wf-bundle-unrelated-ancestor-'));
+  try {
+    const personaPath = path.join(dir, 'persona.json');
+    const personaSpec = persona();
+    await writeFile(personaPath, JSON.stringify(personaSpec, null, 2), 'utf8');
+
+    const unrelatedAncestor = path.join(dir, 'vendor', 'unrelated-ancestor');
+    const dependencyTarget = path.join(unrelatedAncestor, 'packages', 'linked-dependency');
+    await mkdir(dependencyTarget, { recursive: true });
+    await writeFile(
+      path.join(unrelatedAncestor, 'package.json'),
+      JSON.stringify({ name: 'unrelated-ancestor', version: '9.9.9', type: 'module' }, null, 2),
+      'utf8'
+    );
+    await writeFile(
+      path.join(dependencyTarget, 'index.js'),
+      'export const linkedMarker = "linked-dependency-marker";\n',
+      'utf8'
+    );
+    const nodeModules = path.join(dir, 'node_modules');
+    await mkdir(nodeModules, { recursive: true });
+    await symlink(dependencyTarget, path.join(nodeModules, 'linked-dependency'), 'dir');
+    await writeFile(
+      path.join(dir, 'agent.ts'),
+      "import { linkedMarker } from 'linked-dependency'; export default () => linkedMarker;\n",
+      'utf8'
+    );
+
+    await assert.rejects(
+      () => bundleStager.stage({
+        personaPath,
+        persona: personaSpec,
+        outDir: path.join(dir, 'build')
+      }),
+      (error: unknown) => {
+        assert.ok(error instanceof Error);
+        assert.match(
+          error.message,
+          /bundled package "linked-dependency" has no valid package\.json metadata/
+        );
+        assert.equal(error.message.includes('unrelated-ancestor'), false);
+        assert.equal(error.message.includes(dir), false);
+        return true;
+      }
+    );
+  } finally {
+    await rm(dir, { recursive: true, force: true });
+  }
+});
+
 test('bundleStager fails closed without leaking paths when bundled package version metadata is absent', async () => {
   const dir = await mkdtemp(path.join(os.tmpdir(), 'wf-bundle-versionless-'));
   try {
@@ -252,6 +392,49 @@ test('bundleStager fails closed without leaking paths when bundled package versi
         return true;
       }
     );
+  } finally {
+    await rm(dir, { recursive: true, force: true });
+  }
+});
+
+test('bundleStager does not require metadata for a dependency removed from the real output', async () => {
+  const dir = await mkdtemp(path.join(os.tmpdir(), 'wf-bundle-tree-shaken-metadata-'));
+  try {
+    const personaPath = path.join(dir, 'persona.json');
+    const personaSpec = persona();
+    await writeFile(personaPath, JSON.stringify(personaSpec, null, 2), 'utf8');
+    const packageDir = path.join(dir, 'node_modules', 'tree-shaken-versionless');
+    await mkdir(packageDir, { recursive: true });
+    await writeFile(
+      path.join(packageDir, 'package.json'),
+      JSON.stringify({
+        name: 'tree-shaken-versionless',
+        type: 'module',
+        main: 'index.js',
+        sideEffects: false
+      }),
+      'utf8'
+    );
+    await writeFile(path.join(packageDir, 'index.js'), 'export const unused = "unused-marker";\n', 'utf8');
+    await writeFile(
+      path.join(dir, 'agent.ts'),
+      [
+        "import { unused } from 'tree-shaken-versionless';",
+        'void unused;',
+        'export default () => "handler-result";',
+        ''
+      ].join('\n'),
+      'utf8'
+    );
+
+    const result = await bundleStager.stage({
+      personaPath,
+      persona: personaSpec,
+      outDir: path.join(dir, 'build')
+    });
+    const generatedPackageJson = JSON.parse(await readFile(result.packageJsonPath, 'utf8'));
+    assert.deepEqual(generatedPackageJson.bundleManifest.packages, []);
+    assert.doesNotMatch(await readFile(result.bundlePath, 'utf8'), /unused-marker/);
   } finally {
     await rm(dir, { recursive: true, force: true });
   }

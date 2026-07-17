@@ -1,7 +1,7 @@
 import { mkdir, readFile, realpath, writeFile, stat } from 'node:fs/promises';
 import { builtinModules, createRequire } from 'node:module';
 import path from 'node:path';
-import { build, type Metafile } from 'esbuild';
+import { build, type Metafile, type Plugin } from 'esbuild';
 import type { BundleManifest, BundlePackageVersion } from '@agentworkforce/runtime/runner';
 import type { BundleStageInput, BundleResult, BundleStager } from './types.js';
 
@@ -18,6 +18,7 @@ const NODE_EXTERNALS = [
   ...builtinModules,
   'node:*'
 ];
+const NODE_EXTERNAL_SET = new Set(NODE_EXTERNALS);
 
 /**
  * Stage a deploy-ready bundle to `input.outDir`. Output layout:
@@ -56,41 +57,56 @@ export const bundleStager: BundleStager = {
     const packageJsonPath = path.join(input.outDir, 'package.json');
 
     const absWorkingDir = process.cwd();
-    const buildResult = await build({
-      entryPoints: [onEventAbs],
-      outfile: bundlePath,
-      bundle: true,
-      format: 'esm',
-      platform: 'node',
-      target: 'node20',
-      sourcemap: 'inline',
-      logLevel: 'silent',
-      minify: input.bundlerOptions?.minify ?? false,
-      metafile: true,
-      absWorkingDir,
-      banner: {
-        js: [
-          'import { createRequire as __agentworkforceCreateRequire } from "node:module";',
-          'const require = __agentworkforceCreateRequire(import.meta.url);'
-        ].join('\n')
-      },
-      // Resolve TypeScript / JS extensions without forcing the user to
-      // write `.ts`-suffixed imports in their handler file.
-      resolveExtensions: ['.ts', '.mts', '.cts', '.tsx', '.js', '.mjs', '.cjs', '.jsx', '.json'],
-      external: [
-        // Runtime stays external — see file header comment.
-        '@agentworkforce/runtime',
-        '@agentworkforce/runtime/raw',
-        // Node builtins must never be bundled.
-        ...NODE_EXTERNALS
-      ]
-    });
+    const dependencyTrace: DependencyTrace = {
+      roots: new Map(),
+      metadataFailures: new Map()
+    };
+    let buildResult;
+    try {
+      buildResult = await build({
+        entryPoints: [onEventAbs],
+        outfile: bundlePath,
+        bundle: true,
+        format: 'esm',
+        platform: 'node',
+        target: 'node20',
+        sourcemap: 'inline',
+        logLevel: 'silent',
+        minify: input.bundlerOptions?.minify ?? false,
+        metafile: true,
+        absWorkingDir,
+        plugins: [traceLogicalDependencyRoots(dependencyTrace)],
+        banner: {
+          js: [
+            'import { createRequire as __agentworkforceCreateRequire } from "node:module";',
+            'const require = __agentworkforceCreateRequire(import.meta.url);'
+          ].join('\n')
+        },
+        // Resolve TypeScript / JS extensions without forcing the user to
+        // write `.ts`-suffixed imports in their handler file.
+        resolveExtensions: ['.ts', '.mts', '.cts', '.tsx', '.js', '.mjs', '.cjs', '.jsx', '.json'],
+        external: [
+          // Runtime stays external — see file header comment.
+          '@agentworkforce/runtime',
+          '@agentworkforce/runtime/raw',
+          // Node builtins must never be bundled.
+          ...NODE_EXTERNALS
+        ]
+      });
+    } catch (error) {
+      const failure = [...dependencyTrace.metadataFailures.entries()].sort(([a], [b]) =>
+        a.localeCompare(b)
+      )[0];
+      if (failure) throw invalidBundledPackageMetadataError(failure[0], failure[1]);
+      throw error;
+    }
 
     const bundleManifest = await buildBundleManifest(
       buildResult.metafile,
       bundlePath,
       onEventAbs,
-      absWorkingDir
+      absWorkingDir,
+      dependencyTrace.roots
     );
 
     await writeFile(personaCopyPath, JSON.stringify(input.persona, null, 2) + '\n', 'utf8');
@@ -247,7 +263,8 @@ async function buildBundleManifest(
   metafile: Metafile,
   bundlePath: string,
   entryPointPath: string,
-  absWorkingDir: string
+  absWorkingDir: string,
+  dependencyRoots: Map<string, Set<string>>
 ): Promise<BundleManifest> {
   const expectedBundlePath = path.resolve(absWorkingDir, bundlePath);
   const output = Object.entries(metafile.outputs).find(
@@ -257,18 +274,23 @@ async function buildBundleManifest(
     throw new Error('bundle: esbuild metafile did not describe agent.bundle.mjs');
   }
 
-  const ownerCache = new Map<string, Promise<PackageOwnership | undefined>>();
-  const entryOwner = await findPackageOwnership(entryPointPath, ownerCache);
+  const ownerCache: PackageOwnershipCache = {
+    directories: new Map(),
+    packageRoots: new Map()
+  };
+  const entryOwner = await findPackageOwnership(entryPointPath, ownerCache, dependencyRoots);
   const contributingInputs = Object.entries(output.inputs)
     .filter(([, contribution]) => contribution.bytesInOutput > 0)
     .map(([inputPath]) => path.resolve(absWorkingDir, inputPath));
   const owners = await Promise.all(
-    contributingInputs.map((inputPath) => findPackageOwnership(inputPath, ownerCache))
+    contributingInputs.map((inputPath) =>
+      findPackageOwnership(inputPath, ownerCache, dependencyRoots)
+    )
   );
 
   const uniquePackages = new Map<string, BundlePackageVersion>();
   for (const owner of owners) {
-    if (!owner || owner.root === entryOwner?.root) continue;
+    if (!owner) continue;
     if (owner.invalidMetadata) {
       const packageLabel = owner.invalidMetadata.name
         ? ` package "${owner.invalidMetadata.name}"`
@@ -277,6 +299,7 @@ async function buildBundleManifest(
         `bundle: bundled${packageLabel} has no valid ${owner.invalidMetadata.field} metadata`
       );
     }
+    if (owner.root === entryOwner?.root) continue;
     if (!owner.pkg) continue;
     const key = `${owner.pkg.name}\u0000${owner.pkg.version}`;
     uniquePackages.set(key, owner.pkg);
@@ -297,10 +320,39 @@ interface PackageOwnership {
   };
 }
 
+interface PackageOwnershipCache {
+  directories: Map<string, Promise<PackageOwnership | undefined>>;
+  packageRoots: Map<string, Promise<PackageRootMetadata>>;
+}
+
+interface PackageRootMetadata {
+  pkg?: BundlePackageVersion;
+  invalidField?: 'package.json' | '"name"' | '"version"';
+}
+
+interface LogicalDependencyBoundary {
+  name: string;
+  root: string;
+}
+
+interface DependencyTrace {
+  roots: Map<string, Set<string>>;
+  metadataFailures: Map<string, 'package.json' | '"name"' | '"version"'>;
+}
+
 async function findPackageOwnership(
   inputPath: string,
-  cache: Map<string, Promise<PackageOwnership | undefined>>
+  cache: PackageOwnershipCache,
+  dependencyRoots: Map<string, Set<string>>
 ): Promise<PackageOwnership | undefined> {
+  // Capture a logical node_modules package boundary whenever esbuild retains
+  // one. Symlinked inputs are normally already dereferenced in the metafile;
+  // those are recovered from the resolution trace below.
+  const dependencyBoundary = findLogicalDependencyBoundary(inputPath);
+  if (dependencyBoundary) {
+    return findDependencyPackageOwnership(dependencyBoundary, cache);
+  }
+
   let resolvedInput: string;
   try {
     resolvedInput = await realpath(inputPath);
@@ -309,14 +361,69 @@ async function findPackageOwnership(
     // have package metadata and must never leak their identifiers as paths.
     return undefined;
   }
+  const tracedBoundary = findTracedDependencyBoundary(resolvedInput, dependencyRoots);
+  if (tracedBoundary) {
+    return findDependencyPackageOwnership(tracedBoundary, cache);
+  }
   return findPackageOwnershipFromDirectory(path.dirname(resolvedInput), cache);
+}
+
+async function findDependencyPackageOwnership(
+  boundary: LogicalDependencyBoundary,
+  cache: PackageOwnershipCache
+): Promise<PackageOwnership> {
+  let realRoot: string;
+  try {
+    realRoot = await realpath(boundary.root);
+  } catch {
+    return {
+      root: boundary.root,
+      invalidMetadata: { name: boundary.name, field: 'package.json' }
+    };
+  }
+
+  let metadata = cache.packageRoots.get(realRoot);
+  if (!metadata) {
+    metadata = readPackageRootMetadata(realRoot);
+    cache.packageRoots.set(realRoot, metadata);
+  }
+  const resolved = await metadata;
+  if (resolved.pkg) return { root: realRoot, pkg: resolved.pkg };
+  return {
+    root: realRoot,
+    invalidMetadata: {
+      // Use only the stable logical dependency name in errors. Never expose
+      // the consumer path, workspace target, or an unrelated ancestor label.
+      name: boundary.name,
+      field: resolved.invalidField ?? 'package.json'
+    }
+  };
+}
+
+async function readPackageRootMetadata(directory: string): Promise<PackageRootMetadata> {
+  let parsed: { name?: unknown; version?: unknown };
+  try {
+    parsed = JSON.parse(await readFile(path.join(directory, 'package.json'), 'utf8')) as {
+      name?: unknown;
+      version?: unknown;
+    };
+  } catch {
+    return { invalidField: 'package.json' };
+  }
+  if (typeof parsed.name !== 'string' || parsed.name.length === 0) {
+    return { invalidField: '"name"' };
+  }
+  if (typeof parsed.version !== 'string' || parsed.version.length === 0) {
+    return { invalidField: '"version"' };
+  }
+  return { pkg: { name: parsed.name, version: parsed.version } };
 }
 
 function findPackageOwnershipFromDirectory(
   directory: string,
-  cache: Map<string, Promise<PackageOwnership | undefined>>
+  cache: PackageOwnershipCache
 ): Promise<PackageOwnership | undefined> {
-  const cached = cache.get(directory);
+  const cached = cache.directories.get(directory);
   if (cached) return cached;
 
   const pending = (async (): Promise<PackageOwnership | undefined> => {
@@ -361,8 +468,141 @@ function findPackageOwnershipFromDirectory(
       ? undefined
       : findPackageOwnershipFromDirectory(parent, cache);
   })();
-  cache.set(directory, pending);
+  cache.directories.set(directory, pending);
   return pending;
+}
+
+function findLogicalDependencyBoundary(inputPath: string): LogicalDependencyBoundary | undefined {
+  let directory = path.dirname(path.resolve(inputPath));
+  while (true) {
+    const name = packageNameAtNodeModulesBoundary(directory);
+    if (name) return { name, root: directory };
+    const parent = path.dirname(directory);
+    if (parent === directory) return undefined;
+    directory = parent;
+  }
+}
+
+function findTracedDependencyBoundary(
+  inputPath: string,
+  dependencyRoots: Map<string, Set<string>>
+): LogicalDependencyBoundary | undefined {
+  let match: LogicalDependencyBoundary | undefined;
+  for (const [root, names] of dependencyRoots) {
+    if (!isPathInside(inputPath, root) || (match && match.root.length >= root.length)) continue;
+    const name = [...names].sort()[0];
+    if (name) match = { name, root };
+  }
+  return match;
+}
+
+/**
+ * esbuild intentionally resolves symlinks to their real targets before the
+ * metafile is produced. Trace bare-package resolutions without changing that
+ * behavior, so pnpm's realpath-based dependency lookup keeps working while the
+ * manifest builder retains the logical package boundary and stable name.
+ */
+function traceLogicalDependencyRoots(trace: DependencyTrace): Plugin {
+  const recursiveResolve = {};
+  const metadataCache = new Map<string, Promise<PackageRootMetadata>>();
+  return {
+    name: 'agentworkforce-logical-dependency-roots',
+    setup(buildApi) {
+      buildApi.onResolve({ filter: /.*/ }, async (args) => {
+        if (args.pluginData === recursiveResolve) return undefined;
+        const packageName = packageNameFromBareSpecifier(args.path);
+        if (!packageName || isExternalPackageSpecifier(args.path)) return undefined;
+
+        const nearestRoot = await findNearestInstalledPackageRoot(args.resolveDir, packageName);
+        const result = await buildApi.resolve(args.path, {
+          importer: args.importer,
+          kind: args.kind,
+          namespace: args.namespace,
+          resolveDir: args.resolveDir,
+          pluginData: recursiveResolve,
+          with: args.with
+        });
+        const root = nearestRoot && (
+          (!result.external && path.isAbsolute(result.path) && isPathInside(result.path, nearestRoot))
+          || result.errors.length > 0
+        ) ? nearestRoot : undefined;
+        if (root) {
+          let metadata = metadataCache.get(root);
+          if (!metadata) {
+            metadata = readPackageRootMetadata(root);
+            metadataCache.set(root, metadata);
+          }
+          const resolvedMetadata = await metadata;
+          if (result.errors.length > 0 && resolvedMetadata.invalidField) {
+            trace.metadataFailures.set(packageName, resolvedMetadata.invalidField);
+            return { errors: [{ text: 'bundled dependency metadata validation failed' }] };
+          }
+          if (!result.external && path.isAbsolute(result.path)) {
+            const names = trace.roots.get(root) ?? new Set<string>();
+            names.add(packageName);
+            trace.roots.set(root, names);
+          }
+        }
+        return result;
+      });
+    }
+  };
+}
+
+async function findNearestInstalledPackageRoot(
+  resolveDirectory: string,
+  packageName: string
+): Promise<string | undefined> {
+  let directory = path.resolve(resolveDirectory);
+  while (true) {
+    const logicalRoot = path.join(directory, 'node_modules', ...packageName.split('/'));
+    try {
+      return await realpath(logicalRoot);
+    } catch {
+      // This resolution level does not contain the requested package.
+    }
+    const parent = path.dirname(directory);
+    if (parent === directory) return undefined;
+    directory = parent;
+  }
+}
+
+function invalidBundledPackageMetadataError(
+  packageName: string,
+  field: 'package.json' | '"name"' | '"version"'
+): Error {
+  return new Error(`bundle: bundled package "${packageName}" has no valid ${field} metadata`);
+}
+
+function packageNameFromBareSpecifier(specifier: string): string | undefined {
+  if (
+    specifier.length === 0
+    || specifier.startsWith('.')
+    || specifier.startsWith('/')
+    || specifier.startsWith('#')
+    || specifier.includes('\\')
+  ) {
+    return undefined;
+  }
+  const segments = specifier.split('/');
+  if (specifier.startsWith('@')) {
+    return segments.length >= 2 && segments[0].length > 1 && segments[1].length > 0
+      ? `${segments[0]}/${segments[1]}`
+      : undefined;
+  }
+  return segments[0] || undefined;
+}
+
+function isExternalPackageSpecifier(specifier: string): boolean {
+  return specifier.startsWith('node:')
+    || NODE_EXTERNAL_SET.has(specifier)
+    || specifier === '@agentworkforce/runtime'
+    || specifier === '@agentworkforce/runtime/raw';
+}
+
+function isPathInside(candidate: string, root: string): boolean {
+  const relative = path.relative(root, candidate);
+  return relative === '' || (!relative.startsWith(`..${path.sep}`) && relative !== '..' && !path.isAbsolute(relative));
 }
 
 function packageNameAtNodeModulesBoundary(directory: string): string | undefined {
