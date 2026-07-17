@@ -1254,6 +1254,28 @@ test('parseCapabilities validates the httpRead capability contract', () => {
     ),
     /persona\.capabilities\.httpRead\.allow\[0\]\.method must be "GET" or "HEAD"/
   );
+  assert.throws(
+    () => parseCapabilities(
+      { httpRead: { allow: [], futureNetworkPolicy: true } },
+      'persona.capabilities'
+    ),
+    /persona\.capabilities\.httpRead\.futureNetworkPolicy is not allowed/
+  );
+  assert.throws(
+    () => parseCapabilities(
+      {
+        httpRead: {
+          allow: [{
+            method: 'GET',
+            urlGlob: 'https://example.test/*',
+            followRedirects: true
+          }]
+        }
+      },
+      'persona.capabilities'
+    ),
+    /persona\.capabilities\.httpRead\.allow\[0\]\.followRedirects is not allowed/
+  );
 });
 
 test('parsePersonaSpec round-trip preserves a declared teamSolve capability', () => {

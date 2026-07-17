@@ -464,11 +464,10 @@ export interface PersonaHttpReadRule {
   urlGlob: string;
 }
 
-export interface PersonaHttpReadCapability {
+export type PersonaHttpReadCapability = {
   enabled?: boolean;
   allow?: PersonaHttpReadRule[];
-  [k: string]: unknown;
-}
+};
 
 /**
  * Portable proactive capability declarations.

@@ -101,6 +101,38 @@ test('generated schema reflects locked v1 persona fields', async () => {
   assert.equal('PersonaTraits' in definitions, false);
 });
 
+test('persona schema keeps the httpRead security boundary closed', async () => {
+  const schema = JSON.parse(await readFile(schemaPath, 'utf8')) as SchemaNode;
+  const definitions = schema.definitions as Record<string, SchemaNode>;
+  const capability = definitions.PersonaHttpReadCapability;
+  const rule = definitions.PersonaHttpReadRule;
+
+  assert.equal(capability.additionalProperties, false);
+  assert.equal(rule.additionalProperties, false);
+  assert.throws(
+    () => assertSchema(
+      { enabled: true, futureNetworkPolicy: true },
+      capability,
+      schema,
+      'capabilities.httpRead'
+    ),
+    /capabilities\.httpRead\.futureNetworkPolicy is not allowed/
+  );
+  assert.throws(
+    () => assertSchema(
+      {
+        method: 'GET',
+        urlGlob: 'https://example.test/*',
+        followRedirects: true
+      },
+      rule,
+      schema,
+      'capabilities.httpRead.allow[0]'
+    ),
+    /capabilities\.httpRead\.allow\[0\]\.followRedirects is not allowed/
+  );
+});
+
 test('persona schema keeps mount.enabled but drops the moved listener fields', async () => {
   const schema = JSON.parse(await readFile(schemaPath, 'utf8')) as SchemaNode;
   const definitions = schema.definitions as Record<string, SchemaNode>;

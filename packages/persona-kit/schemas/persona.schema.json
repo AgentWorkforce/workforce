@@ -582,7 +582,7 @@
           }
         }
       },
-      "additionalProperties": {}
+      "additionalProperties": false
     },
     "PersonaHttpReadRule": {
       "type": "object",
@@ -601,7 +601,8 @@
       "required": [
         "method",
         "urlGlob"
-      ]
+      ],
+      "additionalProperties": false
     },
     "PersonaMemory": {
       "anyOf": [
