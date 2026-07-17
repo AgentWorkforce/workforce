@@ -36,6 +36,12 @@
     "@agentworkforce/persona-kit": "workspace:*",
     "@agentworkforce/runtime": "workspace:*",
     "@daytonaio/sdk": "^0.185.0",
-    "esbuild": "^0.25.0"
+    "esbuild": "^0.25.0",
+    "semver": "^7.8.5",
+    "validate-npm-package-name": "^5.0.1"
+  },
+  "devDependencies": {
+    "@types/semver": "^7.7.1",
+    "@types/validate-npm-package-name": "^4.0.2"
   }
 }

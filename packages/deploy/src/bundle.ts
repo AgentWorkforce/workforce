@@ -2,6 +2,8 @@ import { mkdir, readFile, realpath, writeFile, stat } from 'node:fs/promises';
 import { builtinModules, createRequire } from 'node:module';
 import path from 'node:path';
 import { build, type Metafile, type Plugin } from 'esbuild';
+import { parse as parseSemver } from 'semver';
+import validatePackageName from 'validate-npm-package-name';
 import type { BundleManifest, BundlePackageVersion } from '@agentworkforce/runtime/runner';
 import type { BundleStageInput, BundleResult, BundleStager } from './types.js';
 
@@ -410,13 +412,33 @@ async function readPackageRootMetadata(directory: string): Promise<PackageRootMe
   } catch {
     return { invalidField: 'package.json' };
   }
-  if (typeof parsed.name !== 'string' || parsed.name.length === 0) {
+  if (!isValidPackageName(parsed.name)) {
     return { invalidField: '"name"' };
   }
-  if (typeof parsed.version !== 'string' || parsed.version.length === 0) {
+  if (!isExactPackageVersion(parsed.version)) {
     return { invalidField: '"version"' };
   }
   return { pkg: { name: parsed.name, version: parsed.version } };
+}
+
+function isValidPackageName(value: unknown): value is string {
+  return typeof value === 'string' && validatePackageName(value).validForNewPackages;
+}
+
+function isExactPackageVersion(value: unknown): value is string {
+  if (typeof value !== 'string') return false;
+  const parsed = parseSemver(value);
+  if (!parsed) return false;
+
+  // node-semver deliberately accepts compatibility spellings such as a
+  // leading "v" or surrounding whitespace. Reconstruct the canonical SemVer
+  // spelling so package metadata remains an exact version, while retaining
+  // valid prerelease and build identifiers.
+  const prerelease = parsed.prerelease.length > 0
+    ? `-${parsed.prerelease.map(String).join('.')}`
+    : '';
+  const build = parsed.build.length > 0 ? `+${parsed.build.join('.')}` : '';
+  return value === `${parsed.major}.${parsed.minor}.${parsed.patch}${prerelease}${build}`;
 }
 
 function findPackageOwnershipFromDirectory(
@@ -437,10 +459,10 @@ function findPackageOwnershipFromDirectory(
         name?: unknown;
         version?: unknown;
       };
-      if (typeof parsed.name !== 'string' || parsed.name.length === 0) {
+      if (!isValidPackageName(parsed.name)) {
         return { root: directory, invalidMetadata: { field: '"name"' } };
       }
-      if (typeof parsed.version !== 'string' || parsed.version.length === 0) {
+      if (!isExactPackageVersion(parsed.version)) {
         return {
           root: directory,
           invalidMetadata: { name: parsed.name, field: '"version"' }

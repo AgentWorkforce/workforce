@@ -111,7 +111,12 @@ test('bundleStager records only actual bundled package versions in deterministic
     await writeFile(personaPath, JSON.stringify(personaSpec, null, 2), 'utf8');
 
     await writePackage(dir, '@relayfile/relay-helpers', '0.4.9', 'export const relayVersion = "0.4.9";\n');
-    await writePackage(dir, 'alpha-bundled', '2.3.4', 'export const alpha = "alpha";\n');
+    await writePackage(
+      dir,
+      'alpha-bundled',
+      '2.3.4-rc.1+build.20260717',
+      'export const alpha = "alpha";\n'
+    );
     await writePackage(dir, 'unused-declaration', '9.9.9', 'export const unused = true;\n');
     await writeFile(
       path.join(dir, 'agent.ts'),
@@ -138,7 +143,7 @@ test('bundleStager records only actual bundled package versions in deterministic
       schemaVersion: 1,
       packages: [
         { name: '@relayfile/relay-helpers', version: '0.4.9' },
-        { name: 'alpha-bundled', version: '2.3.4' }
+        { name: 'alpha-bundled', version: '2.3.4-rc.1+build.20260717' }
       ]
     });
     assert.equal(generatedPackageJsonSource.includes(dir), false, 'manifest must not leak build paths');
@@ -397,7 +402,195 @@ test('bundleStager fails closed without leaking paths when bundled package versi
   }
 });
 
-test('bundleStager does not require metadata for a dependency removed from the real output', async () => {
+test('bundleStager rejects a contributing package whose version is an absolute store path without leaking it', async () => {
+  const dir = await mkdtemp(path.join(os.tmpdir(), 'wf-bundle-unsafe-version-'));
+  try {
+    const personaPath = path.join(dir, 'persona.json');
+    const personaSpec = persona();
+    const unsafeVersion = path.join(dir, 'node_modules', '.pnpm', 'store', 'v3', 'files', 'secret');
+    await writeFile(personaPath, JSON.stringify(personaSpec, null, 2), 'utf8');
+    await writePackage(
+      dir,
+      '@relayfile/path-poison',
+      unsafeVersion,
+      'export const marker = "contributing-path-poison-marker";\n'
+    );
+    await writeFile(
+      path.join(dir, 'agent.ts'),
+      "import { marker } from '@relayfile/path-poison'; export default () => marker;\n",
+      'utf8'
+    );
+
+    const outDir = path.join(dir, 'build');
+    await assert.rejects(
+      () => bundleStager.stage({ personaPath, persona: personaSpec, outDir }),
+      (error: unknown) => {
+        assert.ok(error instanceof Error);
+        assert.equal(
+          error.message,
+          'bundle: bundled package "@relayfile/path-poison" has no valid "version" metadata'
+        );
+        assert.equal(error.message.includes(unsafeVersion), false);
+        assert.equal(error.message.includes(dir), false);
+        return true;
+      }
+    );
+
+    await assert.rejects(readFile(path.join(outDir, 'package.json'), 'utf8'), { code: 'ENOENT' });
+    await assert.rejects(readFile(path.join(outDir, 'runner.mjs'), 'utf8'), { code: 'ENOENT' });
+    assert.equal(
+      (await readFile(path.join(outDir, 'agent.bundle.mjs'), 'utf8')).includes(unsafeVersion),
+      false,
+      'the rejected version must not appear in the emitted bundle either'
+    );
+  } finally {
+    await rm(dir, { recursive: true, force: true });
+  }
+});
+
+test('bundleStager rejects non-version package metadata across real esbuild ownership paths', async () => {
+  const dir = await mkdtemp(path.join(os.tmpdir(), 'wf-bundle-invalid-versions-'));
+  try {
+    const personaPath = path.join(dir, 'persona.json');
+    const personaSpec = persona();
+    await writeFile(personaPath, JSON.stringify(personaSpec, null, 2), 'utf8');
+    await writeFile(
+      path.join(dir, 'agent.ts'),
+      "import { marker } from '@relayfile/invalid-version'; export default () => marker;\n",
+      'utf8'
+    );
+
+    const invalidVersions = [
+      'not-a-version',
+      '^1.2.3',
+      'workspace:*',
+      'file:../private-package',
+      'https://registry.example/private-package.tgz',
+      'C:\\pnpm-store\\private-package',
+      ' 1.2.3',
+      '1.2.3\nprivate-path',
+      '1.2.3+invalid_metadata',
+      '1.2.3-alpha..1'
+    ];
+
+    for (const [index, invalidVersion] of invalidVersions.entries()) {
+      await writePackage(
+        dir,
+        '@relayfile/invalid-version',
+        invalidVersion,
+        'export const marker = "contributing-invalid-version-marker";\n'
+      );
+      await assert.rejects(
+        () => bundleStager.stage({
+          personaPath,
+          persona: personaSpec,
+          outDir: path.join(dir, `build-${index}`)
+        }),
+        (error: unknown) => {
+          assert.ok(error instanceof Error);
+          assert.equal(
+            error.message,
+            'bundle: bundled package "@relayfile/invalid-version" has no valid "version" metadata'
+          );
+          assert.equal(error.message.includes(invalidVersion), false);
+          assert.equal(error.message.includes(dir), false);
+          return true;
+        },
+        `expected ${JSON.stringify(invalidVersion)} to be rejected`
+      );
+    }
+
+    const relativePackage = path.join(dir, 'vendor', 'relative-invalid-version');
+    await mkdir(relativePackage, { recursive: true });
+    await writeFile(
+      path.join(relativePackage, 'package.json'),
+      JSON.stringify({
+        name: '@relayfile/relative-invalid-version',
+        version: 'npm:@relayfile/private@1.2.3',
+        type: 'module'
+      }),
+      'utf8'
+    );
+    await writeFile(
+      path.join(relativePackage, 'index.js'),
+      'export const marker = "relative-invalid-version-marker";\n',
+      'utf8'
+    );
+    await writeFile(
+      path.join(dir, 'agent.ts'),
+      "import { marker } from './vendor/relative-invalid-version/index.js'; export default () => marker;\n",
+      'utf8'
+    );
+    await assert.rejects(
+      () => bundleStager.stage({
+        personaPath,
+        persona: personaSpec,
+        outDir: path.join(dir, 'build-relative')
+      }),
+      (error: unknown) => {
+        assert.ok(error instanceof Error);
+        assert.equal(
+          error.message,
+          'bundle: bundled package "@relayfile/relative-invalid-version" has no valid "version" metadata'
+        );
+        assert.equal(error.message.includes('npm:'), false);
+        assert.equal(error.message.includes(dir), false);
+        return true;
+      }
+    );
+  } finally {
+    await rm(dir, { recursive: true, force: true });
+  }
+});
+
+test('bundleStager rejects an invalid metadata name using only the logical dependency name', async () => {
+  const dir = await mkdtemp(path.join(os.tmpdir(), 'wf-bundle-invalid-name-'));
+  try {
+    const personaPath = path.join(dir, 'persona.json');
+    const personaSpec = persona();
+    const invalidMetadataName = `../private/${path.basename(dir)}`;
+    await writeFile(personaPath, JSON.stringify(personaSpec, null, 2), 'utf8');
+    const packageDir = path.join(dir, 'node_modules', '@relayfile', 'name-poison');
+    await mkdir(packageDir, { recursive: true });
+    await writeFile(
+      path.join(packageDir, 'package.json'),
+      JSON.stringify({ name: invalidMetadataName, version: '1.2.3', type: 'module', main: 'index.js' }),
+      'utf8'
+    );
+    await writeFile(
+      path.join(packageDir, 'index.js'),
+      'export const marker = "name-poison-marker";\n',
+      'utf8'
+    );
+    await writeFile(
+      path.join(dir, 'agent.ts'),
+      "import { marker } from '@relayfile/name-poison'; export default () => marker;\n",
+      'utf8'
+    );
+
+    await assert.rejects(
+      () => bundleStager.stage({
+        personaPath,
+        persona: personaSpec,
+        outDir: path.join(dir, 'build')
+      }),
+      (error: unknown) => {
+        assert.ok(error instanceof Error);
+        assert.equal(
+          error.message,
+          'bundle: bundled package "@relayfile/name-poison" has no valid "name" metadata'
+        );
+        assert.equal(error.message.includes(invalidMetadataName), false);
+        assert.equal(error.message.includes(dir), false);
+        return true;
+      }
+    );
+  } finally {
+    await rm(dir, { recursive: true, force: true });
+  }
+});
+
+test('bundleStager does not require valid metadata for a dependency removed from the real output', async () => {
   const dir = await mkdtemp(path.join(os.tmpdir(), 'wf-bundle-tree-shaken-metadata-'));
   try {
     const personaPath = path.join(dir, 'persona.json');
@@ -409,6 +602,7 @@ test('bundleStager does not require metadata for a dependency removed from the r
       path.join(packageDir, 'package.json'),
       JSON.stringify({
         name: 'tree-shaken-versionless',
+        version: 'file:/private/tree-shaken-package',
         type: 'module',
         main: 'index.js',
         sideEffects: false
