@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [4.1.33] - 2026-07-18
+
+### Fixed
+
+- Isolate Relaycast agent auth (#293)
+
 ## [4.1.24] - 2026-07-16
 
 ### Fixed
