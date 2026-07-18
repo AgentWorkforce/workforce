@@ -48,12 +48,29 @@ test('dm posts /v1/dm with bearer agent token + {to,text}, unwraps {ok,data} id'
   });
 });
 
-test('agent token precedence: WORKFORCE_AGENT_TOKEN over RELAY_API_KEY', async () => {
-  await withEnv({ WORKFORCE_AGENT_TOKEN: 'tok_wf', RELAY_API_KEY: 'rk_live_x' }, async () => {
+test('agent token precedence: RELAY_AGENT_TOKEN over workflow and deprecated agent-token aliases', async () => {
+  await withEnv({
+    RELAY_AGENT_TOKEN: 'tok_agent',
+    WORKFORCE_AGENT_TOKEN: 'tok_workflow',
+    RELAY_API_KEY: 'tok_legacy_agent'
+  }, async () => {
     const { calls, restore } = stubFetch(() => new Response(JSON.stringify({ ok: true, data: { id: 'm2' } }), { status: 200 }));
     try {
       await buildRelayContext(noopLog).dm('p', 'hi');
-      assert.equal((calls[0].init.headers as Record<string, string>).authorization, 'Bearer tok_wf');
+      assert.equal((calls[0].init.headers as Record<string, string>).authorization, 'Bearer tok_agent');
+    } finally {
+      restore();
+    }
+  });
+});
+
+test('workflow token alone is never sent to Relaycast', async () => {
+  await withEnv({ WORKFORCE_AGENT_TOKEN: 'tok_workflow' }, async () => {
+    const { calls, restore } = stubFetch(() => new Response('{}', { status: 200 }));
+    try {
+      const res = await buildRelayContext(noopLog).dm('p', 'hi');
+      assert.deepEqual(res, { ok: false });
+      assert.equal(calls.length, 0);
     } finally {
       restore();
     }

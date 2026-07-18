@@ -18,12 +18,13 @@ function resolveRelaycastUrl(env: NodeJS.ProcessEnv): string {
 
 /**
  * Relaycast agent actions (`/v1/dm`, channel posts) are authenticated with the
- * AGENT token, not the workspace key — prefer it, falling back to the workspace
- * `RELAY_API_KEY` so single-identity boxes and tests still work.
+ * Relaycast token, never the Relayfile/workflow `WORKFORCE_AGENT_TOKEN`.
+ * `RELAY_API_KEY` is a deprecated compatibility alias and works here only
+ * when it contains an agent-scoped token; workspace bootstrap keys cannot
+ * authenticate these endpoints.
  */
 function resolveAgentToken(env: NodeJS.ProcessEnv): string | undefined {
   return (
-    env.WORKFORCE_AGENT_TOKEN?.trim() ||
     env.RELAY_AGENT_TOKEN?.trim() ||
     env.RELAY_API_KEY?.trim() ||
     undefined
@@ -55,7 +56,7 @@ export function buildRelayContext(log: Log, env: NodeJS.ProcessEnv = process.env
   async function send(path: string, body: unknown, action: string): Promise<RelaySendResult> {
     if (!token) {
       log('warn', `relay.${action}.no-token`, {
-        reason: 'no agent token (WORKFORCE_AGENT_TOKEN/RELAY_AGENT_TOKEN/RELAY_API_KEY) in the box'
+        reason: 'no Relaycast token (RELAY_AGENT_TOKEN/RELAY_API_KEY) in the box'
       });
       return { ok: false };
     }
