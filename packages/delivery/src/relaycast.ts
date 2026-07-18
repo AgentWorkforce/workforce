@@ -20,14 +20,13 @@ export function resolveRelaycastUrl(): string {
 
 /**
  * Resolve the token to authenticate relaycast agent actions (DMs). `/v1/dm` is
- * secured with the AGENT token, not the workspace key — so prefer the agent
- * token and only fall back to the workspace `RELAY_API_KEY` (which lets tests
- * and single-identity boxes still work). Mirrors the runtime's agent-token
- * resolution order.
+ * secured with an agent credential, not the Relayfile/workflow token. Prefer
+ * `RELAY_AGENT_TOKEN`. `RELAY_API_KEY` is a deprecated compatibility alias and
+ * works here only when it contains an agent-scoped token; workspace bootstrap
+ * keys cannot authenticate this endpoint. Mirrors the runtime's resolution.
  */
 function resolveRelayAgentToken(): string | undefined {
   return (
-    process.env.WORKFORCE_AGENT_TOKEN?.trim() ||
     process.env.RELAY_AGENT_TOKEN?.trim() ||
     process.env.RELAY_API_KEY?.trim() ||
     undefined
@@ -47,7 +46,7 @@ export function defaultRelaycastSender(ctx: WorkforceCtx): RelaycastSender {
     async dm(to: string, text: string): Promise<{ ok: boolean; messageId?: string }> {
       if (!token) {
         ctx.log?.('warn', 'delivery.relaycast.no-token', {
-          reason: 'no agent token (WORKFORCE_AGENT_TOKEN/RELAY_AGENT_TOKEN/RELAY_API_KEY) in the agent box'
+          reason: 'no Relaycast token (RELAY_AGENT_TOKEN/RELAY_API_KEY) in the agent box'
         });
         return { ok: false };
       }

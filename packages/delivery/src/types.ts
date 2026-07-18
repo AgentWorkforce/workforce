@@ -64,7 +64,9 @@ export interface DeliveryOptions {
 
 /**
  * Minimal seam for sending a relaycast DM back to a peer agent. The default
- * implementation posts `POST /v1/dm` with the box's injected `RELAY_API_KEY`;
+ * implementation posts `POST /v1/dm` with the box's injected
+ * `RELAY_AGENT_TOKEN` (or deprecated `RELAY_API_KEY` alias when it contains an
+ * agent-scoped token);
  * tests inject a mock. Unlike Slack/Telegram (config-driven via persona
  * inputs), the relaycast reply address is EVENT-driven — `to` is the inbound
  * message's sender, supplied by the caller.

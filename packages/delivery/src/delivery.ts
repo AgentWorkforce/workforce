@@ -69,7 +69,7 @@ export function createDelivery(
     : undefined);
 
   // Relaycast reply: address from the inbound event, client from the injected
-  // sender or the default env-backed one (POST /v1/dm with RELAY_API_KEY).
+  // sender or the default env-backed one (POST /v1/dm with a Relaycast token).
   const relaycast = targets.includes('relaycast') && transports?.relaycast?.to
     ? {
         to: transports.relaycast.to,
