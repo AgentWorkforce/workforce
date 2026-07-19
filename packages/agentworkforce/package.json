@@ -1,6 +1,6 @@
 {
   "name": "agentworkforce",
-  "version": "4.1.33",
+  "version": "4.1.34",
   "private": false,
   "description": "Top-level installer for the Agent Workforce CLI (installs the `agentworkforce` command). Wraps @agentworkforce/cli.",
   "type": "module",
