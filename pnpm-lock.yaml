@@ -216,8 +216,8 @@ importers:
         specifier: workspace:*
         version: link:../persona-kit
       '@relayfile/adapter-core':
-        specifier: ^0.5.1
-        version: 0.5.1(@relayfile/sdk@0.7.40)
+        specifier: ^0.5.9
+        version: 0.5.9(@relayfile/sdk@0.7.40)
       '@relayfile/relay-helpers':
         specifier: ^0.4.7
         version: 0.4.7(@relayfile/sdk@0.7.40)
@@ -1088,6 +1088,13 @@ packages:
 
   '@relayfile/adapter-core@0.5.6':
     resolution: {integrity: sha512-u5SMeaz2y1IzidXsMLufoBOg9Y1eTUnzQLSs9AmNK5aiqxdEQXvTRwWxJ0t47fic4vX8TV1JlryGNXL72e5TJQ==}
+    engines: {node: '>=18'}
+    hasBin: true
+    peerDependencies:
+      '@relayfile/sdk': '>=0.6.0 <1'
+
+  '@relayfile/adapter-core@0.5.9':
+    resolution: {integrity: sha512-uMyUyZBjuLM/uOfDrKlfndN7nY20rJMVD2zAoZItQH9AMAi4zbkEhz14/v87CZXAsyCgZKkTFW6Jzoc39oSnRA==}
     engines: {node: '>=18'}
     hasBin: true
     peerDependencies:
@@ -3534,14 +3541,22 @@ snapshots:
       minimatch: 10.2.5
       yaml: 2.9.0
 
+  '@relayfile/adapter-core@0.5.9(@relayfile/sdk@0.7.40)':
+    dependencies:
+      '@relayfile/sdk': 0.7.40
+      '@scalar/postman-to-openapi': 0.6.3
+      cheerio: 1.2.0
+      minimatch: 10.2.5
+      yaml: 2.9.0
+
   '@relayfile/adapter-linear@0.4.6(@relayfile/sdk@0.7.40)':
     dependencies:
-      '@relayfile/adapter-core': 0.5.6(@relayfile/sdk@0.7.40)
+      '@relayfile/adapter-core': 0.5.9(@relayfile/sdk@0.7.40)
       '@relayfile/sdk': 0.7.40
 
   '@relayfile/adapter-reddit@0.2.5(@relayfile/sdk@0.7.40)':
     dependencies:
-      '@relayfile/adapter-core': 0.5.6(@relayfile/sdk@0.7.40)
+      '@relayfile/adapter-core': 0.5.9(@relayfile/sdk@0.7.40)
       '@relayfile/sdk': 0.7.40
 
   '@relayfile/core@0.7.40': {}
