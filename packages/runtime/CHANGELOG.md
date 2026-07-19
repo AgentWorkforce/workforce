@@ -7,6 +7,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- Require `@relayfile/adapter-core` 0.5.9 so direct create-draft writes and
+  mount echoes coalesce onto one writeback operation.
+
 ## [4.1.33] - 2026-07-18
 
 ### Fixed
