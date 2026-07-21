@@ -127,7 +127,8 @@ function normalizeTriggerProviderAliases(agent: AgentSpec): AgentSpec {
   const aliases = KNOWN_TRIGGER_PROVIDER_ALIASES as Record<string, string>;
   const normalized: NonNullable<AgentSpec['triggers']> = {};
   for (const [provider, list] of Object.entries(triggers)) {
-    normalized[aliases[provider] ?? provider] = list;
+    const key = aliases[provider] ?? provider;
+    normalized[key] = [...(normalized[key] ?? []), ...list];
   }
   return { ...agent, triggers: normalized };
 }
