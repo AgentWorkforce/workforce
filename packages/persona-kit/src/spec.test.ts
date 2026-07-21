@@ -3,6 +3,7 @@ import { test } from 'node:test';
 
 import {
   HARNESS_VALUES,
+  deriveAgentCard,
   isHarness,
   isIntent,
   parseAgentSpec,
@@ -28,6 +29,7 @@ test('spec entrypoint re-exports the validation surface', () => {
   assert.equal(typeof parseAgentSpec, 'function');
   assert.equal(typeof isIntent, 'function');
   assert.equal(typeof isHarness, 'function');
+  assert.equal(typeof deriveAgentCard, 'function');
   assert.ok(Array.isArray(HARNESS_VALUES));
 });
 
