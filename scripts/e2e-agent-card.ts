@@ -3,7 +3,8 @@ import {
   cpSync,
   mkdtempSync,
   readFileSync,
-  rmSync
+  rmSync,
+  writeFileSync
 } from 'node:fs';
 import { spawnSync } from 'node:child_process';
 import { dirname, join } from 'node:path';
@@ -72,8 +73,41 @@ try {
     'compile and discovery surfaces must derive the same card'
   );
 
+  const originalSource = readFileSync(personaPath, 'utf8');
+  const toggledSource = originalSource
+    .replace('review: true', 'review: false')
+    .replace('issueClaim: false', 'issueClaim: true');
+  assert.notEqual(
+    toggledSource,
+    originalSource,
+    'E2E fixture must contain the capability flags it toggles'
+  );
+  writeFileSync(personaPath, toggledSource, 'utf8');
+
+  runCli([
+    'persona',
+    'compile',
+    personaPath,
+    '--base-url',
+    baseUrl,
+    '--version',
+    version
+  ]);
+  const toggledCard = A2aAgentCardSchema.parse(
+    JSON.parse(readFileSync(agentCardPath, 'utf8'))
+  );
+  const toggledSkillIds = toggledCard.skills.map((skill) => skill.id);
+  assert.ok(
+    !toggledSkillIds.includes('review'),
+    'disabling review in the persona must remove it from the compiled card'
+  );
+  assert.ok(
+    toggledSkillIds.includes('issueClaim'),
+    'enabling issueClaim in the persona must add it to the compiled card'
+  );
+
   process.stdout.write(
-    `agent-card E2E passed: ${emittedCard.name} (${skillIds.join(', ')})\n`
+    `agent-card E2E passed: ${emittedCard.name} (${skillIds.join(', ')} -> ${toggledSkillIds.join(', ')})\n`
   );
 } finally {
   rmSync(fixtureDir, { recursive: true, force: true });
