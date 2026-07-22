@@ -1,5 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
+import { spawnSync } from 'node:child_process';
 import {
   mkdirSync,
   mkdtempSync,
@@ -11,6 +12,8 @@ import {
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
+import { A2aAgentCardSchema } from '@relaycast/a2a';
+
 import { compilePersonaFile } from './persona-compile.js';
 
 test('compilePersonaFile bundles persona.ts, validates it, and writes persona.json', async () => {
@@ -18,6 +21,7 @@ test('compilePersonaFile bundles persona.ts, validates it, and writes persona.js
   try {
     const inputPath = join(root, 'persona.ts');
     const outputPath = join(root, 'persona.json');
+    const agentCardPath = join(root, 'agent-card.json');
     writeFileSync(
       inputPath,
       `import { definePersona } from '@agentworkforce/persona-kit';
@@ -36,6 +40,15 @@ export default definePersona({
     notion: {},
     jira: {},
     unknown: {}
+  },
+  skills: [{
+    id: 'review-rubric',
+    source: '@agentworkforce/review-rubric',
+    description: 'Apply the review rubric.'
+  }],
+  capabilities: {
+    review: true,
+    issueClaim: false
   },
   onEvent: './agent.ts',
   harnessSettings: {
@@ -56,11 +69,21 @@ export default definePersona({
 
     assert.equal(result.personaId, 'compiled-persona');
     assert.equal(result.outputPath, outputPath);
+    assert.equal(result.agentCardPath, agentCardPath);
     assert.equal(compiled.id, 'compiled-persona');
     assert.equal(compiled.inputs?.TARGET, 'repo');
     // Integration connections (source/scope) are preserved; triggers live in agent.ts.
     assert.equal(compiled.integrations?.github.scope?.repo, 'org/repo');
     assert.ok(compiled.integrations?.unknown);
+
+    const card = A2aAgentCardSchema.parse(
+      JSON.parse(readFileSync(agentCardPath, 'utf8'))
+    );
+    assert.equal(card.url, 'http://localhost:3000');
+    assert.equal(card.version, '0.0.0');
+    assert.ok(card.skills.some((skill) => skill.id === 'review-rubric'));
+    assert.ok(card.skills.some((skill) => skill.id === 'review'));
+    assert.ok(!card.skills.some((skill) => skill.id === 'issueClaim'));
   } finally {
     rmSync(root, { recursive: true, force: true });
   }
@@ -246,10 +269,8 @@ test('compilePersonaFile removes the temporary evaluated module', async () => {
   const root = mkdtempSync(join(tmpdir(), 'aw-persona-compile-cleanup-'));
   try {
     const inputPath = join(root, 'persona.ts');
-    const tempPrefix = 'agentworkforce-persona-';
-    const existingTempDirs = new Set(
-      readdirSync(tmpdir()).filter((name) => name.startsWith(tempPrefix))
-    );
+    const isolatedTemp = join(root, 'tmp');
+    mkdirSync(isolatedTemp);
     writeFileSync(
       inputPath,
       `export default {
@@ -263,9 +284,22 @@ test('compilePersonaFile removes the temporary evaluated module', async () => {
       'utf8'
     );
 
-    await compilePersonaFile(inputPath);
-    const leftovers = readdirSync(tmpdir()).filter((name) =>
-      name.startsWith(tempPrefix) && !existingTempDirs.has(name)
+    const child = spawnSync(
+      process.execPath,
+      [
+        '--input-type=module',
+        '-e',
+        `import { compilePersonaFile } from ${JSON.stringify(new URL('./persona-compile.js', import.meta.url).href)}; await compilePersonaFile(process.argv[1]);`,
+        inputPath
+      ],
+      {
+        encoding: 'utf8',
+        env: { ...process.env, TMPDIR: isolatedTemp }
+      }
+    );
+    assert.equal(child.status, 0, child.stderr || child.stdout);
+    const leftovers = readdirSync(isolatedTemp).filter((name) =>
+      name.startsWith('agentworkforce-persona-')
     );
     assert.deepEqual(leftovers, []);
   } finally {

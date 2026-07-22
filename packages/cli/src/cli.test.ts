@@ -729,11 +729,18 @@ test('main: persona compile dispatches to the typed persona compiler', async () 
     );
     assert.equal(exitCode, 0);
     assert.equal(stderr, '');
-    assert.match(stdout, /Compiled .*persona\.ts -> .*persona\.json \(cli-compiled\)/);
+    assert.match(
+      stdout,
+      /Compiled .*persona\.ts -> .*persona\.json, .*agent-card\.json \(cli-compiled\)/
+    );
     const compiled = JSON.parse(readFileSync(join(root, 'persona.json'), 'utf8')) as {
       id: string;
     };
+    const agentCard = JSON.parse(
+      readFileSync(join(root, 'agent-card.json'), 'utf8')
+    ) as { name: string };
     assert.equal(compiled.id, 'cli-compiled');
+    assert.equal(agentCard.name, 'cli-compiled');
   } finally {
     rmSync(root, { recursive: true, force: true });
   }

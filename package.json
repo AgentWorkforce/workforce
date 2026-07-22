@@ -23,8 +23,10 @@
     }
   },
   "devDependencies": {
+    "@relaycast/a2a": "^6.2.0",
     "@types/node": "^22.18.0",
     "agent-trajectories": "^0.5.3",
+    "tsx": "^4.23.1",
     "typescript": "^5.9.2"
   },
   "scripts": {
@@ -33,7 +35,8 @@
     "dev:cli": "node packages/cli/dist/cli.js",
     "typecheck": "pnpm -r typecheck && pnpm run typecheck:examples",
     "typecheck:examples": "tsc -p examples/tsconfig.json --noEmit",
-    "test": "node --test scripts/release-workflows.test.mjs && pnpm -r test",
+    "test": "node --test scripts/release-workflows.test.mjs && pnpm -r test && pnpm run test:e2e:agent-card",
+    "test:e2e:agent-card": "pnpm -r build && tsx scripts/e2e-agent-card.ts",
     "lint": "pnpm -r lint",
     "check": "pnpm run lint && pnpm run typecheck && pnpm run test"
   }
