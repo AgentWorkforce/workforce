@@ -38,6 +38,12 @@ try {
   const emittedCard = A2aAgentCardSchema.parse(JSON.parse(emittedJson));
   const skillIds = emittedCard.skills.map((skill) => skill.id);
 
+  assert.equal(emittedCard.url, baseUrl, 'compiled card must advertise its origin');
+  assert.equal(
+    emittedCard.version,
+    version,
+    'compiled card must advertise its deployment version'
+  );
   assert.ok(
     skillIds.includes('review-rubric'),
     'compiled card must include the example persona declared skill'

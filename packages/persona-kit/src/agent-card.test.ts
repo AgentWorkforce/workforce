@@ -144,6 +144,8 @@ test('deriveAgentCard canonicalizes pullRequest and derives A2A capability flags
     streaming: true,
     pushNotifications: false
   });
+  assert.ok(!card.skills.some((skill) => skill.id === 'streaming'));
+  assert.ok(!card.skills.some((skill) => skill.id === 'pushNotifications'));
   assert.deepEqual(card.default_input_modes, ['application/json']);
   assert.deepEqual(card.default_output_modes, ['text/markdown']);
   assert.equal(card.documentation_url, 'https://docs.example.test/reviewer');

@@ -7,6 +7,10 @@ import {
 import type { CapabilityValue, PersonaSpec } from './types.js';
 
 const DEFAULT_MODES = ['text/plain', 'application/json'] as const;
+const A2A_TRANSPORT_CAPABILITIES = new Set([
+  'streaming',
+  'pushNotifications'
+]);
 
 /** Deployment-specific values that cannot be inferred from a persona definition. */
 export interface DeriveAgentCardOptions {
@@ -78,6 +82,11 @@ function mergeSkills(
     personaSpec.capabilities ?? {}
   )) {
     if (!capabilityEnabled(value)) continue;
+
+    // These keys describe the A2A transport itself, not work the persona can
+    // perform. They are projected into card.capabilities above; all other
+    // unknown capability keys remain discoverable as skills.
+    if (A2A_TRANSPORT_CAPABILITIES.has(declaredName)) continue;
 
     const id = declaredName === 'pullRequest' ? 'review' : declaredName;
     const existing = skills.find((skill) => skill.id === id);
