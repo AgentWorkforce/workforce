@@ -248,7 +248,10 @@ Commands:
                         --json        emit the resolved PersonaSpec as JSON
   persona compile <path/to/persona.ts>
                       Compile a typed persona.ts authoring file to sibling
-                      persona.json after validating it with persona-kit.
+                      persona.json and agent-card.json after validation.
+  agent-card <path> [--base-url <url>] [--version <version>] [--json]
+                      Derive a canonical A2A agent card. Compact --json output
+                      is byte-identical to mcp-workforce get_agent_card.
   install [flags] <pkg|path>
                       Copy persona JSON files from an npm package or local
                       package directory into
@@ -5063,6 +5066,16 @@ export async function main(): Promise<void> {
   if (subcommand === 'persona') {
     try {
       await runPersonaCompileCommand(rest);
+      return;
+    } catch (err) {
+      die((err as Error)?.message ?? String(err), false);
+    }
+  }
+
+  if (subcommand === 'agent-card') {
+    try {
+      const { runAgentCardCommand } = await import('./agent-card-command.js');
+      await runAgentCardCommand(rest);
       return;
     } catch (err) {
       die((err as Error)?.message ?? String(err), false);

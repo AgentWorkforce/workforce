@@ -13,6 +13,12 @@ export {
 } from './constants.js';
 export type { KnownPersonaTag } from './constants.js';
 
+// Canonical A2A agent-card derivation
+export {
+  deriveAgentCard,
+  type DeriveAgentCardOptions
+} from './agent-card.js';
+
 // Types
 export type {
   AgentSpec,

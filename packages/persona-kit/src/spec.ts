@@ -13,10 +13,10 @@
  * the barrel therefore EVALUATES every one of those modules' top-level
  * code — `node:child_process`, `node:fs`, and the deferred
  * `@relayfile/local-mount` → `@parcel/watcher` edge — none of which a pure
- * validation consumer needs. `./spec.js` transitively imports only
- * `./parse.js`, `./constants.js`, and `./types.js`, which have ZERO
- * external runtime dependencies (no `@relayfile/*`, no native bindings,
- * no Node process/fs APIs at module-eval time).
+ * validation consumer needs. `./spec.js` transitively imports only the pure
+ * parser/constants/types modules plus `./agent-card.js` and Relaycast's Zod
+ * schema contract. None use `node:*`, native bindings, or process/fs APIs at
+ * module-eval time.
  *
  * Keep this entrypoint in lockstep with the validation-related exports of
  * `./index.js`; it is intentionally a strict subset, never a superset.
@@ -36,6 +36,12 @@ export {
   SKILL_SOURCE_KINDS
 } from './constants.js';
 export type { KnownPersonaTag } from './constants.js';
+
+// Canonical A2A agent-card derivation
+export {
+  deriveAgentCard,
+  type DeriveAgentCardOptions
+} from './agent-card.js';
 
 // Spec types
 export type {

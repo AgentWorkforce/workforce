@@ -5,6 +5,17 @@
     "review"
   ],
   "description": "Reviews opened PRs, responds to @mentions in comments, attempts autofix on red CI.",
+  "skills": [
+    {
+      "id": "review-rubric",
+      "source": "https://prpm.dev/packages/@agentworkforce/review-rubric",
+      "description": "Apply a consistent correctness and regression-risk review rubric."
+    }
+  ],
+  "capabilities": {
+    "review": true,
+    "issueClaim": false
+  },
   "cloud": true,
   "useSubscription": true,
   "integrations": {

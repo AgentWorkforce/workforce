@@ -44,6 +44,7 @@ test('createWorkforceMcpServer registers the documented tool set', () => {
   const tools = (server as unknown as Registry)._registeredTools ?? {};
   const names = Object.keys(tools).sort();
   assert.deepEqual(names, [
+    'get_agent_card',
     'integration.github.comment',
     'integration.github.createIssue',
     'integration.github.getPr',

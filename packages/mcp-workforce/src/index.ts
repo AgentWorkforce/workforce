@@ -27,3 +27,7 @@ export {
   type ListIntegrationsArgs,
   type ListIntegrationsDeps
 } from './tools/list-integrations.js';
+export {
+  getAgentCardTool,
+  type GetAgentCardArgs
+} from './tools/get-agent-card.js';
