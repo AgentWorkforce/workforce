@@ -49,10 +49,16 @@ export interface TurnMemoryOptions {
 }
 
 export interface TurnContext {
-  /** Short stable heading for logs and prompts. */
-  title: string;
-  /** Grounding text or instructions supplied to the responder. */
+  /** Stable block identity. Keep this unique within one assembled turn. */
+  id: string;
+  /** Human-readable heading for logs and prompts. */
+  label: string;
+  /** Grounding text or instructions supplied to the responder or harness. */
   content: string;
+  importance?: 'low' | 'medium' | 'high';
+  source?: string;
+  category?: 'memory' | 'session' | 'enrichment' | 'workspace' | 'guardrail' | 'other';
+  metadata?: Record<string, unknown>;
 }
 
 export interface TurnContextProviderArgs {

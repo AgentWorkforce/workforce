@@ -99,7 +99,13 @@ test('runner composes recall, deterministic context, ack, delivery, then memory'
         collect: ({ history }) => {
           order.push('context');
           assert.equal(history[0]?.content, 'User: old\nAssistant: earlier');
-          return { title: 'Open tasks', content: '#7 Call Mom' };
+          return {
+            id: 'open-tasks',
+            label: 'Open tasks',
+            content: '#7 Call Mom',
+            source: 'task-store',
+            category: 'workspace'
+          };
         }
       })
     ]
@@ -115,7 +121,13 @@ test('runner composes recall, deterministic context, ack, delivery, then memory'
     respond: async ({ history, context, acknowledge }) => {
       order.push('respond');
       assert.equal(history.length, 1);
-      assert.deepEqual(context, [{ title: 'Open tasks', content: '#7 Call Mom' }]);
+      assert.deepEqual(context, [{
+        id: 'open-tasks',
+        label: 'Open tasks',
+        content: '#7 Call Mom',
+        source: 'task-store',
+        category: 'workspace'
+      }]);
       assert.equal(await acknowledge('Checking…'), true);
       return 'You have one task: call Mom.';
     },

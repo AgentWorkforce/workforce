@@ -10,6 +10,10 @@
       "types": "./dist/index.d.ts",
       "default": "./dist/index.js"
     },
+    "./assistant": {
+      "types": "./dist/assistant.d.ts",
+      "default": "./dist/assistant.js"
+    },
     "./package.json": "./package.json"
   },
   "files": [
@@ -36,5 +40,16 @@
   "dependencies": {
     "@agentworkforce/persona-kit": "workspace:*",
     "@agentworkforce/runtime": "workspace:*"
+  },
+  "peerDependencies": {
+    "@agent-assistant/turn-context": "^0.4.35"
+  },
+  "peerDependenciesMeta": {
+    "@agent-assistant/turn-context": {
+      "optional": true
+    }
+  },
+  "devDependencies": {
+    "@agent-assistant/turn-context": "^0.4.35"
   }
 }

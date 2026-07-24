@@ -16,3 +16,9 @@ file.
   the bundled kit version in runtime logs.
 - Add a provider-agnostic confirmed-action helper that constructs success
   output only after the caller's receipt predicate passes.
+- Add the optional `@agentworkforce/turn-kit/assistant` bridge so Workforce
+  history and deterministic context blocks can use
+  `@agent-assistant/turn-context` for canonical identity/context assembly and
+  harness projection.
+- Align deterministic context blocks with the Agent Assistant prepared-context
+  shape (`id`, `label`, `content`, source/category metadata).
