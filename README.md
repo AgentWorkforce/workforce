@@ -317,6 +317,9 @@ grammar, skill staging, and sandbox mount behavior live in
 - `packages/runtime` — deploy runtime facade and per-integration clients.
 - `packages/review-kit` — strongly typed factories and evidence providers for
   charter-driven pull-request reviewers.
+- `packages/turn-kit` — transport-neutral multi-turn lifecycle, chronological
+  memory, deterministic context providers, acknowledgements, and
+  receipt-gated final delivery.
 - `packages/deploy` — bundle staging and runner launch modes for `workforce
   deploy`.
 
