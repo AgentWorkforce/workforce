@@ -713,14 +713,18 @@ jobs:
           // packages" step. Sorting release-notes entries by this order
           // ensures missing packages don't all collapse to indexOf=-1.
           const packageOrder = [
+            'events',
             'persona-kit',
             'runtime',
+            'compose',
             'delivery',
             'workload-router',
             'deploy',
+            'review-kit',
             'turn-kit',
             'mcp-workforce',
             'daytona-runner',
+            'local-surface',
             'cli',
             'agentworkforce',
           ];
