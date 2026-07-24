@@ -87,6 +87,16 @@ export default defineAgent({
 });
 `;
 
+const GMAIL_ALIAS_COLLISION_AGENT_SRC = `import { defineAgent } from '@agentworkforce/runtime';
+export default defineAgent({
+  triggers: {
+    'google-mail': [{ on: 'file.created', match: 'from-alias' }],
+    gmail: [{ on: 'file.created', match: 'from-canonical' }]
+  },
+  handler: async () => {}
+});
+`;
+
 async function withTempPersona(
   persona: Record<string, unknown>,
   agentSource = SCHEDULE_AGENT_SRC
@@ -398,6 +408,25 @@ test('preflightPersona refuses when the agent triggers a provider the persona do
   );
   try {
     await assert.rejects(preflightPersona(personaPath), /does not connect/);
+  } finally {
+    await cleanup();
+  }
+});
+
+test('preflightPersona merges trigger lists when an alias collides with its canonical provider', async () => {
+  const { personaPath, cleanup } = await withTempPersona(
+    basePersonaJson({ integrations: { 'google-mail': {}, gmail: {} } }),
+    GMAIL_ALIAS_COLLISION_AGENT_SRC
+  );
+  try {
+    const pre = await preflightPersona(personaPath);
+    assert.deepEqual(pre.agent.triggers, {
+      gmail: [
+        { on: 'file.created', match: 'from-alias' },
+        { on: 'file.created', match: 'from-canonical' }
+      ]
+    });
+    assert.deepEqual(pre.warnings, []);
   } finally {
     await cleanup();
   }
