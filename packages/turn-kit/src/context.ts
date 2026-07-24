@@ -33,6 +33,13 @@ export async function collectTurnContext(
     })
   );
   const context = collected.flat();
+  const seenIds = new Set<string>();
+  for (const block of context) {
+    if (seenIds.has(block.id)) {
+      throw new TypeError(`duplicate turn context id: ${block.id}`);
+    }
+    seenIds.add(block.id);
+  }
   args.ctx.log?.('info', 'turn-kit.context-collected', {
     providers: providers.length,
     sections: context.length
@@ -50,11 +57,18 @@ function normalizeContext(
       ? value
       : [value];
   return entries.map((entry) => {
-    const title = entry.title.trim();
+    const id = entry.id.trim();
+    const label = entry.label.trim();
     const content = entry.content.trim();
-    if (!title || !content) {
+    if (!id || !label || !content) {
       throw new TypeError(`turn context provider ${provider} returned an empty section`);
     }
-    return { title, content };
+    return {
+      ...entry,
+      id,
+      label,
+      content,
+      ...(entry.source !== undefined ? { source: entry.source.trim() } : {})
+    };
   });
 }

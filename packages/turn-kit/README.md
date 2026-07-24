@@ -26,8 +26,11 @@ const turns = createTurnRunner({
     defineTurnContext({
       name: 'open-work',
       collect: async ({ ctx }) => ({
-        title: 'Open work',
-        content: await ctx.files.read('/my-agent/open-work.json')
+        id: 'open-work',
+        label: 'Open work',
+        content: await ctx.files.read('/my-agent/open-work.json'),
+        source: 'relayfile',
+        category: 'workspace'
       })
     })
   ]
@@ -48,6 +51,58 @@ await turns.run(ctx, {
   confirmDelivery: (receipt) => receipt.ok
 });
 ```
+
+## Agent Assistant alignment
+
+Workforce owns the event and delivery lifecycle in this package. Assistant
+identity, turn-scoped prompt/context assembly, guardrails, provenance, and
+harness projection remain owned by `@agent-assistant/turn-context`.
+
+Agents that need that richer assistant layer can opt into the bridge without
+adding the Agent Assistant runtime graph to every turn-kit consumer:
+
+```sh
+pnpm add @agentworkforce/turn-kit @agent-assistant/turn-context
+```
+
+```ts
+import {
+  assembleAssistantTurnContext
+} from '@agentworkforce/turn-kit/assistant';
+
+const assembly = await assembleAssistantTurnContext({
+  assistantId: 'my-agent',
+  turnId: message.id,
+  conversation,
+  identity: {
+    assistantName: 'My Agent',
+    baseInstructions: {
+      systemPrompt: ctx.persona.systemPrompt ?? 'You are a helpful assistant.'
+    }
+  },
+  history,
+  context
+});
+
+// Directly compatible with @agent-assistant/harness.
+console.log(assembly.harnessProjection);
+```
+
+The split is deliberate:
+
+- `turn-kit` adapts `WorkforceCtx`, transport delivery, acknowledgements,
+  provider receipts, and post-delivery `ctx.memory` persistence.
+- `@agent-assistant/turn-context` assembles assistant identity and effective
+  context for a bounded turn.
+- `@agent-assistant/sessions` is appropriate when a product needs affinity
+  across surfaces. Pass its resolved session id as `sessionId`; a transport
+  chat id remains sufficient for simple Telegram or Slack continuity.
+- `@agent-assistant/continuation` applies when a harness returns a resumable
+  clarification, approval, or deferred outcome. It is not required for every
+  inbound chat message.
+- `@agent-assistant/memory` is not substituted for `ctx.memory`: Workforce's
+  cloud-managed surface currently exposes semantic save/recall, while the
+  Assistant SDK store requires structured CRUD/list adapters.
 
 Provider mutations can use `runConfirmedTurnAction()` so user-visible success
 text is not even constructed until the receipt predicate passes:
