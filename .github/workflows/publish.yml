@@ -601,7 +601,27 @@ jobs:
               exit 1
             fi
             echo "==> Publishing $TARBALL $COMMON_FLAGS"
-            npm publish "$TARBALL" $COMMON_FLAGS
+            if ! npm publish "$TARBALL" $COMMON_FLAGS; then
+              # npm's provenance flow makes a second, separate authenticated
+              # call after the tarball PUT to attach the attestation. That
+              # second call has been observed to fail with a transient
+              # "401 Failed to generate Web Auth URLs" even though the
+              # publish itself already landed on the registry. Don't fail
+              # the whole (lockstep, multi-package) run for a flake that
+              # already succeeded — but only trust this for real publishes;
+              # a dry run has nothing on the registry to check against.
+              if [ "${{ github.event.inputs.dry_run }}" = "true" ]; then
+                echo "::error::npm publish failed for $NPM_NAME@$VERSION (dry run)" >&2
+                exit 1
+              fi
+              PUBLISHED_VERSION=$(npm view "$NPM_NAME@$VERSION" version 2>/dev/null || true)
+              if [ "$PUBLISHED_VERSION" = "$VERSION" ]; then
+                echo "::warning::npm publish exited non-zero for $NPM_NAME@$VERSION but the registry already has that version (likely a post-publish attestation flake) - continuing"
+              else
+                echo "::error::npm publish failed for $NPM_NAME@$VERSION and the registry does not have it" >&2
+                exit 1
+              fi
+            fi
           done
 
       # Annotated tags (-a) so `git push --follow-tags` actually pushes them;
