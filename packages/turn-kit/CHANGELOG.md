@@ -22,3 +22,5 @@ file.
   harness projection.
 - Align deterministic context blocks with the Agent Assistant prepared-context
   shape (`id`, `label`, `content`, source/category metadata).
+- Encode conversation-key components independently to prevent delimiter
+  collisions, and sort timestamped history by parsed instants.

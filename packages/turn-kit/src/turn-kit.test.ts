@@ -42,6 +42,12 @@ test('conversation identity keeps transports and threads isolated', () => {
     conversationTag('joke-bot', { transport: 'telegram', id: '8587' }),
     conversationTag('joke-bot', { transport: 'slack', id: '8587' })
   );
+  assert.equal(conversationKey('room:topic'), 'room%3Atopic');
+  assert.equal(conversationKey('room', 'topic'), 'room:topic');
+  assert.notEqual(
+    conversationKey('room:topic'),
+    conversationKey('room', 'topic')
+  );
   assert.throws(
     () => conversationTag('Not Valid', { transport: 'telegram', id: '1' }),
     /lowercase slug/
@@ -55,6 +61,14 @@ test('timestamped memory is always returned oldest first', () => {
     memoryItem('second', '2026-07-24T12:02:00.000Z')
   ]);
   assert.deepEqual(history.map((entry) => entry.content), ['first', 'second', 'third']);
+});
+
+test('timestamped memory sorts by instant when offsets differ', () => {
+  const history = normalizeTurnHistory([
+    memoryItem('later', '2026-07-24T10:30:00Z'),
+    memoryItem('earlier', '2026-07-24T12:00:00+02:00')
+  ]);
+  assert.deepEqual(history.map((entry) => entry.content), ['earlier', 'later']);
 });
 
 test('timestamp-less cloud recall defaults from newest-first to chronological', () => {

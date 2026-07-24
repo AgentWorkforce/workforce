@@ -10,8 +10,14 @@ const DEFAULT_SCOPE = 'workspace';
 
 export function conversationKey(root: string, thread?: string | number): string {
   const base = requiredIdentityPart(root, 'conversation root');
-  if (thread === undefined || thread === null || String(thread).trim() === '') return base;
-  return `${base}:${requiredIdentityPart(String(thread), 'conversation thread')}`;
+  const encodedBase = encodeURIComponent(base);
+  if (thread === undefined || thread === null || String(thread).trim() === '') {
+    return encodedBase;
+  }
+  const encodedThread = encodeURIComponent(
+    requiredIdentityPart(String(thread), 'conversation thread')
+  );
+  return `${encodedBase}:${encodedThread}`;
 }
 
 export function conversationTag(namespace: string, conversation: TurnConversation): string {
@@ -70,7 +76,7 @@ export function normalizeTurnHistory(
 
   if (entries.length > 0 && entries.every((entry) => validDate(entry.createdAt))) {
     entries.sort((left, right) =>
-      String(left.createdAt).localeCompare(String(right.createdAt))
+      Date.parse(String(left.createdAt)) - Date.parse(String(right.createdAt))
     );
   } else if (recallOrder === 'newest-first') {
     entries.reverse();

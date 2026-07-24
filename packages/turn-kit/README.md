@@ -184,8 +184,9 @@ Use the transport's stable conversation boundary:
 - Slack: channel id plus root thread timestamp.
 - Relay inbox: sender plus any application thread/correlation id.
 
-`conversationKey(root, thread)` composes the transport-local id, and
-`conversationTag(namespace, conversation)` adds namespace and transport
+`conversationKey(root, thread)` percent-encodes each component before joining
+them so delimiter-bearing provider ids cannot collide.
+`conversationTag(namespace, conversation)` then adds namespace and transport
 isolation.
 
 ## Partial adoption
