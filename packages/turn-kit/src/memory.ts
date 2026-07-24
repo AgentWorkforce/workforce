@@ -38,7 +38,8 @@ export async function recallTurnHistory(
     recalled = await ctx.memory.recall(options.query ?? 'recent conversation turns', {
       tags: [tag],
       limit,
-      scope: options.scope ?? DEFAULT_SCOPE
+      scope: options.scope ?? DEFAULT_SCOPE,
+      failOnError: options.required
     });
   } catch (error) {
     ctx.log?.('warn', 'turn-kit.memory-recall-failed', { error: String(error) });

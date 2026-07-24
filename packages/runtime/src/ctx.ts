@@ -74,7 +74,10 @@ const NOOP_MEMORY: MemoryContext = {
   async save() {
     /* memory disabled (persona.memory unset) — saves silently no-op */
   },
-  async recall() {
+  async recall(_query, opts) {
+    if (opts?.failOnError) {
+      throw new Error('ctx.memory is unavailable: enable persona memory and connect cloud memory credentials.');
+    }
     return [];
   }
 };
@@ -407,13 +410,13 @@ function createCloudMemoryContext(args: {
           headers: { authorization: `Bearer ${args.agentToken}` }
         });
         if (!response.ok) {
-          args.log('warn', 'memory.recall.failed', { status: response.status });
-          return [];
+          throw new Error(`cloud memory recall failed with HTTP ${response.status}`);
         }
         const body = await response.json().catch(() => ({})) as { items?: unknown };
         return normalizeMemoryItems(body.items);
       } catch (err) {
         args.log('warn', 'memory.recall.failed', { error: memoryFetchErrorMessage(err) });
+        if (opts?.failOnError) throw err;
         return [];
       }
     }

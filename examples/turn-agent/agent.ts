@@ -25,11 +25,19 @@ export default defineAgent({
     const expanded = await event.expand('full');
     const input = messageText(expanded.data);
     if (!input) return;
+    const directMessage = isDirectMessageChannel(event.channel);
+    const peer = directMessage ? relayPeer(event, expanded.data) : undefined;
+    if (directMessage && !peer) {
+      ctx.log('warn', 'turn-agent.direct-peer-unavailable', { channel: event.channel });
+      return;
+    }
 
     await turns.run(ctx, {
       conversation: {
         transport: 'relay',
-        id: conversationKey(event.channel, event.threadId)
+        id: directMessage
+          ? conversationKey(event.channel, peer)
+          : conversationKey(event.channel, event.threadId)
       },
       input,
       respond: async ({ history }) =>
@@ -43,24 +51,63 @@ export default defineAgent({
           ].filter(Boolean).join('\n\n'),
           { maxTokens: 300 }
         ),
-      deliver: (reply) => ctx.relay.post(event.channel!, reply),
+      deliver: (reply) =>
+        directMessage
+          ? ctx.relay.dm(peer!, reply)
+          : ctx.relay.post(event.channel!, reply),
       confirmDelivery: (receipt) => receipt.ok
     });
   }
 });
 
+function isDirectMessageChannel(channel: string): boolean {
+  return channel === 'dm' || channel.startsWith('dm:');
+}
+
+function relayPeer(event: AgentEvent, data: unknown): string | undefined {
+  const eventSummary = record((event as { summary?: unknown }).summary);
+  const full = record(data);
+  const candidates = [
+    record(eventSummary?.actor),
+    record(full?.from),
+    record(full?.actor),
+    record(record(full?.message)?.from),
+    record(full?.message)
+  ];
+  for (const candidate of candidates) {
+    const identity =
+      text(candidate?.id) ??
+      text(candidate?.agentId) ??
+      text(candidate?.agent_id) ??
+      text(candidate?.name) ??
+      text(candidate?.displayName);
+    if (identity) return identity;
+  }
+  return undefined;
+}
+
 function messageText(value: unknown): string {
-  if (!value || typeof value !== 'object' || Array.isArray(value)) return '';
-  const record = value as Record<string, unknown>;
+  const recordValue = record(value);
+  if (!recordValue) return '';
   const nested =
-    record.message && typeof record.message === 'object' && !Array.isArray(record.message)
-      ? record.message as Record<string, unknown>
+    recordValue.message && typeof recordValue.message === 'object' && !Array.isArray(recordValue.message)
+      ? recordValue.message as Record<string, unknown>
       : {};
   return (
-    typeof record.text === 'string'
-      ? record.text
+    typeof recordValue.text === 'string'
+      ? recordValue.text
       : typeof nested.text === 'string'
         ? nested.text
         : ''
   ).trim();
+}
+
+function record(value: unknown): Record<string, unknown> | undefined {
+  return value && typeof value === 'object' && !Array.isArray(value)
+    ? value as Record<string, unknown>
+    : undefined;
+}
+
+function text(value: unknown): string | undefined {
+  return typeof value === 'string' && value.trim() ? value.trim() : undefined;
 }

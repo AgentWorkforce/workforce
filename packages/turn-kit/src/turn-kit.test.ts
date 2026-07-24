@@ -313,6 +313,29 @@ test('missing memory save receipt is visible without failing a delivered chat tu
   );
 });
 
+test('required memory recall asks the runtime adapter to fail on backend errors', async () => {
+  let recallOptions: Parameters<WorkforceCtx['memory']['recall']>[1];
+  const ctx = fakeCtx({
+    recall: async (_query, options) => {
+      recallOptions = options;
+      return [];
+    }
+  });
+  const result = await createTurnRunner({
+    namespace: 'memory-required',
+    memory: { required: true }
+  }).run(ctx, {
+    conversation: { transport: 'relay', id: 'peer' },
+    input: 'hello',
+    respond: () => 'Hi',
+    deliver: async () => ({ ok: true }),
+    confirmDelivery: (receipt) => receipt.ok
+  });
+
+  assert.equal(result.reply, 'Hi');
+  assert.equal(recallOptions?.failOnError, true);
+});
+
 function memoryItem(content: string, createdAt: string): MemoryItem {
   return {
     id: `mem-${createdAt}`,
