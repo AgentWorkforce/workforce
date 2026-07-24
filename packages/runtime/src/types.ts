@@ -264,6 +264,11 @@ export interface MemoryRecallOptions {
   scope?: PersonaMemoryScope;
   scopes?: PersonaMemoryScope[];
   tags?: string[];
+  /**
+   * Reject when the backing memory service is unavailable instead of
+   * degrading to an empty result.
+   */
+  failOnError?: boolean;
 }
 
 export interface MemoryItem {

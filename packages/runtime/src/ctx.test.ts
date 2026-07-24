@@ -543,6 +543,34 @@ test('ctx.memory.recall falls back to [] on network failure', async () => {
   );
 });
 
+test('ctx.memory.recall rejects backend failures when failOnError is set', async () => {
+  await withEnv(
+    {
+      WORKFORCE_CLOUD_URL: 'https://cloud.example.test',
+      WORKFORCE_AGENT_TOKEN: 'agent-token'
+    },
+    async () => {
+      await withFetch(async () => {
+        throw new Error('offline');
+      }, async () => {
+        const ctx = ctxFor({ ...basePersona, memory: true });
+        await assert.rejects(
+          () => ctx.memory.recall('anything', { failOnError: true }),
+          /offline/
+        );
+      });
+
+      await withFetch(async () => jsonResponse({ error: 'unavailable' }, { status: 503 }), async () => {
+        const ctx = ctxFor({ ...basePersona, memory: true });
+        await assert.rejects(
+          () => ctx.memory.recall('anything', { failOnError: true }),
+          /HTTP 503/
+        );
+      });
+    }
+  );
+});
+
 test('ctx.memory logs a bounded timeout when cloud memory fetch aborts', async () => {
   await withEnv(
     {
@@ -602,6 +630,10 @@ test('ctx.memory stays a safe no-op when cloud auth is absent', async () => {
         const ctx = ctxFor({ ...basePersona, memory: true });
         assert.equal(await ctx.memory.save('quiet'), undefined);
         assert.deepEqual(await ctx.memory.recall('quiet'), []);
+        await assert.rejects(
+          () => ctx.memory.recall('quiet', { failOnError: true }),
+          /ctx\.memory is unavailable/
+        );
       });
       assert.equal(fetchCalled, false);
     }

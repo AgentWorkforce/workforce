@@ -22,6 +22,7 @@ on:
           - '@agentworkforce/workload-router'
           - '@agentworkforce/deploy'
           - '@agentworkforce/review-kit'
+          - '@agentworkforce/turn-kit'
           - '@agentworkforce/mcp-workforce'
           - '@agentworkforce/daytona-runner'
           - '@agentworkforce/local-surface'
