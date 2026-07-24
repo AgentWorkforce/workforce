@@ -225,6 +225,15 @@ importers:
         specifier: ^0.5.3
         version: 0.5.3
 
+  packages/turn-kit:
+    dependencies:
+      '@agentworkforce/persona-kit':
+        specifier: workspace:*
+        version: link:../persona-kit
+      '@agentworkforce/runtime':
+        specifier: workspace:*
+        version: link:../runtime
+
   packages/workload-router:
     dependencies:
       '@agentworkforce/persona-kit':

@@ -8,7 +8,8 @@
       "@agentworkforce/runtime/runner": ["../packages/runtime/src/runner.ts"],
       "@agentworkforce/runtime/clients": ["../packages/runtime/src/clients/index.ts"],
       "@agentworkforce/runtime/raw": ["../packages/runtime/src/raw.ts"],
-      "@agentworkforce/persona-kit": ["../packages/persona-kit/src/index.ts"]
+      "@agentworkforce/persona-kit": ["../packages/persona-kit/src/index.ts"],
+      "@agentworkforce/turn-kit": ["../packages/turn-kit/src/index.ts"]
     }
   },
   "include": ["./**/*.ts"],
