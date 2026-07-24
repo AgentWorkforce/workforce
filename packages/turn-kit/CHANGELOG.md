@@ -5,6 +5,8 @@ file.
 
 ## [Unreleased]
 
+## [4.1.36] - 2026-07-24
+
 ### Added
 
 - Add a transport-neutral turn runner with chronological conversation memory,
@@ -24,3 +26,4 @@ file.
   shape (`id`, `label`, `content`, source/category metadata).
 - Encode conversation-key components independently to prevent delimiter
   collisions, and sort timestamped history by parsed instants.
+

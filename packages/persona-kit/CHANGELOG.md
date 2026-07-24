@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [4.1.36] - 2026-07-24
+
+### Changed
+
+- 296: deriveAgentCard(personaSpec): canonical persona → A2A agent card in persona-kit (#298)
+
 ## [4.1.26] - 2026-07-16
 
 ### Fixed

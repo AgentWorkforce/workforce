@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [4.1.36] - 2026-07-24
+
+### Added
+
+- **Add reusable multi-turn agent kit** (#299)
+
 ## [4.1.34] - 2026-07-19
 
 ### Fixed
