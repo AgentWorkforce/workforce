@@ -48,6 +48,12 @@ export interface TurnMemoryOptions {
   required?: boolean;
 }
 
+export interface TurnMessageMemoryOptions
+  extends Pick<TurnMemoryOptions, 'scope' | 'ttlSeconds' | 'required'> {
+  /** Label prepended to the stored message. Defaults to the role name. */
+  label?: string;
+}
+
 export interface TurnContext {
   /** Stable block identity. Keep this unique within one assembled turn. */
   id: string;

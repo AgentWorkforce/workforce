@@ -38,6 +38,7 @@
     "lint": "tsc -p tsconfig.json --noEmit"
   },
   "dependencies": {
+    "@agentworkforce/delivery": "workspace:*",
     "@agentworkforce/persona-kit": "workspace:*",
     "@agentworkforce/runtime": "workspace:*"
   },
