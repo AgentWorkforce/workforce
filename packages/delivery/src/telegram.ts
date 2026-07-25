@@ -63,6 +63,10 @@ export function createCloudTelegramTransport(
 
   return {
     async sendMessage(chatId, text, sendOptions = {}) {
+      const replyToMessageId = numericMessageId(
+        sendOptions.replyToMessageId
+      );
+      const threadId = numericMessageId(sendOptions.threadId);
       const controller = new AbortController();
       const timeout = setTimeout(() => controller.abort(), requestTimeoutMs);
       let response: Response;
@@ -79,11 +83,11 @@ export function createCloudTelegramTransport(
             data: {
               chat_id: numericChatId(chatId),
               text,
-              ...(sendOptions.replyToMessageId !== undefined
-                ? { reply_to_message_id: sendOptions.replyToMessageId }
+              ...(replyToMessageId !== undefined
+                ? { reply_to_message_id: replyToMessageId }
                 : {}),
-              ...(sendOptions.threadId !== undefined
-                ? { message_thread_id: sendOptions.threadId }
+              ...(threadId !== undefined
+                ? { message_thread_id: threadId }
                 : {}),
               ...(sendOptions.parseMode
                 ? { parse_mode: sendOptions.parseMode }
@@ -163,6 +167,14 @@ export function defaultTelegramTransport(
 ): TelegramTransport {
   const direct = createCloudTelegramTransport(ctx, options);
   if (direct) return direct;
+  return createRelayfileTelegramTransport(ctx, options);
+}
+
+/** Create a Relayfile Telegram sender with explicit managed HTTP credentials. */
+export function createRelayfileTelegramTransport(
+  ctx: WorkforceCtx,
+  options: Pick<DefaultTelegramTransportOptions, 'writebackTimeoutMs'> = {}
+): TelegramTransport {
   return telegramClient({
     writebackTimeoutMs: options.writebackTimeoutMs ?? 45_000,
     ...relayfileHttpOptions(ctx)
@@ -331,6 +343,15 @@ function numericChatId(value: string | number): string | number {
   const bare = bareTelegramChatId(value);
   const number = Number(bare);
   return Number.isSafeInteger(number) ? number : bare;
+}
+
+function numericMessageId(value: string | number | undefined): number | undefined {
+  if (value === undefined) return undefined;
+  if (typeof value === 'string' && !/^\d+$/u.test(value.trim())) {
+    return undefined;
+  }
+  const number = Number(value);
+  return Number.isSafeInteger(number) && number > 0 ? number : undefined;
 }
 
 function asRecord(value: unknown): Record<string, unknown> | null {

@@ -85,7 +85,13 @@ export function createCloudScheduleContext(
     if (!Array.isArray(body?.schedules)) {
       throw new Error('Cloud schedule list returned no schedules array');
     }
-    return body.schedules.map(parseScheduleRecord);
+    return body.schedules.flatMap((value) => {
+      try {
+        return [parseScheduleRecord(value)];
+      } catch {
+        return [];
+      }
+    });
   }
 
   return {
@@ -147,13 +153,17 @@ export function createDefaultCloudScheduleContext(input: {
   if (!baseUrl || !token || !input.workspaceId.trim() || !input.agentId.trim()) {
     return undefined;
   }
-  return createCloudScheduleContext({
-    baseUrl,
-    token,
-    workspaceId: input.workspaceId,
-    agentId: input.agentId,
-    ...(input.fetch ? { fetch: input.fetch } : {})
-  });
+  try {
+    return createCloudScheduleContext({
+      baseUrl,
+      token,
+      workspaceId: input.workspaceId,
+      agentId: input.agentId,
+      ...(input.fetch ? { fetch: input.fetch } : {})
+    });
+  } catch {
+    return undefined;
+  }
 }
 
 export function isManagedScheduleContext(

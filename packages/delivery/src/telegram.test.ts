@@ -85,6 +85,45 @@ test('managed Telegram transport uses the Cloud proxy and requires a message id'
   });
 });
 
+test('managed Telegram transport normalizes valid message ids and omits invalid ids', async () => {
+  const bodies: Array<Record<string, unknown>> = [];
+  const transport = createCloudTelegramTransport(context(), {
+    fetch: async (_input, init) => {
+      bodies.push(JSON.parse(String(init?.body)) as Record<string, unknown>);
+      return Response.json({
+        ok: true,
+        result: { message_id: bodies.length, chat: { id: 8587455921 } }
+      });
+    }
+  });
+
+  await transport!.sendMessage('8587455921', 'valid', {
+    replyToMessageId: '7',
+    threadId: '9'
+  });
+  await transport!.sendMessage('8587455921', 'invalid', {
+    replyToMessageId: 'seven',
+    threadId: 0
+  });
+
+  assert.deepEqual(
+    (bodies[0]?.data as Record<string, unknown>),
+    {
+      chat_id: 8587455921,
+      text: 'valid',
+      reply_to_message_id: 7,
+      message_thread_id: 9
+    }
+  );
+  assert.deepEqual(
+    (bodies[1]?.data as Record<string, unknown>),
+    {
+      chat_id: 8587455921,
+      text: 'invalid'
+    }
+  );
+});
+
 test('managed Telegram transport rejects provider errors and missing receipts', async () => {
   const rejected = createCloudTelegramTransport(context(), {
     fetch: async () => Response.json(

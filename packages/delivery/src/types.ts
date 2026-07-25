@@ -47,11 +47,9 @@ export interface DeliveryOptions {
   /** Thread the message under a prior delivery result. */
   replyTo?: DeliveryResult;
   /**
-   * When true, don't wait for the writeback receipt. Returns draft refs
-   * immediately and relies on the cloud's server-side ordering for
-   * threading (Slack parentRef pattern, Telegram sendMessage with 0ms
-   * timeout). The returned refs have empty ts/messageId but valid
-   * draftRef for use as a parent in subsequent threaded sends.
+   * When true, don't wait for the provider receipt. Slack returns a draft ref
+   * for cloud-side ordering; Telegram queues through Relayfile with a 0ms
+   * writeback timeout and returns an empty messageId until delivery.
    *
    * Use this for the header in a header+threaded-body pattern so the
    * digest never blocks on a receipt — the cloud orders the threaded
@@ -113,15 +111,14 @@ export interface DeliveryClient {
    *
    * In blocking mode (default): waits for the writeback receipt and returns
    * the delivered ts/messageId. In non-blocking mode (`opts.nonBlocking: true`):
-   * returns draft refs immediately with the relay path as draftRef — zero
-   * receipt round-trips, cloud-side server ordering handles threading.
+   * queues through Relayfile without a provider receipt round-trip. Slack
+   * returns a draftRef; Telegram's messageId remains empty.
    */
   send(text: string, opts?: DeliveryOptions): Promise<DeliveryResult>;
 
   /**
    * Convenience: same as `send(text, { nonBlocking: true })`.
-   * Publish a message without waiting for a receipt. Returns draft refs
-   * immediately for use as a threading parent.
+   * Publish a message without waiting for a provider receipt.
    */
   publish(text: string): Promise<DeliveryResult>;
 

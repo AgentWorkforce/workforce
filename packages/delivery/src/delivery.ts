@@ -1,4 +1,4 @@
-import { slackClient, telegramClient } from '@relayfile/relay-helpers';
+import { slackClient } from '@relayfile/relay-helpers';
 import type { SlackClient } from '@relayfile/relay-helpers';
 import type { WorkforceCtx } from '@agentworkforce/runtime';
 import {
@@ -19,6 +19,7 @@ import { defaultRelaycastSender } from './relaycast.js';
 import { requireSlackReceipt } from './slack.js';
 import {
   createCloudTelegramTransport,
+  createRelayfileTelegramTransport,
   defaultTelegramTransport,
   type TelegramTransport
 } from './telegram.js';
@@ -76,9 +77,9 @@ export function createDelivery(
         })
       : undefined
   );
-  const telegramNonBlocking = injectedTelegram ?? cloudTelegram ?? (
+  const telegramNonBlocking = injectedTelegram ?? (
     targets.includes('telegram')
-      ? telegramClient({ writebackTimeoutMs: 0 })
+      ? createRelayfileTelegramTransport(ctx, { writebackTimeoutMs: 0 })
       : undefined
   );
 
@@ -96,7 +97,6 @@ export function createDelivery(
     slackNonBlocking,
     telegramBlocking,
     telegramNonBlocking,
-    telegramRequiresReceipt: cloudTelegram !== undefined,
     relaycast
   });
 }
@@ -106,7 +106,6 @@ interface DeliveryTransportsInternal {
   slackNonBlocking?: SlackClient;
   telegramBlocking?: TelegramTransport;
   telegramNonBlocking?: TelegramTransport;
-  telegramRequiresReceipt: boolean;
   relaycast?: { to: string; sender: RelaycastSender };
 }
 
@@ -167,8 +166,10 @@ class DeliveryClientImpl implements DeliveryClient {
 
     await Promise.all(tasks);
 
-    // In non-blocking mode, draft refs always succeed (no receipt wait to fail).
-    // Treat any ref as success. In blocking mode, require all targets to succeed.
+    // Non-blocking Slack/Telegram use Relayfile's zero-writeback path and
+    // return draft refs without a provider round-trip. Direct Cloud Telegram
+    // is intentionally reserved for blocking sends that require a receipt.
+    // Treat any draft ref as success; blocking mode requires every target.
     const ok = nonBlocking
       ? refs.length > 0
       : errors.length === 0 && refs.length === this.targets.length;
@@ -296,7 +297,7 @@ class DeliveryClientImpl implements DeliveryClient {
       ? await client.sendMessage(chatId, text, { replyToMessageId: Number(parentRef.messageId) || undefined })
       : await client.sendMessage(chatId, text);
 
-    if ((!nonBlocking || this.t.telegramRequiresReceipt) && !result.ok) {
+    if (!nonBlocking && !result.ok) {
       this.ctx.log?.('warn', 'delivery.telegram.no-receipt', { chatId });
       return null;
     }

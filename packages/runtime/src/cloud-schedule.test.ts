@@ -122,6 +122,28 @@ test('cloud schedule lists, gets, and cancels durable schedules', async () => {
   assert.match(requests.at(-1) ?? '', /\?name=call%20mom%2Fsoon$/);
 });
 
+test('cloud schedule ignores malformed list records while retaining valid schedules', async () => {
+  const schedule = createCloudScheduleContext({
+    baseUrl: 'https://cloud.example.test',
+    token: 'token',
+    workspaceId: 'workspace-1',
+    agentId: 'agent-1',
+    fetch: async () => Response.json({
+      schedules: [
+        { ...active, id: '' },
+        active,
+        { ...active, status: 'legacy' }
+      ]
+    })
+  });
+
+  assert.deepEqual(
+    (await schedule.list()).map((record) => record.id),
+    ['schedule-1']
+  );
+  assert.equal((await schedule.get('schedule-1'))?.name, 'call-mom');
+});
+
 test('cloud schedule surfaces provider errors and request timeouts', async () => {
   const rejected = createCloudScheduleContext({
     baseUrl: 'https://cloud.example.test',
@@ -169,6 +191,15 @@ test('default cloud schedule requires the complete managed runner identity', () 
     agentId: 'agent-1',
     fetch: async () => Response.json({ schedules: [] })
   }));
+
+  assert.equal(createDefaultCloudScheduleContext({
+    env: {
+      WORKFORCE_CLOUD_BASE_URL: 'cloud.example.test',
+      WORKFORCE_WORKSPACE_TOKEN: 'token'
+    },
+    workspaceId: 'workspace-1',
+    agentId: 'agent-1'
+  }), undefined);
 });
 
 test('managed schedule helpers narrow query support and fail clearly', async () => {

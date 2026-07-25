@@ -91,6 +91,24 @@ Proactive output can join the same conversation without inventing a fake user
 message:
 
 ```ts
+import {
+  conversationKey,
+  conversationTag,
+  rememberAssistantMessage,
+  type TurnConversation
+} from '@agentworkforce/turn-kit';
+import {
+  bareTelegramChatId,
+  input
+} from '@agentworkforce/delivery';
+
+const ownerChat = input(ctx, 'TELEGRAM_CHAT');
+if (!ownerChat) throw new Error('TELEGRAM_CHAT is required');
+const conversation: TurnConversation = {
+  transport: 'telegram',
+  id: conversationKey(bareTelegramChatId(ownerChat))
+};
+
 await rememberAssistantMessage(
   ctx,
   conversationTag('my-agent', conversation),
