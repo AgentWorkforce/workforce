@@ -1,5 +1,5 @@
 import { slackClient, telegramClient } from '@relayfile/relay-helpers';
-import type { SlackClient, TelegramClient } from '@relayfile/relay-helpers';
+import type { SlackClient } from '@relayfile/relay-helpers';
 import type { WorkforceCtx } from '@agentworkforce/runtime';
 import {
   resolveDeliveryTargets,
@@ -17,6 +17,11 @@ import {
 } from './types.js';
 import { defaultRelaycastSender } from './relaycast.js';
 import { requireSlackReceipt } from './slack.js';
+import {
+  createCloudTelegramTransport,
+  defaultTelegramTransport,
+  type TelegramTransport
+} from './telegram.js';
 
 const WRITEBACK_TIMEOUT_MS = 45_000;
 
@@ -61,12 +66,21 @@ export function createDelivery(
   const slackNonBlocking = injectedSlack ?? (targets.includes('slack')
     ? slackClient({ writebackTimeoutMs: 0 })
     : undefined);
-  const telegramBlocking = injectedTelegram ?? (targets.includes('telegram')
-    ? telegramClient({ writebackTimeoutMs: WRITEBACK_TIMEOUT_MS })
-    : undefined);
-  const telegramNonBlocking = injectedTelegram ?? (targets.includes('telegram')
-    ? telegramClient({ writebackTimeoutMs: 0 })
-    : undefined);
+  const cloudTelegram = !injectedTelegram && targets.includes('telegram')
+    ? createCloudTelegramTransport(ctx)
+    : undefined;
+  const telegramBlocking = injectedTelegram ?? cloudTelegram ?? (
+    targets.includes('telegram')
+      ? defaultTelegramTransport(ctx, {
+          writebackTimeoutMs: WRITEBACK_TIMEOUT_MS
+        })
+      : undefined
+  );
+  const telegramNonBlocking = injectedTelegram ?? cloudTelegram ?? (
+    targets.includes('telegram')
+      ? telegramClient({ writebackTimeoutMs: 0 })
+      : undefined
+  );
 
   // Relaycast reply: address from the inbound event, client from the injected
   // sender or the default env-backed one (POST /v1/dm with a Relaycast token).
@@ -82,6 +96,7 @@ export function createDelivery(
     slackNonBlocking,
     telegramBlocking,
     telegramNonBlocking,
+    telegramRequiresReceipt: cloudTelegram !== undefined,
     relaycast
   });
 }
@@ -89,8 +104,9 @@ export function createDelivery(
 interface DeliveryTransportsInternal {
   slackBlocking?: SlackClient;
   slackNonBlocking?: SlackClient;
-  telegramBlocking?: TelegramClient;
-  telegramNonBlocking?: TelegramClient;
+  telegramBlocking?: TelegramTransport;
+  telegramNonBlocking?: TelegramTransport;
+  telegramRequiresReceipt: boolean;
   relaycast?: { to: string; sender: RelaycastSender };
 }
 
@@ -280,7 +296,7 @@ class DeliveryClientImpl implements DeliveryClient {
       ? await client.sendMessage(chatId, text, { replyToMessageId: Number(parentRef.messageId) || undefined })
       : await client.sendMessage(chatId, text);
 
-    if (!nonBlocking && !result.ok) {
+    if ((!nonBlocking || this.t.telegramRequiresReceipt) && !result.ok) {
       this.ctx.log?.('warn', 'delivery.telegram.no-receipt', { chatId });
       return null;
     }

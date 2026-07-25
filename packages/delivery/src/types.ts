@@ -1,6 +1,6 @@
 import type { WorkforceCtx } from '@agentworkforce/runtime';
 import type { SlackClient } from '@relayfile/relay-helpers';
-import type { TelegramClient } from '@relayfile/relay-helpers';
+import type { TelegramTransport } from './telegram.js';
 import { input } from './helpers.js';
 
 // ── message reference (returned by send, accepted by reply) ──────────────
@@ -91,7 +91,7 @@ export interface DeliveryTransports {
   /** Injected Slack client (used for both blocking and non-blocking paths). */
   slack?: SlackClient;
   /** Injected Telegram client (used for both blocking and non-blocking paths). */
-  telegram?: TelegramClient;
+  telegram?: TelegramTransport;
   /**
    * Relaycast reply target. When set, `relaycast` becomes a delivery target
    * and `send()`/`publish()` DM the inbound sender over the relay. Event-driven
