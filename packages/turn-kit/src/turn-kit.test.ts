@@ -12,6 +12,7 @@ import {
   defineTurnContext,
   defineTurnPersona,
   normalizeTurnHistory,
+  rememberAssistantMessage,
   runConfirmedTurnAction,
   TURN_KIT_VERSION,
   UnconfirmedTurnActionError,
@@ -80,6 +81,26 @@ test('timestamp-less cloud recall defaults from newest-first to chronological', 
     normalizeTurnHistory(['oldest', 'newest'], 'oldest-first').map((entry) => entry.content),
     ['oldest', 'newest']
   );
+});
+
+test('proactive assistant messages persist without a fabricated user turn', async () => {
+  const saved: string[] = [];
+  const ctx = fakeCtx({
+    save: async (content) => {
+      saved.push(content);
+      return { id: 'memory-1' };
+    }
+  });
+  assert.equal(
+    await rememberAssistantMessage(
+      ctx,
+      'turn:life-agent:telegram:8587',
+      'Your reminder is due tomorrow.',
+      { label: 'life-agent' }
+    ),
+    true
+  );
+  assert.deepEqual(saved, ['life-agent: Your reminder is due tomorrow.']);
 });
 
 test('runner composes recall, deterministic context, ack, delivery, then memory', async () => {

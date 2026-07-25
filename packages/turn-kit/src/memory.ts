@@ -2,6 +2,7 @@ import type { WorkforceCtx } from '@agentworkforce/runtime';
 import type {
   TurnConversation,
   TurnHistoryEntry,
+  TurnMessageMemoryOptions,
   TurnMemoryOptions
 } from './types.js';
 
@@ -100,6 +101,43 @@ export async function rememberTurn(
   ).trim();
   if (!serialized) throw new TypeError('turn memory content cannot be empty');
 
+  return saveTurnMemory(ctx, tag, serialized, options);
+}
+
+/** Persist one proactive/user/assistant message without fabricating a pair. */
+export async function rememberTurnMessage(
+  ctx: WorkforceCtx,
+  tag: string,
+  role: 'user' | 'assistant',
+  message: string,
+  options: TurnMessageMemoryOptions = {}
+): Promise<boolean> {
+  const text = message.trim();
+  if (!text) throw new TypeError('turn memory message cannot be empty');
+  const label = options.label?.trim() || (
+    role === 'assistant' ? 'Assistant' : 'User'
+  );
+  return saveTurnMemory(ctx, tag, `${label}: ${text}`, options);
+}
+
+export function rememberAssistantMessage(
+  ctx: WorkforceCtx,
+  tag: string,
+  message: string,
+  options: TurnMessageMemoryOptions = {}
+): Promise<boolean> {
+  return rememberTurnMessage(ctx, tag, 'assistant', message, options);
+}
+
+async function saveTurnMemory(
+  ctx: WorkforceCtx,
+  tag: string,
+  serialized: string,
+  options: Pick<
+    TurnMemoryOptions,
+    'scope' | 'ttlSeconds' | 'required'
+  >
+): Promise<boolean> {
   let receipt: { id: string } | void;
   try {
     receipt = await ctx.memory.save(serialized, {

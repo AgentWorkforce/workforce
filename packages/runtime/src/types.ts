@@ -294,9 +294,64 @@ export interface WorkflowContext {
   status(runId: string): Promise<{ status: 'pending' | 'running' | 'success' | 'failure'; output?: unknown; error?: string; patches?: unknown }>;
 }
 
+export type ScheduleStatus =
+  | 'pending'
+  | 'active'
+  | 'fired'
+  | 'cancelled'
+  | 'cancellation_pending'
+  | 'failed';
+
+export interface ScheduleRecord {
+  id: string;
+  name: string;
+  scheduledAt: string;
+  timezone: string;
+  payload: Record<string, unknown>;
+  status: ScheduleStatus;
+  lastError?: string;
+  firedAt?: string;
+  cancelledAt?: string;
+  createdAt?: string;
+  updatedAt?: string;
+}
+
+export interface ScheduleAtOptions {
+  /**
+   * Stable cancellation key. Cloud generates a unique name when omitted.
+   * Supplying a name lets callers cancel a known wake-up slot before replacing
+   * or abandoning it.
+   */
+  name?: string;
+  /** IANA timezone recorded with the schedule. Defaults to UTC. */
+  timezone?: string;
+}
+
 export interface ScheduleContext {
-  at(when: Date, payload: unknown): Promise<void>;
+  /**
+   * Register a one-shot wake-up. Managed Cloud returns the durable active
+   * receipt; legacy/injected schedulers may continue returning void.
+   */
+  at(
+    when: Date,
+    payload: unknown,
+    options?: ScheduleAtOptions
+  ): Promise<ScheduleRecord | void>;
   cancel(name: string): Promise<void>;
+  /** Available on managed/queryable schedulers. */
+  list?(): Promise<ScheduleRecord[]>;
+  /** Available on managed/queryable schedulers. */
+  get?(id: string): Promise<ScheduleRecord | null>;
+}
+
+export interface ManagedScheduleContext extends ScheduleContext {
+  at(
+    when: Date,
+    payload: unknown,
+    options?: ScheduleAtOptions
+  ): Promise<ScheduleRecord>;
+  list(): Promise<ScheduleRecord[]>;
+  get(id: string): Promise<ScheduleRecord | null>;
 }
 
 /**

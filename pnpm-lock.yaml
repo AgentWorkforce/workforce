@@ -236,6 +236,9 @@ importers:
 
   packages/turn-kit:
     dependencies:
+      '@agentworkforce/delivery':
+        specifier: workspace:*
+        version: link:../delivery
       '@agentworkforce/persona-kit':
         specifier: workspace:*
         version: link:../persona-kit

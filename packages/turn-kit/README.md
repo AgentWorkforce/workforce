@@ -3,8 +3,9 @@
 Transport-neutral lifecycle primitives for multi-turn cloud agents. The kit
 owns conversation identity, chronological memory, deterministic context
 collection, interim acknowledgements, delivery confirmation, and post-delivery
-persistence. The agent keeps control of event parsing, prompts, domain actions,
-provider writes, and transport adapters.
+persistence. The agent keeps control of prompts, domain actions, and provider
+writes. First-party transport adapters may bind these guarantees to a provider
+without moving domain behavior into the kit.
 
 ```ts
 import {
@@ -50,6 +51,70 @@ await turns.run(ctx, {
   deliver: (reply) => telegram.reply(message, reply),
   confirmDelivery: (receipt) => receipt.ok
 });
+```
+
+For Telegram, the first-party adapter owns envelope normalization, private
+owner-chat filtering, forum-topic identity, threaded acknowledgements,
+chunking, direct Cloud delivery, receipt validation, and the generic lifecycle:
+
+```ts
+import {
+  createTelegramTurnAdapter
+} from '@agentworkforce/turn-kit';
+import { input } from '@agentworkforce/delivery';
+
+const telegramTurns = createTelegramTurnAdapter({
+  namespace: 'my-agent',
+  ownerChat: (ctx) => input(ctx, 'TELEGRAM_CHAT'),
+  memory: {
+    query: 'recent my-agent conversation',
+    assistantLabel: 'my-agent'
+  }
+});
+
+await telegramTurns.handle(ctx, {
+  payload: (await event.expand('full')).data,
+  respond: async ({ input, history, context, message, acknowledge }) => {
+    await acknowledge('Checking…');
+    // message.replyText carries the exact Telegram reply target when present.
+    return ctx.llm.complete(buildPrompt({
+      input,
+      history,
+      context,
+      replyText: message.replyText
+    }));
+  }
+});
+```
+
+Proactive output can join the same conversation without inventing a fake user
+message:
+
+```ts
+import {
+  conversationKey,
+  conversationTag,
+  rememberAssistantMessage,
+  type TurnConversation
+} from '@agentworkforce/turn-kit';
+import {
+  bareTelegramChatId,
+  input
+} from '@agentworkforce/delivery';
+
+const ownerChat = input(ctx, 'TELEGRAM_CHAT');
+if (!ownerChat) throw new Error('TELEGRAM_CHAT is required');
+const conversation: TurnConversation = {
+  transport: 'telegram',
+  id: conversationKey(bareTelegramChatId(ownerChat))
+};
+
+await rememberAssistantMessage(
+  ctx,
+  conversationTag('my-agent', conversation),
+  '⏰ Call Mom',
+  { label: 'my-agent' }
+);
 ```
 
 ## Agent Assistant alignment
@@ -155,9 +220,10 @@ and surfaced as `memorySaved: false`.
 
 The following boundaries are deliberate:
 
-- **Transport parsing and loop guards.** Slack, Telegram, relay inbox, and
-  future surfaces have different envelopes and threading rules. Normalize them
-  before calling the runner.
+- **Unsupported transport parsing and loop guards.** The included Telegram
+  adapter handles Telegram. Slack, relay inbox, and future surfaces should
+  normalize their provider-specific envelopes before calling the runner until
+  equivalent first-party adapters exist.
 - **Domain actions.** GitHub issue writes, Linear mutations, reminders, and
   other side effects must wait for their provider receipt. Build success text
   from confirmed action results, then return it from `respond`.
@@ -192,5 +258,5 @@ isolation.
 ## Partial adoption
 
 Handlers do not have to use the full runner. `recallTurnHistory()`,
-`rememberTurn()`, `collectTurnContext()`, and the conversation helpers are
-public for agents with a custom lifecycle.
+`rememberTurn()`, `rememberAssistantMessage()`, `collectTurnContext()`, and
+the conversation helpers are public for agents with a custom lifecycle.

@@ -7,6 +7,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- Add normalized Telegram inbound-message helpers, private owner-chat guards,
+  line-aware chunking, and receipt-required multi-chunk delivery.
+- Add a managed Cloud Telegram transport and make `createDelivery()` prefer it
+  over Relayfile writeback when Cloud credentials are available.
+
 ## [4.1.33] - 2026-07-18
 
 ### Fixed

@@ -140,7 +140,9 @@ export async function startRunner(options: StartRunnerOptions): Promise<void> {
     ...(options.subsystems?.workflow ?? cloudDefaults.workflow
       ? { workflow: options.subsystems?.workflow ?? cloudDefaults.workflow }
       : {}),
-    ...(options.subsystems?.schedule ? { schedule: options.subsystems.schedule } : {}),
+    ...(options.subsystems?.schedule ?? cloudDefaults.schedule
+      ? { schedule: options.subsystems?.schedule ?? cloudDefaults.schedule }
+      : {}),
     ...(options.subsystems?.log ? { log: options.subsystems.log } : {}),
     // Recorder write-root resolved once by cloud-defaults; identical to the
     // value cloud-defaults passes to the ai-hist MCP. Undefined locally/in

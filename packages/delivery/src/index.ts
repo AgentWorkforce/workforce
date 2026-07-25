@@ -33,3 +33,18 @@ export {
 } from './slack.js';
 
 export { input, list, withTimeout, fetchWithTimeout } from './helpers.js';
+
+export {
+  bareTelegramChatId,
+  chunkTelegramText,
+  createCloudTelegramTransport,
+  defaultTelegramTransport,
+  readTelegramMessage,
+  sendTelegramText,
+  telegramSkipReason,
+  type CloudTelegramTransportOptions,
+  type DefaultTelegramTransportOptions,
+  type TelegramInboundMessage,
+  type TelegramTextReceipt,
+  type TelegramTransport
+} from './telegram.js';

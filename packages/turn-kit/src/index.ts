@@ -12,6 +12,8 @@ export {
   conversationTag,
   normalizeTurnHistory,
   recallTurnHistory,
+  rememberAssistantMessage,
+  rememberTurnMessage,
   rememberTurn
 } from './memory.js';
 export { defineTurnPersona } from './persona.js';
@@ -27,6 +29,7 @@ export type {
   TurnConversation,
   TurnHistoryEntry,
   TurnMemoryOptions,
+  TurnMessageMemoryOptions,
   TurnRecallOrder,
   TurnRequest,
   TurnResponderArgs,
@@ -35,3 +38,12 @@ export type {
   TurnRunner,
   TurnRunnerOptions
 } from './types.js';
+
+export {
+  createTelegramTurnAdapter,
+  type TelegramTurnAdapter,
+  type TelegramTurnAdapterOptions,
+  type TelegramTurnHandleInput,
+  type TelegramTurnHandleResult,
+  type TelegramTurnResponderArgs
+} from './telegram.js';

@@ -5,6 +5,14 @@ file.
 
 ## [Unreleased]
 
+### Added
+
+- Add a Telegram turn adapter that owns envelope normalization, fail-closed
+  owner filtering, topic-aware conversation identity, reply threading,
+  chunking, confirmed delivery, and turn lifecycle wiring.
+- Add `rememberTurnMessage()` and `rememberAssistantMessage()` for proactive
+  output that should join conversation memory without a fabricated user turn.
+
 ## [4.1.36] - 2026-07-24
 
 ### Added
@@ -26,4 +34,3 @@ file.
   shape (`id`, `label`, `content`, source/category metadata).
 - Encode conversation-key components independently to prevent delimiter
   collisions, and sort timestamped history by parsed instants.
-

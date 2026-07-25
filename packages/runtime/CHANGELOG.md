@@ -7,6 +7,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- Add a managed Cloud `ctx.schedule` adapter with receipt-verified one-shot
+  registration, stable cancellation names, and durable list/get support.
+- Route the Agent Assistant proactive scheduler bridge through named dynamic
+  schedules so returned binding ids can be cancelled directly.
+
 ## [4.1.36] - 2026-07-24
 
 ### Added

@@ -1,5 +1,5 @@
-import { slackClient, telegramClient } from '@relayfile/relay-helpers';
-import type { SlackClient, TelegramClient } from '@relayfile/relay-helpers';
+import { slackClient } from '@relayfile/relay-helpers';
+import type { SlackClient } from '@relayfile/relay-helpers';
 import type { WorkforceCtx } from '@agentworkforce/runtime';
 import {
   resolveDeliveryTargets,
@@ -17,6 +17,12 @@ import {
 } from './types.js';
 import { defaultRelaycastSender } from './relaycast.js';
 import { requireSlackReceipt } from './slack.js';
+import {
+  createCloudTelegramTransport,
+  createRelayfileTelegramTransport,
+  defaultTelegramTransport,
+  type TelegramTransport
+} from './telegram.js';
 
 const WRITEBACK_TIMEOUT_MS = 45_000;
 
@@ -61,12 +67,21 @@ export function createDelivery(
   const slackNonBlocking = injectedSlack ?? (targets.includes('slack')
     ? slackClient({ writebackTimeoutMs: 0 })
     : undefined);
-  const telegramBlocking = injectedTelegram ?? (targets.includes('telegram')
-    ? telegramClient({ writebackTimeoutMs: WRITEBACK_TIMEOUT_MS })
-    : undefined);
-  const telegramNonBlocking = injectedTelegram ?? (targets.includes('telegram')
-    ? telegramClient({ writebackTimeoutMs: 0 })
-    : undefined);
+  const cloudTelegram = !injectedTelegram && targets.includes('telegram')
+    ? createCloudTelegramTransport(ctx)
+    : undefined;
+  const telegramBlocking = injectedTelegram ?? cloudTelegram ?? (
+    targets.includes('telegram')
+      ? defaultTelegramTransport(ctx, {
+          writebackTimeoutMs: WRITEBACK_TIMEOUT_MS
+        })
+      : undefined
+  );
+  const telegramNonBlocking = injectedTelegram ?? (
+    targets.includes('telegram')
+      ? createRelayfileTelegramTransport(ctx, { writebackTimeoutMs: 0 })
+      : undefined
+  );
 
   // Relaycast reply: address from the inbound event, client from the injected
   // sender or the default env-backed one (POST /v1/dm with a Relaycast token).
@@ -89,8 +104,8 @@ export function createDelivery(
 interface DeliveryTransportsInternal {
   slackBlocking?: SlackClient;
   slackNonBlocking?: SlackClient;
-  telegramBlocking?: TelegramClient;
-  telegramNonBlocking?: TelegramClient;
+  telegramBlocking?: TelegramTransport;
+  telegramNonBlocking?: TelegramTransport;
   relaycast?: { to: string; sender: RelaycastSender };
 }
 
@@ -151,8 +166,10 @@ class DeliveryClientImpl implements DeliveryClient {
 
     await Promise.all(tasks);
 
-    // In non-blocking mode, draft refs always succeed (no receipt wait to fail).
-    // Treat any ref as success. In blocking mode, require all targets to succeed.
+    // Non-blocking Slack/Telegram use Relayfile's zero-writeback path and
+    // return draft refs without a provider round-trip. Direct Cloud Telegram
+    // is intentionally reserved for blocking sends that require a receipt.
+    // Treat any draft ref as success; blocking mode requires every target.
     const ok = nonBlocking
       ? refs.length > 0
       : errors.length === 0 && refs.length === this.targets.length;
