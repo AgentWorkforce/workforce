@@ -23,6 +23,7 @@ import {
   resolveRelayMcpFromEnv
 } from './relay-mcp.js';
 import { createDefaultLlm } from './cloud-llm.js';
+import { createDefaultCloudScheduleContext } from './cloud-schedule.js';
 import { SandboxNotAvailableError } from './errors.js';
 import { spawnAndCapture, spawnNonInteractiveAndCapture } from './harness-process.js';
 import { appendNoReplyPromptContract } from './no-reply.js';
@@ -32,6 +33,7 @@ import type {
   HarnessRunResult,
   HarnessUsage,
   LlmContext,
+  ManagedScheduleContext,
   SandboxContext,
   WorkforceAgentContext,
   WorkforceCtx,
@@ -73,6 +75,7 @@ export interface CloudRuntimeDefaults {
   files: FilesContext;
   workflow?: WorkflowContext;
   llm?: LlmContext;
+  schedule?: ManagedScheduleContext;
   harnessRunner: (args: HarnessRunArgs) => Promise<HarnessRunResult>;
   /**
    * Resolved trajectory root for this deployment, or `undefined` when there is
@@ -109,11 +112,17 @@ export function createCloudRuntimeDefaults(options: CloudDefaultOptions): CloudR
     env,
     log: options.log
   });
+  const schedule = createDefaultCloudScheduleContext({
+    env,
+    workspaceId: options.workspaceId,
+    agentId: options.agent.id
+  });
   return {
     sandbox,
     files,
     ...(workflow ? { workflow } : {}),
     ...(llm ? { llm } : {}),
+    ...(schedule ? { schedule } : {}),
     ...(trajectoryRoot ? { trajectoryRoot } : {}),
     harnessRunner: createProcessHarnessRunner({
       ...options,

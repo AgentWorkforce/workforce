@@ -26,6 +26,7 @@ export type {
   MemoryItem,
   MemoryRecallOptions,
   MemorySaveOptions,
+  ManagedScheduleContext,
   RelayContext,
   RelaySendResult,
   RelayfileCredentials,
@@ -34,6 +35,9 @@ export type {
   SandboxExecArgs,
   SandboxExecResult,
   ScheduleContext,
+  ScheduleAtOptions,
+  ScheduleRecord,
+  ScheduleStatus,
   WorkflowContext,
   WorkflowRunHandle,
   WorkforceAgentContext,
@@ -49,6 +53,15 @@ export type {
   RelayfileChangeEvent,
   StartupEvent
 } from './types.js';
+
+export {
+  createCloudScheduleContext,
+  createDefaultCloudScheduleContext,
+  getSchedule,
+  isManagedScheduleContext,
+  listSchedules,
+  type CloudScheduleContextOptions
+} from './cloud-schedule.js';
 
 // Relay SDK event type guards, re-exported so persona handlers can narrow
 // `event` by type without importing `@agent-relay/events` directly.

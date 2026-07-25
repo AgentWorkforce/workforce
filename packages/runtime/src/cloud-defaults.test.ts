@@ -48,6 +48,19 @@ test('cloud trajectoryRoot: defaults to <workspaceRoot>/.trajectories in a cloud
   assert.equal(defaults.trajectoryRoot, path.join('/srv/work', '.trajectories'));
 });
 
+test('cloud defaults attach the managed schedule adapter when runner auth exists', () => {
+  const defaults = createCloudRuntimeDefaults({
+    ...base,
+    env: {
+      WORKFORCE_CLOUD_BASE_URL: 'https://cloud.example.test/cloud',
+      WORKFORCE_WORKSPACE_TOKEN: 'workspace-token'
+    }
+  });
+  assert.ok(defaults.schedule);
+  assert.equal(typeof defaults.schedule.at, 'function');
+  assert.equal(typeof defaults.schedule.list, 'function');
+});
+
 test('foldHarnessFailureOutput: surfaces stderr on a non-zero exit (the grok ENOENT case)', () => {
   // spawn('grok') ENOENT leaves stdout empty and writes the reason to stderr.
   // Without folding, callers building `... failed (exit 1): ${run.output}`
