@@ -5,6 +5,8 @@ file.
 
 ## [Unreleased]
 
+## [4.1.37] - 2026-07-25
+
 ### Added
 
 - Add a Telegram turn adapter that owns envelope normalization, fail-closed
