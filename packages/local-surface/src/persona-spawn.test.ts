@@ -56,6 +56,7 @@ test('coalesces concurrent node/project/persona launches and layers the task', a
   __setPersonaSpawnImplementationsForTest({
     resolvePersona: () => resolved,
     buildPlan: () => plan,
+    checkFleetCompatibility: () => undefined,
     executePlan: async (_plan, options) => {
       executeCalls += 1;
       assert.equal(options.mount?.autoSync, true);

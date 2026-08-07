@@ -2,6 +2,7 @@ import { mkdtemp, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join, resolve as resolvePath } from 'node:path';
 
+import * as fleetSdk from '@agent-relay/fleet';
 import {
   action,
   defineNode,
@@ -72,20 +73,24 @@ interface PreparedPersonaExecution {
 type ResolvePersona = typeof resolvePersonaReference;
 type BuildPlan = typeof buildPersonaSpawnPlan;
 type ExecutePlan = typeof executePersonaSpawnPlan;
+type CheckFleetCompatibility = () => void;
 
 let resolvePersonaImpl: ResolvePersona = resolvePersonaReference;
 let buildPlanImpl: BuildPlan = buildPersonaSpawnPlan;
 let executePlanImpl: ExecutePlan = executePersonaSpawnPlan;
+let checkFleetCompatibilityImpl: CheckFleetCompatibility = assertFleetCompatibility;
 
 /** @internal Test seam for SDK orchestration; not part of the stable API. */
 export function __setPersonaSpawnImplementationsForTest(input?: {
   resolvePersona?: ResolvePersona;
   buildPlan?: BuildPlan;
   executePlan?: ExecutePlan;
+  checkFleetCompatibility?: CheckFleetCompatibility;
 }): void {
   resolvePersonaImpl = input?.resolvePersona ?? resolvePersonaReference;
   buildPlanImpl = input?.buildPlan ?? buildPersonaSpawnPlan;
   executePlanImpl = input?.executePlan ?? executePersonaSpawnPlan;
+  checkFleetCompatibilityImpl = input?.checkFleetCompatibility ?? assertFleetCompatibility;
 }
 
 /**
@@ -101,6 +106,7 @@ export function workforcePersonaSpawnCapability(
   const active = new Map<string, PreparedPersonaExecution>();
 
   return action({}, async (rawInput, ctx) => {
+    checkFleetCompatibilityImpl();
     const input = parseSpawnInput(rawInput);
     const cwd = resolvePath(input.cwd ?? options.cwd ?? process.cwd());
     const resolved = resolvePersonaImpl(input.persona, {
@@ -222,6 +228,17 @@ async function launchResolvedPersona(input: {
     await execution?.dispose();
     await rm(scratchDir, { recursive: true, force: true });
     throw error;
+  }
+}
+
+function assertFleetCompatibility(): void {
+  const supported = (
+    fleetSdk as unknown as { FLEET_DYNAMIC_SPAWN_DELEGATION?: unknown }
+  ).FLEET_DYNAMIC_SPAWN_DELEGATION;
+  if (supported !== true) {
+    throw new Error(
+      'spawn:persona requires @agent-relay/fleet 11.5 or newer; older Fleet versions cannot delegate a persona action to its resolved harness'
+    );
   }
 }
 

@@ -32,7 +32,7 @@
     "lint": "tsc -p tsconfig.json --noEmit"
   },
   "dependencies": {
-    "@agent-relay/fleet": "^11.5.0",
+    "@agent-relay/fleet": "^11.4.2",
     "@agentworkforce/deploy": "workspace:*",
     "@agentworkforce/persona-kit": "workspace:*",
     "@agentworkforce/persona-registry": "workspace:*",
