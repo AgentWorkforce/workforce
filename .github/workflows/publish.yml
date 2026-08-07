@@ -92,16 +92,17 @@ jobs:
           #   compose         (leaf — TeamSpec parsing and preview planning)
           #   delivery        (→ runtime; consumed by external agents)
           #   workload-router (→ persona-kit; consumed by cli)
+          #   persona-registry (→ persona-kit + workload-router; consumed by local-surface + cli)
           #   deploy          (→ persona-kit + runtime; consumed by cli)
           #   review-kit      (→ persona-kit + runtime; authoring infrastructure)
           #   turn-kit        (→ persona-kit + runtime; multi-turn agent infrastructure)
           #   mcp-workforce   (→ persona-kit + runtime)
           #   daytona-runner  (no workspace deps)
-          #   local-surface   (→ deploy + persona-kit + runtime; consumed by cli)
-          #   cli             (→ persona-kit + workload-router + deploy + local-surface)
+          #   local-surface   (→ deploy + persona-kit + persona-registry + runtime; consumed by cli)
+          #   cli             (→ persona-kit + persona-registry + workload-router + deploy + local-surface)
           #   agentworkforce  (→ cli — umbrella wrapper, must publish last)
           # personas-core publishes via the separate publish-personas.yml workflow.
-          echo "packages=events persona-kit runtime compose delivery workload-router deploy review-kit turn-kit mcp-workforce daytona-runner local-surface cli agentworkforce" >> "$GITHUB_OUTPUT"
+          echo "packages=events persona-kit runtime compose delivery workload-router persona-registry deploy review-kit turn-kit mcp-workforce daytona-runner local-surface cli agentworkforce" >> "$GITHUB_OUTPUT"
 
       # Lockstep baseline heal. The workspace publishes every package at the
       # same version, so if any package's local version lags either its own

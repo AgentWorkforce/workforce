@@ -58,6 +58,9 @@ importers:
       '@agentworkforce/persona-kit':
         specifier: workspace:*
         version: link:../persona-kit
+      '@agentworkforce/persona-registry':
+        specifier: workspace:*
+        version: link:../persona-registry
       '@agentworkforce/runtime':
         specifier: workspace:*
         version: link:../runtime
@@ -137,14 +140,17 @@ importers:
   packages/local-surface:
     dependencies:
       '@agent-relay/fleet':
-        specifier: ^10.1.0
-        version: 10.2.0
+        specifier: ^11.5.0
+        version: 11.5.0
       '@agentworkforce/deploy':
         specifier: workspace:*
         version: link:../deploy
       '@agentworkforce/persona-kit':
         specifier: workspace:*
         version: link:../persona-kit
+      '@agentworkforce/persona-registry':
+        specifier: workspace:*
+        version: link:../persona-registry
       '@agentworkforce/runtime':
         specifier: workspace:*
         version: link:../runtime
@@ -188,6 +194,15 @@ importers:
   packages/persona-linear-dispatcher: {}
 
   packages/persona-nango-integrations: {}
+
+  packages/persona-registry:
+    dependencies:
+      '@agentworkforce/persona-kit':
+        specifier: workspace:*
+        version: link:../persona-kit
+      '@agentworkforce/workload-router':
+        specifier: workspace:*
+        version: link:../workload-router
 
   packages/persona-repo-router: {}
 

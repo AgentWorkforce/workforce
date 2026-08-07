@@ -8,6 +8,17 @@ import {
 import { deploy as deployPersona, type DeployIO, type ModeLaunchHandle } from '@agentworkforce/deploy';
 import type { RawGatewayEnvelope } from '@agentworkforce/runtime';
 
+export {
+  WORKFORCE_PERSONA_SPAWN_CAPABILITY,
+  __setPersonaSpawnImplementationsForTest,
+  defineWorkforcePersonaSpawnNode,
+  workforcePersonaSpawnCapability,
+  type DefineWorkforcePersonaSpawnNodeOptions,
+  type WorkforcePersonaSpawnInput,
+  type WorkforcePersonaSpawnOptions,
+  type WorkforcePersonaSpawnResult
+} from './persona-spawn.js';
+
 // Test seam: swap the `deploy()` call `launchPersonaRunner` makes without
 // changing `defineWorkforcePersonaNode`'s public signature. Not part of the
 // package's public contract — used by this package's own tests only.
