@@ -24,7 +24,7 @@ await serveNode({ definition, connection });
 The capability prepares the persona in process with `persona-kit`, including
 its skills, MCP servers, sidecars, harness, model, and harness settings. A
 request `task` is delivered separately as the concrete assignment. Concurrent
-requests for the same node, project, and persona share one launch, and the
+requests for the same node, project, persona, and agent name share one launch, and the
 Relay broker verifies node registration plus the harness `worker_ready`
 handshake before the action succeeds. This path requires Agent Relay 11.5 or
 newer. The isolated mount auto-syncs agent changes back to the project and
@@ -32,6 +32,6 @@ flushes once more during teardown.
 
 ## Proactive event persona
 
-`defineWorkforcePersonaNode` remains the long-lived `cloud: true` / `onEvent`
-surface. It composes `@agentworkforce/deploy` for a persona that consumes Relay
-message events rather than launching an interactive worker per request.
+`defineWorkforcePersonaNode` remains the long-lived channel `onMessage` surface.
+It composes `@agentworkforce/deploy` for a persona that consumes Relay message
+events rather than launching an interactive worker per request.

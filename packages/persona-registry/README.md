@@ -7,7 +7,7 @@ personal directory), then the built-in catalog.
 ```ts
 import { resolvePersonaReference } from '@agentworkforce/persona-registry';
 
-const resolved = resolvePersonaReference('code-reviewer', { cwd: process.cwd() });
+const resolved = resolvePersonaReference('persona-maker', { cwd: process.cwd() });
 console.log(resolved.selection.harness, resolved.selection.model);
 ```
 

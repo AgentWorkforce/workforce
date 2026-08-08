@@ -115,10 +115,9 @@ export function workforcePersonaSpawnCapability(
     });
     for (const warning of resolved.warnings) options.onWarning?.(warning);
 
-    // Same discipline as pear's personaSpawnRequestKey, but node-scoped: two
-    // callers racing to launch the same persona into the same project await a
-    // single preparation + capacity request.
-    const key = [ctx.node.name, cwd, resolved.path ?? resolved.spec.id].join('\u001f');
+    // A Relay identity is a capacity request. Coalesce only callers that name
+    // the same node, project, persona, and registered agent identity.
+    const key = [ctx.node.name, input.name, cwd, resolved.path ?? resolved.spec.id].join('\u001f');
     const existing = inFlight.get(key);
     if (existing) return existing;
 
@@ -163,7 +162,12 @@ async function launchResolvedPersona(input: {
   const scratchDir = await mkdtemp(join(tmpdir(), 'agentworkforce-relay-persona-'));
   let execution: ExecutionHandle | undefined;
   try {
-    const built = buildPlanImpl(resolved.selection);
+    const built = buildPlanImpl(resolved.selection, {
+      // Input values are resolved on the target node. Forward only declared
+      // input variables instead of serializing the node's whole environment
+      // into this inspectable plan.
+      processEnv: declaredInputEnv(resolved.selection)
+    });
     // Interactive CLI launches use an isolated mount by default even when the
     // persona has no custom filters. Preserve that safety property: skills,
     // AGENTS.md/CLAUDE.md, and generated MCP config must never overwrite the
@@ -240,6 +244,16 @@ function assertFleetCompatibility(): void {
       'spawn:persona requires @agent-relay/fleet 11.5 or newer; older Fleet versions cannot delegate a persona action to its resolved harness'
     );
   }
+}
+
+function declaredInputEnv(selection: ResolvedPersonaReference['selection']): NodeJS.ProcessEnv {
+  const env: NodeJS.ProcessEnv = {};
+  for (const [name, input] of Object.entries(selection.inputs ?? {})) {
+    const envName = input.env ?? name;
+    const value = process.env[envName];
+    if (typeof value === 'string') env[envName] = value;
+  }
+  return env;
 }
 
 function parseSpawnInput(value: unknown): WorkforcePersonaSpawnInput {

@@ -71,7 +71,7 @@ export function resolvePersonaReference(
 
   const cwd = options.cwd ?? process.cwd();
   const candidatePath = isAbsolute(selector) ? selector : resolvePath(cwd, selector);
-  const explicitPath = looksLikePath(selector) || existsSync(candidatePath);
+  const explicitPath = looksLikePath(selector);
   const baseConfig = loadPersonaSourceConfig(options);
   let lookupOptions = options;
   let lookupId = selector;

@@ -6,6 +6,7 @@ import {
   CODEX_APPROVAL_POLICIES,
   CODEX_SANDBOX_MODES,
   HARNESS_VALUES,
+  PERMISSION_MODES,
   SIDECAR_MD_MODES,
   type CodexApprovalPolicy,
   type CodexSandboxMode,
@@ -19,7 +20,8 @@ import {
   type PersonaSpec,
   type PersonaTag,
   type SidecarMdMode,
-  parseHarnessSettings
+  parseHarnessSettings,
+  parseInputs
 } from '@agentworkforce/persona-kit';
 import { listBuiltInPersonas, personaCatalog } from '@agentworkforce/workload-router';
 
@@ -243,11 +245,11 @@ function readRawPersonaSourceConfig(
   }
 }
 
-function dedupeDirs(dirs: readonly string[], warnings: string[]): string[] {
+function dedupeDirs(dirs: readonly string[], warnings: string[], baseDir: string): string[] {
   const seen = new Set<string>();
   const out: string[] = [];
   for (const dir of dirs) {
-    const normalized = normalizePersonaDir(dir);
+    const normalized = normalizePersonaDir(dir, baseDir);
     if (seen.has(normalized)) {
       warnings.push(`[config] duplicate persona source directory ${normalized}; keeping first.`);
       continue;
@@ -260,8 +262,10 @@ function dedupeDirs(dirs: readonly string[], warnings: string[]): string[] {
 
 export function loadPersonaSourceConfig(options: LoadOptions = {}): PersonaSourceConfig {
   const workforceHomeDir = options.workforceHomeDir ?? defaultWorkforceHomeDir();
+  const baseDir = options.cwd ?? process.cwd();
   const userPersonaDir = normalizePersonaDir(
-    options.userPersonaDir ?? options.homeDir ?? defaultUserPersonaDir(workforceHomeDir)
+    options.userPersonaDir ?? options.homeDir ?? defaultUserPersonaDir(workforceHomeDir),
+    baseDir
   );
   const configPath = normalizePersonaDir(
     options.configPath ?? defaultPersonaConfigPath(workforceHomeDir)
@@ -276,8 +280,7 @@ export function loadPersonaSourceConfig(options: LoadOptions = {}): PersonaSourc
     options.configPath !== undefined || options.workforceHomeDir !== undefined;
   const explicitUserScope =
     options.userPersonaDir !== undefined ||
-    options.homeDir !== undefined ||
-    Boolean(process.env.AGENT_WORKFORCE_CONFIG_DIR?.trim());
+    options.homeDir !== undefined;
   const configuredDirs =
     options.personaDirs ??
     (explicitConfigScope
@@ -289,7 +292,7 @@ export function loadPersonaSourceConfig(options: LoadOptions = {}): PersonaSourc
 
   return {
     configPath,
-    personaDirs: dedupeDirs(configuredDirs, warnings),
+    personaDirs: dedupeDirs(configuredDirs, warnings, baseDir),
     ...(defaultCreateTarget ? { defaultCreateTarget } : {}),
     userPersonaDir,
     warnings
@@ -516,9 +519,9 @@ function parseOverride(value: unknown, context: string): LocalPersonaOverride {
   if (raw.agentsMdMode !== undefined) assertSidecarMode(raw.agentsMdMode, `${context}.agentsMdMode`);
 
   return {
-    id: raw.id,
-    extends: raw.extends as string | undefined,
-    intent: raw.intent as string | undefined,
+    id: raw.id.trim(),
+    ...(typeof raw.extends === 'string' ? { extends: raw.extends.trim() } : {}),
+    ...(typeof raw.intent === 'string' ? { intent: raw.intent.trim() } : {}),
     ...(normalizedTags !== undefined ? { tags: normalizedTags } : {}),
     description: raw.description as string | undefined,
     skills: raw.skills as PersonaSpec['skills'] | undefined,
@@ -542,60 +545,11 @@ function parseOverride(value: unknown, context: string): LocalPersonaOverride {
   };
 }
 
-const INPUT_NAME_RE = /^[A-Z_][A-Z0-9_]*$/;
-
-function assertInputName(name: string, context: string): void {
-  if (!INPUT_NAME_RE.test(name)) {
-    throw new Error(`${context} must be an env-style name matching ${INPUT_NAME_RE.source}`);
-  }
-}
-
 function parseInputsShape(
   value: unknown,
   context: string
 ): Record<string, PersonaInputSpec> | undefined {
-  if (value === undefined) return undefined;
-  if (!isPlainObject(value)) {
-    throw new Error(`${context} must be an object if provided`);
-  }
-  const out: Record<string, PersonaInputSpec> = {};
-  for (const [name, raw] of Object.entries(value)) {
-    assertInputName(name, `${context}.${name}`);
-    if (typeof raw === 'string') {
-      if (!raw) throw new Error(`${context}.${name} default must be non-empty`);
-      out[name] = { default: raw };
-      continue;
-    }
-    if (!isPlainObject(raw)) {
-      throw new Error(`${context}.${name} must be a string default or an object`);
-    }
-    const spec = raw as Record<string, unknown>;
-    if (spec.description !== undefined && (typeof spec.description !== 'string' || !spec.description.trim())) {
-      throw new Error(`${context}.${name}.description must be a non-empty string if provided`);
-    }
-    if (spec.env !== undefined) {
-      if (typeof spec.env !== 'string' || !spec.env.trim()) {
-        throw new Error(`${context}.${name}.env must be a non-empty string if provided`);
-      }
-      assertInputName(spec.env, `${context}.${name}.env`);
-    }
-    if (spec.default !== undefined && (typeof spec.default !== 'string' || !spec.default)) {
-      throw new Error(`${context}.${name}.default must be a non-empty string if provided`);
-    }
-    if (spec.optional !== undefined && typeof spec.optional !== 'boolean') {
-      throw new Error(`${context}.${name}.optional must be a boolean if provided`);
-    }
-    if (spec.optional === true && spec.default !== undefined) {
-      throw new Error(`${context}.${name} cannot combine optional:true with a default`);
-    }
-    out[name] = {
-      ...(typeof spec.description === 'string' ? { description: spec.description } : {}),
-      ...(typeof spec.env === 'string' ? { env: spec.env } : {}),
-      ...(typeof spec.default === 'string' ? { default: spec.default } : {}),
-      ...(spec.optional === true ? { optional: true } : {})
-    };
-  }
-  return Object.keys(out).length > 0 ? out : undefined;
+  return parseInputs(value, context);
 }
 
 function assertStringMap(value: unknown, context: string): void {
@@ -656,8 +610,8 @@ function assertPermissionsShape(value: unknown, context: string): void {
     }
   }
   const mode = value.mode;
-  if (mode !== undefined && typeof mode !== 'string') {
-    throw new Error(`${context}.mode must be a string if provided`);
+  if (mode !== undefined && (!PERMISSION_MODES.includes(mode as typeof PERMISSION_MODES[number]))) {
+    throw new Error(`${context}.mode must be one of: ${PERMISSION_MODES.join(', ')}`);
   }
 }
 
@@ -665,6 +619,9 @@ function assertMountShape(value: unknown, context: string): void {
   if (value === undefined) return;
   if (!isPlainObject(value)) {
     throw new Error(`${context} must be an object if provided`);
+  }
+  if (value.enabled !== undefined && typeof value.enabled !== 'boolean') {
+    throw new Error(`${context}.enabled must be a boolean if provided`);
   }
   for (const key of ['ignoredPatterns', 'readonlyPatterns'] as const) {
     const list = value[key];
@@ -1053,10 +1010,10 @@ function mergeOverride(
   const harness = override.harness ?? base.harness;
   const model = override.model ?? base.model;
   const systemPrompt = override.systemPrompt ?? base.systemPrompt;
-  const harnessSettings: HarnessSettings = {
+  const harnessSettings: HarnessSettings = parseHarnessSettings({
     ...base.harnessSettings,
     ...(override.harnessSettings ?? {})
-  };
+  }, `persona[${override.id}].harnessSettings`);
 
   const env =
     override.env || base.env
@@ -1173,8 +1130,13 @@ function mergeMount(
     ...(base?.readonlyPatterns ?? []),
     ...(override?.readonlyPatterns ?? [])
   ];
-  if (ignoredPatterns.length === 0 && readonlyPatterns.length === 0) return undefined;
+  const enabled = override?.enabled ?? base?.enabled;
+  if (enabled === false) return { enabled: false };
+  if (ignoredPatterns.length === 0 && readonlyPatterns.length === 0) {
+    return enabled === true ? { enabled: true } : undefined;
+  }
   return {
+    ...(enabled !== undefined ? { enabled } : {}),
     ...(ignoredPatterns.length > 0 ? { ignoredPatterns } : {}),
     ...(readonlyPatterns.length > 0 ? { readonlyPatterns } : {})
   };

@@ -46,10 +46,14 @@ const plan: PersonaSpawnPlan = {
   env: {}
 };
 
-test('coalesces concurrent node/project/persona launches and layers the task', async () => {
+test('coalesces concurrent node/project/persona/name launches and layers the task', async () => {
   let executeCalls = 0;
   let spawnCalls = 0;
   let resolveSpawn: ((value: unknown) => void) | undefined;
+  let signalSpawnEntered: (() => void) | undefined;
+  const spawnEntered = new Promise<void>((resolve) => {
+    signalSpawnEntered = resolve;
+  });
   const spawnPending = new Promise<unknown>((resolve) => {
     resolveSpawn = resolve;
   });
@@ -67,6 +71,7 @@ test('coalesces concurrent node/project/persona launches and layers the task', a
   const node = defineWorkforcePersonaSpawnNode({ nodeName: 'persona-node', cwd: '/tmp/project' });
   const spawnAgent = async (input: unknown) => {
     spawnCalls += 1;
+    signalSpawnEntered?.();
     const value = input as {
       initialTask?: string;
       agent: {
@@ -98,11 +103,11 @@ test('coalesces concurrent node/project/persona launches and layers the task', a
       task: 'Review PR 42'
     }, ctx);
     const second = invokeNodeHandler(node, 'spawn:persona', {
-      name: 'reviewer-copy',
+      name: 'reviewer-42',
       persona: 'reviewer',
       task: 'Review PR 42'
     }, ctx);
-    await new Promise((resolve) => setImmediate(resolve));
+    await spawnEntered;
     assert.equal(executeCalls, 1);
     assert.equal(spawnCalls, 1);
     resolveSpawn?.({ ready: true });

@@ -7,16 +7,17 @@ import test from 'node:test';
 import { PersonaResolutionError, resolvePersonaReference } from './index.js';
 
 test('resolves a built-in persona to an interactive selection', () => {
-  const resolved = resolvePersonaReference('persona-maker', {
-    cwd: mkdtempSync(join(tmpdir(), 'persona-registry-built-in-')),
-    personaDirs: []
-  });
-
-  assert.equal(resolved.source, 'built-in');
-  assert.equal(resolved.spec.id, 'persona-maker');
-  assert.equal(resolved.selection.personaId, 'persona-maker');
-  assert.equal(resolved.selection.harness, resolved.spec.harness);
-  assert.equal(resolved.selection.model, resolved.spec.model);
+  const cwd = mkdtempSync(join(tmpdir(), 'persona-registry-built-in-'));
+  try {
+    const resolved = resolvePersonaReference('persona-maker', { cwd, personaDirs: [] });
+    assert.equal(resolved.source, 'built-in');
+    assert.equal(resolved.spec.id, 'persona-maker');
+    assert.equal(resolved.selection.personaId, 'persona-maker');
+    assert.equal(resolved.selection.harness, resolved.spec.harness);
+    assert.equal(resolved.selection.model, resolved.spec.model);
+  } finally {
+    rmSync(cwd, { recursive: true, force: true });
+  }
 });
 
 test('an explicit JSON path is the highest registry layer and inherits normally', () => {
@@ -61,9 +62,14 @@ test('an explicit JSON path is the highest registry layer and inherits normally'
 });
 
 test('unknown names fail with a typed resolution error', () => {
+  const cwd = mkdtempSync(join(tmpdir(), 'persona-registry-unknown-'));
+  try {
   assert.throws(
-    () => resolvePersonaReference('does-not-exist', { personaDirs: [] }),
+    () => resolvePersonaReference('does-not-exist', { cwd, personaDirs: [] }),
     (error: unknown) =>
       error instanceof PersonaResolutionError && error.code === 'unknown_persona'
   );
+  } finally {
+    rmSync(cwd, { recursive: true, force: true });
+  }
 });
