@@ -4,7 +4,39 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import test from 'node:test';
 
-import { PersonaResolutionError, resolvePersonaReference } from './index.js';
+import type { PersonaSpec } from '@agentworkforce/persona-kit';
+import { PersonaResolutionError, resolvePersonaReference, __mergeOverrideForTests } from './index.js';
+
+test('a later mount layer can re-enable inherited mount patterns', () => {
+  const base: PersonaSpec = {
+    id: 'base',
+    intent: 'review',
+    description: 'Base persona',
+    skills: [],
+    harness: 'codex',
+    model: 'openai-codex/test',
+    systemPrompt: 'Review',
+    harnessSettings: {},
+    mount: {
+      ignoredPatterns: ['.env'],
+      readonlyPatterns: ['docs/**']
+    }
+  };
+  const disabled = __mergeOverrideForTests(base, {
+    id: 'disabled',
+    mount: { enabled: false }
+  });
+  const reenabled = __mergeOverrideForTests(disabled, {
+    id: 'reenabled',
+    mount: { enabled: true }
+  });
+
+  assert.deepEqual(reenabled.mount, {
+    enabled: true,
+    ignoredPatterns: ['.env'],
+    readonlyPatterns: ['docs/**']
+  });
+});
 
 test('resolves a built-in persona to an interactive selection', () => {
   const cwd = mkdtempSync(join(tmpdir(), 'persona-registry-built-in-'));

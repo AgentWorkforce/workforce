@@ -118,3 +118,38 @@ test('coalesces concurrent node/project/persona/name launches and layers the tas
     __setPersonaSpawnImplementationsForTest();
   }
 });
+
+test('does not coalesce concurrent launches with distinct agent names', async () => {
+  let executeCalls = 0;
+  let spawnCalls = 0;
+  __setPersonaSpawnImplementationsForTest({
+    resolvePersona: () => resolved,
+    buildPlan: () => plan,
+    checkFleetCompatibility: () => undefined,
+    executePlan: async () => {
+      executeCalls += 1;
+      return { cwd: `/tmp/persona-runtime-${executeCalls}`, dispose: async () => undefined };
+    }
+  });
+
+  const node = defineWorkforcePersonaSpawnNode({ nodeName: 'persona-node', cwd: '/tmp/project' });
+  const ctx = {
+    node: { name: 'persona-node', capabilities: ['spawn:persona'] },
+    relay: { sendMessage: async () => undefined },
+    spawnAgent: async () => {
+      spawnCalls += 1;
+      return { ready: true };
+    }
+  } satisfies FleetActionContext;
+
+  try {
+    await Promise.all([
+      invokeNodeHandler(node, 'spawn:persona', { name: 'reviewer-42', persona: 'reviewer' }, ctx),
+      invokeNodeHandler(node, 'spawn:persona', { name: 'reviewer-43', persona: 'reviewer' }, ctx)
+    ]);
+    assert.equal(executeCalls, 2);
+    assert.equal(spawnCalls, 2);
+  } finally {
+    __setPersonaSpawnImplementationsForTest();
+  }
+});

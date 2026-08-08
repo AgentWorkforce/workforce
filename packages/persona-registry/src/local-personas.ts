@@ -1131,7 +1131,6 @@ function mergeMount(
     ...(override?.readonlyPatterns ?? [])
   ];
   const enabled = override?.enabled ?? base?.enabled;
-  if (enabled === false) return { enabled: false };
   if (ignoredPatterns.length === 0 && readonlyPatterns.length === 0) {
     return enabled === true ? { enabled: true } : undefined;
   }
