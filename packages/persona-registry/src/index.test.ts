@@ -16,7 +16,7 @@ test('a later mount layer can re-enable inherited mount patterns', () => {
     harness: 'codex',
     model: 'openai-codex/test',
     systemPrompt: 'Review',
-    harnessSettings: {},
+    harnessSettings: { reasoning: 'medium', timeoutSeconds: 60 },
     mount: {
       ignoredPatterns: ['.env'],
       readonlyPatterns: ['docs/**']
