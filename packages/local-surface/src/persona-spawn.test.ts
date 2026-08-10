@@ -1,4 +1,7 @@
 import assert from 'node:assert/strict';
+import { mkdtemp, rm, stat, writeFile } from 'node:fs/promises';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 import test from 'node:test';
 
 import { invokeNodeHandler, type FleetActionContext } from '@agent-relay/fleet';
@@ -151,5 +154,82 @@ test('does not coalesce concurrent launches with distinct agent names', async ()
     assert.equal(spawnCalls, 2);
   } finally {
     __setPersonaSpawnImplementationsForTest();
+  }
+});
+
+test('hands relayfile a nonexistent mount path before reaching broker spawn', async () => {
+  let spawnCalls = 0;
+  __setPersonaSpawnImplementationsForTest({
+    resolvePersona: () => resolved,
+    buildPlan: () => plan,
+    checkFleetCompatibility: () => undefined,
+    executePlan: async (_plan, options) => {
+      const mountDir = options.mount?.mountDir;
+      assert.ok(mountDir);
+      await assert.rejects(stat(mountDir), (error: unknown) => {
+        return (error as NodeJS.ErrnoException).code === 'ENOENT';
+      });
+      return { cwd: mountDir, dispose: async () => undefined };
+    }
+  });
+
+  const node = defineWorkforcePersonaSpawnNode({ nodeName: 'persona-node', cwd: '/tmp/project' });
+  const ctx = {
+    node: { name: 'persona-node', capabilities: ['spawn:persona'] },
+    relay: { sendMessage: async () => undefined },
+    spawnAgent: async () => {
+      spawnCalls += 1;
+      return { ready: true };
+    }
+  } satisfies FleetActionContext;
+
+  try {
+    await invokeNodeHandler(
+      node,
+      'spawn:persona',
+      { name: 'reviewer-mount-contract', persona: 'reviewer' },
+      ctx
+    );
+    assert.equal(spawnCalls, 1);
+  } finally {
+    __setPersonaSpawnImplementationsForTest();
+  }
+});
+
+test('real relayfile mount completes before broker spawn is invoked', async () => {
+  const project = await mkdtemp(join(tmpdir(), 'persona-spawn-mount-project-'));
+  await writeFile(join(project, 'input.txt'), 'mounted');
+  let spawnCalls = 0;
+  const brokerReached = new Error('broker spawn reached');
+  __setPersonaSpawnImplementationsForTest({
+    resolvePersona: () => resolved,
+    buildPlan: () => plan,
+    checkFleetCompatibility: () => undefined
+  });
+
+  const node = defineWorkforcePersonaSpawnNode({ nodeName: 'persona-node', cwd: project });
+  const ctx = {
+    node: { name: 'persona-node', capabilities: ['spawn:persona'] },
+    relay: { sendMessage: async () => undefined },
+    spawnAgent: async () => {
+      spawnCalls += 1;
+      throw brokerReached;
+    }
+  } satisfies FleetActionContext;
+
+  try {
+    await assert.rejects(
+      invokeNodeHandler(
+        node,
+        'spawn:persona',
+        { name: 'reviewer-real-mount', persona: 'reviewer' },
+        ctx
+      ),
+      brokerReached
+    );
+    assert.equal(spawnCalls, 1);
+  } finally {
+    __setPersonaSpawnImplementationsForTest();
+    await rm(project, { recursive: true, force: true });
   }
 });

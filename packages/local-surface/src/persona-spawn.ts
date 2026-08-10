@@ -160,6 +160,10 @@ async function launchResolvedPersona(input: {
 }): Promise<WorkforcePersonaSpawnResult> {
   const { resolved, ctx } = input;
   const scratchDir = await mkdtemp(join(tmpdir(), 'agentworkforce-relay-persona-'));
+  // @relayfile/local-mount owns mountDir: createMount() either creates a
+  // missing path or reuses one carrying its .relayfile-local-mount marker.
+  // Keep our cleanup root separate and hand it a nonexistent child path.
+  const mountDir = join(scratchDir, 'mount');
   let execution: ExecutionHandle | undefined;
   try {
     const built = buildPlanImpl(resolved.selection, {
@@ -180,7 +184,7 @@ async function launchResolvedPersona(input: {
         };
     execution = await executePlanImpl(plan, {
       cwd: input.cwd,
-      mount: { mountDir: scratchDir, includeGit: true, autoSync: true }
+      mount: { mountDir, includeGit: true, autoSync: true }
     });
 
     const args = plan.initialPrompt ? [...plan.args, plan.initialPrompt] : [...plan.args];
