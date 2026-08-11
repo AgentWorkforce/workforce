@@ -8,6 +8,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- `@agentworkforce/persona-registry` exposes the CLI's built-in, project,
+  personal, configured-directory, and exact JSON-path persona resolution as an
+  in-process SDK.
+- `@agentworkforce/local-surface` adds a deduplicated `spawn:persona` Fleet
+  capability. It prepares interactive personas through `persona-kit`, layers a
+  concrete task over standing instructions, auto-syncs isolated-mount changes,
+  and requests verified Relay registration and readiness without invoking the
+  `agentworkforce` binary. It requires `@agent-relay/fleet` 11.5 or newer.
+
 ## [4.1.15] - 2026-07-13
 
 ### Added
@@ -34,4 +45,3 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - `@agentworkforce/cli`: requires `@relayfile/local-mount` ^0.10.23
   (git-list population, `attachMount`, exported autosync state, and the
   external-teardown safety guard).
-

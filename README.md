@@ -312,6 +312,11 @@ grammar, skill staging, and sandbox mount behavior live in
   triggers.
 - `packages/workload-router` — TypeScript SDK for typed persona and routing
   profile resolution.
+- `packages/persona-registry` — in-process resolution of persona ids and exact
+  JSON paths through the CLI's project, personal, configured, and built-in
+  source cascade.
+- `packages/local-surface` — Agent Relay fleet-node adapters for proactive
+  personas and verified interactive `spawn:persona` launches.
 - `packages/cli` — command-line implementation used by the `agentworkforce`
   wrapper.
 - `packages/runtime` — deploy runtime facade and per-integration clients.

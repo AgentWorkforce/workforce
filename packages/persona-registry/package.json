@@ -1,5 +1,5 @@
 {
-  "name": "@agentworkforce/local-surface",
+  "name": "@agentworkforce/persona-registry",
   "version": "4.1.37",
   "private": false,
   "type": "module",
@@ -19,7 +19,7 @@
   "repository": {
     "type": "git",
     "url": "https://github.com/AgentWorkforce/workforce",
-    "directory": "packages/local-surface"
+    "directory": "packages/persona-registry"
   },
   "publishConfig": {
     "access": "public"
@@ -32,10 +32,7 @@
     "lint": "tsc -p tsconfig.json --noEmit"
   },
   "dependencies": {
-    "@agent-relay/fleet": "^11.5.0",
-    "@agentworkforce/deploy": "workspace:*",
     "@agentworkforce/persona-kit": "workspace:*",
-    "@agentworkforce/persona-registry": "workspace:*",
-    "@agentworkforce/runtime": "workspace:*"
+    "@agentworkforce/workload-router": "workspace:*"
   }
 }

@@ -15,6 +15,7 @@
     "@agentworkforce/events": "workspace:*",
     "@agentworkforce/local-surface": "workspace:*",
     "@agentworkforce/persona-kit": "workspace:*",
+    "@agentworkforce/persona-registry": "workspace:*",
     "@agentworkforce/runtime": "workspace:*",
     "@agentworkforce/workload-router": "workspace:*",
     "@relayburn/sdk": "^2.5.2",
