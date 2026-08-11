@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import { mkdtemp, rm, stat, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
-import { join } from 'node:path';
+import { dirname, join } from 'node:path';
 import test from 'node:test';
 
 import { invokeNodeHandler, type FleetActionContext } from '@agent-relay/fleet';
@@ -50,6 +50,7 @@ const plan: PersonaSpawnPlan = {
 };
 
 test('coalesces concurrent node/project/persona/name launches and layers the task', async () => {
+  const scratchDirs = new Set<string>();
   let executeCalls = 0;
   let spawnCalls = 0;
   let resolveSpawn: ((value: unknown) => void) | undefined;
@@ -67,6 +68,8 @@ test('coalesces concurrent node/project/persona/name launches and layers the tas
     executePlan: async (_plan, options) => {
       executeCalls += 1;
       assert.equal(options.mount?.autoSync, true);
+      assert.ok(options.mount?.mountDir);
+      scratchDirs.add(dirname(options.mount.mountDir));
       return { cwd: '/tmp/persona-runtime', dispose: async () => undefined };
     }
   });
@@ -119,18 +122,22 @@ test('coalesces concurrent node/project/persona/name launches and layers the tas
     assert.equal((a as { persona: string }).persona, 'reviewer');
   } finally {
     __setPersonaSpawnImplementationsForTest();
+    await removeScratchDirs(scratchDirs);
   }
 });
 
 test('does not coalesce concurrent launches with distinct agent names', async () => {
+  const scratchDirs = new Set<string>();
   let executeCalls = 0;
   let spawnCalls = 0;
   __setPersonaSpawnImplementationsForTest({
     resolvePersona: () => resolved,
     buildPlan: () => plan,
     checkFleetCompatibility: () => undefined,
-    executePlan: async () => {
+    executePlan: async (_plan, options) => {
       executeCalls += 1;
+      assert.ok(options.mount?.mountDir);
+      scratchDirs.add(dirname(options.mount.mountDir));
       return { cwd: `/tmp/persona-runtime-${executeCalls}`, dispose: async () => undefined };
     }
   });
@@ -154,10 +161,12 @@ test('does not coalesce concurrent launches with distinct agent names', async ()
     assert.equal(spawnCalls, 2);
   } finally {
     __setPersonaSpawnImplementationsForTest();
+    await removeScratchDirs(scratchDirs);
   }
 });
 
 test('hands relayfile a nonexistent mount path before reaching broker spawn', async () => {
+  const scratchDirs = new Set<string>();
   let spawnCalls = 0;
   __setPersonaSpawnImplementationsForTest({
     resolvePersona: () => resolved,
@@ -166,6 +175,7 @@ test('hands relayfile a nonexistent mount path before reaching broker spawn', as
     executePlan: async (_plan, options) => {
       const mountDir = options.mount?.mountDir;
       assert.ok(mountDir);
+      scratchDirs.add(dirname(mountDir));
       await assert.rejects(stat(mountDir), (error: unknown) => {
         return (error as NodeJS.ErrnoException).code === 'ENOENT';
       });
@@ -193,6 +203,12 @@ test('hands relayfile a nonexistent mount path before reaching broker spawn', as
     assert.equal(spawnCalls, 1);
   } finally {
     __setPersonaSpawnImplementationsForTest();
+    await removeScratchDirs(scratchDirs);
+    for (const scratchDir of scratchDirs) {
+      await assert.rejects(stat(scratchDir), (error: unknown) => {
+        return (error as NodeJS.ErrnoException).code === 'ENOENT';
+      });
+    }
   }
 });
 
@@ -233,3 +249,9 @@ test('real relayfile mount completes before broker spawn is invoked', async () =
     await rm(project, { recursive: true, force: true });
   }
 });
+
+async function removeScratchDirs(scratchDirs: Iterable<string>): Promise<void> {
+  await Promise.all(
+    [...scratchDirs].map((scratchDir) => rm(scratchDir, { recursive: true, force: true }))
+  );
+}
