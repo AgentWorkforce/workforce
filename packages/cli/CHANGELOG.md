@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [4.1.39] - 2026-08-11
+
+### Added
+
+- **Expose SDK-backed persona fleet spawning** (#307)
+
 ## [4.1.36] - 2026-07-24
 
 ### Changed

@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [4.1.39] - 2026-08-11
+
+### Added
+
+- **Add Slack inbound message helpers to delivery/src/slack.ts**
+
 ## [4.1.37] - 2026-07-25
 
 ### Added
