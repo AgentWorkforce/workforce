@@ -6,6 +6,116 @@ import {
   type IntegrationClientOptions
 } from '@agentworkforce/runtime';
 
+// ── Inbound message handling ──────────────────────────────────────────────────
+// Parallel to telegram.ts: readTelegramMessage / telegramSkipReason / bareTelegramChatId.
+
+export interface SlackInboundMessage {
+  channel: string;
+  ts: string;
+  threadTs?: string;
+  text: string;
+  user?: string;
+  isBot: boolean;
+  subtype?: string;
+}
+
+function slackAsRecord(value: unknown): Record<string, unknown> | null {
+  return value && typeof value === 'object' && !Array.isArray(value)
+    ? (value as Record<string, unknown>)
+    : null;
+}
+function slackStr(value: unknown): string | undefined {
+  return typeof value === 'string' && value.length > 0 ? value : undefined;
+}
+
+/**
+ * Strip the `__name` suffix the platform appends to channel ids in some payloads
+ * (e.g. `/slack/channels/{id__name}/**`). Bare Slack ids never contain `__`, so
+ * this is a safe no-op when the id is already bare. Use it before comparing
+ * channels, keying memory, or calling the Slack API.
+ *
+ * Parallel to `bareTelegramChatId` in telegram.ts.
+ */
+export function bareSlackChannelId(channel: string): string {
+  return channel.split('__')[0];
+}
+
+/** Strip a leading `<@U…>`/`@name` mention so the question text is clean. */
+export function stripSlackLeadingMention(text: string): string {
+  return text.replace(/^\s*<@[^>]+>\s*/, '').replace(/^\s*@\S+\s*/, '');
+}
+
+/**
+ * Conversation key for continuity. A threaded message keys on its thread; a
+ * top-level message keys on the CHANNEL itself, so consecutive top-level
+ * messages in a dedicated chat channel form one continuous conversation.
+ */
+export function conversationKeyForSlack(msg: SlackInboundMessage): string {
+  const chanId = bareSlackChannelId(msg.channel);
+  return msg.threadTs ? `${chanId}:${msg.threadTs}` : chanId;
+}
+
+/**
+ * Parse a Slack message envelope into a normalized shape, or null if unusable.
+ *
+ * Parallel to `readTelegramMessage` in telegram.ts.
+ */
+export function readSlackMessage(payload: unknown): SlackInboundMessage | null {
+  const rec = slackAsRecord(payload);
+  if (!rec) return null;
+  const unwrapped = slackAsRecord(rec.data) ?? rec;
+  const raw = slackAsRecord(unwrapped.raw_event) ?? unwrapped;
+
+  const channel = slackStr(unwrapped.channel) ?? slackStr(raw.channel);
+  if (!channel) return null;
+  const ts =
+    slackStr(unwrapped.ts) ??
+    slackStr(raw.ts) ??
+    slackStr(unwrapped.event_ts) ??
+    slackStr(raw.event_ts);
+  if (!ts) return null;
+
+  return {
+    channel,
+    ts,
+    threadTs:
+      slackStr(unwrapped.thread_ts) ??
+      slackStr(unwrapped.threadTs) ??
+      slackStr(raw.thread_ts),
+    text: slackStr(unwrapped.text) ?? slackStr(raw.text) ?? '',
+    user: slackStr(unwrapped.user) ?? slackStr(raw.user),
+    isBot:
+      Boolean(unwrapped.is_bot ?? raw.is_bot) ||
+      Boolean(slackStr(unwrapped.bot_id) ?? slackStr(raw.bot_id)),
+    subtype: slackStr(unwrapped.subtype) ?? slackStr(raw.subtype)
+  };
+}
+
+/**
+ * Return why an inbound Slack message must be ignored, or null to handle it.
+ *
+ * Skips bot messages (loop guard), message subtypes (edits, joins), the wrong
+ * channel, and empty text. Does NOT check for a bot @mention — agents in shared
+ * channels (pr-shepherd, joke-bot) should add that guard themselves: fail closed
+ * when botUserId is unset, check `rawText.includes(\`<@${botUserId}>\`)`.
+ *
+ * Parallel to `telegramSkipReason` in telegram.ts.
+ */
+export function slackSkipReason(
+  msg: SlackInboundMessage,
+  boardChannel: string | undefined
+): string | null {
+  if (msg.isBot) return 'bot message';
+  if (msg.subtype) return `slack subtype ${msg.subtype}`;
+  if (!boardChannel || bareSlackChannelId(msg.channel) !== bareSlackChannelId(boardChannel)) {
+    return 'not the chat channel';
+  }
+  if (!stripSlackLeadingMention(msg.text).trim()) return 'empty message text';
+  return null;
+}
+
+// ── Roster helpers ─────────────────────────────────────────────────────────────
+
 export interface SlackUser {
   id: string;
   handle: string;
