@@ -15,6 +15,8 @@ import {
   buildPickCandidates,
   buildRelayfileMountPatterns,
   buildMountGitExcludeBlock,
+  buildNativeResumeArgs,
+  buildRelayhistoryContextPrompt,
   buildSpawnSummary,
   buildSidecarBody,
   configureGitForMount,
@@ -29,6 +31,7 @@ import {
   readSingleCharChoice,
   resolveEnvCheckIntervalMs,
   resolveSystemPromptPlaceholders,
+  prepareRelayhistoryResume,
   stripAgentFlag,
   type ImproverProposal,
   type ResolvedSidecar
@@ -141,6 +144,84 @@ test('parseAgentArgs: --dry-run sets flag and preserves positional selector', ()
   assert.equal(flags.installInRepo, false);
   assert.equal(flags.noLaunchMetadata, false);
   assert.deepEqual(positional, ['local-codex@best']);
+});
+
+test('parseAgentArgs: --resume and --cli accept values in either supported form', () => {
+  const split = parseAgentArgs(['--resume', 'relay-session-1', '--cli', 'codex', 'local-codex']);
+  assert.equal(split.flags.resumeSessionId, 'relay-session-1');
+  assert.equal(split.flags.cli, 'codex');
+  assert.deepEqual(split.positional, ['local-codex']);
+
+  const equals = parseAgentArgs(['--resume=relay-session-2', '--cli=claude', 'local-claude']);
+  assert.equal(equals.flags.resumeSessionId, 'relay-session-2');
+  assert.equal(equals.flags.cli, 'claude');
+});
+
+test('native resume argv uses each CLI\'s actual syntax', () => {
+  assert.deepEqual(
+    buildNativeResumeArgs('claude', ['--model', 'sonnet'], 'claude-session'),
+    ['--model', 'sonnet', '--resume', 'claude-session']
+  );
+  assert.deepEqual(
+    buildNativeResumeArgs('codex', ['-m', 'gpt-5'], 'codex-session'),
+    ['resume', 'codex-session', '-m', 'gpt-5']
+  );
+});
+
+test('cross-CLI context prompt preserves turn roles and persona instructions', () => {
+  const prompt = buildRelayhistoryContextPrompt(
+    [
+      { role: 'user', content: 'Implement session continuity.' },
+      { role: 'assistant', content: 'I will update the launcher.' }
+    ],
+    'Use the existing persona conventions.'
+  );
+  assert.match(prompt, /\[USER\][\s\S]*Implement session continuity/);
+  assert.match(prompt, /\[ASSISTANT\][\s\S]*update the launcher/);
+  assert.match(prompt, /Current persona instructions:[\s\S]*existing persona conventions/);
+});
+
+test('prepareRelayhistoryResume chooses native or cross-CLI context mode', async () => {
+  const originalFetch = globalThis.fetch;
+  const urls: string[] = [];
+  globalThis.fetch = (async (input: string | URL | Request) => {
+    const url = String(input);
+    urls.push(url);
+    if (url.endsWith('/turns')) {
+      return new Response(JSON.stringify({
+        turns: [{ role: 'assistant', content: 'Prior Codex turn.' }]
+      }), { status: 200 });
+    }
+    return new Response(JSON.stringify({
+      metadata: { nativeCli: 'claude', nativeResumeId: 'native-claude-id' }
+    }), { status: 200 });
+  }) as typeof fetch;
+  try {
+    const native = await prepareRelayhistoryResume({
+      sessionId: 'relay-1',
+      env: { RELAYHISTORY_URL: 'https://history.example.test' }
+    });
+    assert.deepEqual(native, {
+      sessionId: 'relay-1',
+      targetCli: 'claude',
+      mode: 'native',
+      nativeResumeId: 'native-claude-id'
+    });
+    assert.equal(urls.length, 1);
+
+    const crossCli = await prepareRelayhistoryResume({
+      sessionId: 'relay-1',
+      requestedCli: 'codex',
+      personaPrompt: 'Resume as the codex persona.',
+      env: { RELAYHISTORY_URL: 'https://history.example.test' }
+    });
+    assert.equal(crossCli.mode, 'context');
+    assert.equal(crossCli.targetCli, 'codex');
+    assert.match(crossCli.contextPrompt ?? '', /Prior Codex turn/);
+    assert.equal(urls.length, 3);
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
 });
 
 test('parseAgentArgs: --no-skill-cache and --refresh-skills set flags', () => {
