@@ -157,14 +157,10 @@ test('parseAgentArgs: --resume and --cli accept values in either supported form'
   assert.equal(equals.flags.cli, 'claude');
 });
 
-test('native resume argv uses each CLI\'s actual syntax', () => {
+test('native resume argv is reserved for Claude', () => {
   assert.deepEqual(
-    buildNativeResumeArgs('claude', ['--model', 'sonnet'], 'claude-session'),
+    buildNativeResumeArgs(['--model', 'sonnet'], 'claude-session'),
     ['--model', 'sonnet', '--resume', 'claude-session']
-  );
-  assert.deepEqual(
-    buildNativeResumeArgs('codex', ['-m', 'gpt-5'], 'codex-session'),
-    ['resume', 'codex-session', '-m', 'gpt-5']
   );
 });
 
@@ -181,7 +177,7 @@ test('cross-CLI context prompt preserves turn roles and persona instructions', (
   assert.match(prompt, /Current persona instructions:[\s\S]*existing persona conventions/);
 });
 
-test('prepareRelayhistoryResume chooses native or cross-CLI context mode', async () => {
+test('prepareRelayhistoryResume uses Claude native mode and Codex journal context mode', async () => {
   const originalFetch = globalThis.fetch;
   const urls: string[] = [];
   globalThis.fetch = (async (input: string | URL | Request) => {
@@ -219,6 +215,15 @@ test('prepareRelayhistoryResume chooses native or cross-CLI context mode', async
     assert.equal(crossCli.targetCli, 'codex');
     assert.match(crossCli.contextPrompt ?? '', /Prior Codex turn/);
     assert.equal(urls.length, 3);
+
+    const codexJournal = await prepareRelayhistoryResume({
+      sessionId: 'relay-1',
+      requestedCli: 'codex',
+      env: { RELAYHISTORY_URL: 'https://history.example.test' }
+    });
+    assert.equal(codexJournal.mode, 'context');
+    assert.equal(codexJournal.targetCli, 'codex');
+    assert.equal(urls.length, 5);
   } finally {
     globalThis.fetch = originalFetch;
   }

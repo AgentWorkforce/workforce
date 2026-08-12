@@ -1751,16 +1751,12 @@ export function buildRelayhistoryContextPrompt(
     .join('\n\n');
 }
 
-/** Build the native resume argv while preserving each CLI's real syntax. */
+/** Claude is the only CLI with a Relayhistory-native resume mode. */
 export function buildNativeResumeArgs(
-  cli: RelayhistoryCli,
   args: readonly string[],
   nativeResumeId: string
 ): string[] {
-  // Claude exposes --resume; current Codex exposes the `resume <id>` subcommand.
-  return cli === 'claude'
-    ? [...args, '--resume', nativeResumeId]
-    : ['resume', nativeResumeId, ...args];
+  return [...args, '--resume', nativeResumeId];
 }
 
 export async function prepareRelayhistoryResume(input: {
@@ -1787,7 +1783,13 @@ export async function prepareRelayhistoryResume(input: {
     );
   }
 
-  if (targetCli === metadata.nativeCli && metadata.nativeResumeId) {
+  // Codex session IDs remain useful journal identifiers, but are not passed
+  // to its native CLI. Only Claude can resume Relayhistory metadata natively.
+  if (
+    targetCli === 'claude' &&
+    metadata.nativeCli === 'claude' &&
+    metadata.nativeResumeId
+  ) {
     return {
       sessionId: input.sessionId,
       targetCli,
@@ -1811,7 +1813,7 @@ export async function prepareRelayhistoryResume(input: {
   };
 }
 
-function nativeResumeIdFromTranscript(
+function sessionArtifactIdFromTranscript(
   cli: RelayhistoryCli,
   transcriptPath: string
 ): string | undefined {
@@ -1839,9 +1841,9 @@ function pauseWithoutKeepingProcessAlive(ms: number): Promise<void> {
 }
 
 /**
- * Native IDs only exist after the CLI writes its transcript header. Polling
- * starts immediately after spawn and posts metadata as soon as that header is
- * visible, without making interactive startup wait on Relayhistory I/O.
+ * The harness writes its session artifact only after startup. Polling begins
+ * immediately after spawn and posts Relayhistory metadata as soon as that
+ * header is visible, without making interactive startup wait on network I/O.
  */
 function beginRelayhistoryNativeSessionCapture(input: {
   cli: RelayhistoryCli;
@@ -1858,14 +1860,16 @@ function beginRelayhistoryNativeSessionCapture(input: {
         sessionCwd: input.sessionCwd,
         startedAt: input.startedAt
       });
-      const nativeResumeId = transcriptPath
-        ? nativeResumeIdFromTranscript(input.cli, transcriptPath)
+      const sessionArtifactId = transcriptPath
+        ? sessionArtifactIdFromTranscript(input.cli, transcriptPath)
         : undefined;
-      if (nativeResumeId) {
-        const sessionId = input.relayhistorySessionId ?? nativeResumeId;
+      if (sessionArtifactId) {
+        const sessionId = input.relayhistorySessionId ?? sessionArtifactId;
         const metadata = {
           nativeCli: input.cli,
-          nativeResumeId,
+          // Codex is journal-only: its on-disk ID identifies turns but must
+          // never be supplied to `codex resume` via Relayhistory.
+          ...(input.cli === 'claude' ? { nativeResumeId: sessionArtifactId } : {}),
           sessionOwner:
             process.env.RELAY_SESSION_OWNER ?? process.env.RELAY_AGENT_NAME ?? process.env.USER ?? 'unknown',
           originNode: process.env.RELAY_ORIGIN_NODE ?? process.env.HOSTNAME ?? hostname()
@@ -1885,7 +1889,7 @@ function beginRelayhistoryNativeSessionCapture(input: {
       }
       await pauseWithoutKeepingProcessAlive(250);
     }
-    process.stderr.write('warning: native CLI session ID was not found; Relayhistory metadata was not updated.\n');
+    process.stderr.write('warning: CLI session artifact was not found; Relayhistory metadata was not updated.\n');
   })().catch((err) => {
     process.stderr.write(`warning: ${(err as Error).message}\n`);
   });
@@ -2496,7 +2500,7 @@ async function runInteractive(
     );
   }
   if (options.resume?.mode === 'native' && options.resume.nativeResumeId) {
-    effectiveArgs = buildNativeResumeArgs(harness as RelayhistoryCli, effectiveArgs, options.resume.nativeResumeId);
+    effectiveArgs = buildNativeResumeArgs(effectiveArgs, options.resume.nativeResumeId);
   }
   const initialPrompt =
     options.resume?.mode === 'context' ? options.resume.contextPrompt : spec.initialPrompt;
@@ -3816,7 +3820,7 @@ async function runAgentSelector(
       die(`agent: could not resume Relayhistory session: ${(err as Error).message}`);
     }
     process.stderr.write(
-      `• relayhistory: ${resume.mode === 'native' ? 'native same-CLI resume' : 'cross-CLI context restore'} via ${resume.targetCli}\n`
+      `• relayhistory: ${resume.mode === 'native' ? 'Claude native resume' : 'turn-journal context restore'} via ${resume.targetCli}\n`
     );
   }
   const selection = {
