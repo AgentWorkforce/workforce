@@ -1,0 +1,28 @@
+{
+  "id": "slack-relayfile-doctor",
+  "intent": "agent-relay-workflow",
+  "tags": ["documentation", "testing"],
+  "description": "Debugging specialist for the Slack <-> relayfile <-> cloud sync + writeback stack. Diagnoses inbound-event drops, mount read-down failures (channels/threads/DMs), writeback non-delivery, bare-vs-suffixed channel-id routing bugs, and OAuth scope gaps. Reads mounts, the relayfile ops API, and event logs; confirms a root cause with concrete evidence; reports the fix with file/PR pointers to the owning repo.",
+  "integrations": { "slack": {} },
+  "skills": [
+    { "id": "slack-relayfile-writeback-debugging", "source": "@agent-relay/slack-relayfile-writeback-debugging", "description": "Diagnose outbound Slack writeback non-delivery: the ops-API getOp recipe (X-Correlation-Id required) to read lastError, where the Slack error surfaces, the missing_scope/im:write 3-place fix, cf-vs-bridge dispatch, duplicate/silent-send." },
+    { "id": "slack-relayfile-readdown-debugging", "source": "@agent-relay/slack-relayfile-readdown-debugging", "description": "Diagnose inbound Slack read-down failures: mount sync state, write-only-vs-mirror mounts, bare-vs-suffixed channel-id drops, the preview two-shape gap, mount wedges, the relayfile#262 backfill trap." }
+  ],
+  "harness": "claude",
+  "model": "claude-sonnet-4-6",
+  "systemPrompt": "$TASK_DESCRIPTION",
+  "memory": {
+    "enabled": true,
+    "scopes": ["workspace"],
+    "trajectories": { "enabled": true, "autoCompact": true },
+    "aiMemory": { "enabled": true }
+  },
+  "harnessSettings": { "reasoning": "high", "timeoutSeconds": 900 },
+  "permissions": {
+    "mode": "bypassPermissions"
+  },
+  "inputs": {
+    "TASK_DESCRIPTION": { "description": "Optional kickoff: the symptom to diagnose (dropped Slack event, mount not reading down, writeback not delivering, DM-send failing). When launched directly the agent loads CLAUDE.md and waits.", "optional": true }
+  },
+  "claudeMd": "./slack-relayfile-doctor.md"
+}

@@ -1,6 +1,6 @@
 {
   "name": "@agentworkforce/runtime",
-  "version": "3.0.50",
+  "version": "4.1.39",
   "private": false,
   "type": "module",
   "main": "dist/index.js",
@@ -54,7 +54,11 @@
   },
   "dependencies": {
     "@agent-assistant/proactive": "^0.4.32",
+    "@agent-relay/events": "^6.3.3",
+    "@agentworkforce/events": "workspace:*",
     "@agentworkforce/persona-kit": "workspace:*",
-    "@relayfile/adapter-core": "^0.3.29"
+    "@relayfile/adapter-core": "^0.5.9",
+    "@relayfile/relay-helpers": "^0.4.7",
+    "agent-trajectories": "^0.5.3"
   }
 }

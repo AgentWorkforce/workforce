@@ -19,7 +19,8 @@ Flags:
   --agent <selector>     Agent the run belongs to (agentId, deployedName,
                          or persona slug). Without it, every agent in the
                          workspace is checked for the run id.
-  --fixture <file>       Write the envelope fixture to <file>.
+  --fixture <file>       Write the legacy replay fixture to <file>.
+  --bundle <file>        Write the richer replay bundle to <file>.
                          Default: stdout.
   --workspace <name>     Workforce workspace; defaults to the active one.
   --cloud-url <url>      Override the workforce cloud base URL.
@@ -33,6 +34,7 @@ export interface RunsExportOptions {
   runId: string;
   agent?: string;
   fixturePath?: string;
+  bundlePath?: string;
   workspace?: string;
   cloudUrl?: string;
   noPrompt?: boolean;
@@ -52,6 +54,7 @@ export function parseRunsArgs(args: readonly string[]): ParsedRunsArgs {
   let runId: string | undefined;
   let agent: string | undefined;
   let fixturePath: string | undefined;
+  let bundlePath: string | undefined;
   let workspace: string | undefined;
   let cloudUrl: string | undefined;
   let noPrompt = false;
@@ -68,6 +71,10 @@ export function parseRunsArgs(args: readonly string[]): ParsedRunsArgs {
       fixturePath = expectValue('--fixture', rest[++i]);
     } else if (a.startsWith('--fixture=')) {
       fixturePath = expectInline('--fixture', a.slice('--fixture='.length));
+    } else if (a === '--bundle') {
+      bundlePath = expectValue('--bundle', rest[++i]);
+    } else if (a.startsWith('--bundle=')) {
+      bundlePath = expectInline('--bundle', a.slice('--bundle='.length));
     } else if (a === '--workspace') {
       workspace = expectValue('--workspace', rest[++i]);
     } else if (a.startsWith('--workspace=')) {
@@ -90,6 +97,9 @@ export function parseRunsArgs(args: readonly string[]): ParsedRunsArgs {
   if (!runId) {
     throw new Error('runs export: missing run id. Usage: agentworkforce runs export <runId>');
   }
+  if (fixturePath && bundlePath) {
+    throw new Error('runs export: --fixture and --bundle are mutually exclusive');
+  }
 
   return {
     action: 'export',
@@ -97,6 +107,7 @@ export function parseRunsArgs(args: readonly string[]): ParsedRunsArgs {
       runId,
       ...(agent ? { agent } : {}),
       ...(fixturePath ? { fixturePath: path.resolve(fixturePath) } : {}),
+      ...(bundlePath ? { bundlePath: path.resolve(bundlePath) } : {}),
       ...(workspace ? { workspace } : {}),
       ...(cloudUrl ? { cloudUrl } : {}),
       ...(noPrompt ? { noPrompt: true } : {})
@@ -121,6 +132,7 @@ type EnvelopeResponse = {
   omitted?: unknown;
   envelope?: unknown;
 };
+type ReplayBundleResponse = Record<string, unknown>;
 
 export interface RunsIO {
   stdout: (text: string) => void;
@@ -179,13 +191,14 @@ async function runRunsExport(opts: RunsExportOptions, io: RunsIO): Promise<void>
     throw new Error(`no deployed agents found in workspace ${ctx.workspace}`);
   }
 
-  let payload: EnvelopeResponse | null = null;
+  let payload: EnvelopeResponse | ReplayBundleResponse | null = null;
   let matchedAgent: DeploymentAgent | null = null;
   for (const agent of candidates) {
+    const endpoint = opts.bundlePath ? 'bundle' : 'envelope';
     const url = new URL(
       `/api/v1/workspaces/${encodeURIComponent(ctx.workspace)}` +
         `/deployments/${encodeURIComponent(agent.agentId)}` +
-        `/runs/${encodeURIComponent(opts.runId)}/envelope`,
+        `/runs/${encodeURIComponent(opts.runId)}/${endpoint}`,
       ctx.cloudUrl
     );
     try {
@@ -213,20 +226,20 @@ async function runRunsExport(opts: RunsExportOptions, io: RunsIO): Promise<void>
     );
   }
 
-  const interpreted = interpretEnvelopeResponse(payload, opts.runId, matchedAgent.deployedName);
-  if (!interpreted.ok) {
-    throw new Error(interpreted.error);
-  }
+  const rendered = opts.bundlePath
+    ? interpretReplayBundleResponse(payload as ReplayBundleResponse, opts.runId, matchedAgent.deployedName)
+    : interpretEnvelopeResponse(payload as EnvelopeResponse, opts.runId, matchedAgent.deployedName);
+  if (!rendered.ok) throw new Error(rendered.error);
 
-  const fixture = interpreted.fixture;
-  if (opts.fixturePath) {
-    await writeFile(opts.fixturePath, fixture, 'utf8');
+  if (opts.fixturePath || opts.bundlePath) {
+    const outputPath = opts.fixturePath ?? opts.bundlePath!;
+    await writeFile(outputPath, rendered.fixture, 'utf8');
     io.stderr(
-      `exported envelope for run ${opts.runId} (agent ${matchedAgent.deployedName}) to ${opts.fixturePath}\n` +
-        `replay with: agentworkforce invoke <persona-path> --fixture ${opts.fixturePath}\n`
+      `exported ${opts.bundlePath ? 'bundle' : 'fixture'} for run ${opts.runId} (agent ${matchedAgent.deployedName}) to ${outputPath}\n` +
+        `replay with: agentworkforce invoke <persona-path> --fixture ${outputPath}\n`
     );
   } else {
-    io.stdout(fixture);
+    io.stdout(rendered.fixture);
   }
 }
 
@@ -270,6 +283,20 @@ export function interpretEnvelopeResponse(
       '(runs before cloud#1841 deployed predate capture). ' +
       'Re-fire the agent or use `agentworkforce invoke --scaffold <type>`.'
   };
+}
+
+export function interpretReplayBundleResponse(
+  payload: ReplayBundleResponse,
+  runId: string,
+  agentName: string
+): { ok: true; fixture: string } | { ok: false; error: string } {
+  if (!payload || typeof payload !== 'object' || Array.isArray(payload)) {
+    return {
+      ok: false,
+      error: `run ${runId} (agent ${agentName}): replay bundle endpoint returned a non-object payload`
+    };
+  }
+  return { ok: true, fixture: `${JSON.stringify(payload, null, 2)}\n` };
 }
 
 /**

@@ -14,6 +14,7 @@ agentworkforce persona compile <path/to/persona.ts|persona.js>
 agentworkforce install [flags] <pkg|path>
 agentworkforce deploy <path/to/persona.json|persona.ts|persona.js> [flags]
 agentworkforce integrations [provider] [--all] [--json]
+agentworkforce trigger <agent-name-or-id> [--workspace <id>] [--cloud-url <url>] [--json] [--no-prompt]
 agentworkforce sources <list|add|remove>
 agentworkforce harness check
 agentworkforce destroy <persona-or-agent-id> [--workspace <id>] [--cloud-url <url>] [--no-prompt]
@@ -36,6 +37,9 @@ agentworkforce --version
   an authored source module such as `persona.ts` or `persona.js`.
 - `integrations` — discover available integrations, known trigger events, and
   connection status for the active workspace.
+- `trigger` — manually fire an active deployed persona for testing. The
+  selector accepts agent id, compact agent id, deployed name, persona slug, or
+  persona id, and posts to the same cloud trigger endpoint used by the dashboard.
 - `sources` — list, add, or remove persona source directories.
 - `harness check` — probe which harnesses (`claude`, `codex`, `opencode`, `grok`, `cursor`)
   are installed. See [`## Harness check`](#harness-check) below.
@@ -44,7 +48,8 @@ agentworkforce --version
   JSON path (slug resolved via the workspace's agents index) or a literal
   agent UUID. Exits `0` on success, `2` when the agent is unknown or
   already destroyed, `1` for any other failure.
-- `--version` — print the installed package version.
+- `--version` — print the exact validated CLI implementation version selected
+  by the top-level wrapper.
 
 ## Install
 

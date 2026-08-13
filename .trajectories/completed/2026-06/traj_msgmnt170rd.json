@@ -1,0 +1,38 @@
+{
+  "id": "traj_msgmnt170rd",
+  "version": 1,
+  "task": { "title": "Fix Slack messages + DM mounts stuck write-only (zero read-down)" },
+  "status": "completed",
+  "startedAt": "2026-06-08T17:20:00.000Z",
+  "completedAt": "2026-06-08T17:50:00.000Z",
+  "agents": [ { "name": "default", "role": "lead", "joinedAt": "2026-06-08T17:20:00.000Z" } ],
+  "chapters": [ {
+    "id": "chap_msgmnt170rd",
+    "title": "Work",
+    "agentName": "default",
+    "startedAt": "2026-06-08T17:20:00.000Z",
+    "endedAt": "2026-06-08T17:50:00.000Z",
+    "events": [ {
+      "ts": 1780940520000,
+      "type": "decision",
+      "content": "Root cause: messages and users/<U>/messages mounts were sync=write-only -> flip both to mirror (pear#170)",
+      "raw": {
+        "question": "Why is there zero read-down on Slack channel/thread/inbound-DM content?",
+        "chosen": "Flip messages + users/<U>/messages mounts from write-only to mirror (pear#170); activate via rebuild + restart",
+        "alternatives": ["poll Slack out-of-band on a timer", "treat as a cloud sync-lag bug", "add a separate read-only mount alongside the write mount"],
+        "reasoning": "The messages and users/<U>/messages mounts were configured sync=write-only, so inbound content never materialized — read-down was structurally impossible, not sync lag. Flipped both to mirror (pear#170), activated by rebuild + restart (build 4f3a28e); channel/thread/inbound-DM read-down then verified live with content. CAVEAT discovered: the relayfile#262 fast-path trap — write-only sets BootstrapComplete, so on restart the bootstrap full-pull is skipped and already-missed records (e.g. DM 1780931083) are NOT backfilled; clearState is required to force a full re-pull. Also: mirror does NOT auto-delete dispatched writebacks."
+      },
+      "significance": "high"
+    } ]
+  } ],
+  "retrospective": {
+    "summary": "Slack messages + DM mounts had sync=write-only, making read-down impossible. pear#170 flipped them to mirror (build 4f3a28e); read-down verified live. Watch the relayfile#262 fast-path trap (BootstrapComplete skips restart backfill — needs clearState) and that mirror does not auto-delete dispatched writebacks.",
+    "approach": "Check mount sync mode FIRST when read-down is totally absent (vs partial/lagging); a write-only mount is a config bug, not a sync bug.",
+    "confidence": 0.9
+  },
+  "commits": [],
+  "filesChanged": [],
+  "projectId": "/Users/khaliqgant/Projects/AgentWorkforce/pear",
+  "tags": ["slack", "relayfile", "mount", "write-only", "mirror", "backfill", "bug"],
+  "_trace": { "startRef": "f326e47", "endRef": "f326e47" }
+}

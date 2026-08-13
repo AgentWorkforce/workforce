@@ -4,7 +4,7 @@ import { tmpdir } from 'node:os';
 import path from 'node:path';
 import test from 'node:test';
 import notionEssayPr from './agent.js';
-import type { WorkforceCtx, WorkforceProviderEvent } from '@agentworkforce/runtime';
+import { envelopeToAgentEvent, type WorkforceCtx, type WorkforceEvent } from '@agentworkforce/runtime';
 
 const FAKE_RECEIPT_URL = 'https://github.com/AgentWorkforce/proactive-agents/pull/17';
 
@@ -110,17 +110,16 @@ class MockNotionEssayRuntime {
     }
   }
 
-  async spawnAndDispatch(agent: { handler: (ctx: WorkforceCtx, event: WorkforceProviderEvent) => Promise<void> | void }): Promise<void> {
+  async spawnAndDispatch(agent: { handler: (ctx: WorkforceCtx, event: WorkforceEvent) => Promise<void> | void }): Promise<void> {
     this.sandboxSpawned = true;
     this.files.set('/workspace/AGENTS.md', '# Agent: notion-essay-pr\n');
-    await agent.handler(this.ctx(), {
+    const event = envelopeToAgentEvent({
       id: 'evt-page-123',
-      source: 'notion',
-      type: 'page.created',
-      workspaceId: 'ws-proactive',
+      workspace: 'ws-proactive',
+      type: 'notion.page.created',
       occurredAt: '2026-05-13T12:00:00.000Z',
       attempt: 1,
-      payload: {
+      resource: {
         pageId: 'page-123',
         title: 'Launch notes'
       },
@@ -128,6 +127,8 @@ class MockNotionEssayRuntime {
         title: 'Launch notes'
       }
     });
+    if (!event) throw new Error('failed to build test event');
+    await agent.handler(this.ctx(), event);
   }
 
   async collectPullRequestWritebacks(): Promise<Array<Record<string, unknown>>> {
@@ -243,6 +244,17 @@ class MockNotionEssayRuntime {
         async cancel() {
           /* unused */
         }
+      },
+      trajectory: {
+        async chapter() {},
+        async note() {},
+        async decide() {},
+        async error() {},
+        async done() {}
+      },
+      relay: {
+        async dm() { return { ok: false }; },
+        async post() { return { ok: false }; }
       },
       log: () => undefined
     };

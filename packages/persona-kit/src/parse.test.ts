@@ -61,11 +61,11 @@ test('parsePersonaSpec accepts a minimal valid flat spec', () => {
   assert.equal(spec.harnessSettings.reasoning, 'medium');
 });
 
-test('parsePersonaSpec strips unknown top-level fields silently', () => {
-  const raw = validSpec({ unknownField: 'should be dropped', extra: { nested: true } });
+test('parsePersonaSpec preserves unknown top-level fields for downstream consumers', () => {
+  const raw = validSpec({ futurePolicy: 'cloud-owned', extra: { nested: true } });
   const spec = parsePersonaSpec(raw, 'documentation');
-  assert.ok(!('unknownField' in spec), 'unknown fields are not preserved on the parsed spec');
-  assert.ok(!('extra' in spec));
+  assert.equal(spec.futurePolicy, 'cloud-owned');
+  assert.deepEqual(spec.extra, { nested: true });
 });
 
 test('parsePersonaSpec accepts deploy-v1 optional fields (connection-only integrations)', () => {
@@ -74,7 +74,10 @@ test('parsePersonaSpec accepts deploy-v1 optional fields (connection-only integr
       cloud: true,
       useSubscription: true,
       integrations: {
-        github: { scope: { repo: 'AgentWorkforce/workforce' } }
+        github: {
+          scope: { repo: 'AgentWorkforce/workforce' },
+          futureConnectionPolicy: { installationMode: 'workspace' }
+        }
       },
       memory: { enabled: true, scopes: ['workspace'], ttlDays: 30 },
       onEvent: './agent.ts'
@@ -84,6 +87,9 @@ test('parsePersonaSpec accepts deploy-v1 optional fields (connection-only integr
 
   assert.equal(spec.cloud, true);
   assert.equal(spec.integrations?.github.scope?.repo, 'AgentWorkforce/workforce');
+  assert.deepEqual(spec.integrations?.github.futureConnectionPolicy, {
+    installationMode: 'workspace'
+  });
   assert.deepEqual(spec.memory, { enabled: true, scopes: ['workspace'], ttlDays: 30 });
   assert.equal(spec.onEvent, './agent.ts');
 });
@@ -141,7 +147,13 @@ test('parsePersonaSpec accepts the Relayfile-VFS example personas', () => {
   // Triggers moved to agent.ts; persona declares the github/slack connections.
   assert.ok(reviewAgent.integrations?.github);
   assert.ok(reviewAgent.integrations?.slack);
-  assert.deepEqual(reviewAgent.memory, { enabled: true, scopes: ['workspace'] });
+  // Example opts into both memory facets (object form) alongside long-form memory.
+  assert.deepEqual(reviewAgent.memory, {
+    enabled: true,
+    scopes: ['workspace'],
+    trajectories: { enabled: true, autoCompact: true },
+    aiMemory: { enabled: true }
+  });
 
   const linearShipper = parsePersonaFixture('examples/linear-shipper/persona.json');
   assert.equal(linearShipper.id, 'linear-shipper');
@@ -339,15 +351,29 @@ test('parseInputs rejects names that violate the env-var convention', () => {
   assert.throws(() => parseInputs({ foo: 'x' }, 'inputs'), /inputs\.foo must be an env-style name/);
 });
 
-test('parseInputs keeps a picker alongside env/optional', () => {
+test('parseInputs keeps a picker and forwards input/picker extensions', () => {
   const inputs = parseInputs(
     {
-      BENJAMIN: { env: 'BENJAMIN', optional: true, picker: { provider: 'slack', resource: 'users' } }
+      BENJAMIN: {
+        env: 'BENJAMIN',
+        optional: true,
+        futureInputPolicy: { visibility: 'workspace' },
+        picker: {
+          provider: 'slack',
+          resource: 'users',
+          futurePagination: 'cursor'
+        }
+      }
     },
     'inputs'
   );
-  assert.deepEqual(inputs?.BENJAMIN.picker, { provider: 'slack', resource: 'users' });
+  assert.deepEqual(inputs?.BENJAMIN.picker, {
+    provider: 'slack',
+    resource: 'users',
+    futurePagination: 'cursor'
+  });
   assert.equal(inputs?.BENJAMIN.optional, true);
+  assert.deepEqual(inputs?.BENJAMIN.futureInputPolicy, { visibility: 'workspace' });
 });
 
 test('parseInputs rejects a picker missing provider or resource', () => {
@@ -578,7 +604,10 @@ test('parseMemory accepts boolean + object forms and validates scopes', () => {
       scopes: ['user', 'user', 'workspace', 'global'],
       ttlDays: 7,
       autoPromote: true,
-      dedupMs: 0
+      dedupMs: 0,
+      futureMemoryPolicy: { retentionClass: 'durable' },
+      trajectories: { enabled: true, futureTrajectoryPolicy: 'cloud' },
+      aiMemory: { dbPath: '/tmp/history.db', futureRecallMode: 'hybrid' }
     },
     'memory'
   );
@@ -588,7 +617,10 @@ test('parseMemory accepts boolean + object forms and validates scopes', () => {
     scopes: ['user', 'workspace', 'global'],
     ttlDays: 7,
     autoPromote: true,
-    dedupMs: 0
+    dedupMs: 0,
+    futureMemoryPolicy: { retentionClass: 'durable' },
+    trajectories: { enabled: true, futureTrajectoryPolicy: 'cloud' },
+    aiMemory: { dbPath: '/tmp/history.db', futureRecallMode: 'hybrid' }
   });
 });
 
@@ -645,12 +677,69 @@ test('parseSchedules validates cron, requires unique names, preserves tz when se
 test('parseIntegrations preserves scope (connection-only); rejects persona-level triggers', () => {
   const i = parseIntegrations(
     {
-      github: { scope: { repo: 'org/r' } },
+      github: {
+        scope: { repo: 'org/r' },
+        config: {
+          materialization: {
+            default: 'lazy',
+            webhookWritesForLazyRepos: true,
+            rules: [
+              {
+                repos: ['org/r'],
+                resources: ['issues', 'pulls'],
+                issues: { mode: 'eager', filter: { state: 'open', labels: ['p0'] } },
+                pulls: 'eager'
+              }
+            ]
+          }
+        }
+      },
+      gitlab: {
+        scope: { projectPath: 'org/r' },
+        config: {
+          materialization: {
+            default: 'lazy',
+            webhookWritesForLazyProjects: true,
+            rules: [
+              {
+                projects: ['org/r'],
+                resources: ['issues', 'merge_requests'],
+                issues: { mode: 'eager', filter: { state: 'opened', labels: ['p0'] } },
+                merge_requests: 'eager'
+              }
+            ]
+          }
+        }
+      },
       linear: {} // no scope — still a declared connection
     },
     'integrations'
   );
   assert.equal(i?.github.scope?.repo, 'org/r');
+  assert.deepEqual(i?.github.config?.materialization, {
+    default: 'lazy',
+    webhookWritesForLazyRepos: true,
+    rules: [
+      {
+        repos: ['org/r'],
+        resources: ['issues', 'pulls'],
+        issues: { mode: 'eager', filter: { state: 'open', labels: ['p0'] } },
+        pulls: 'eager'
+      }
+    ]
+  });
+  assert.deepEqual(i?.gitlab.config?.materialization, {
+    default: 'lazy',
+    webhookWritesForLazyProjects: true,
+    rules: [
+      {
+        projects: ['org/r'],
+        resources: ['issues', 'merge_requests'],
+        issues: { mode: 'eager', filter: { state: 'opened', labels: ['p0'] } },
+        merge_requests: 'eager'
+      }
+    ]
+  });
   // Default-injected source keeps existing personas resolving against
   // the deploying user's `user_integrations` row.
   assert.deepEqual(i?.github.source, { kind: 'deployer_user' });
@@ -663,25 +752,126 @@ test('parseIntegrations preserves scope (connection-only); rejects persona-level
   );
 });
 
+test('parseIntegrations accepts optional integrations enabled by persona input', () => {
+  const i = parseIntegrations(
+    {
+      slack: { optional: true, enabledByInput: 'SLACK_CHANNEL' }
+    },
+    'integrations'
+  );
+
+  assert.equal(i?.slack.optional, true);
+  assert.equal(i?.slack.enabledByInput, 'SLACK_CHANNEL');
+});
+
+test('parseIntegrations validates optional integration activation shape', () => {
+  assert.throws(
+    () => parseIntegrations({ slack: { optional: 'yes' } }, 'integrations'),
+    /integrations\.slack\.optional must be a boolean/
+  );
+  assert.throws(
+    () => parseIntegrations({ slack: { optional: true } }, 'integrations'),
+    /integrations\.slack\.enabledByInput is required when optional is true/
+  );
+  assert.throws(
+    () => parseIntegrations({ slack: { enabledByInput: 'SLACK_CHANNEL' } }, 'integrations'),
+    /integrations\.slack\.optional must be true when enabledByInput is set/
+  );
+  assert.throws(
+    () => parseIntegrations({ slack: { optional: true, enabledByInput: 'slack_channel' } }, 'integrations'),
+    /integrations\.slack\.enabledByInput must be an env-style name/
+  );
+});
+
+test('parseIntegrations rejects non-plain adapter config values', () => {
+  assert.throws(
+    () => parseIntegrations({ github: { config: null } }, 'integrations'),
+    /integrations\.github\.config must be a plain object/
+  );
+  assert.throws(
+    () => parseIntegrations({ github: { config: ['materialization'] } }, 'integrations'),
+    /integrations\.github\.config must be a plain object/
+  );
+});
+
 test('parseAgentSpec validates launchedBy plus provider-keyed triggers, schedules, and watch', () => {
   const agent = parseAgentSpec({
+    futureDispatchPolicy: { queue: 'priority' },
     launchedBy: 'team-dispatcher',
     triggers: {
       github: [
         { on: 'pull_request.opened' },
-        { on: 'issue_comment.created', match: '@mention' }
+        {
+          on: 'issue_comment.created',
+          match: '@mention',
+          paths: ['/github/repos/AgentWorkforce/workforce/issues/**'],
+          maxConcurrency: 1,
+          conditions: { labels: ['ready'] },
+          futureTriggerOption: ['cloud-owned']
+        }
       ],
-      slack: [{ on: 'app_mention' }]
+      slack: [{ on: 'app_mention', paths: ['/slack/channels/C_REVIEW/**'] }]
     },
-    schedules: [{ name: 'nightly', cron: '0 2 * * *', tz: 'UTC' }],
-    watch: [{ paths: ['/github/x.json'], events: ['created'] }]
+    schedules: [
+      { name: ' nightly ', cron: ' 0 2 * * * ', tz: ' UTC ', jitterSeconds: 30 }
+    ],
+    watch: [
+      {
+        paths: ['/github/x.json'],
+        events: ['created', 'updated', 'created'],
+        conditions: { changedFields: ['state'] },
+        futureWatchOption: true
+      }
+    ]
   });
   assert.equal(agent.triggers?.github.length, 2);
   assert.equal(agent.triggers?.github[1].match, '@mention');
+  assert.deepEqual(agent.triggers?.github[1].paths, [
+    '/github/repos/AgentWorkforce/workforce/issues/**'
+  ]);
+  assert.equal(agent.triggers?.github[1].maxConcurrency, 1);
+  assert.deepEqual(agent.triggers?.github[1].conditions, { labels: ['ready'] });
+  assert.deepEqual(agent.triggers?.github[1].futureTriggerOption, ['cloud-owned']);
   assert.equal(agent.triggers?.slack[0].on, 'app_mention');
+  assert.deepEqual(agent.triggers?.slack[0].paths, ['/slack/channels/C_REVIEW/**']);
   assert.equal(agent.schedules?.[0].name, 'nightly');
+  assert.equal(agent.schedules?.[0].cron, '0 2 * * *');
+  assert.equal(agent.schedules?.[0].tz, 'UTC');
+  assert.equal(agent.schedules?.[0].jitterSeconds, 30);
   assert.equal(agent.watch?.[0].paths[0], '/github/x.json');
+  assert.deepEqual(agent.watch?.[0].events, ['created', 'updated']);
+  assert.deepEqual(agent.watch?.[0].conditions, { changedFields: ['state'] });
+  assert.equal(agent.watch?.[0].futureWatchOption, true);
   assert.equal(agent.launchedBy, 'team-dispatcher');
+  assert.deepEqual(agent.futureDispatchPolicy, { queue: 'priority' });
+});
+
+test('parseAgentSpec omits invalid trigger maxConcurrency values', () => {
+  const agent = parseAgentSpec({
+    triggers: {
+      github: [
+        { on: 'absent' },
+        { on: 'valid', maxConcurrency: 2 },
+        { on: 'zero', maxConcurrency: 0 },
+        { on: 'negative', maxConcurrency: -1 },
+        { on: 'fractional', maxConcurrency: 1.5 },
+        { on: 'nan', maxConcurrency: NaN },
+        { on: 'infinity', maxConcurrency: Infinity },
+        { on: 'string', maxConcurrency: '1' }
+      ]
+    }
+  });
+
+  assert.deepEqual(agent.triggers?.github, [
+    { on: 'absent' },
+    { on: 'valid', maxConcurrency: 2 },
+    { on: 'zero' },
+    { on: 'negative' },
+    { on: 'fractional' },
+    { on: 'nan' },
+    { on: 'infinity' },
+    { on: 'string' }
+  ]);
 });
 
 test('parseAgentSpec rejects malformed triggers maps with precise field paths', () => {
@@ -695,6 +885,46 @@ test('parseAgentSpec rejects malformed triggers maps with precise field paths', 
     () => parseAgentSpec({ triggers: { github: [{ on: '' }] } }),
     /triggers\.github\[0\]\.on must be a non-empty string/
   );
+  assert.throws(
+    () => parseAgentSpec({ triggers: { github: [{ on: 'issue.opened', match: '' }] } }),
+    /triggers\.github\[0\]\.match must be a non-empty string if provided/
+  );
+  assert.throws(
+    () => parseAgentSpec({ triggers: { github: [{ on: 'issue.opened', where: 1 }] } }),
+    /triggers\.github\[0\]\.where must be a non-empty string if provided/
+  );
+  assert.throws(
+    () => parseAgentSpec({ triggers: { github: [{ on: 'issue.opened', paths: '/*' }] } }),
+    /triggers\.github\[0\]\.paths must be a non-empty array/
+  );
+  assert.throws(
+    () => parseAgentSpec({ triggers: { github: [{ on: 'issue.opened', paths: [] }] } }),
+    /triggers\.github\[0\]\.paths must be a non-empty array/
+  );
+  assert.throws(
+    () => parseAgentSpec({ triggers: { github: [{ on: 'issue.opened', paths: [''] }] } }),
+    /triggers\.github\[0\]\.paths\[0\] must be a non-empty string/
+  );
+  assert.throws(
+    () => parseAgentSpec({ triggers: { github: [{ on: 'issue.opened', paths: ['/github/** '] }] } }),
+    /triggers\.github\[0\]\.paths\[0\] must not have leading or trailing whitespace/
+  );
+  assert.throws(
+    () => parseAgentSpec({ triggers: { github: [{ on: 'issue.opened', paths: ['github/**'] }] } }),
+    /triggers\.github\[0\]\.paths\[0\] must start with \//
+  );
+  const triggerWithInternalSpace = parseAgentSpec({
+    triggers: { github: [{ on: 'issue.opened', paths: ['/ github/**'] }] }
+  });
+  assert.deepEqual(triggerWithInternalSpace.triggers?.github[0].paths, ['/ github/**']);
+  for (const separator of ['\r', '\n', '\u2028', '\u2029']) {
+    assert.throws(
+      () => parseAgentSpec({
+        triggers: { github: [{ on: 'issue.opened', paths: [`/github/${separator}issues/**`] }] }
+      }),
+      /triggers\.github\[0\]\.paths\[0\] must not contain line separators/
+    );
+  }
   // An empty agent (no listeners) parses to {}; the deploy CLI enforces "at least one".
   assert.deepEqual(parseAgentSpec({}), {});
 });
@@ -712,7 +942,12 @@ test('parseIntegrations default-injects source=deployer_user when the persona om
 test('parseIntegrations round-trips all three valid IntegrationSource kinds', () => {
   const i = parseIntegrations(
     {
-      github: { source: { kind: 'deployer_user' } },
+      github: {
+        source: {
+          kind: 'deployer_user',
+          futureResolutionPolicy: { fallback: 'workspace' }
+        }
+      },
       slack: { source: { kind: 'workspace' } },
       linear: {
         source: { kind: 'workspace_service_account', name: 'release-bot' }
@@ -720,7 +955,10 @@ test('parseIntegrations round-trips all three valid IntegrationSource kinds', ()
     },
     'integrations'
   );
-  assert.deepEqual(i?.github.source, { kind: 'deployer_user' });
+  assert.deepEqual(i?.github.source, {
+    kind: 'deployer_user',
+    futureResolutionPolicy: { fallback: 'workspace' }
+  });
   assert.equal(
     (i?.github as { __agentworkforceImplicitSource?: unknown }).__agentworkforceImplicitSource,
     undefined
@@ -896,12 +1134,23 @@ test('parseWatch rejects malformed relayfile watch rules with precise field path
   assert.throws(() => parseWatch([{ events: ['created'] }], 'watch'), /watch\[0\]\.paths must be a non-empty array/);
   assert.throws(() => parseWatch([{ paths: [], events: ['created'] }], 'watch'), /watch\[0\]\.paths must be a non-empty array/);
   assert.throws(() => parseWatch([{ paths: [42], events: ['created'] }], 'watch'), /watch\[0\]\.paths\[0\] must be a non-empty string/);
+  assert.throws(() => parseWatch([{ paths: ['/x '], events: ['created'] }], 'watch'), /watch\[0\]\.paths\[0\] must not have leading or trailing whitespace/);
   assert.throws(() => parseWatch([{ paths: ['relative/**'], events: ['created'] }], 'watch'), /watch\[0\]\.paths\[0\] must start with \//);
   assert.throws(() => parseWatch([{ paths: ['/x'] }], 'watch'), /watch\[0\]\.events must be a non-empty array/);
   assert.throws(() => parseWatch([{ paths: ['/x'], events: [] }], 'watch'), /watch\[0\]\.events must be a non-empty array/);
   assert.throws(() => parseWatch([{ paths: ['/x'], events: ['changed'] }], 'watch'), /watch\[0\]\.events\[0\] must be one of: created, updated, deleted/);
   assert.throws(() => parseWatch([{ paths: ['/x'], events: ['created'], debounceMs: -1 }], 'watch'), /watch\[0\]\.debounceMs must be a non-negative number/);
   assert.throws(() => parseWatch([{ paths: ['/x'], events: ['created'], match: '' }], 'watch'), /watch\[0\]\.match must be a non-empty string/);
+  assert.deepEqual(
+    parseWatch([{ paths: ['/ github/**'], events: ['created'] }], 'watch')?.[0].paths,
+    ['/ github/**']
+  );
+  for (const separator of ['\r', '\n', '\u2028', '\u2029']) {
+    assert.throws(
+      () => parseWatch([{ paths: [`/github/${separator}issues/**`], events: ['created'] }], 'watch'),
+      /watch\[0\]\.paths\[0\] must not contain line separators/
+    );
+  }
 });
 
 test('parsePersonaSpec round-trips mount.enabled=false (watch now lives on the agent)', () => {
@@ -978,6 +1227,57 @@ test('parseCapabilities rejects arrays for the capabilities map and values', () 
   );
 });
 
+test('parseCapabilities validates the httpRead capability contract', () => {
+  const caps = parseCapabilities({
+    httpRead: {
+      allow: [
+        { method: 'GET', urlGlob: 'https://example.test/front-page' },
+        { method: 'HEAD', urlGlob: 'https://example.test/*' }
+      ]
+    }
+  }, 'persona.capabilities');
+
+  assert.deepEqual(caps?.httpRead, {
+    allow: [
+      { method: 'GET', urlGlob: 'https://example.test/front-page' },
+      { method: 'HEAD', urlGlob: 'https://example.test/*' }
+    ]
+  });
+  assert.throws(
+    () => parseCapabilities({ httpRead: true }, 'persona.capabilities'),
+    /persona\.capabilities\.httpRead must be an object if provided/
+  );
+  assert.throws(
+    () => parseCapabilities(
+      { httpRead: { allow: [{ method: 'POST', urlGlob: 'https://example.test/*' }] } },
+      'persona.capabilities'
+    ),
+    /persona\.capabilities\.httpRead\.allow\[0\]\.method must be "GET" or "HEAD"/
+  );
+  assert.throws(
+    () => parseCapabilities(
+      { httpRead: { allow: [], futureNetworkPolicy: true } },
+      'persona.capabilities'
+    ),
+    /persona\.capabilities\.httpRead\.futureNetworkPolicy is not allowed/
+  );
+  assert.throws(
+    () => parseCapabilities(
+      {
+        httpRead: {
+          allow: [{
+            method: 'GET',
+            urlGlob: 'https://example.test/*',
+            followRedirects: true
+          }]
+        }
+      },
+      'persona.capabilities'
+    ),
+    /persona\.capabilities\.httpRead\.allow\[0\]\.followRedirects is not allowed/
+  );
+});
+
 test('parsePersonaSpec round-trip preserves a declared teamSolve capability', () => {
   const spec = parsePersonaSpec(
     validSpec({
@@ -989,5 +1289,25 @@ test('parsePersonaSpec round-trip preserves a declared teamSolve capability', ()
   assert.deepEqual(spec.capabilities?.teamSolve, {
     enabled: true,
     maxMembers: 1
+  });
+});
+
+test('parsePersonaSpec preserves a declared httpRead capability', () => {
+  const spec = parsePersonaSpec(
+    validSpec({
+      cloud: true,
+      capabilities: {
+        httpRead: {
+          enabled: true,
+          allow: [{ method: 'GET', urlGlob: 'https://example.test/*' }]
+        }
+      }
+    }),
+    'documentation'
+  );
+
+  assert.deepEqual(spec.capabilities?.httpRead, {
+    enabled: true,
+    allow: [{ method: 'GET', urlGlob: 'https://example.test/*' }]
   });
 });

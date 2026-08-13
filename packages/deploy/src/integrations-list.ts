@@ -5,7 +5,7 @@ import {
 } from '@agentworkforce/persona-kit';
 import { resolveCloudUrl } from './cloud-url.js';
 import { createBufferedIO } from './io.js';
-import { readActiveWorkspace, resolveWorkspaceToken, type ActiveWorkspacePointer } from './login.js';
+import { resolveWorkspaceToken, type ActiveWorkspacePointer } from './login.js';
 
 export type AuthState = 'authenticated' | 'unauthenticated';
 export type TriggerSource = 'catalog' | 'none';
@@ -16,6 +16,7 @@ export interface IntegrationConnection {
   scope: IntegrationScope;
   serviceAccountName: string | null;
   status: string;
+  registrationHealth?: Record<string, unknown>;
 }
 
 export interface IntegrationRow {
@@ -26,6 +27,7 @@ export interface IntegrationRow {
   connections: IntegrationConnection[] | null;
   triggers: string[];
   triggerSource: TriggerSource;
+  registrationHealth?: Record<string, unknown>;
 }
 
 export interface IntegrationsDocument {
@@ -47,7 +49,6 @@ export interface ListIntegrationsOptions {
   fetch?: typeof fetch;
   env?: NodeJS.ProcessEnv;
   activeWorkspace?: ActiveWorkspacePointer | null;
-  readActiveWorkspace?: typeof readActiveWorkspace;
   resolveWorkspaceToken?: typeof resolveWorkspaceToken;
   provider?: string;
   includeTriggers?: boolean;
@@ -89,9 +90,7 @@ export async function listIntegrations(
   options: ListIntegrationsOptions = {}
 ): Promise<IntegrationsDocument> {
   const env = options.env ?? process.env;
-  const active = options.activeWorkspace !== undefined
-    ? options.activeWorkspace
-    : await (options.readActiveWorkspace ?? readActiveWorkspace)().catch(() => null);
+  const active = options.activeWorkspace ?? null;
   const cloudUrl = resolveCloudUrl({ env, active, ...(options.cloudUrl ? { flag: options.cloudUrl } : {}) });
   const auth = await resolveAuth(options, cloudUrl, active, env);
 
@@ -294,6 +293,13 @@ async function addStatusConnection(
   const connections = row.connections ?? [];
   addConnectionsFromStatus(connections, body, row.id, scope);
   row.connections = connections;
+  const registrationHealth = readRegistrationHealth(body);
+  if (registrationHealth) {
+    row.registrationHealth = {
+      ...(row.registrationHealth ?? {}),
+      [scope]: registrationHealth
+    };
+  }
 }
 
 function addConnectionsFromList(
@@ -345,7 +351,8 @@ function connectionFromRecord(
       readString(value, 'serviceAccountName') ??
       readString(value, 'name') ??
       null,
-    status: readStatus(value)
+    status: readStatus(value),
+    ...(readRegistrationHealth(value) ? { registrationHealth: readRegistrationHealth(value) } : {})
   };
 }
 
@@ -464,6 +471,20 @@ function readString(value: unknown, field: string): string | undefined {
   if (!value || typeof value !== 'object' || Array.isArray(value)) return undefined;
   const raw = (value as Record<string, unknown>)[field];
   return typeof raw === 'string' && raw.trim() ? raw.trim() : undefined;
+}
+
+function readRegistrationHealth(value: unknown): Record<string, unknown> | undefined {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return undefined;
+  const record = value as Record<string, unknown>;
+  const direct = record.registrationHealth;
+  if (direct && typeof direct === 'object' && !Array.isArray(direct)) {
+    return direct as Record<string, unknown>;
+  }
+  const summary: Record<string, unknown> = {};
+  for (const key of ['registered', 'healthy', 'reason', 'adapter', 'checkedAt']) {
+    if (record[key] !== undefined) summary[key] = record[key];
+  }
+  return Object.keys(summary).length > 0 ? summary : undefined;
 }
 
 function firstString(...candidates: Array<string | undefined>): string | undefined {

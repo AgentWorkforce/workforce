@@ -121,6 +121,151 @@ test('buildCtx exposes agent and deployment metadata', () => {
   });
 });
 
+test('ctx.harness.run turns an exact no-reply marker into observable silent success', async () => {
+  const logs: Array<{ level: string; message: string; attrs?: Record<string, unknown> }> = [];
+  const ctx = buildCtx({
+    persona: basePersona,
+    workspaceId: 'ws-test',
+    sandbox: stubSandbox,
+    harnessRunner: async () => ({ output: '  [[NO_REPLY]]\n', exitCode: 0, durationMs: 12 }),
+    agent: {
+      id: 'agent_123',
+      deployedName: 'docs-demo',
+      spawnedByAgentId: null
+    },
+    deployment: {
+      id: 'deployment_456',
+      triggerKind: 'inbox',
+      parentDeploymentId: null
+    },
+    log: (level, message, attrs) => logs.push({ level, message, attrs })
+  });
+
+  const result = await ctx.harness.run({ prompt: 'decide whether to reply' });
+  assert.deepEqual(result, {
+    output: '',
+    exitCode: 0,
+    durationMs: 12,
+    containsMarker: true,
+    suppressed: true
+  });
+  assert.deepEqual(logs, [
+    {
+      level: 'info',
+      message: 'harness.no_reply.suppressed',
+      attrs: { containsMarker: true }
+    }
+  ]);
+});
+
+test('ctx.harness.run strips a mixed no-reply marker and logs the leak', async () => {
+  const logs: Array<{ level: string; message: string; attrs?: Record<string, unknown> }> = [];
+  const ctx = buildCtx({
+    persona: basePersona,
+    workspaceId: 'ws-test',
+    sandbox: stubSandbox,
+    harnessRunner: async () => ({
+      output: 'Visible before. [[NO_REPLY]] Visible after.',
+      exitCode: 0,
+      durationMs: 8
+    }),
+    agent: {
+      id: 'agent_123',
+      deployedName: 'docs-demo',
+      spawnedByAgentId: null
+    },
+    deployment: {
+      id: 'deployment_456',
+      triggerKind: 'inbox',
+      parentDeploymentId: null
+    },
+    log: (level, message, attrs) => logs.push({ level, message, attrs })
+  });
+
+  const result = await ctx.harness.run({ prompt: 'decide whether to reply' });
+  assert.deepEqual(result, {
+    output: 'Visible before.  Visible after.',
+    exitCode: 0,
+    durationMs: 8,
+    containsMarker: true,
+    suppressed: false
+  });
+  assert.deepEqual(logs, [
+    {
+      level: 'warn',
+      message: 'harness.no_reply.marker_leak',
+      attrs: { containsMarker: true }
+    }
+  ]);
+});
+
+test('ctx.harness.run strips the marker from stderr as well as output', async () => {
+  const logs: Array<{ level: string; message: string; attrs?: Record<string, unknown> }> = [];
+  const ctx = buildCtx({
+    persona: basePersona,
+    workspaceId: 'ws-test',
+    sandbox: stubSandbox,
+    harnessRunner: async () => ({
+      output: 'Visible response.',
+      stderr: 'diagnostic [[NO_REPLY]]',
+      exitCode: 0,
+      durationMs: 5
+    }),
+    agent: {
+      id: 'agent_123',
+      deployedName: 'docs-demo',
+      spawnedByAgentId: null
+    },
+    deployment: {
+      id: 'deployment_456',
+      triggerKind: 'inbox',
+      parentDeploymentId: null
+    },
+    log: (level, message, attrs) => logs.push({ level, message, attrs })
+  });
+
+  const result = await ctx.harness.run({ prompt: 'decide whether to reply' });
+  assert.equal(result.output, 'Visible response.');
+  assert.equal(result.stderr, 'diagnostic');
+  assert.equal(result.containsMarker, true);
+  assert.equal(result.suppressed, false);
+  assert.deepEqual(logs, [
+    {
+      level: 'warn',
+      message: 'harness.no_reply.marker_leak',
+      attrs: { containsMarker: true }
+    }
+  ]);
+});
+
+test('ctx.harness.run does not turn a failed marker result into success', async () => {
+  const logs: Array<{ level: string; message: string }> = [];
+  const ctx = buildCtx({
+    persona: basePersona,
+    workspaceId: 'ws-test',
+    sandbox: stubSandbox,
+    harnessRunner: async () => ({ output: '[[NO_REPLY]]', exitCode: 1, durationMs: 4 }),
+    agent: {
+      id: 'agent_123',
+      deployedName: 'docs-demo',
+      spawnedByAgentId: null
+    },
+    deployment: {
+      id: 'deployment_456',
+      triggerKind: 'inbox',
+      parentDeploymentId: null
+    },
+    log: (level, message) => logs.push({ level, message })
+  });
+
+  const result = await ctx.harness.run({ prompt: 'decide whether to reply' });
+  assert.equal(result.output, '');
+  assert.equal(result.exitCode, 1);
+  assert.equal(result.containsMarker, true);
+  assert.equal(result.suppressed, true);
+  assert.deepEqual(logs, [{ level: 'warn', message: 'harness.no_reply.marker_leak' }]);
+});
+
 test('buildCtx exposes ctx.files as a sandbox file helper', async () => {
   const reads: string[] = [];
   const writes: Array<{ path: string; contents: string }> = [];
@@ -398,6 +543,34 @@ test('ctx.memory.recall falls back to [] on network failure', async () => {
   );
 });
 
+test('ctx.memory.recall rejects backend failures when failOnError is set', async () => {
+  await withEnv(
+    {
+      WORKFORCE_CLOUD_URL: 'https://cloud.example.test',
+      WORKFORCE_AGENT_TOKEN: 'agent-token'
+    },
+    async () => {
+      await withFetch(async () => {
+        throw new Error('offline');
+      }, async () => {
+        const ctx = ctxFor({ ...basePersona, memory: true });
+        await assert.rejects(
+          () => ctx.memory.recall('anything', { failOnError: true }),
+          /offline/
+        );
+      });
+
+      await withFetch(async () => jsonResponse({ error: 'unavailable' }, { status: 503 }), async () => {
+        const ctx = ctxFor({ ...basePersona, memory: true });
+        await assert.rejects(
+          () => ctx.memory.recall('anything', { failOnError: true }),
+          /HTTP 503/
+        );
+      });
+    }
+  );
+});
+
 test('ctx.memory logs a bounded timeout when cloud memory fetch aborts', async () => {
   await withEnv(
     {
@@ -457,6 +630,10 @@ test('ctx.memory stays a safe no-op when cloud auth is absent', async () => {
         const ctx = ctxFor({ ...basePersona, memory: true });
         assert.equal(await ctx.memory.save('quiet'), undefined);
         assert.deepEqual(await ctx.memory.recall('quiet'), []);
+        await assert.rejects(
+          () => ctx.memory.recall('quiet', { failOnError: true }),
+          /ctx\.memory is unavailable/
+        );
       });
       assert.equal(fetchCalled, false);
     }

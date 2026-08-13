@@ -63,24 +63,18 @@ export function toProactiveSession(
  * schedule / sandbox / workspace handles. Treat the binding as request-
  * scoped, the same way `ctx` itself is.
  *
- * Cancellation caveat: `ctx.schedule.at` does not currently accept a
- * caller-supplied name — schedule names are owned by the persona's
- * declared `schedules[]` list. `cancelWakeUp` therefore only works if
- * the caller has pre-registered a persona schedule slot whose name
- * matches the returned `bindingId` (the deterministic
- * `proactive-${agentName}` key below). Otherwise `cancelWakeUp` is a
- * no-op against the underlying scheduler.
+ * Wake-ups use a stable `proactive-${agentName}` dynamic-schedule name, so
+ * Agent Assistant's returned binding id can be passed directly to
+ * `cancelWakeUp` without a predeclared cron slot.
  */
 export function schedulerBindingFromCtx(ctx: WorkforceCtx): ContextSchedulerBinding {
   const slotName = bindingSlotFor(ctx.agentName);
   const adapter: RuntimeScheduleContext = {
     scheduleWakeUp: async (at, context) => {
-      await ctx.schedule.at(at, context);
-      // Workforce's `ctx.schedule.cancel` takes a schedule name from the
-      // persona's `schedules[]` list. We return a stable per-agent slot
-      // name so a matching pre-registered persona schedule (e.g.
-      // `proactive-${agentName}`) can be cancelled by `cancelWakeUp`.
-      return { bindingId: slotName };
+      const receipt = await ctx.schedule.at(at, context, { name: slotName });
+      // A stable per-agent name gives Agent Assistant a cancellation identity
+      // without coupling it to Cloud's internal schedule id.
+      return { bindingId: receipt?.name ?? slotName };
     },
     cancelWakeUp: async (bindingId) => {
       await ctx.schedule.cancel(bindingId);

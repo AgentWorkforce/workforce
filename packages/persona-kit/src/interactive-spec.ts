@@ -2,7 +2,8 @@ import type {
   Harness,
   HarnessSettings,
   McpServerSpec,
-  PersonaPermissions
+  PersonaPermissions,
+  PersonaRelay
 } from './types.js';
 
 /**
@@ -82,6 +83,22 @@ export interface RelayMcpConfig {
   defaultWorkspace?: string;
 }
 
+/**
+ * Resolved config for the `ai-hist` MCP server. Both fields are optional —
+ * the MCP defaults to its own discovery (`~/Projects/**​/.trajectories/**` for
+ * the "why" and `~/.local/share/ai-hist/ai-history.db` for the "how") when the
+ * caller supplies neither.
+ */
+export interface AiHistMcpConfig {
+  /**
+   * Root directory the MCP scans for per-run trajectory contract files
+   * (`$TRAJECTORY_ROOT/**​/compacted/*.json`). Passed through as `TRAJECTORY_ROOT`.
+   */
+  trajectoryRoot?: string;
+  /** Override the ai-hist SQLite DB path. Passed through as `AI_HIST_DB`. */
+  dbPath?: string;
+}
+
 export interface BuildInteractiveSpecInput {
   harness: Harness;
   /**
@@ -102,6 +119,16 @@ export interface BuildInteractiveSpecInput {
    * warn that MCP injection is unsupported.
    */
   relayMcp?: RelayMcpConfig;
+  /**
+   * When set, an `ai-hist` MCP server is merged into {@link mcpServers} so a
+   * persona has retrieval access to its own decision trajectories (the "why")
+   * and cross-tool prompt/session history (the "how"). A persona-declared
+   * server literally named `ai-hist` takes precedence (it is not overwritten).
+   * Callers resolve this from env + the persona's `memory.aiMemory` opt-in and
+   * pass it explicitly — this function reads no environment itself. Wired for
+   * claude and codex; opencode still warns that MCP injection is unsupported.
+   */
+  aiHist?: AiHistMcpConfig;
   permissions?: PersonaPermissions;
   harnessSettings?: HarnessSettings;
   /**
@@ -118,6 +145,10 @@ export interface BuildInteractiveSpecInput {
 function stripProviderPrefix(model: string): string {
   const idx = model.indexOf('/');
   return idx >= 0 ? model.slice(idx + 1) : model;
+}
+
+function normalizeOpencodeModel(model: string): string {
+  return model.includes('/') ? model : `opencode/${model}`;
 }
 
 function hasAnyPermission(p: PersonaPermissions | undefined): boolean {
@@ -260,6 +291,75 @@ function buildRelaycastMcpServer(relay: RelayMcpConfig): McpServerSpec {
   return { type: 'stdio', command: 'npx', args: ['-y', '@relaycast/mcp'], env };
 }
 
+/** Outcome of resolving a persona's declared `relay` against the environment. */
+export type ResolveRelayMcpResult =
+  | { kind: 'disabled' }
+  | { kind: 'missing-secret'; reason: string }
+  | { kind: 'ready'; config: RelayMcpConfig };
+
+/**
+ * Resolve a persona's declarative {@link PersonaRelay} into a
+ * {@link RelayMcpConfig} the launcher can hand to {@link buildInteractiveSpec}
+ * as `relayMcp`. The persona declares **intent** (enabled, agentName, default
+ * workspace); the secret (`RELAY_API_KEY`) and base URL come from `env`.
+ *
+ * Returns a discriminated result so callers can distinguish "off" from
+ * "declared but the deploy env is missing `RELAY_API_KEY`" (worth a warning)
+ * rather than silently dropping relay. Pure — reads only the passed `env`.
+ */
+export function resolvePersonaRelayMcp(
+  relay: PersonaRelay | undefined,
+  env: Record<string, string | undefined>,
+  fallbackAgentName?: string
+): ResolveRelayMcpResult {
+  if (relay === undefined || relay === false) return { kind: 'disabled' };
+  const cfg = typeof relay === 'object' ? relay : {};
+  if (cfg.enabled === false) return { kind: 'disabled' };
+
+  const apiKey = env.RELAY_API_KEY?.trim();
+  const agentName = cfg.agentName?.trim() || env.RELAY_AGENT_NAME?.trim() || fallbackAgentName?.trim();
+  if (!apiKey) {
+    return { kind: 'missing-secret', reason: 'RELAY_API_KEY is not set in the deploy environment' };
+  }
+  if (!agentName) {
+    return {
+      kind: 'missing-secret',
+      reason: 'no relay agent name (set relay.agentName, RELAY_AGENT_NAME, or pass the persona id)'
+    };
+  }
+  const baseUrl = env.RELAY_BASE_URL?.trim();
+  const defaultWorkspace = cfg.defaultWorkspace?.trim() || env.RELAY_DEFAULT_WORKSPACE?.trim();
+  return {
+    kind: 'ready',
+    config: {
+      apiKey,
+      agentName,
+      ...(baseUrl ? { baseUrl } : {}),
+      ...(defaultWorkspace ? { defaultWorkspace } : {})
+    }
+  };
+}
+
+/**
+ * Build the stdio MCP server spec for ai-hist — the unified retrieval surface
+ * that serves both the "why" (this persona's compacted decision trajectories)
+ * and the "how" (cross-tool prompt/session history). Launched via
+ * `npx -y ai-hist-mcp` — the published, provenance-signed wrapper package that
+ * re-exports the server from `ai-hist`. Env carries the trajectory root +
+ * optional DB override.
+ */
+function buildAiHistMcpServer(cfg: AiHistMcpConfig): McpServerSpec {
+  const env: Record<string, string> = {};
+  if (cfg.trajectoryRoot) env.TRAJECTORY_ROOT = cfg.trajectoryRoot;
+  if (cfg.dbPath) env.AI_HIST_DB = cfg.dbPath;
+  return {
+    type: 'stdio',
+    command: 'npx',
+    args: ['-y', 'ai-hist-mcp'],
+    env
+  };
+}
+
 export function buildInteractiveSpec(input: BuildInteractiveSpecInput): InteractiveSpec {
   const {
     harness,
@@ -280,10 +380,20 @@ export function buildInteractiveSpec(input: BuildInteractiveSpecInput): Interact
   const relayMcpServer = input.relayMcp
     ? buildRelaycastMcpServer(input.relayMcp)
     : undefined;
+  // ai-hist is injected only for personas that opt into recall
+  // (callers gate `input.aiHist` on `memory.aiMemory`). A persona-declared
+  // `ai-hist` server wins, same as relaycast.
+  const aiHistServer = input.aiHist ? buildAiHistMcpServer(input.aiHist) : undefined;
   const injectsRelaycast = relayMcpServer !== undefined && personaMcpServers?.relaycast === undefined;
-  const mcpServers = relayMcpServer
-    ? { relaycast: relayMcpServer, ...(personaMcpServers ?? {}) }
-    : personaMcpServers;
+  const injectsAiHist = aiHistServer !== undefined && personaMcpServers?.['ai-hist'] === undefined;
+  const mcpServers =
+    injectsRelaycast || injectsAiHist
+      ? {
+          ...(injectsRelaycast ? { relaycast: relayMcpServer as McpServerSpec } : {}),
+          ...(injectsAiHist ? { 'ai-hist': aiHistServer as McpServerSpec } : {}),
+          ...(personaMcpServers ?? {})
+        }
+      : personaMcpServers;
   const warnings: string[] = [];
   const hasPluginDirs = pluginDirs !== undefined && pluginDirs.length > 0;
 
@@ -382,17 +492,22 @@ export function buildInteractiveSpec(input: BuildInteractiveSpecInput): Interact
       };
     }
     case 'opencode': {
-      if (hasPersonaMcpServers && injectsRelaycast) {
+      const injectsDefaults = injectsRelaycast || injectsAiHist;
+      const defaultNames = [
+        ...(injectsRelaycast ? ['relaycast'] : []),
+        ...(injectsAiHist ? ['ai-hist'] : [])
+      ].join('/');
+      if (hasPersonaMcpServers && injectsDefaults) {
         warnings.push(
-          'persona declares mcpServers and broker requested relaycast MCP injection, but the opencode harness is not yet wired for runtime MCP injection; proceeding without MCP.'
+          `persona declares mcpServers and default ${defaultNames} MCP injection was requested, but the opencode harness is not yet wired for runtime MCP injection; proceeding without MCP.`
         );
       } else if (hasPersonaMcpServers) {
         warnings.push(
           'persona declares mcpServers but the opencode harness is not yet wired for runtime MCP injection; proceeding without MCP.'
         );
-      } else if (injectsRelaycast) {
+      } else if (injectsDefaults) {
         warnings.push(
-          'broker requested relaycast MCP injection but the opencode harness is not yet wired for runtime MCP injection; proceeding without MCP.'
+          `default ${defaultNames} MCP injection was requested but the opencode harness is not yet wired for runtime MCP injection; proceeding without MCP.`
         );
       }
       if (hasAnyPermission(permissions)) {
@@ -453,7 +568,7 @@ export function buildInteractiveSpec(input: BuildInteractiveSpecInput): Interact
       const agentConfig = {
         agent: {
           [personaId]: {
-            model,
+            model: normalizeOpencodeModel(model),
             ...(systemPrompt ? { prompt: systemPrompt } : {}),
             mode: 'primary',
             permission: { '*': 'allow' }
@@ -618,11 +733,24 @@ export function buildInteractiveSpec(input: BuildInteractiveSpecInput): Interact
   }
 }
 
+/** Off-argv delivery for a one-shot harness prompt. Keeping the potentially
+ * large per-run task out of `args` avoids Linux's 128 KiB single-argument
+ * limit as well as the combined argv + env limit. */
+export type NonInteractivePrompt =
+  | { readonly mode: 'stdin'; readonly contents: string }
+  | {
+      readonly mode: 'file';
+      readonly contents: string;
+      readonly flag: '--prompt-file';
+    };
+
 /** Result of translating a persona's runtime into a one-shot, non-interactive
- * spawnable command. Caller writes `configFiles` before spawning. */
+ * spawnable command. Caller writes `configFiles` and delivers `prompt` using
+ * its declared off-argv mode before spawning. */
 export interface NonInteractiveSpec {
   bin: string;
   args: readonly string[];
+  prompt: NonInteractivePrompt;
   configFiles: readonly InteractiveConfigFile[];
   warnings: readonly string[];
 }
@@ -630,18 +758,19 @@ export interface NonInteractiveSpec {
 /**
  * Translate a persona's runtime into a non-interactive, one-shot command.
  * Layers harness-specific non-interactive flags on top of {@link buildInteractiveSpec},
- * then appends the user task. Pure — no I/O.
+ * then declares how the caller must deliver the user task off argv. Pure — no I/O.
  *
- * - `claude`: appends `--print --output-format text <task>`.
- * - `codex`:  prefixes `exec`, appends `--skip-git-repo-check`, then a prompt
- *   built from any `initialPrompt` joined with the user task.
- * - `opencode`: prefixes `run`, appends `--model <m> --format default
- *   [--dir <cwd>] [--title <n>] <task>`.
+ * - `claude`: appends `--print --output-format text`; task is written to stdin.
+ * - `codex`:  prefixes `exec`, appends `--skip-git-repo-check -`; stdin receives
+ *   a prompt built from any `initialPrompt` joined with the user task.
+ * - `opencode`: prefixes `run`, appends `--format default
+ *   [--title <n>]`; task is written to stdin and model selection stays in the
+ *   generated agent config.
  * - `grok`: appends `--output-format plain [--cwd <cwd>] --always-approve
- *   --single <prompt>`, where prompt includes the persona system prompt plus
- *   the one-shot task.
- * - `cursor`: appends `--print --output-format text <task>`; persona
- *   instructions are carried by the AGENTS.md config file.
+ *   --prompt-file <temp-path>` at spawn time, where the temporary file contains
+ *   the persona system prompt plus the one-shot task.
+ * - `cursor`: appends `--print --output-format text`; task is written to
+ *   stdin and persona instructions are carried by the AGENTS.md config file.
  */
 export function buildNonInteractiveSpec(
   input: BuildInteractiveSpecInput & {
@@ -654,10 +783,10 @@ export function buildNonInteractiveSpec(
   switch (input.harness) {
     case 'claude': {
       const args = [...interactive.args, '--print', '--output-format', 'text'];
-      args.push(input.task);
       return {
         bin: interactive.bin,
         args,
+        prompt: { mode: 'stdin', contents: input.task },
         configFiles: interactive.configFiles,
         warnings: interactive.warnings
       };
@@ -668,19 +797,24 @@ export function buildNonInteractiveSpec(
         : input.task;
       return {
         bin: interactive.bin,
-        args: ['exec', ...interactive.args, '--skip-git-repo-check', prompt],
+        args: ['exec', ...interactive.args, '--skip-git-repo-check', '-'],
+        prompt: { mode: 'stdin', contents: prompt },
         configFiles: interactive.configFiles,
         warnings: interactive.warnings
       };
     }
     case 'opencode': {
-      const args = ['run', ...interactive.args, '--model', input.model, '--format', 'default'];
-      if (input.workingDirectory) args.push('--dir', input.workingDirectory);
+      // The generated opencode.json already selects the persona model through
+      // `--agent`. Avoid overriding it with `--model`: that CLI flag requires
+      // provider/model syntax, and bare persona model values are normalized in
+      // the generated agent config. The child process is spawned with cwd set
+      // separately, and `opencode run` does not support `--dir`.
+      const args = ['run', ...interactive.args, '--format', 'default'];
       if (input.name) args.push('--title', input.name);
-      args.push(input.task);
       return {
         bin: interactive.bin,
         args,
+        prompt: { mode: 'stdin', contents: input.task },
         configFiles: interactive.configFiles,
         warnings: interactive.warnings
       };
@@ -694,10 +828,10 @@ export function buildNonInteractiveSpec(
       if (!args.includes('--always-approve')) {
         args.push('--always-approve');
       }
-      args.push('--single', prompt);
       return {
         bin: interactive.bin,
         args,
+        prompt: { mode: 'file', contents: prompt, flag: '--prompt-file' },
         configFiles: interactive.configFiles,
         warnings: interactive.warnings
       };
@@ -705,7 +839,8 @@ export function buildNonInteractiveSpec(
     case 'cursor': {
       return {
         bin: interactive.bin,
-        args: [...interactive.args, '--print', '--output-format', 'text', input.task],
+        args: [...interactive.args, '--print', '--output-format', 'text'],
+        prompt: { mode: 'stdin', contents: input.task },
         configFiles: interactive.configFiles,
         warnings: interactive.warnings
       };

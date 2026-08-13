@@ -167,7 +167,13 @@ export function formatSingleProvider(row: IntegrationRow | undefined): string {
         lines.push(`    serviceAccountName: ${connection.serviceAccountName}`);
       }
       lines.push(`    status: ${connection.status}`);
+      if (connection.registrationHealth) {
+        lines.push(`    registrationHealth: ${JSON.stringify(connection.registrationHealth)}`);
+      }
     }
+  }
+  if (row.registrationHealth) {
+    lines.push('', 'Registration health:', `  ${JSON.stringify(row.registrationHealth)}`);
   }
   const firstTrigger = row.triggers[0] ?? 'event.name';
   lines.push(

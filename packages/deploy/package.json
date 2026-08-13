@@ -1,6 +1,6 @@
 {
   "name": "@agentworkforce/deploy",
-  "version": "3.0.50",
+  "version": "4.1.39",
   "private": false,
   "type": "module",
   "main": "dist/index.js",
@@ -32,10 +32,16 @@
     "lint": "tsc -p tsconfig.json --noEmit"
   },
   "dependencies": {
-    "@agent-relay/cloud": "^6.0.17",
+    "@agent-relay/cloud": "^8.7.0",
     "@agentworkforce/persona-kit": "workspace:*",
     "@agentworkforce/runtime": "workspace:*",
-    "@daytonaio/sdk": "^0.179.0",
-    "esbuild": "^0.25.0"
+    "@daytonaio/sdk": "^0.185.0",
+    "esbuild": "^0.25.0",
+    "semver": "^7.8.5",
+    "validate-npm-package-name": "^5.0.1"
+  },
+  "devDependencies": {
+    "@types/semver": "^7.7.1",
+    "@types/validate-npm-package-name": "^4.0.2"
   }
 }

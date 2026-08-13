@@ -1,0 +1,26 @@
+# Changelog
+
+All notable changes to `@agentworkforce/review-kit` will be documented in this file.
+
+## [Unreleased]
+
+## [4.1.32] - 2026-07-17
+
+### Fixed
+
+- Skip non-pull-request events before requesting a gateway expansion, while
+  continuing to surface expansion failures for genuine pull-request events.
+
+## [4.1.30] - 2026-07-17
+
+### Added
+
+- **Strip the model's preamble from the review** (#287)
+
+## [4.1.29] - 2026-07-17
+
+### Added
+
+- Add strongly typed review-agent and review-persona factories that encode the
+  seven silent review plumbing traps from workforce#281.
+- Add built-in PR diff and git-history evidence providers.

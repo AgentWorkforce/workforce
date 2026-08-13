@@ -7,6 +7,146 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [4.1.39] - 2026-08-11
+
+### Added
+
+- **Expose SDK-backed persona fleet spawning** (#307)
+
+## [4.1.36] - 2026-07-24
+
+### Changed
+
+- 296: deriveAgentCard(personaSpec): canonical persona → A2A agent card in persona-kit (#298)
+
+## [4.1.31] - 2026-07-17
+
+### Fixed
+
+- Preserve deployment run failures and integration-watch health in JSON output,
+  and surface them clearly in the human-readable deployments list.
+
+## [4.1.29] - 2026-07-17
+
+### Fixed
+
+- Authored `.ts`/`.js` deploy failures now report the selected CLI version and
+  package source plus a copyable PATH/update check, making stale global binary
+  selection explicit (#163).
+
+## [4.1.25] - 2026-07-16
+
+### Fixed
+
+- Deliver harness prompts off argv (#274)
+
+## [4.1.24] - 2026-07-16
+
+### Fixed
+
+- Close composable runtime policy and contract gaps (#273)
+
+## [4.1.23] - 2026-07-15
+
+### Added
+
+- **Close the composable local runtime loop** (#272)
+
+## [4.1.19] - 2026-07-15
+
+### Added
+
+- **Fleet-node bridge for running proactive personas on a laptop** (#263)
+
+## [4.1.18] - 2026-07-15
+
+### Added
+
+- **Add reusable cron and Slack delivery helpers** (#261)
+
+## [4.1.15] - 2026-07-13
+
+### Added
+
+- **Warm fast path spawns the harness in ~20ms; 10x faster cold launches**
+
+### Fixed
+
+- Split PATH on the platform delimiter in resolveBinOnPath
+- Harden the warm fast path per review
+- Resolve fast-session exit even when the child exits during module load
+
+### Dependencies
+
+- Consume published @relayfile/local-mount 0.10.23
+
+## [4.1.13] - 2026-06-25
+
+### Added
+
+- **Add managed harness source alias** (#257)
+
+## [4.1.8] - 2026-06-21
+
+### Fixed
+
+- Explain trigger auth source on 403
+
+## [4.1.7] - 2026-06-21
+
+### Added
+
+- **Add deployed persona trigger command**
+
+## [4.0.5] - 2026-06-14
+
+### Fixed
+
+- Let --reconnect refresh a revoked harness LLM credential (#235)
+
+## [4.0.4] - 2026-06-14
+
+### Changed
+
+- Unify workforce cloud auth session (#234)
+
+## [4.0.2] - 2026-06-11
+
+### Added
+
+- **Add linear-dispatcher and repo-router persona packs** (#223)
+
+### Fixed
+
+- Resolve local skill sources against the persona JSON directory (#226)
+
+## [4.0.0] - 2026-06-10
+
+### Breaking Changes
+
+- **Relay SDK AgentEvent + declarative relay persona field (Stage 1, A, B, C-runtime)** (#220)
+
+## [3.0.51] - 2026-06-08
+
+### Added
+
+- **Auto-inject ai-hist MCP + enforce trajectory recording**
+- **Add grok harness support**
+
+### Fixed
+
+- Use broker-aware agent-relay MCP for local persona spawns (#214)
+- Route launch-metadata warnings to a log file
+- Address grok harness review feedback
+
+### Changed
+
+- Consolidate trajectories + ai-memory under memory (opt-in) (#210)
+
+### Dependencies
+
+- Apply pr-reviewer fixes for #206 (#206)
+
 ## [3.0.45] - 2026-06-04
 
 ### Documentation

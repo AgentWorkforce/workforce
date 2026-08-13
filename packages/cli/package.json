@@ -1,6 +1,6 @@
 {
   "name": "@agentworkforce/cli",
-  "version": "3.0.50",
+  "version": "4.1.39",
   "private": false,
   "type": "module",
   "files": [
@@ -10,14 +10,18 @@
     "package.json"
   ],
   "dependencies": {
-    "@agent-relay/cloud": "^6.0.17",
+    "@agent-relay/cloud": "^10.1.0",
     "@agentworkforce/deploy": "workspace:*",
+    "@agentworkforce/events": "workspace:*",
+    "@agentworkforce/local-surface": "workspace:*",
     "@agentworkforce/persona-kit": "workspace:*",
+    "@agentworkforce/persona-registry": "workspace:*",
     "@agentworkforce/runtime": "workspace:*",
     "@agentworkforce/workload-router": "workspace:*",
     "@relayburn/sdk": "^2.5.2",
-    "@relayfile/local-mount": "^0.7.24",
-    "ora": "^9.4.0"
+    "@relayfile/local-mount": "^0.10.23",
+    "ora": "^9.4.0",
+    "yaml": "^2.9.0"
   },
   "repository": {
     "type": "git",

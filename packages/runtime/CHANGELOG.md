@@ -7,6 +7,172 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [4.1.37] - 2026-07-25
+
+### Added
+
+- Add a managed Cloud `ctx.schedule` adapter with receipt-verified one-shot
+  registration, stable cancellation names, and durable list/get support.
+- Route the Agent Assistant proactive scheduler bridge through named dynamic
+  schedules so returned binding ids can be cancelled directly.
+
+## [4.1.36] - 2026-07-24
+
+### Added
+
+- **Add reusable multi-turn agent kit** (#299)
+
+## [4.1.34] - 2026-07-19
+
+### Fixed
+
+- Require `@relayfile/adapter-core` 0.5.9 so direct create-draft writes and
+  mount echoes coalesce onto one writeback operation.
+
+## [4.1.33] - 2026-07-18
+
+### Fixed
+
+- Isolate Relaycast agent auth (#293)
+
+## [4.1.29] - 2026-07-17
+
+### Added
+
+- Include the deployed bundle package manifest in structured `runner.started`
+  evidence (#279).
+- Add the reserved `[[NO_REPLY]]` harness contract for successful silent runs,
+  including marker leak sanitization and observability.
+
+## [4.1.26] - 2026-07-16
+
+### Fixed
+
+- Preserve trigger paths (#276)
+
+## [4.1.25] - 2026-07-16
+
+### Fixed
+
+- Deliver one-shot Claude, Codex, and OpenCode prompts through stdin and Grok
+  prompts through a private temporary file instead of oversized argv elements.
+
+## [4.1.24] - 2026-07-16
+
+### Fixed
+
+- Close composable runtime policy and contract gaps (#273)
+
+## [4.1.23] - 2026-07-15
+
+### Added
+
+- **Close the composable local runtime loop** (#272)
+
+## [4.1.19] - 2026-07-15
+
+### Added
+
+- **Compile single-file Agent presets** (#267)
+- **Add versioned Run contracts** (#266)
+- **Add canonical Event contracts** (#265)
+
+## [4.1.18] - 2026-07-15
+
+### Added
+
+- **Add reusable cron and Slack delivery helpers** (#261)
+
+### Fixed
+
+- Bump @relayfile/adapter-core to pick up telegram trigger catalog (#264)
+
+## [4.1.17] - 2026-07-15
+
+### Added
+
+- Add `normalizeCronFire` and `workforceEventType` so handlers can consume one
+  stable cron view across legacy v3 and normalized v4 runtime events.
+
+## [4.1.16] - 2026-07-14
+
+### Fixed
+
+- Fix broker precedence for relay MCP injection (#260)
+
+## [4.1.14] - 2026-06-25
+
+### Added
+
+- **Ctx.relay — agent-to-agent messaging over the relay (#254 pt.2)** (#254)
+
+## [4.1.6] - 2026-06-18
+
+### Fixed
+
+- Treat Relayfile writebacks that time out without receipts as first-class `WritebackError`s from the runtime client helpers.
+
+## [4.1.5] - 2026-06-18
+
+### Dependencies
+
+- Refresh relayfile trigger catalog
+
+## [4.1.3] - 2026-06-16
+
+### Added
+
+- **Add OpenRouter/opencode LLM provider support**
+
+### Changed
+
+- Opencode is its own provider, not an alias for openrouter
+
+## [4.1.1] - 2026-06-16
+
+### Fixed
+
+- Surface harness stderr on non-zero exit so failures aren't blank
+
+## [4.0.4] - 2026-06-14
+
+### Dependencies
+
+- Refresh relayfile trigger catalog for daytona (#231)
+
+## [4.0.2] - 2026-06-11
+
+### Fixed
+
+- Patch vulnerable transitive deps (shell-quote, protobufjs, hono) and align adapter-core
+
+## [4.0.1] - 2026-06-10
+
+### Fixed
+
+- No-trigger personas narrow to AgentEvent, not BaseAgentEvent (#221)
+
+## [4.0.0] - 2026-06-10
+
+### Breaking Changes
+
+- **Relay SDK AgentEvent + declarative relay persona field (Stage 1, A, B, C-runtime)** (#220)
+
+## [3.0.51] - 2026-06-08
+
+### Added
+
+- **Auto-record decision trajectories + emit ai-hist contract (Workstream B)** (#207)
+
+### Fixed
+
+- Use broker-aware agent-relay MCP for local persona spawns (#214)
+- Address grok harness review feedback
+
+### Changed
+
+- Consolidate trajectories + ai-memory under memory (opt-in) (#210)
+
 ## [3.0.50] - 2026-06-06
 
 ### Fixed

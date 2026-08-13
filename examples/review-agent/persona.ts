@@ -6,6 +6,17 @@ export default definePersona({
   tags: ['review'],
   description:
     'Reviews opened PRs, responds to @mentions in comments, attempts autofix on red CI.',
+  skills: [
+    {
+      id: 'review-rubric',
+      source: 'https://prpm.dev/packages/@agentworkforce/review-rubric',
+      description: 'Apply a consistent correctness and regression-risk review rubric.'
+    }
+  ],
+  capabilities: {
+    review: true,
+    issueClaim: false
+  },
   cloud: true,
   useSubscription: true,
   // Connection config only — which events fire this agent lives in agent.ts
@@ -16,7 +27,14 @@ export default definePersona({
   },
   memory: {
     enabled: true,
-    scopes: ['workspace']
+    scopes: ['workspace'],
+    trajectories: {
+      enabled: true,
+      autoCompact: true
+    },
+    aiMemory: {
+      enabled: true
+    }
   },
   onEvent: './agent.ts',
   harness: 'codex',

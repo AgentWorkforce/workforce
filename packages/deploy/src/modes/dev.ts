@@ -53,7 +53,15 @@ export const devLauncher: ModeLauncher = {
     // runner reads NDJSON envelopes from its stdin, so any envelopes the
     // user pipes into `workforce deploy --mode dev` flow straight into
     // the runner without an intermediate file.
-    if (child.stdin) {
+    //
+    // `input.bridged` opts out of this: a caller driving the runner via the
+    // returned handle's `write()` (e.g. a long-lived fleet-node host process)
+    // owns the child's stdin lifecycle itself. Without this opt-out, the
+    // HOST process's own stdin ending (the normal case for anything
+    // non-interactive/daemonized) would end `child.stdin` out from under
+    // that caller — every subsequent `write()` then throws
+    // ERR_STREAM_WRITE_AFTER_END, uncaught, crashing the host process.
+    if (child.stdin && !input.bridged) {
       process.stdin.pipe(child.stdin);
       // When the parent's stdin closes (EOF / piped input drained), end
       // the child's stdin too so the runner's for-await loop terminates.
@@ -61,6 +69,13 @@ export const devLauncher: ModeLauncher = {
         child.stdin?.end();
       });
     }
+    // A write after the child's stdin has ended (crashed/exiting child,
+    // or a `bridged` caller racing `stop()`) throws — without a listener,
+    // Node treats that as an uncaught exception and crashes the whole
+    // process. Surface it through `io.warn` instead, in every mode.
+    child.stdin?.on('error', (err) => {
+      input.io.warn(`[runtime] stdin write error: ${err instanceof Error ? err.message : String(err)}`);
+    });
 
     if (child.pid === undefined) {
       throw new Error('dev launcher: failed to spawn runner (no pid assigned)');
@@ -119,7 +134,10 @@ export const devLauncher: ModeLauncher = {
     return {
       id: `pid:${child.pid}`,
       stop,
-      done
+      done,
+      write: (line: string) => {
+        child.stdin?.write(line);
+      }
     };
   }
 };

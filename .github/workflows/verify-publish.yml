@@ -14,10 +14,21 @@ on:
         default: '@agentworkforce/cli'
         type: choice
         options:
+          - '@agentworkforce/events'
+          - '@agentworkforce/persona-kit'
+          - '@agentworkforce/runtime'
+          - '@agentworkforce/compose'
+          - '@agentworkforce/delivery'
+          - '@agentworkforce/workload-router'
+          - '@agentworkforce/persona-registry'
+          - '@agentworkforce/deploy'
+          - '@agentworkforce/review-kit'
+          - '@agentworkforce/turn-kit'
+          - '@agentworkforce/mcp-workforce'
+          - '@agentworkforce/daytona-runner'
+          - '@agentworkforce/local-surface'
           - '@agentworkforce/cli'
           - 'agentworkforce'
-          - '@agentworkforce/workload-router'
-          - '@agentworkforce/persona-kit'
       version:
         description: 'Version to verify (defaults to the "latest" dist-tag)'
         required: false
@@ -38,7 +49,7 @@ jobs:
       - name: Setup Node
         uses: actions/setup-node@v4
         with:
-          node-version: '22.14.0'
+          node-version: '26.5.0'
           registry-url: 'https://registry.npmjs.org'
 
       - name: Resolve version
@@ -101,7 +112,6 @@ jobs:
 
           const mod = await import('./node_modules/@agentworkforce/cli/dist/cli.js');
           assert.equal(typeof mod.main, 'function');
-          assert.equal(typeof mod.CLI_VERSION, 'string');
           console.log(`scoped CLI package smoke passed for ${pkg.name}@${pkg.version}`);
           EOF
 

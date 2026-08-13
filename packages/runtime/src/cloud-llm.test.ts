@@ -338,3 +338,36 @@ test('empty text content throws instead of returning an empty string', async (t)
   assert.ok(llm);
   await assert.rejects(llm.complete('hi'), /no text content/);
 });
+
+test('OPENCODE_API_KEY routes opencode personas to OpenRouter chat completions', async (t) => {
+  const requests = stubFetch(t, {
+    payload: { choices: [{ message: { content: 'hello from deepseek' } }] }
+  });
+  const llm = createDefaultLlm({
+    persona: { ...basePersona, harness: 'opencode', model: 'deepseek-v4-flash-free' },
+    env: { OPENCODE_API_KEY: 'sk-oc-test' },
+    log: noopLog
+  });
+  assert.ok(llm);
+  const result = await llm.complete('hi', { maxTokens: 512 });
+  assert.equal(result, 'hello from deepseek');
+  const request = requests[0]!;
+  assert.equal(request.url, 'https://openrouter.ai/api/v1/chat/completions');
+  assert.equal(request.headers['authorization'], 'Bearer sk-oc-test');
+  assert.equal(request.body.model, 'deepseek-v4-flash-free');
+  assert.equal(request.body.max_tokens, 512);
+});
+
+test('opencode harness prefers OPENCODE_API_KEY over ANTHROPIC_API_KEY', async (t) => {
+  const requests = stubFetch(t, {
+    payload: { choices: [{ message: { content: 'opencode wins' } }] }
+  });
+  const llm = createDefaultLlm({
+    persona: { ...basePersona, harness: 'opencode', model: 'deepseek-v4-flash-free' },
+    env: { ANTHROPIC_API_KEY: 'sk-ant-test', OPENCODE_API_KEY: 'sk-oc-test' },
+    log: noopLog
+  });
+  assert.ok(llm);
+  await llm.complete('hi');
+  assert.equal(requests[0]!.url, 'https://openrouter.ai/api/v1/chat/completions');
+});

@@ -55,10 +55,18 @@ test('listIntegrations merges cloud catalog, trigger catalog aliases, and connec
           });
         }
         if (pathname.includes('/status?scope=deployer_user')) {
-          return json({ provider: pathname.includes('google-mail') ? 'google-mail' : 'other', status: 'pending' });
+          return json({
+            provider: pathname.includes('google-mail') ? 'google-mail' : 'other',
+            status: 'pending',
+            registrationHealth: { registered: pathname.includes('google-mail'), healthy: true }
+          });
         }
         if (pathname.includes('/status?scope=workspace')) {
-          return json({ provider: pathname.includes('github') ? 'github' : 'other', status: 'pending' });
+          return json({
+            provider: pathname.includes('github') ? 'github' : 'other',
+            status: 'pending',
+            registrationHealth: { registered: pathname.includes('github'), healthy: true }
+          });
         }
         return json({ error: 'unexpected' }, 500);
       }
@@ -73,6 +81,10 @@ test('listIntegrations merges cloud catalog, trigger catalog aliases, and connec
   assert.ok(googleMail.triggers.length > 0);
   assert.equal(googleMail.triggerSource, 'catalog');
   assert.equal(googleMail.connections?.some((c) => c.connectionId === 'conn-user-gmail'), true);
+  assert.deepEqual(googleMail.registrationHealth, {
+    deployer_user: { registered: true, healthy: true },
+    workspace: { registered: false, healthy: true }
+  });
 
   const acme = document.integrations.find((row) => row.id === 'acme-internal');
   assert.ok(acme);

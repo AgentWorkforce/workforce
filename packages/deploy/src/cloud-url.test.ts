@@ -16,10 +16,32 @@ test('canonicalizeCloudUrl: origin.agentrelay.cloud/cloud → public canonical',
   );
 });
 
-test('canonicalizeCloudUrl: staging.agentrelay.cloud → public canonical', () => {
+test('canonicalizeCloudUrl: staging.agentrelay.cloud is preserved for staging deploys', () => {
   assert.equal(
     canonicalizeCloudUrl('https://staging.agentrelay.cloud'),
-    'https://agentrelay.com/cloud'
+    'https://staging.agentrelay.cloud/cloud'
+  );
+  assert.equal(
+    canonicalizeCloudUrl('https://staging.agentrelay.cloud/cloud'),
+    'https://staging.agentrelay.cloud/cloud'
+  );
+  assert.equal(
+    canonicalizeCloudUrl('https://staging.agentrelay.cloud/cloud/'),
+    'https://staging.agentrelay.cloud/cloud'
+  );
+});
+
+test('canonicalizeCloudUrl: origin preview host → public canonical', () => {
+  assert.equal(
+    canonicalizeCloudUrl('https://origin-preview-pr-113.agentrelay.cloud/cloud'),
+    'https://preview-pr-113.agentrelay.cloud/cloud'
+  );
+});
+
+test('canonicalizeCloudUrl: preview public host gets cloud base path', () => {
+  assert.equal(
+    canonicalizeCloudUrl('https://preview-pr-113.agentrelay.cloud'),
+    'https://preview-pr-113.agentrelay.cloud/cloud'
   );
 });
 
@@ -89,7 +111,7 @@ test('canonicalizeCloudUrl: apex with a non-root path is left untouched', () => 
   );
 });
 
-test('resolveCloudUrl: flag wins over env wins over active.json wins over default', () => {
+test('resolveCloudUrl: flag wins over env wins over compatibility active pointer wins over default', () => {
   // Flag wins.
   assert.equal(
     resolveCloudUrl({
@@ -124,7 +146,7 @@ test('resolveCloudUrl: flag wins over env wins over active.json wins over defaul
     'https://legacy-env.example.test'
   );
 
-  // No env → active.json wins.
+  // No env → compatibility active pointer wins.
   assert.equal(
     resolveCloudUrl({
       env: {},
@@ -141,9 +163,7 @@ test('resolveCloudUrl: nothing set → canonical default', () => {
   );
 });
 
-test('resolveCloudUrl: active.json with bypass hostname is canonicalized', () => {
-  // The active.json file may still carry an origin.* hostname written by
-  // an older login flow. resolveCloudUrl repairs that on read.
+test('resolveCloudUrl: compatibility active pointer with bypass hostname is canonicalized', () => {
   assert.equal(
     resolveCloudUrl({
       env: {},
@@ -153,7 +173,7 @@ test('resolveCloudUrl: active.json with bypass hostname is canonicalized', () =>
   );
 });
 
-test('resolveCloudUrl: active.json with bare apex is canonicalized', () => {
+test('resolveCloudUrl: compatibility active pointer with bare apex is canonicalized', () => {
   assert.equal(
     resolveCloudUrl({
       env: {},

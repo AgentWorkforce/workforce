@@ -21,10 +21,16 @@ import type {
   PersonaIntegrationConfig,
   PersonaIntegrationTrigger,
   PersonaIntent,
+  PersonaAiMemoryConfig,
+  PersonaHttpReadCapability,
+  PersonaHttpReadRule,
   PersonaMemory,
   PersonaMemoryConfig,
   PersonaMemoryScope,
+  PersonaRelay,
+  PersonaRelayConfig,
   PersonaMount,
+  PersonaTrajectoryConfig,
   PersonaPermissions,
   PersonaSchedule,
   PersonaSelection,
@@ -46,6 +52,28 @@ const PERSONA_TAG_MAX_LEN = 64;
 
 export function isObject(value: unknown): value is Record<string, unknown> {
   return typeof value === 'object' && value !== null;
+}
+
+export function isPlainObject(value: unknown): value is Record<string, unknown> {
+  if (!isObject(value) || Array.isArray(value)) return false;
+  const proto = Object.getPrototypeOf(value);
+  return proto === Object.prototype || proto === null;
+}
+
+/**
+ * Copy fields this parser does not own so downstream runtimes can extend the
+ * portable spec without waiting for a persona-kit release. Callers validate
+ * and project their known fields after this copy, ensuring normalized known
+ * values always win over the raw input.
+ */
+function preserveUnknownFields(
+  value: Record<string, unknown>,
+  knownFields: readonly string[]
+): Record<string, unknown> {
+  const known = new Set(knownFields);
+  return Object.fromEntries(
+    Object.entries(value).filter(([key]) => !known.has(key))
+  );
 }
 
 export function isHarness(value: unknown): value is Harness {
@@ -157,10 +185,19 @@ export function parseHarnessSettings(value: unknown, context: string): HarnessSe
     throw new Error(`${context}.timeoutSeconds must be a positive number`);
   }
 
-  const out: HarnessSettings = {
+  const out = {
+    ...preserveUnknownFields(value, [
+      'reasoning',
+      'timeoutSeconds',
+      'sandboxMode',
+      'approvalPolicy',
+      'workspaceWriteNetworkAccess',
+      'webSearch',
+      'dangerouslyBypassApprovalsAndSandbox'
+    ]),
     reasoning: reasoning as HarnessSettings['reasoning'],
     timeoutSeconds
-  };
+  } as HarnessSettings;
   if (sandboxMode !== undefined) {
     if (!CODEX_SANDBOX_MODES.includes(sandboxMode as CodexSandboxMode)) {
       throw new Error(`${context}.sandboxMode must be one of: ${CODEX_SANDBOX_MODES.join(', ')}`);
@@ -231,7 +268,12 @@ export function parseSkills(value: unknown, context: string): PersonaSkill[] {
     if (typeof description !== 'string' || !description.trim()) {
       throw new Error(`${entryContext}.description must be a non-empty string`);
     }
-    return { id, source, description };
+    return {
+      ...preserveUnknownFields(entry, ['id', 'source', 'description']),
+      id,
+      source,
+      description
+    };
   });
 }
 
@@ -278,10 +320,16 @@ export function parseMount(
     : hasPatterns
       ? true
       : undefined;
-  if (!hasPatterns && finalEnabled === undefined) {
+  const unknownFields = preserveUnknownFields(value, [
+    'enabled',
+    'ignoredPatterns',
+    'readonlyPatterns'
+  ]);
+  if (!hasPatterns && finalEnabled === undefined && Object.keys(unknownFields).length === 0) {
     return undefined;
   }
   return {
+    ...unknownFields,
     ...(finalEnabled !== undefined ? { enabled: finalEnabled } : {}),
     ...(ignoredPatterns ? { ignoredPatterns } : {}),
     ...(readonlyPatterns ? { readonlyPatterns } : {})
@@ -334,7 +382,13 @@ export function parseInputs(
       throw new Error(`${context}.${name} must be a string default or an object`);
     }
     const { description, env, default: defaultValue, optional, picker } = raw;
-    const parsed: PersonaInputSpec = {};
+    const parsed = preserveUnknownFields(raw, [
+      'description',
+      'env',
+      'default',
+      'optional',
+      'picker'
+    ]) as PersonaInputSpec;
     if (description !== undefined) {
       if (typeof description !== 'string' || !description.trim()) {
         throw new Error(`${context}.${name}.description must be a non-empty string if provided`);
@@ -376,7 +430,11 @@ export function parseInputs(
       if (typeof resource !== 'string' || !resource.trim()) {
         throw new Error(`${context}.${name}.picker.resource must be a non-empty string`);
       }
-      parsed.picker = { provider, resource };
+      parsed.picker = {
+        ...preserveUnknownFields(picker, ['provider', 'resource']),
+        provider,
+        resource
+      };
     }
     out[name] = parsed;
   }
@@ -392,7 +450,7 @@ export function parsePermissions(
   if (!isObject(value)) {
     throw new Error(`${context} must be an object if provided`);
   }
-  const out: PersonaPermissions = {};
+  const out = preserveUnknownFields(value, ['allow', 'deny', 'mode']) as PersonaPermissions;
   const { allow, deny, mode } = value;
   if (allow !== undefined) {
     if (!Array.isArray(allow) || allow.some((s) => typeof s !== 'string' || !s.trim())) {
@@ -454,7 +512,12 @@ export function parseMcpServers(
         throw new Error(`${context}.${name}.url must be a non-empty string for type=${type}`);
       }
       const headers = parseStringMap(raw.headers, `${context}.${name}.headers`);
-      out[name] = { type, url: raw.url, ...(headers ? { headers } : {}) };
+      out[name] = {
+        ...preserveUnknownFields(raw, ['type', 'url', 'headers']),
+        type,
+        url: raw.url,
+        ...(headers ? { headers } : {})
+      };
     } else if (type === 'stdio') {
       if (typeof raw.command !== 'string' || !raw.command.trim()) {
         throw new Error(`${context}.${name}.command must be a non-empty string for type=stdio`);
@@ -465,6 +528,7 @@ export function parseMcpServers(
       }
       const env = parseStringMap(raw.env, `${context}.${name}.env`);
       out[name] = {
+        ...preserveUnknownFields(raw, ['type', 'command', 'args', 'env']),
         type: 'stdio',
         command: raw.command,
         ...(args ? { args: args as string[] } : {}),
@@ -532,6 +596,28 @@ function assertCronExpression(value: string, context: string): void {
   }
 }
 
+function parseAbsolutePathList(value: unknown, context: string): string[] {
+  if (!Array.isArray(value) || value.length === 0) {
+    throw new Error(`${context} must be a non-empty array`);
+  }
+  return value.map((path, pathIdx) => {
+    const pathContext = `${context}[${pathIdx}]`;
+    if (typeof path !== 'string' || !path.trim()) {
+      throw new Error(`${pathContext} must be a non-empty string`);
+    }
+    if (path !== path.trim()) {
+      throw new Error(`${pathContext} must not have leading or trailing whitespace`);
+    }
+    if (/[\r\n\u2028\u2029]/u.test(path)) {
+      throw new Error(`${pathContext} must not contain line separators`);
+    }
+    if (!path.startsWith('/')) {
+      throw new Error(`${pathContext} must start with /`);
+    }
+    return path;
+  });
+}
+
 export function parseIntegrationTrigger(
   value: unknown,
   context: string
@@ -539,7 +625,7 @@ export function parseIntegrationTrigger(
   if (!isObject(value)) {
     throw new Error(`${context} must be an object`);
   }
-  const { on, match, where } = value;
+  const { on, match, where, paths, maxConcurrency } = value;
   if (typeof on !== 'string' || !on.trim()) {
     throw new Error(`${context}.on must be a non-empty string`);
   }
@@ -549,10 +635,32 @@ export function parseIntegrationTrigger(
   if (where !== undefined && (typeof where !== 'string' || !where.trim())) {
     throw new Error(`${context}.where must be a non-empty string if provided`);
   }
+  const parsedPaths = paths === undefined
+    ? undefined
+    : parseAbsolutePathList(paths, `${context}.paths`);
+  // Intentionally lenient: Cloud derives this as an optional backpressure hint,
+  // so invalid values mean "unset" rather than a parse failure.
+  const parsedMaxConcurrency =
+    typeof maxConcurrency === 'number' &&
+    Number.isInteger(maxConcurrency) &&
+    maxConcurrency >= 1
+      ? maxConcurrency
+      : undefined;
   return {
+    ...preserveUnknownFields(value, [
+      'on',
+      'match',
+      'where',
+      'paths',
+      'maxConcurrency'
+    ]),
     on,
     ...(typeof match === 'string' ? { match } : {}),
-    ...(typeof where === 'string' ? { where } : {})
+    ...(typeof where === 'string' ? { where } : {}),
+    ...(parsedPaths ? { paths: parsedPaths } : {}),
+    ...(parsedMaxConcurrency !== undefined
+      ? { maxConcurrency: parsedMaxConcurrency }
+      : {})
   };
 }
 
@@ -592,6 +700,7 @@ export function parseIntegrationSource(
       `${context}.kind must be one of: ${INTEGRATION_SOURCE_KINDS.join(', ')}`
     );
   }
+  const unknownFields = preserveUnknownFields(value, ['kind', 'name']);
   if (kind === 'workspace_service_account') {
     if (typeof name !== 'string' || !name) {
       throw new Error(
@@ -608,14 +717,14 @@ export function parseIntegrationSource(
         `${context}.name must be kebab-case matching ${INTEGRATION_SOURCE_NAME_RE.source}`
       );
     }
-    return { kind, name };
+    return { ...unknownFields, kind, name };
   }
   if (name !== undefined) {
     throw new Error(
       `${context}.name is only allowed when kind="workspace_service_account"`
     );
   }
-  return { kind };
+  return { ...unknownFields, kind };
 }
 
 export function parseIntegrationConfig(
@@ -625,7 +734,7 @@ export function parseIntegrationConfig(
   if (!isObject(value)) {
     throw new Error(`${context} must be an object`);
   }
-  const { source, scope } = value;
+  const { source, scope, config, optional, enabledByInput } = value;
 
   // Hard cut: triggers moved from the persona to the agent. A persona
   // integration is connection-config only (source + scope). Fail loudly so
@@ -637,7 +746,14 @@ export function parseIntegrationConfig(
     );
   }
 
-  const out: PersonaIntegrationConfig = {};
+  const out = preserveUnknownFields(value, [
+    'source',
+    'scope',
+    'config',
+    'optional',
+    'enabledByInput',
+    'triggers'
+  ]) as PersonaIntegrationConfig;
 
   // Default-inject `deployer_user` when the persona omits `source` so
   // pre-discriminator personas keep parsing unchanged. The cloud-side
@@ -658,6 +774,35 @@ export function parseIntegrationConfig(
     if (parsedScope && Object.keys(parsedScope).length > 0) {
       out.scope = parsedScope;
     }
+  }
+
+  if (config !== undefined) {
+    if (!isPlainObject(config)) {
+      throw new Error(`${context}.config must be a plain object if provided`);
+    }
+    out.config = config;
+  }
+
+  if (optional !== undefined) {
+    if (typeof optional !== 'boolean') {
+      throw new Error(`${context}.optional must be a boolean if provided`);
+    }
+    out.optional = optional;
+  }
+
+  if (enabledByInput !== undefined) {
+    if (typeof enabledByInput !== 'string' || !enabledByInput.trim()) {
+      throw new Error(`${context}.enabledByInput must be a non-empty string if provided`);
+    }
+    assertInputName(enabledByInput, `${context}.enabledByInput`);
+    out.enabledByInput = enabledByInput;
+  }
+
+  if (out.optional === true && out.enabledByInput === undefined) {
+    throw new Error(`${context}.enabledByInput is required when optional is true`);
+  }
+  if (out.enabledByInput !== undefined && out.optional !== true) {
+    throw new Error(`${context}.optional must be true when enabledByInput is set`);
   }
 
   return out;
@@ -721,6 +866,7 @@ export function parseSchedules(
       throw new Error(`${entryContext}.tz must be a non-empty string if provided`);
     }
     out.push({
+      ...preserveUnknownFields(entry, ['name', 'cron', 'tz']),
       name: trimmedName,
       cron: trimmedCron,
       ...(typeof tz === 'string' ? { tz: tz.trim() } : {})
@@ -751,19 +897,7 @@ export function parseWatch(value: unknown, context: string): WatchRule[] | undef
       throw new Error(`${entryContext} must be an object`);
     }
     const { paths, events, debounceMs, match } = entry;
-    if (!Array.isArray(paths) || paths.length === 0) {
-      throw new Error(`${entryContext}.paths must be a non-empty array`);
-    }
-    const parsedPaths = paths.map((path, pathIdx) => {
-      const pathContext = `${entryContext}.paths[${pathIdx}]`;
-      if (typeof path !== 'string' || !path.trim()) {
-        throw new Error(`${pathContext} must be a non-empty string`);
-      }
-      if (!path.startsWith('/')) {
-        throw new Error(`${pathContext} must start with /`);
-      }
-      return path;
-    });
+    const parsedPaths = parseAbsolutePathList(paths, `${entryContext}.paths`);
 
     if (!Array.isArray(events) || events.length === 0) {
       throw new Error(`${entryContext}.events must be a non-empty array`);
@@ -789,6 +923,7 @@ export function parseWatch(value: unknown, context: string): WatchRule[] | undef
     }
 
     return {
+      ...preserveUnknownFields(entry, ['paths', 'events', 'debounceMs', 'match']),
       paths: parsedPaths,
       events: parsedEvents,
       ...(typeof debounceMs === 'number' ? { debounceMs } : {}),
@@ -811,7 +946,12 @@ export function parseAgentSpec(value: unknown, context = 'agent'): AgentSpec {
     throw new Error(`${context} must be an object`);
   }
   const { launchedBy, triggers, schedules, watch } = value;
-  const out: AgentSpec = {};
+  const out = preserveUnknownFields(value, [
+    'launchedBy',
+    'triggers',
+    'schedules',
+    'watch'
+  ]) as AgentSpec;
 
   if (launchedBy !== undefined) {
     if (launchedBy !== 'team-dispatcher') {
@@ -858,8 +998,16 @@ export function parseMemory(value: unknown, context: string): PersonaMemory | un
   if (!isObject(value)) {
     throw new Error(`${context} must be a boolean or an object if provided`);
   }
-  const { enabled, scopes, ttlDays, autoPromote, dedupMs } = value;
-  const out: PersonaMemoryConfig = {};
+  const { enabled, scopes, ttlDays, autoPromote, dedupMs, trajectories, aiMemory } = value;
+  const out = preserveUnknownFields(value, [
+    'enabled',
+    'scopes',
+    'ttlDays',
+    'autoPromote',
+    'dedupMs',
+    'trajectories',
+    'aiMemory'
+  ]) as PersonaMemoryConfig;
   if (enabled !== undefined) {
     if (typeof enabled !== 'boolean') {
       throw new Error(`${context}.enabled must be a boolean if provided`);
@@ -902,7 +1050,160 @@ export function parseMemory(value: unknown, context: string): PersonaMemory | un
     }
     out.dedupMs = dedupMs;
   }
+  if (trajectories !== undefined) {
+    out.trajectories = parseTrajectoryConfig(trajectories, `${context}.trajectories`);
+  }
+  if (aiMemory !== undefined) {
+    out.aiMemory = parseAiMemoryConfig(aiMemory, `${context}.aiMemory`);
+  }
   return out;
+}
+
+export function parseRelay(value: unknown, context: string): PersonaRelay | undefined {
+  if (value === undefined) return undefined;
+  if (typeof value === 'boolean') return value;
+  if (!isObject(value)) {
+    throw new Error(`${context} must be a boolean or an object if provided`);
+  }
+  const { enabled, agentName, channels, inbox, defaultWorkspace } = value;
+  const out = preserveUnknownFields(value, [
+    'enabled',
+    'agentName',
+    'channels',
+    'inbox',
+    'defaultWorkspace'
+  ]) as PersonaRelayConfig;
+  if (enabled !== undefined) {
+    if (typeof enabled !== 'boolean') {
+      throw new Error(`${context}.enabled must be a boolean if provided`);
+    }
+    out.enabled = enabled;
+  }
+  if (agentName !== undefined) {
+    if (typeof agentName !== 'string' || !agentName.trim()) {
+      throw new Error(`${context}.agentName must be a non-empty string if provided`);
+    }
+    out.agentName = agentName.trim();
+  }
+  if (channels !== undefined) {
+    out.channels = parseRelayStringList(channels, `${context}.channels`);
+  }
+  if (inbox !== undefined) {
+    out.inbox = parseRelayStringList(inbox, `${context}.inbox`);
+  }
+  if (defaultWorkspace !== undefined) {
+    if (typeof defaultWorkspace !== 'string' || !defaultWorkspace.trim()) {
+      throw new Error(`${context}.defaultWorkspace must be a non-empty string if provided`);
+    }
+    out.defaultWorkspace = defaultWorkspace.trim();
+  }
+  return out;
+}
+
+function parseRelayStringList(value: unknown, context: string): string[] {
+  if (!Array.isArray(value)) {
+    throw new Error(`${context} must be an array of strings if provided`);
+  }
+  const out: string[] = [];
+  for (const [idx, entry] of value.entries()) {
+    if (typeof entry !== 'string' || !entry.trim()) {
+      throw new Error(`${context}[${idx}] must be a non-empty string`);
+    }
+    const normalized = entry.trim();
+    if (!out.includes(normalized)) out.push(normalized);
+  }
+  return out;
+}
+
+function parseTrajectoryConfig(
+  value: unknown,
+  context: string
+): boolean | PersonaTrajectoryConfig {
+  if (typeof value === 'boolean') return value;
+  if (!isObject(value)) {
+    throw new Error(`${context} must be a boolean or an object if provided`);
+  }
+  const out = preserveUnknownFields(value, [
+    'enabled',
+    'autoCompact'
+  ]) as PersonaTrajectoryConfig;
+  if (value.enabled !== undefined) {
+    if (typeof value.enabled !== 'boolean') {
+      throw new Error(`${context}.enabled must be a boolean if provided`);
+    }
+    out.enabled = value.enabled;
+  }
+  if (value.autoCompact !== undefined) {
+    if (typeof value.autoCompact !== 'boolean') {
+      throw new Error(`${context}.autoCompact must be a boolean if provided`);
+    }
+    out.autoCompact = value.autoCompact;
+  }
+  return out;
+}
+
+function parseAiMemoryConfig(
+  value: unknown,
+  context: string
+): boolean | PersonaAiMemoryConfig {
+  if (typeof value === 'boolean') return value;
+  if (!isObject(value)) {
+    throw new Error(`${context} must be a boolean or an object if provided`);
+  }
+  const out = preserveUnknownFields(value, [
+    'enabled',
+    'dbPath'
+  ]) as PersonaAiMemoryConfig;
+  if (value.enabled !== undefined) {
+    if (typeof value.enabled !== 'boolean') {
+      throw new Error(`${context}.enabled must be a boolean if provided`);
+    }
+    out.enabled = value.enabled;
+  }
+  if (value.dbPath !== undefined) {
+    if (typeof value.dbPath !== 'string' || !value.dbPath.trim()) {
+      throw new Error(`${context}.dbPath must be a non-empty string if provided`);
+    }
+    out.dbPath = value.dbPath;
+  }
+  return out;
+}
+
+/**
+ * Resolve the opt-in `memory.trajectories` facet (the "why" write side).
+ * Off unless the persona declares it: `true`, or an object whose
+ * `enabled !== false`. The boolean `memory: true` shorthand does NOT enable it.
+ */
+export function resolveTrajectoryRecording(memory: PersonaMemory | undefined): {
+  enabled: boolean;
+  autoCompact?: boolean;
+} {
+  if (!memory || typeof memory === 'boolean') return { enabled: false };
+  const value = memory.trajectories;
+  if (value === undefined) return { enabled: false };
+  if (typeof value === 'boolean') return { enabled: value };
+  return {
+    enabled: value.enabled !== false,
+    ...(value.autoCompact !== undefined ? { autoCompact: value.autoCompact } : {})
+  };
+}
+
+/**
+ * Resolve the opt-in `memory.aiMemory` facet (the "how"+"why" recall side that
+ * loads the ai-hist MCP). Off unless declared; `memory: true` does NOT enable it.
+ */
+export function resolveAiMemory(memory: PersonaMemory | undefined): {
+  enabled: boolean;
+  dbPath?: string;
+} {
+  if (!memory || typeof memory === 'boolean') return { enabled: false };
+  const value = memory.aiMemory;
+  if (value === undefined) return { enabled: false };
+  if (typeof value === 'boolean') return { enabled: value };
+  return {
+    enabled: value.enabled !== false,
+    ...(value.dbPath ? { dbPath: value.dbPath } : {})
+  };
 }
 
 function parseCapabilityValue(value: unknown, context: string): CapabilityValue {
@@ -914,6 +1215,56 @@ function parseCapabilityValue(value: unknown, context: string): CapabilityValue 
     throw new Error(`${context}.enabled must be a boolean if provided`);
   }
   return { ...value } as CapabilityValue;
+}
+
+function parseHttpReadRule(value: unknown, context: string): PersonaHttpReadRule {
+  if (!isObject(value) || Array.isArray(value)) {
+    throw new Error(`${context} must be an object`);
+  }
+  const entry = value as Record<string, unknown>;
+  for (const key of Object.keys(entry)) {
+    if (!['method', 'urlGlob'].includes(key)) {
+      throw new Error(`${context}.${key} is not allowed`);
+    }
+  }
+  if (entry.method !== 'GET' && entry.method !== 'HEAD') {
+    throw new Error(`${context}.method must be "GET" or "HEAD"`);
+  }
+  if (typeof entry.urlGlob !== 'string' || !entry.urlGlob.trim()) {
+    throw new Error(`${context}.urlGlob must be a non-empty string`);
+  }
+  return {
+    method: entry.method,
+    urlGlob: entry.urlGlob
+  };
+}
+
+function parseHttpReadCapability(value: unknown, context: string): PersonaHttpReadCapability {
+  if (!isObject(value) || Array.isArray(value)) {
+    throw new Error(`${context} must be an object if provided`);
+  }
+  const entry = value as Record<string, unknown>;
+  for (const key of Object.keys(entry)) {
+    if (!['enabled', 'allow'].includes(key)) {
+      throw new Error(`${context}.${key} is not allowed`);
+    }
+  }
+  if (entry.enabled !== undefined && typeof entry.enabled !== 'boolean') {
+    throw new Error(`${context}.enabled must be a boolean if provided`);
+  }
+  if (entry.allow !== undefined && !Array.isArray(entry.allow)) {
+    throw new Error(`${context}.allow must be an array if provided`);
+  }
+  return {
+    ...(entry.enabled !== undefined ? { enabled: entry.enabled } : {}),
+    ...(entry.allow !== undefined
+      ? {
+          allow: entry.allow.map((rule, index) =>
+            parseHttpReadRule(rule, `${context}.allow[${index}]`)
+          )
+        }
+      : {})
+  };
 }
 
 export function parseCapabilities(
@@ -936,7 +1287,9 @@ export function parseCapabilities(
   // drop capability keys it happens not to recognize.
   for (const [key, raw] of Object.entries(value)) {
     if (raw === undefined) continue;
-    out[key] = parseCapabilityValue(raw, `${context}.${key}`);
+    out[key] = key === 'httpRead'
+      ? parseHttpReadCapability(raw, `${context}.${key}`)
+      : parseCapabilityValue(raw, `${context}.${key}`);
   }
 
   return Object.keys(out).length > 0 ? out : undefined;
@@ -997,6 +1350,7 @@ export function parsePersonaSpec(value: unknown, expectedIntent: PersonaIntent):
     integrations,
     capabilities,
     memory,
+    relay,
     onEvent
   } = value;
 
@@ -1104,10 +1458,45 @@ export function parsePersonaSpec(value: unknown, expectedIntent: PersonaIntent):
     `persona[${expectedIntent}].capabilities`
   );
   const parsedMemory = parseMemory(memory, `persona[${expectedIntent}].memory`);
+  const parsedRelay = parseRelay(relay, `persona[${expectedIntent}].relay`);
   const parsedOnEvent = parseOnEvent(onEvent, `persona[${expectedIntent}].onEvent`);
   const parsedSandbox = parseSandbox(sandbox, `persona[${expectedIntent}].sandbox`);
 
   return {
+    ...preserveUnknownFields(value, [
+      'id',
+      'intent',
+      'tags',
+      'description',
+      'harness',
+      'model',
+      'systemPrompt',
+      'harnessSettings',
+      'skills',
+      'inputs',
+      'env',
+      'mcpServers',
+      'permissions',
+      'mount',
+      'sandbox',
+      'claudeMd',
+      'claudeMdMode',
+      'agentsMd',
+      'agentsMdMode',
+      'claudeMdContent',
+      'agentsMdContent',
+      'cloud',
+      'useSubscription',
+      'integrations',
+      'capabilities',
+      'memory',
+      'relay',
+      'onEvent',
+      // Explicit hard cuts above remain rejected rather than passed through.
+      'traits',
+      'schedules',
+      'watch'
+    ]),
     id,
     intent,
     ...(parsedTags ? { tags: parsedTags } : {}),
@@ -1134,6 +1523,7 @@ export function parsePersonaSpec(value: unknown, expectedIntent: PersonaIntent):
     ...(parsedIntegrations ? { integrations: parsedIntegrations } : {}),
     ...(parsedCapabilities ? { capabilities: parsedCapabilities } : {}),
     ...(parsedMemory !== undefined ? { memory: parsedMemory } : {}),
+    ...(parsedRelay !== undefined ? { relay: parsedRelay } : {}),
     ...(parsedOnEvent !== undefined ? { onEvent: parsedOnEvent } : {})
   };
 }

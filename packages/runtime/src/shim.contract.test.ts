@@ -1,7 +1,8 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { CLOUD_ENVELOPE_FIELDS } from './envelope-fields.cloud.js';
-import { RAW_GATEWAY_ENVELOPE_FIELDS, shimEnvelope, type RawGatewayEnvelope } from './shim.js';
+import { RAW_GATEWAY_ENVELOPE_FIELDS, type RawGatewayEnvelope } from './shim.js';
+import { envelopeToAgentEvent } from './to-agent-event.js';
 
 /**
  * Cross-repo envelope contract test (workforce#189): every field cloud's
@@ -32,7 +33,7 @@ test('cloud field lists are disjoint and non-empty (copy sanity)', () => {
   }
 });
 
-test('a full cloud-shaped envelope (all contract fields) shims without loss of dispatch', () => {
+test('a full cloud-shaped envelope (all contract fields) shims without loss of dispatch', async () => {
   // An exported fixture from `runs export` carries the cloud-only fields;
   // shimEnvelope must still dispatch it (unknown-to-dispatch fields are
   // simply not consumed — replay fidelity comes from `resource`).
@@ -52,11 +53,11 @@ test('a full cloud-shaped envelope (all contract fields) shims without loss of d
     summary: { title: 'x' },
     resumeContext: { phase: 2 },
   };
-  const event = shimEnvelope(envelope);
+  const event = envelopeToAgentEvent(envelope);
   assert.ok(event);
   if (!event) return;
-  assert.equal(event.source, 'github');
-  if (event.source !== 'github') return;
-  assert.equal(event.type, 'pull_request.opened');
-  assert.deepEqual(event.payload, { action: 'opened' });
+  assert.equal(event.type, 'github.pull_request.opened');
+  assert.equal(event.resource.provider, 'github');
+  const full = await event.expand('full');
+  assert.deepEqual(full.data, { action: 'opened' });
 });

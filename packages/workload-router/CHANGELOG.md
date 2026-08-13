@@ -7,6 +7,27 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [4.1.18] - 2026-07-15
+
+### Added
+
+- **Add reusable cron and Slack delivery helpers** (#261)
+
+## [3.0.51] - 2026-06-08
+
+### Added
+
+- **Launch ai-hist via plain npx -y ai-hist-mcp + enable trajectory memory on persona-maker** (#211)
+- **Auto-inject ai-hist MCP + enforce trajectory recording**
+
+### Changed
+
+- Consolidate trajectories + ai-memory under memory (opt-in) (#210)
+
+### Dependencies
+
+- Drop memory from persona-maker (#212)
+
 ## [3.0.31] - 2026-05-28
 
 ### Released

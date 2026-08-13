@@ -304,6 +304,56 @@ test('installs sidecar markdown files into __assets/<id>/ and rewrites JSON path
   });
 });
 
+test('installs local skill markdown files into __assets/<id>/ and rewrites JSON sources', () => {
+  withTemp((root) => {
+    const project = join(root, 'project');
+    const pack = join(root, 'pack');
+    const persona = fullPersona('router-bot') as Record<string, unknown>;
+    persona.skills = [
+      {
+        id: 'local-routing-map',
+        source: './skills/routing-map.md',
+        description: 'Local routing map shipped by the persona package.'
+      },
+      {
+        id: '@agent-relay/workspace-layout',
+        source: '@agent-relay/workspace-layout',
+        description: 'Remote prpm skill remains remote.'
+      }
+    ];
+    writeJson(join(pack, 'personas', 'router-bot.json'), persona);
+    mkdirSync(join(pack, 'skills'), { recursive: true });
+    writeFileSync(join(pack, 'skills', 'routing-map.md'), '# Routing map\n');
+
+    const result = installPersonas({ source: pack, cwd: project });
+    assert.equal(result.installed.length, 1);
+
+    const installedJson = readJson(
+      join(project, '.agentworkforce', 'workforce', 'personas', 'router-bot.json')
+    ) as { skills: Array<{ source: string }> };
+    assert.equal(
+      installedJson.skills[0].source,
+      '.agentworkforce/workforce/personas/__assets/router-bot/skills/routing-map.md'
+    );
+    assert.equal(installedJson.skills[1].source, '@agent-relay/workspace-layout');
+
+    const installedSkill = readFileSync(
+      join(
+        project,
+        '.agentworkforce',
+        'workforce',
+        'personas',
+        '__assets',
+        'router-bot',
+        'skills',
+        'routing-map.md'
+      ),
+      'utf8'
+    );
+    assert.equal(installedSkill, '# Routing map\n');
+  });
+});
+
 test('rejects sidecar paths that escape the persona dir', () => {
   withTemp((root) => {
     const project = join(root, 'project');
@@ -314,6 +364,27 @@ test('rejects sidecar paths that escape the persona dir', () => {
     assert.throws(
       () => installPersonas({ source: pack, cwd: project }),
       /\.\./
+    );
+  });
+});
+
+test('hard-fails on missing referenced local skill markdown', () => {
+  withTemp((root) => {
+    const project = join(root, 'project');
+    const pack = join(root, 'pack');
+    const persona = fullPersona('router-bot') as Record<string, unknown>;
+    persona.skills = [
+      {
+        id: 'missing-skill',
+        source: './skills/missing.md',
+        description: 'Missing local skill.'
+      }
+    ];
+    writeJson(join(pack, 'personas', 'router-bot.json'), persona);
+
+    assert.throws(
+      () => installPersonas({ source: pack, cwd: project }),
+      /referenced skill source not found/
     );
   });
 });

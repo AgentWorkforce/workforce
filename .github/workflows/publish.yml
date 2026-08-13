@@ -66,7 +66,7 @@ jobs:
       - name: Setup Node
         uses: actions/setup-node@v6
         with:
-          node-version: '22.14.0'
+          node-version: '26.5.0'
           registry-url: 'https://registry.npmjs.org'
           cache: 'pnpm'
 
@@ -86,16 +86,23 @@ jobs:
         id: targets
         run: |
           # Dependency order (topological):
+          #   events          (leaf — consumed by runtime and Cloud)
           #   persona-kit     (leaf — consumed by everyone)
           #   runtime         (→ persona-kit; consumed by deploy + mcp-workforce)
+          #   compose         (leaf — TeamSpec parsing and preview planning)
+          #   delivery        (→ runtime; consumed by external agents)
           #   workload-router (→ persona-kit; consumed by cli)
+          #   persona-registry (→ persona-kit + workload-router; consumed by local-surface + cli)
           #   deploy          (→ persona-kit + runtime; consumed by cli)
+          #   review-kit      (→ persona-kit + runtime; authoring infrastructure)
+          #   turn-kit        (→ persona-kit + runtime; multi-turn agent infrastructure)
           #   mcp-workforce   (→ persona-kit + runtime)
           #   daytona-runner  (no workspace deps)
-          #   cli             (→ persona-kit + workload-router + deploy)
+          #   local-surface   (→ deploy + persona-kit + persona-registry + runtime; consumed by cli)
+          #   cli             (→ persona-kit + persona-registry + workload-router + deploy + local-surface)
           #   agentworkforce  (→ cli — umbrella wrapper, must publish last)
           # personas-core publishes via the separate publish-personas.yml workflow.
-          echo "packages=persona-kit runtime workload-router deploy mcp-workforce daytona-runner cli agentworkforce" >> "$GITHUB_OUTPUT"
+          echo "packages=events persona-kit runtime compose delivery workload-router persona-registry deploy review-kit turn-kit mcp-workforce daytona-runner local-surface cli agentworkforce" >> "$GITHUB_OUTPUT"
 
       # Lockstep baseline heal. The workspace publishes every package at the
       # same version, so if any package's local version lags either its own
@@ -549,9 +556,11 @@ jobs:
             git commit -m "$MSG"
           fi
 
-      # npm >= 11.5.1 is required for the OIDC trusted-publisher flow.
-      - name: Install latest npm
-        run: npm install -g npm@latest
+      # npm >= 11.5.1 is required for the OIDC trusted-publisher flow. Pinned
+      # to the npm 11 line: @latest broke 2026-07-13 when npm 12 dropped
+      # support for the runner's node 22.14 (EBADENGINE).
+      - name: Install npm 11
+        run: npm install -g npm@11
 
       # Authentication note: this workflow does NOT use an NPM_TOKEN. It relies
       # on npm's OIDC trusted-publisher flow — the `id-token: write` permission
@@ -593,7 +602,27 @@ jobs:
               exit 1
             fi
             echo "==> Publishing $TARBALL $COMMON_FLAGS"
-            npm publish "$TARBALL" $COMMON_FLAGS
+            if ! npm publish "$TARBALL" $COMMON_FLAGS; then
+              # npm's provenance flow makes a second, separate authenticated
+              # call after the tarball PUT to attach the attestation. That
+              # second call has been observed to fail with a transient
+              # "401 Failed to generate Web Auth URLs" even though the
+              # publish itself already landed on the registry. Don't fail
+              # the whole (lockstep, multi-package) run for a flake that
+              # already succeeded — but only trust this for real publishes;
+              # a dry run has nothing on the registry to check against.
+              if [ "${{ github.event.inputs.dry_run }}" = "true" ]; then
+                echo "::error::npm publish failed for $NPM_NAME@$VERSION (dry run)" >&2
+                exit 1
+              fi
+              PUBLISHED_VERSION=$(npm view "$NPM_NAME@$VERSION" version 2>/dev/null || true)
+              if [ "$PUBLISHED_VERSION" = "$VERSION" ]; then
+                echo "::warning::npm publish exited non-zero for $NPM_NAME@$VERSION but the registry already has that version (likely a post-publish attestation flake) - continuing"
+              else
+                echo "::error::npm publish failed for $NPM_NAME@$VERSION and the registry does not have it" >&2
+                exit 1
+              fi
+            fi
           done
 
       # Annotated tags (-a) so `git push --follow-tags` actually pushes them;
@@ -705,12 +734,18 @@ jobs:
           // packages" step. Sorting release-notes entries by this order
           // ensures missing packages don't all collapse to indexOf=-1.
           const packageOrder = [
+            'events',
             'persona-kit',
             'runtime',
+            'compose',
+            'delivery',
             'workload-router',
             'deploy',
+            'review-kit',
+            'turn-kit',
             'mcp-workforce',
             'daytona-runner',
+            'local-surface',
             'cli',
             'agentworkforce',
           ];

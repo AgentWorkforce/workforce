@@ -1,4 +1,5 @@
 import type { AgentSpec, PersonaSpec } from '@agentworkforce/persona-kit';
+import type { CompiledAgentV1 } from '@agentworkforce/runtime';
 
 export type DeployMode = 'dev' | 'sandbox' | 'cloud';
 
@@ -17,6 +18,14 @@ export interface DeployOptions {
   byoSandbox?: boolean;
   /** Background the runner instead of streaming logs in the foreground. */
   detach?: boolean;
+  /**
+   * The caller drives the runner's envelope stdin itself via the returned
+   * `ModeLaunchHandle.write()`, instead of the runner's stdin passing
+   * through this process's own stdin (`dev` mode only; ignored otherwise).
+   * Set this when calling `deploy()` from a long-lived host process (e.g. a
+   * fleet-node bridge) whose own stdin lifecycle must not end the runner's.
+   */
+  bridged?: boolean;
   /** Emit the bundle to this directory and exit (no launch). */
   bundleOut?: string;
   /** Validate-only: parse + lint + check connection status, no side effects. */
@@ -26,7 +35,7 @@ export interface DeployOptions {
   /** Fail instead of prompting for cloud auth/integration setup. */
   noPrompt?: boolean;
   /** Cloud harness credential source. */
-  harnessSource?: 'plan' | 'byok' | 'oauth';
+  harnessSource?: 'managed' | 'plan' | 'byok' | 'oauth';
   /** BYOK API key used when `harnessSource` is `byok`. */
   byokKey?: string;
   /** Existing cloud persona behavior. Defaults to `cancel`. */
@@ -131,6 +140,12 @@ export interface ModeLaunchInput {
   io: DeployIO;
   detach?: boolean;
   /**
+   * The caller drives the runner's envelope stdin itself via the returned
+   * `ModeLaunchHandle.write()`. `dev` mode only — see `DeployOptions.bridged`;
+   * other modes ignore.
+   */
+  bridged?: boolean;
+  /**
    * Force BYO Daytona auth even when the user is logged in to workforce
    * cloud. Mode-specific (sandbox launcher only); other modes ignore.
    */
@@ -142,9 +157,16 @@ export interface ModeLaunchInput {
   /** Fail instead of prompting for cloud setup. */
   noPrompt?: boolean;
   /** Cloud harness credential source. */
-  harnessSource?: 'plan' | 'byok' | 'oauth';
+  harnessSource?: 'managed' | 'plan' | 'byok' | 'oauth';
   /** BYOK API key used when `harnessSource` is `byok`. */
   byokKey?: string;
+  /**
+   * Force a fresh OAuth connect flow for specific providers even when cloud
+   * already reports one connected. Covers the harness LLM credential (matched
+   * by model provider or harness name), so a revoked harness token can be
+   * refreshed without first disconnecting it in the dashboard.
+   */
+  reconnectProviders?: string[];
   /** Existing cloud persona behavior. Defaults to `cancel`. */
   onExists?: 'update' | 'destroy' | 'cancel';
   /** Runtime inputs forwarded to launchers that support them. */
@@ -165,6 +187,14 @@ export interface ModeLaunchHandle {
    * resolves only when the user invokes `stop()`.
    */
   done: Promise<{ code: number }>;
+  /**
+   * Write a raw line directly to the runner's envelope stdin, bypassing the
+   * `process.stdin` passthrough. Only `dev` mode implements this today — it
+   * lets a long-lived host process (e.g. a fleet-node bridge) that owns the
+   * `deploy()` call feed one `RawGatewayEnvelope` per message without a real
+   * piped parent stdin. Absent when the mode has no addressable stdin.
+   */
+  write?(line: string): void;
 }
 
 export interface IntegrationConnectOutcome {
@@ -193,4 +223,6 @@ export interface DeployPreflight {
   integrations: string[];
   /** Non-fatal warnings (unknown triggers, etc). */
   warnings: string[];
+  /** Present when the deploy input used the single-file compiler path. */
+  compiledAgent?: CompiledAgentV1;
 }

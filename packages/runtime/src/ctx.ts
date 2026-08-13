@@ -1,10 +1,11 @@
-import type { PersonaSpec } from '@agentworkforce/persona-kit';
+import { resolveTrajectoryRecording, type PersonaSpec } from '@agentworkforce/persona-kit';
 import type {
   LlmContext,
   MemoryContext,
   FilesContext,
   CredentialsContext,
   MemoryItem,
+  RelayContext,
   RequiredRuntimeCredentials,
   ScheduleContext,
   SandboxContext,
@@ -13,6 +14,9 @@ import type {
   WorkforceDeploymentContext,
   WorkflowContext
 } from './types.js';
+import { attachTrajectoryRecorder, createTrajectoryRecorder } from './trajectory.js';
+import { buildRelayContext } from './relay.js';
+import { NO_REPLY_MARKER, sanitizeNoReplyOutput } from './no-reply.js';
 
 type AgentInputValue = string | number | boolean | null | undefined;
 
@@ -52,16 +56,28 @@ export interface CtxBuildOptions {
   memory?: MemoryContext;
   workflow?: WorkflowContext;
   schedule?: ScheduleContext;
+  relay?: RelayContext;
   integrations?: Record<string, unknown>;
   log?: WorkforceCtx['log'];
   harnessRunner: WorkforceCtx['harness']['run'];
+  /**
+   * Root directory for per-run trajectory contract files. Defaults to
+   * `env.TRAJECTORY_ROOT`; when neither resolves, trajectory recording is
+   * disabled (the runtime never writes to the process cwd). The cloud runtime
+   * sets this to the same value it passes to the injected ai-hist MCP so the
+   * MCP reads back exactly what the runtime wrote.
+   */
+  trajectoryRoot?: string;
 }
 
 const NOOP_MEMORY: MemoryContext = {
   async save() {
     /* memory disabled (persona.memory unset) — saves silently no-op */
   },
-  async recall() {
+  async recall(_query, opts) {
+    if (opts?.failOnError) {
+      throw new Error('ctx.memory is unavailable: enable persona memory and connect cloud memory credentials.');
+    }
     return [];
   }
 };
@@ -126,6 +142,19 @@ export function buildCtx(options: CtxBuildOptions): WorkforceCtx {
   };
   const log = options.log ?? defaultLog;
   const files = options.files ?? filesFromSandbox(options.sandbox);
+  const agentName = options.agentName ?? options.persona.id;
+  // Per-persona trajectory recorder (the WHY). Opt-in: no-op unless the
+  // persona declares `memory.trajectories` AND a trajectory root resolves.
+  const trajectory = resolveTrajectoryRecording(options.persona.memory);
+  const trajectoryRecorder = createTrajectoryRecorder({
+    personaId: options.persona.id,
+    agentName,
+    workspaceId: options.workspaceId,
+    recordTrajectories: trajectory.enabled,
+    ...(trajectory.autoCompact !== undefined ? { autoCompact: trajectory.autoCompact } : {}),
+    ...(options.trajectoryRoot ? { trajectoryRoot: options.trajectoryRoot } : {}),
+    log
+  });
   const ctx: WorkforceCtx = {
     persona: buildPersonaContext(options.persona, mergedAgentInputValues),
     agent: {
@@ -135,17 +164,52 @@ export function buildCtx(options: CtxBuildOptions): WorkforceCtx {
     },
     deployment,
     workspaceId: options.workspaceId,
-    agentName: options.agentName ?? options.persona.id,
+    agentName,
     llm: options.llm ?? UNAVAILABLE_LLM,
-    harness: { run: options.harnessRunner },
+    harness: {
+      async run(args) {
+        const result = await options.harnessRunner(args);
+        const sanitizedOutput = sanitizeNoReplyOutput(result.output);
+        const sanitizedStderr = result.stderr === undefined
+          ? undefined
+          : sanitizeNoReplyOutput(result.stderr);
+        const containsMarker =
+          sanitizedOutput.containsMarker || (sanitizedStderr?.containsMarker ?? false);
+
+        if (containsMarker) {
+          const exactMarker =
+            result.exitCode === 0 &&
+            result.output.trim() === NO_REPLY_MARKER &&
+            !(result.stderr?.includes(NO_REPLY_MARKER) ?? false);
+          log(
+            exactMarker ? 'info' : 'warn',
+            exactMarker ? 'harness.no_reply.suppressed' : 'harness.no_reply.marker_leak',
+            { containsMarker: true }
+          );
+        }
+
+        return {
+          ...result,
+          output: sanitizedOutput.output,
+          ...(sanitizedStderr ? { stderr: sanitizedStderr.output } : {}),
+          containsMarker,
+          suppressed: sanitizedOutput.suppressed
+        };
+      }
+    },
     sandbox: options.sandbox,
     files,
     credentials: credentialsFromEnv(),
     memory: options.memory ?? defaultMemoryFor(options.persona.memory, options.workspaceId, log),
     workflow: options.workflow ?? UNAVAILABLE_WORKFLOW,
     schedule: options.schedule ?? UNAVAILABLE_SCHEDULE,
+    relay: options.relay ?? buildRelayContext(log),
+    trajectory: trajectoryRecorder.context,
     log
   };
+  // The runner drives the recorder's lifecycle (begin/complete/fail) via this
+  // non-enumerable handle, keeping those internals off the public ctx surface.
+  attachTrajectoryRecorder(ctx, trajectoryRecorder);
 
   // Optional per-integration subsystems attach as named ctx fields. The
   // cloud-default runtime does not populate this — handlers read provider
@@ -186,6 +250,8 @@ const CORE_CTX_FIELDS: ReadonlySet<string> = new Set([
   'memory',
   'workflow',
   'schedule',
+  'relay',
+  'trajectory',
   'log'
 ]);
 
@@ -344,13 +410,13 @@ function createCloudMemoryContext(args: {
           headers: { authorization: `Bearer ${args.agentToken}` }
         });
         if (!response.ok) {
-          args.log('warn', 'memory.recall.failed', { status: response.status });
-          return [];
+          throw new Error(`cloud memory recall failed with HTTP ${response.status}`);
         }
         const body = await response.json().catch(() => ({})) as { items?: unknown };
         return normalizeMemoryItems(body.items);
       } catch (err) {
         args.log('warn', 'memory.recall.failed', { error: memoryFetchErrorMessage(err) });
+        if (opts?.failOnError) throw err;
         return [];
       }
     }

@@ -1,0 +1,47 @@
+{
+  "name": "review-agent",
+  "description": "Reviews opened PRs, responds to @mentions in comments, attempts autofix on red CI.",
+  "url": "http://localhost:3000",
+  "version": "0.0.0",
+  "skills": [
+    {
+      "id": "review-rubric",
+      "name": "Review Rubric",
+      "description": "Apply a consistent correctness and regression-risk review rubric.",
+      "tags": [
+        "https://prpm.dev/packages/@agentworkforce/review-rubric",
+        "github",
+        "slack"
+      ]
+    },
+    {
+      "id": "review",
+      "name": "Review",
+      "description": "Persona capability: Review",
+      "tags": [
+        "github",
+        "slack"
+      ]
+    }
+  ],
+  "provider": {
+    "organization": "AgentWorkforce",
+    "persona_id": "review-agent",
+    "intent": "review",
+    "tags": [
+      "review"
+    ]
+  },
+  "capabilities": {
+    "streaming": false,
+    "pushNotifications": false
+  },
+  "default_input_modes": [
+    "text/plain",
+    "application/json"
+  ],
+  "default_output_modes": [
+    "text/plain",
+    "application/json"
+  ]
+}

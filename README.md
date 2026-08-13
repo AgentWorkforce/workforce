@@ -191,6 +191,16 @@ See [`examples/review-agent`](./examples/review-agent/) for a complete example.
 You can also use `--bundle-out <dir>` to stage the bundle without launching it,
 or `--dry-run` to validate schema, triggers, and integration readiness.
 
+Every staged `package.json` includes a `bundleManifest` with the exact resolved
+`package.json` versions whose dependency inputs contributed code to
+`agent.bundle.mjs`. The list is deterministically ordered, contains no
+build-machine paths, and preserves multiple installed versions of the same
+package. Operators can inspect it with `jq .bundleManifest
+<bundle-dir>/package.json`; the runtime emits the same JSON object once in the
+structured `runner.started` log. A workspace version identifies the resolved
+workspace package; it does not claim the local bytes equal a published npm
+artifact.
+
 ## Integrations supported
 
 Deploy v1 targets the Tier-1 Relayfile providers:
@@ -302,9 +312,19 @@ grammar, skill staging, and sandbox mount behavior live in
   triggers.
 - `packages/workload-router` — TypeScript SDK for typed persona and routing
   profile resolution.
+- `packages/persona-registry` — in-process resolution of persona ids and exact
+  JSON paths through the CLI's project, personal, configured, and built-in
+  source cascade.
+- `packages/local-surface` — Agent Relay fleet-node adapters for proactive
+  personas and verified interactive `spawn:persona` launches.
 - `packages/cli` — command-line implementation used by the `agentworkforce`
   wrapper.
 - `packages/runtime` — deploy runtime facade and per-integration clients.
+- `packages/review-kit` — strongly typed factories and evidence providers for
+  charter-driven pull-request reviewers.
+- `packages/turn-kit` — transport-neutral multi-turn lifecycle, chronological
+  memory, deterministic context providers, acknowledgements, and
+  receipt-gated final delivery.
 - `packages/deploy` — bundle staging and runner launch modes for `workforce
   deploy`.
 

@@ -1,18 +1,17 @@
 import type {
   AgentSpec,
+  Harness,
+  PersonaDefinitionBase,
   PersonaSchedule,
   TypedTriggerMap,
   WatchRule
 } from '@agentworkforce/persona-kit';
 import { handler as brandHandler } from './handler.js';
+import type { AgentEvent, BaseAgentEvent, EventType } from '@agent-relay/events';
 import type {
-  WorkforceCronEvent,
   WorkforceCtx,
-  WorkforceEvent,
   WorkforceHandler,
-  WorkforceHandlerExport,
-  LinearAgentSessionEvent,
-  WorkforceProviderEvent
+  WorkforceHandlerExport
 } from './types.js';
 
 // ---------------------------------------------------------------------------
@@ -20,12 +19,11 @@ import type {
 //
 // `defineAgent` flows the literal triggers/schedules an author declares into
 // the handler's `event` parameter so `event.type` autocompletes to exactly the
-// declared trigger `on` values and `event.name` to the declared schedule
-// names. This is best-effort: when neither triggers nor schedules are present
-// (or the literals can't be resolved), the handler falls back to the full
-// `WorkforceEvent` union. `source` is intentionally left at its base type —
-// agents trigger on providers outside the closed `WorkforceEventSource` enum
-// (e.g. `granola`, `google-mail`), so narrowing it would fight reality.
+// fully-qualified event types the agent fires on (e.g. a `github` trigger with
+// `on: 'pull_request.opened'` narrows `event.type` to
+// `github.pull_request.opened` — the relay SDK / cloud envelope form). When
+// nothing narrowable is declared, the handler falls back to the full relay SDK
+// {@link AgentEvent}. The payload is read via `await event.expand('full')`.
 // ---------------------------------------------------------------------------
 
 /** Distributive union of every `on` literal declared across a triggers map. */
@@ -37,13 +35,21 @@ type OnLiteralsOf<A> = A extends readonly (infer E)[]
 
 type TriggerOnUnion<Tr> = OnLiteralsOf<NonNullable<Tr[keyof Tr]>>;
 
-type LinearSpecialEvent<O extends string> = Extract<LinearAgentSessionEvent, { type: O }>;
-
-type ProviderEventFor<P extends string, O extends string> = P extends 'linear'
-  ? [LinearSpecialEvent<O>] extends [never]
-    ? Omit<WorkforceProviderEvent, 'type'> & { type: O }
-    : LinearSpecialEvent<O>
-  : Omit<WorkforceProviderEvent, 'type'> & { type: O };
+// A provider trigger `{ github: [{ on: 'pull_request.opened' }] }` narrows to
+// the SDK event whose `type` is the provider-qualified `github.pull_request.opened`.
+// Uses BaseAgentEvent so `event.type` is the exact declared literal and works
+// for any provider event shape — including 2-segment types like
+// `slack.app_mention` that aren't valid `EventType`s (those collapse to `never`
+// under `AgentEvent<...>`).
+//
+// When `O` is the wide `string` (a persona that declares no concrete trigger
+// literals — e.g. team members launched by a dispatcher), fall back to the full
+// `AgentEvent` so a `(event: AgentEvent)` handler stays assignable. Without this
+// the wide case narrows to `BaseAgentEvent<\`${string}.${string}\`>`, which is
+// narrower than `AgentEvent` and rejects an `AgentEvent`-typed handler.
+type ProviderEventFor<P extends string, O extends string> = string extends O
+  ? AgentEvent
+  : BaseAgentEvent<`${P}.${O}`>;
 
 type TriggerProviderEvents<Tr> = {
   [P in keyof Tr]: P extends string
@@ -66,19 +72,21 @@ type ScheduleNameUnion<S> = S extends readonly (infer E)[]
     : never
   : never;
 
+// Any declared schedule fires `cron.tick` events.
 type NarrowedCronEvent<S> = [ScheduleNameUnion<S>] extends [never]
   ? never
-  : Omit<WorkforceCronEvent, 'name'> & { name: ScheduleNameUnion<S> };
+  : AgentEvent & { type: 'cron.tick' };
 
 /**
- * The discriminated event a `defineAgent` handler receives, narrowed to the
- * declared triggers/schedules. Falls back to the full {@link WorkforceEvent}
- * union when nothing narrowable is declared.
+ * The event a `defineAgent` handler receives, narrowed by `event.type` to the
+ * declared triggers/schedules. Falls back to the full relay SDK
+ * {@link AgentEvent} when nothing narrowable is declared. (Renamed from the
+ * pre-v4 `AgentEvent<Tr,S>` to avoid colliding with the SDK's `AgentEvent`.)
  */
-export type AgentEvent<Tr, S> = [
+export type WorkforceEventFor<Tr, S> = [
   NarrowedProviderEvent<Tr> | NarrowedCronEvent<S>
 ] extends [never]
-  ? WorkforceEvent
+  ? AgentEvent
   : NarrowedProviderEvent<Tr> | NarrowedCronEvent<S>;
 
 /**
@@ -107,8 +115,22 @@ export interface AgentDefinition<
   /** Relayfile-change listeners. */
   watch?: readonly WatchRule[];
   /** Event handler. `event` is narrowed to the declared triggers/schedules. */
-  handler: (ctx: WorkforceCtx, event: AgentEvent<Tr, S>) => Promise<void> | void;
+  handler: (ctx: WorkforceCtx, event: WorkforceEventFor<Tr, S>) => Promise<void> | void;
+  /** Forward-compatible downstream agent extensions. */
+  [key: string]: unknown;
 }
+
+/** Common-case one-file Agent: persona identity/runtime plus listeners and handler. */
+export type SingleFileAgentDefinition<
+  Tr extends TypedTriggerMap = TypedTriggerMap,
+  S extends readonly PersonaSchedule[] = readonly PersonaSchedule[]
+> = PersonaDefinitionBase &
+  Omit<AgentDefinition<Tr, S>, 'handler'> & {
+    harness?: Harness;
+    model?: string;
+    systemPrompt?: string;
+    handler: (ctx: WorkforceCtx, event: WorkforceEventFor<Tr, S>) => Promise<void> | void;
+  };
 
 /**
  * Branded object returned by {@link defineAgent}. The deploy CLI reads
@@ -122,6 +144,8 @@ export interface WorkforceAgentExport {
   readonly schedules?: readonly PersonaSchedule[];
   readonly watch?: readonly WatchRule[];
   readonly handler: WorkforceHandlerExport;
+  /** Preset persona fields are retained on single-file exports for the compiler. */
+  readonly [field: string]: unknown;
 }
 
 /**
@@ -149,24 +173,25 @@ export interface WorkforceAgentExport {
 export function defineAgent<
   const Tr extends TypedTriggerMap = Record<string, never>,
   const S extends readonly PersonaSchedule[] = []
->(input: AgentDefinition<Tr, S>): WorkforceAgentExport {
+>(input: SingleFileAgentDefinition<Tr, S>): WorkforceAgentExport & Omit<SingleFileAgentDefinition<Tr, S>, 'handler'>;
+export function defineAgent<
+  const Tr extends TypedTriggerMap = Record<string, never>,
+  const S extends readonly PersonaSchedule[] = []
+>(input: AgentDefinition<Tr, S>): WorkforceAgentExport;
+export function defineAgent(
+  input: AgentDefinition<TypedTriggerMap, readonly PersonaSchedule[]> | SingleFileAgentDefinition<TypedTriggerMap, readonly PersonaSchedule[]>
+): WorkforceAgentExport {
   if (!input || typeof input !== 'object') {
     throw new TypeError('defineAgent() expects an object');
   }
   if (typeof input.handler !== 'function') {
     throw new TypeError('defineAgent({ handler }) — handler must be a function');
   }
-  const agent: {
-    launchedBy?: AgentSpec['launchedBy'];
-    triggers?: TypedTriggerMap;
-    schedules?: readonly PersonaSchedule[];
-    watch?: readonly WatchRule[];
-    handler: WorkforceHandlerExport;
-  } = {
-    ...(input.launchedBy !== undefined ? { launchedBy: input.launchedBy } : {}),
-    ...(input.triggers ? { triggers: input.triggers as TypedTriggerMap } : {}),
-    ...(input.schedules ? { schedules: input.schedules } : {}),
-    ...(input.watch ? { watch: input.watch } : {}),
+  // Preserve the authored object. The single-file compiler removes handler and
+  // listener fields to form the existing persona block; whitelisting here
+  // would recreate the silent field-loss failure class from #1732.
+  const agent = {
+    ...input,
     handler: brandHandler(input.handler as WorkforceHandler)
   };
   Object.defineProperty(agent, '__workforceAgent', {

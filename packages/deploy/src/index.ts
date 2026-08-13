@@ -18,6 +18,12 @@ import type {
 export { pickMode, type CloudAuthRecoveryResolver, type DeployResolvers };
 export { preflightPersona };
 export {
+  compileAgentSource,
+  isSingleFileAgentSource,
+  projectCompiledAgentForPersistence,
+  type PersistedAgentProjectionV1
+} from './compile-agent.js';
+export {
   collectPickerInputs,
   connectIntegrations,
   envIntegrationResolver,
@@ -74,6 +80,10 @@ export {
   loadPersonaSourceFile,
   type PersonaSourceLoadResult
 } from './persona-source.js';
+export {
+  extractAgentSpec,
+  type ExtractedAgent
+} from './extract-agent.js';
 export { devLauncher } from './modes/dev.js';
 export { sandboxLauncher, resolveSandboxAuth, type SandboxAuth } from './modes/sandbox.js';
 export { cloudLauncher } from './modes/cloud/index.js';

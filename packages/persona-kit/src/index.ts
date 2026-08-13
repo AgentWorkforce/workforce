@@ -13,6 +13,12 @@ export {
 } from './constants.js';
 export type { KnownPersonaTag } from './constants.js';
 
+// Canonical A2A agent-card derivation
+export {
+  deriveAgentCard,
+  type DeriveAgentCardOptions
+} from './agent-card.js';
+
 // Types
 export type {
   AgentSpec,
@@ -26,15 +32,21 @@ export type {
   McpServerSpec,
   PermissionMode,
   PersonaContext,
+  PersonaHttpReadCapability,
+  PersonaHttpReadRule,
   PersonaInputPicker,
   PersonaInputSpec,
   PersonaInstallContext,
   PersonaIntegrationConfig,
   PersonaIntegrationTrigger,
   PersonaIntent,
+  PersonaAiMemoryConfig,
   PersonaMemory,
   PersonaMemoryConfig,
   PersonaMemoryScope,
+  PersonaRelay,
+  PersonaRelayConfig,
+  PersonaTrajectoryConfig,
   PersonaMount,
   PersonaPermissions,
   PersonaSchedule,
@@ -55,9 +67,31 @@ export type {
 // Typed persona authoring
 export {
   definePersona,
+  type AdapterConfigFor,
+  type GitLabAdapterConfig,
+  type GitLabMaterializationFilter,
+  type GitLabMaterializationMode,
+  type GitLabMaterializationPolicy,
+  type GitLabMaterializationResource,
+  type GitLabMaterializationResourcePolicy,
+  type GitLabMaterializationRule,
+  type GitLabMaterializationState,
+  type GitHubAdapterConfig,
+  type GitHubMaterializationFilter,
+  type GitHubMaterializationMode,
+  type GitHubMaterializationPolicy,
+  type GitHubMaterializationResource,
+  type GitHubMaterializationResourcePolicy,
+  type GitHubMaterializationRule,
+  type GitHubMaterializationState,
   type PersonaDefinition,
+  type PersonaDefinitionBase,
   type ScopeKeysFor,
   type TriggerNameFor,
+  type TypedAdapterMaterializationFilter,
+  type TypedAdapterMaterializationPolicy,
+  type TypedAdapterMaterializationRule,
+  type TypedAdapterResourceMaterializationPolicy,
   type TypedIntegrationConfig,
   type TypedIntegrations,
   type TypedScopeMap,
@@ -83,6 +117,7 @@ export {
   isHarness,
   isIntent,
   isObject,
+  isPlainObject,
   isSidecarMode,
   isTag,
   parseAgentSpec,
@@ -97,8 +132,11 @@ export {
   parseMemory,
   parseMount,
   parseOnEvent,
+  parseRelay,
   parsePermissions,
   parsePersonaSpec,
+  resolveAiMemory,
+  resolveTrajectoryRecording,
   parseSchedules,
   parseSkills,
   parseStringList,
@@ -191,11 +229,15 @@ export {
 export {
   buildInteractiveSpec,
   buildNonInteractiveSpec,
+  type AiHistMcpConfig,
   type BuildInteractiveSpecInput,
   type InteractiveConfigFile,
   type InteractiveSpec,
+  type NonInteractivePrompt,
   type NonInteractiveSpec,
-  type RelayMcpConfig
+  type RelayMcpConfig,
+  resolvePersonaRelayMcp,
+  type ResolveRelayMcpResult
 } from './interactive-spec.js';
 
 // Harness detection

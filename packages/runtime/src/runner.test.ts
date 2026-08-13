@@ -10,6 +10,7 @@ import { startRunner } from './runner.js';
 import { createCloudRuntimeDefaults } from './cloud-defaults.js';
 import { buildCtx } from './ctx.js';
 import { handler } from './handler.js';
+import { isCronTickEvent } from '@agent-relay/events';
 import type { RawGatewayEnvelope } from './shim.js';
 import type {
   SandboxContext,
@@ -94,10 +95,38 @@ test('startRunner dispatches a cron envelope to the handler', async () => {
     ])
   });
   assert.equal(received.length, 1);
-  assert.equal(received[0].source, 'cron');
-  if (received[0].source !== 'cron') return;
-  assert.equal(received[0].name, 'weekly');
+  assert.ok(isCronTickEvent(received[0]));
+  if (!isCronTickEvent(received[0])) return;
+  assert.equal(received[0].schedule, '0 9 * * 6');
   assert.ok(logs.find((l) => l.message === 'runner.handler.ok'));
+});
+
+test('startRunner surfaces the supplied bundle manifest in runner.started structured evidence', async () => {
+  const logs: Array<{ level: string; message: string; attrs?: Record<string, unknown> }> = [];
+  const bundleManifest = {
+    schemaVersion: 1 as const,
+    packages: [
+      { name: '@relayfile/adapter-core', version: '0.5.7' },
+      { name: '@relayfile/relay-helpers', version: '0.4.9' }
+    ]
+  };
+
+  await startRunner({
+    persona,
+    agent: runtimeAgent,
+    deployment: runtimeDeployment,
+    workspaceId: 'ws-test',
+    handler: handler(async () => {}),
+    bundleManifest,
+    subsystems: {
+      sandbox: stubSandbox,
+      log: (level, message, attrs) => logs.push({ level, message, attrs })
+    },
+    envelopes: streamOf([])
+  });
+
+  const started = logs.find((entry) => entry.message === 'runner.started');
+  assert.deepEqual(started?.attrs?.bundleManifest, bundleManifest);
 });
 
 test('startRunner logs and continues when the handler throws', async () => {
@@ -142,7 +171,8 @@ test('startRunner skips envelopes that the shim can not translate', async () => 
       log: (level, message) => logs.push({ level, message })
     },
     envelopes: streamOf([
-      { id: 'e1', workspace: 'ws-test', type: 'mystery.thing', occurredAt: 'x' },
+      // No dot, and not a known single-word type → the mapper drops it.
+      { id: 'e1', workspace: 'ws-test', type: 'mystery', occurredAt: 'x' },
       { id: 'e2', workspace: 'ws-test', type: 'cron.tick', occurredAt: 'x', name: 'tick' }
     ])
   });
@@ -201,8 +231,12 @@ test('cloud harness runner materializes AGENTS.md for grok personas', async () =
       '#!/usr/bin/env node',
       'const fs = require("node:fs");',
       'const path = require("node:path");',
+      'const args = process.argv.slice(2);',
+      'const promptFlag = args.indexOf("--prompt-file");',
+      'const promptPath = args[promptFlag + 1];',
+      'const prompt = fs.readFileSync(promptPath, "utf8");',
       'const agents = fs.readFileSync(path.join(process.cwd(), "AGENTS.md"), "utf8");',
-      'process.stdout.write(JSON.stringify({ args: process.argv.slice(2), agents }));'
+      'process.stdout.write(JSON.stringify({ args, agents, prompt, promptPath }));'
     ].join('\n'),
     'utf8'
   );
@@ -231,8 +265,13 @@ test('cloud harness runner materializes AGENTS.md for grok personas', async () =
 
     const result = await defaults.harnessRunner({ prompt: 'say hello' });
     assert.equal(result.exitCode, 0);
-    const parsed = JSON.parse(result.output) as { args: string[]; agents: string };
-    assert.deepEqual(parsed.args, [
+    const parsed = JSON.parse(result.output) as {
+      args: string[];
+      agents: string;
+      prompt: string;
+      promptPath: string;
+    };
+    assert.deepEqual(parsed.args.slice(0, -2), [
       '--no-auto-update',
       '--model',
       'grok-build-0.1',
@@ -240,10 +279,15 @@ test('cloud harness runner materializes AGENTS.md for grok personas', async () =
       'plain',
       '--cwd',
       root,
-      '--always-approve',
-      '--single',
-      'Grok system prompt\n\nUser task:\nsay hello'
+      '--always-approve'
     ]);
+    assert.equal(parsed.args.at(-2), '--prompt-file');
+    assert.equal(parsed.args.at(-1), parsed.promptPath);
+    assert.equal(
+      parsed.prompt,
+      'Grok system prompt\n\nWhen no visible reply is useful, make the final message exactly [[NO_REPLY]].\n\nUser task:\nsay hello'
+    );
+    await assert.rejects(() => readFile(parsed.promptPath, 'utf8'), { code: 'ENOENT' });
     assert.equal(parsed.agents, 'Grok agents sidecar\n');
     assert.ok(logs.find((l) => l.message === 'harness.sidecar.materialized'));
   } finally {
@@ -263,7 +307,12 @@ test('cloud harness runner materializes AGENTS.md for cursor personas', async ()
       'const fs = require("node:fs");',
       'const path = require("node:path");',
       'const agents = fs.readFileSync(path.join(process.cwd(), "AGENTS.md"), "utf8");',
-      'process.stdout.write(JSON.stringify({ args: process.argv.slice(2), agents }));'
+      'let prompt = "";',
+      'process.stdin.setEncoding("utf8");',
+      'process.stdin.on("data", (chunk) => { prompt += chunk; });',
+      'process.stdin.on("end", () => {',
+      '  process.stdout.write(JSON.stringify({ args: process.argv.slice(2), agents, prompt }));',
+      '});'
     ].join('\n'),
     'utf8'
   );
@@ -292,19 +341,57 @@ test('cloud harness runner materializes AGENTS.md for cursor personas', async ()
 
     const result = await defaults.harnessRunner({ prompt: 'say hello' });
     assert.equal(result.exitCode, 0);
-    const parsed = JSON.parse(result.output) as { args: string[]; agents: string };
+    const parsed = JSON.parse(result.output) as { args: string[]; agents: string; prompt: string };
     assert.deepEqual(parsed.args, [
       '--model',
       'gpt-5',
       '--print',
       '--output-format',
-      'text',
-      'say hello'
+      'text'
     ]);
+    assert.equal(parsed.prompt, 'say hello');
     assert.equal(parsed.agents, 'Cursor agents sidecar\n');
     assert.ok(logs.find((l) => l.message === 'harness.sidecar.materialized'));
   } finally {
     restoreEnv(envSnapshot);
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
+test('cloud harness runner injects the no-reply contract into opencode config', async () => {
+  const root = await mkdtemp(path.join(os.tmpdir(), 'workforce-opencode-cloud-'));
+  const binDir = path.join(root, 'bin');
+  const capturePath = path.join(root, 'opencode-capture.json');
+  await writeArgCaptureHarness(binDir, 'opencode', capturePath);
+
+  const defaults = createCloudRuntimeDefaults({
+    persona: {
+      ...persona,
+      harness: 'opencode',
+      model: 'opencode/minimax-m2.5',
+      systemPrompt: 'OpenCode system prompt'
+    },
+    agent: runtimeAgent,
+    deployment: runtimeDeployment,
+    workspaceId: 'ws-test',
+    log: () => {},
+    env: {
+      PATH: `${binDir}${path.delimiter}${process.env.PATH ?? ''}`,
+      WORKFORCE_SANDBOX_ROOT: root
+    }
+  });
+
+  try {
+    const result = await defaults.harnessRunner({ prompt: 'say hello' });
+    assert.equal(result.exitCode, 0);
+    const config = JSON.parse(await readFile(path.join(root, 'opencode.json'), 'utf8')) as {
+      agent: Record<string, { prompt: string }>;
+    };
+    assert.equal(
+      config.agent.demo.prompt,
+      'OpenCode system prompt\n\nWhen no visible reply is useful, make the final message exactly [[NO_REPLY]].'
+    );
+  } finally {
     await rm(root, { recursive: true, force: true });
   }
 });
@@ -333,8 +420,13 @@ async function writeArgCaptureHarness(
     [
       '#!/usr/bin/env node',
       "const fs = require('node:fs');",
-      `fs.writeFileSync(${JSON.stringify(capturePath)}, JSON.stringify({ argv: process.argv.slice(2) }, null, 2));`,
-      "process.stdout.write('ok\\n');"
+      "process.stdin.setEncoding('utf8');",
+      "let stdin = '';",
+      "process.stdin.on('data', (chunk) => { stdin += chunk; });",
+      "process.stdin.on('end', () => {",
+      `  fs.writeFileSync(${JSON.stringify(capturePath)}, JSON.stringify({ argv: process.argv.slice(2), stdin }, null, 2));`,
+      "  process.stdout.write('ok\\n');",
+      "});"
     ].join('\n'),
     'utf8'
   );
@@ -463,7 +555,10 @@ test('cloud default codex harness injects agent-relay MCP args from broker helpe
     const result = await defaults.harnessRunner({ prompt: 'do the work' });
     assert.equal(result.exitCode, 0);
 
-    const captured = JSON.parse(await readFile(capturePath, 'utf8')) as { argv: string[] };
+    const captured = JSON.parse(await readFile(capturePath, 'utf8')) as {
+      argv: string[];
+      stdin: string;
+    };
     assert.deepEqual(captured.argv.slice(0, 9), [
       'exec',
       '--config',
@@ -505,7 +600,11 @@ test('cloud default codex harness injects agent-relay MCP args from broker helpe
       JSON.parse(brokerCaptured.argv[existingArgsIdx + 1]),
       captured.argv.slice(11, -1)
     );
-    assert.equal(captured.argv.at(-1), 'coordinate with the team\n\nUser task:\ndo the work');
+    assert.equal(captured.argv.at(-1), '-');
+    assert.equal(
+      captured.stdin,
+      'coordinate with the team\n\nWhen no visible reply is useful, make the final message exactly [[NO_REPLY]].\n\nUser task:\ndo the work'
+    );
     assert.equal(
       brokerCaptured.argv[brokerCaptured.argv.indexOf('--workspaces-json') + 1],
       '{"workspaces":[{"id":"ws-relay"}]}'
@@ -640,7 +739,10 @@ test('cloud default codex harness falls back when broker returns no args', async
     const result = await defaults.harnessRunner({ prompt: 'do the work' });
     assert.equal(result.exitCode, 0);
 
-    const captured = JSON.parse(await readFile(capturePath, 'utf8')) as { argv: string[] };
+    const captured = JSON.parse(await readFile(capturePath, 'utf8')) as {
+      argv: string[];
+      stdin: string;
+    };
     assert.ok(captured.argv.includes('mcp_servers.relaycast.command="npx"'));
     assert.equal(captured.argv.includes('mcp_servers.agent-relay.command="npx"'), false);
   } finally {
@@ -689,12 +791,22 @@ test('cloud default claude harness merges agent-relay MCP config from broker hel
     const result = await defaults.harnessRunner({ prompt: 'do the work' });
     assert.equal(result.exitCode, 0);
 
-    const captured = JSON.parse(await readFile(capturePath, 'utf8')) as { argv: string[] };
+    const captured = JSON.parse(await readFile(capturePath, 'utf8')) as {
+      argv: string[];
+      stdin: string;
+    };
     assert.equal(captured.argv.filter((arg) => arg === '--mcp-config').length, 1);
     assert.ok(captured.argv.includes('--strict-mcp-config'));
     assert.ok(captured.argv.includes('--print'));
     assert.ok(captured.argv.includes('--output-format'));
-    assert.equal(captured.argv.at(-1), 'do the work');
+    assert.notEqual(captured.argv.at(-1), 'do the work');
+    assert.equal(captured.stdin, 'do the work');
+    const systemPromptIdx = captured.argv.indexOf('--append-system-prompt');
+    assert.notEqual(systemPromptIdx, -1);
+    assert.equal(
+      captured.argv[systemPromptIdx + 1],
+      'coordinate with the team\n\nWhen no visible reply is useful, make the final message exactly [[NO_REPLY]].'
+    );
 
     const mcpConfigIdx = captured.argv.indexOf('--mcp-config');
     const payload = JSON.parse(captured.argv[mcpConfigIdx + 1]) as {

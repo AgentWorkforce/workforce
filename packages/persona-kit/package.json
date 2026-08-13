@@ -1,6 +1,6 @@
 {
   "name": "@agentworkforce/persona-kit",
-  "version": "3.0.50",
+  "version": "4.1.39",
   "private": false,
   "type": "module",
   "main": "dist/index.js",
@@ -9,6 +9,10 @@
     ".": {
       "types": "./dist/index.d.ts",
       "default": "./dist/index.js"
+    },
+    "./spec": {
+      "types": "./dist/spec.d.ts",
+      "default": "./dist/spec.js"
     },
     "./package.json": "./package.json",
     "./schemas/persona.schema.json": "./schemas/persona.schema.json",
@@ -37,8 +41,9 @@
     "lint": "tsc -p tsconfig.json --noEmit"
   },
   "dependencies": {
-    "@relayfile/adapter-core": "^0.3.31",
-    "@relayfile/local-mount": "^0.7.24"
+    "@relaycast/a2a": "^6.2.0",
+    "@relayfile/adapter-core": "^0.5.1",
+    "@relayfile/local-mount": "^0.10.23"
   },
   "devDependencies": {
     "ts-json-schema-generator": "^2.3.0"

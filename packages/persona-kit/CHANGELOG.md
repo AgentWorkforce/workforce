@@ -7,6 +7,141 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [4.1.39] - 2026-08-11
+
+### Added
+
+- **Expose SDK-backed persona fleet spawning** (#307)
+
+## [4.1.36] - 2026-07-24
+
+### Changed
+
+- 296: deriveAgentCard(personaSpec): canonical persona → A2A agent card in persona-kit (#298)
+
+## [4.1.26] - 2026-07-16
+
+### Fixed
+
+- Preserve trigger paths (#276)
+
+## [4.1.25] - 2026-07-16
+
+### Breaking Changes
+
+- `buildNonInteractiveSpec` no longer includes the one-shot task in `args`.
+  Consumers must deliver the new required `prompt` descriptor through stdin or
+  a prompt file as directed; spawning only `bin` and `args` now omits the task.
+
+### Fixed
+
+- Keep large one-shot harness prompts off argv to avoid Linux
+  `MAX_ARG_STRLEN`/`E2BIG` failures.
+
+## [4.1.23] - 2026-07-15
+
+### Added
+
+- **Close the composable local runtime loop** (#272)
+
+## [4.1.19] - 2026-07-15
+
+### Added
+
+- **Compile single-file Agent presets** (#267)
+
+### Fixed
+
+- Repair opencode one-shot invocation (#270)
+
+## [4.1.18] - 2026-07-15
+
+### Added
+
+- **Add reusable cron and Slack delivery helpers** (#261)
+
+### Fixed
+
+- Bump @relayfile/adapter-core to pick up telegram trigger catalog (#264)
+
+## [4.1.15] - 2026-07-13
+
+### Fixed
+
+- Harden the warm fast path per review
+
+### Dependencies
+
+- Consume published @relayfile/local-mount 0.10.23
+
+## [4.1.12] - 2026-06-24
+
+### Added
+
+- **Support optional integrations**
+
+## [4.1.6] - 2026-06-18
+
+### Dependencies
+
+- Consume adapter-core writeback normalizer
+
+## [4.1.5] - 2026-06-18
+
+### Dependencies
+
+- Refresh relayfile trigger catalog
+
+## [4.1.2] - 2026-06-16
+
+### Added
+
+- **Type gitlab materialization config**
+- **Add adapter config passthrough**
+
+## [4.1.0] - 2026-06-15
+
+### Added
+
+- **Add side-effect-free ./spec validation entrypoint**
+
+## [4.0.4] - 2026-06-14
+
+### Changed
+
+- Preserve trigger maxConcurrency in persona-kit (#230)
+
+### Dependencies
+
+- Refresh relayfile trigger catalog for daytona (#231)
+
+## [4.0.0] - 2026-06-10
+
+### Breaking Changes
+
+- **Relay SDK AgentEvent + declarative relay persona field (Stage 1, A, B, C-runtime)** (#220)
+
+## [3.0.51] - 2026-06-08
+
+### Added
+
+- **Launch ai-hist via plain npx -y ai-hist-mcp + enable trajectory memory on persona-maker** (#211)
+- **Auto-inject ai-hist MCP + enforce trajectory recording**
+- **Add grok harness support**
+
+### Fixed
+
+- Launch full ai-hist MCP via npx -p ai-hist (revert bundled WHY-only server) (#209)
+- Address grok harness review feedback
+
+### Changed
+
+- Consolidate trajectories + ai-memory under memory (opt-in) (#210)
+
+### Dependencies
+
+- Apply pr-reviewer fixes for #206 (#206)
+
 ## [3.0.47] - 2026-06-04
 
 ### Added
