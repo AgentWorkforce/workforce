@@ -201,6 +201,24 @@ structured `runner.started` log. A workspace version identifies the resolved
 workspace package; it does not claim the local bytes equal a published npm
 artifact.
 
+### Relayhistory turn streaming
+
+The long-lived runtime assigns every process a stable relay session ID from
+`RELAY_SESSION_ID`, or generates a UUID when the variable is absent. The ID is
+included in the structured `runner.started` log and passed into each harness
+invocation. When `RELAYHISTORY_URL` is configured, every completed
+`ctx.harness.run()` call immediately journals its prompt and final output to
+relayhistory-cloud as a user/assistant turn pair. Writes are best-effort and do
+not delay or fail the handler. Set `RELAYHISTORY_ACCESS_TOKEN` (or the legacy
+`RELAYHISTORY_TOKEN`) to send a relayhistory bearer token.
+
+Interactive CLI sessions are different: Claude Code and Codex own the terminal
+conversation internally, so the workforce launcher cannot reliably observe
+individual prompts and responses. Per-turn streaming for those sessions must
+come from a separate transcript mechanism, such as a relayfile watcher over the
+harness transcript. The launcher should not hook into Claude's private runtime
+internals.
+
 ## Integrations supported
 
 Deploy v1 targets the Tier-1 Relayfile providers:

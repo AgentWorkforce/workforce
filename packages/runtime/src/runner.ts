@@ -1,6 +1,8 @@
 import type { AgentSpec, PersonaSpec } from '@agentworkforce/persona-kit';
+import { randomUUID } from 'node:crypto';
 import { createCloudRuntimeDefaults } from './cloud-defaults.js';
 import { buildCtx, type CtxBuildOptions } from './ctx.js';
+import { RelayhistoryTurnWriter } from './relayhistory-turn-writer.js';
 import { getTrajectoryRecorder, type TrajectoryRecorder } from './trajectory.js';
 import { isWorkforceHandler } from './handler.js';
 import { type RawGatewayEnvelope } from './shim.js';
@@ -115,6 +117,27 @@ export async function startRunner(options: StartRunnerOptions): Promise<void> {
     );
   }
 
+  const relaySessionId = process.env.RELAY_SESSION_ID?.trim() || randomUUID();
+  const actorName =
+    process.env.RELAY_AGENT_NAME?.trim() ||
+    options.agent.deployedName?.trim() ||
+    options.persona.id;
+  const sessionOwner =
+    process.env.RELAY_SESSION_OWNER?.trim() ||
+    process.env.RELAY_AGENT_NAME?.trim() ||
+    options.agent.deployedName?.trim() ||
+    options.agent.id;
+  const turnWriter = new RelayhistoryTurnWriter({
+    relaySessionId,
+    sessionOwner,
+    actorName,
+    relayhistoryUrl: process.env.RELAYHISTORY_URL,
+    orgId:
+      process.env.RELAY_ORG_ID?.trim() ||
+      process.env.WORKFORCE_ORG_ID?.trim() ||
+      workspaceId
+  });
+
   const log = options.subsystems?.log;
   const cloudDefaults = createCloudRuntimeDefaults({
     persona: options.persona,
@@ -124,6 +147,13 @@ export async function startRunner(options: StartRunnerOptions): Promise<void> {
     log: log ?? defaultRunnerLog
   });
   const integrations = options.subsystems?.integrations ?? {};
+  const harnessRunner = options.harnessRunner ?? cloudDefaults.harnessRunner;
+  const sessionHarnessRunner = async (args: HarnessRunArgs): Promise<HarnessRunResult> => {
+    return harnessRunner({
+      ...args,
+      env: { ...args.env, RELAY_SESSION_ID: relaySessionId }
+    });
+  };
 
   const ctx = buildCtx({
     persona: options.persona,
@@ -132,7 +162,21 @@ export async function startRunner(options: StartRunnerOptions): Promise<void> {
     workspaceId,
     sandbox: options.subsystems?.sandbox ?? cloudDefaults.sandbox,
     files: options.subsystems?.files ?? cloudDefaults.files,
-    harnessRunner: options.harnessRunner ?? cloudDefaults.harnessRunner,
+    harnessRunner: sessionHarnessRunner,
+    onHarnessRunComplete: (args, result) => {
+      turnWriter.writeTurn({
+        role: 'user',
+        content: args.prompt,
+        actorName: sessionOwner,
+        actorRole: 'owner'
+      });
+      turnWriter.writeTurn({
+        role: 'assistant',
+        content: result.output,
+        actorName,
+        actorRole: 'steerer'
+      });
+    },
     ...(options.subsystems?.llm ?? cloudDefaults.llm
       ? { llm: options.subsystems?.llm ?? cloudDefaults.llm }
       : {}),
@@ -157,6 +201,7 @@ export async function startRunner(options: StartRunnerOptions): Promise<void> {
     schedules: options.agentSpec?.schedules?.map((s) => s.name) ?? [],
     triggers: options.agentSpec?.triggers ? Object.keys(options.agentSpec.triggers) : [],
     integrations: options.persona.integrations ? Object.keys(options.persona.integrations) : [],
+    relaySessionId,
     ...(options.bundleManifest ? { bundleManifest: options.bundleManifest } : {})
   });
 

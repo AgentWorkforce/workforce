@@ -94,6 +94,15 @@ export {
   type SpawnNonInteractiveAndCaptureArgs
 } from './harness-process.js';
 
+export {
+  RelayhistoryTurnWriter,
+  type RelayhistoryActorRole,
+  type RelayhistorySessionMetadataInput,
+  type RelayhistoryTurnInput,
+  type RelayhistoryTurnRole,
+  type RelayhistoryTurnWriterOptions
+} from './relayhistory-turn-writer.js';
+
 // Runtime envelope helpers shared by provider-triggered agents.
 export {
   unwrapResourceRecord

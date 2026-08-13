@@ -1,5 +1,7 @@
 import { resolveTrajectoryRecording, type PersonaSpec } from '@agentworkforce/persona-kit';
 import type {
+  HarnessRunArgs,
+  HarnessRunResult,
   LlmContext,
   MemoryContext,
   FilesContext,
@@ -60,6 +62,8 @@ export interface CtxBuildOptions {
   integrations?: Record<string, unknown>;
   log?: WorkforceCtx['log'];
   harnessRunner: WorkforceCtx['harness']['run'];
+  /** Observe a completed, marker-sanitized harness turn without delaying it. */
+  onHarnessRunComplete?: (args: HarnessRunArgs, result: HarnessRunResult) => void;
   /**
    * Root directory for per-run trajectory contract files. Defaults to
    * `env.TRAJECTORY_ROOT`; when neither resolves, trajectory recording is
@@ -188,13 +192,21 @@ export function buildCtx(options: CtxBuildOptions): WorkforceCtx {
           );
         }
 
-        return {
+        const sanitizedResult: HarnessRunResult = {
           ...result,
           output: sanitizedOutput.output,
           ...(sanitizedStderr ? { stderr: sanitizedStderr.output } : {}),
           containsMarker,
           suppressed: sanitizedOutput.suppressed
         };
+        try {
+          options.onHarnessRunComplete?.(args, sanitizedResult);
+        } catch (error) {
+          log('warn', 'harness.turn_observer.failed', {
+            error: error instanceof Error ? error.message : String(error)
+          });
+        }
+        return sanitizedResult;
       }
     },
     sandbox: options.sandbox,

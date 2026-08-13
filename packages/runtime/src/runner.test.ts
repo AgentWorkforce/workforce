@@ -129,6 +129,86 @@ test('startRunner surfaces the supplied bundle manifest in runner.started struct
   assert.deepEqual(started?.attrs?.bundleManifest, bundleManifest);
 });
 
+test('startRunner streams each completed ctx.harness.run turn under its relay session id', async () => {
+  const requests: Array<Record<string, unknown>> = [];
+  const server = http.createServer(async (request, response) => {
+    const chunks: Buffer[] = [];
+    for await (const chunk of request) chunks.push(Buffer.from(chunk));
+    requests.push(JSON.parse(Buffer.concat(chunks).toString('utf8')) as Record<string, unknown>);
+    response.statusCode = 200;
+    response.end('{}');
+  });
+  await new Promise<void>((resolve) => server.listen(0, '127.0.0.1', resolve));
+  const address = server.address() as AddressInfo;
+  const previousEnv = {
+    url: process.env.RELAYHISTORY_URL,
+    sessionId: process.env.RELAY_SESSION_ID,
+    owner: process.env.RELAY_SESSION_OWNER
+  };
+  process.env.RELAYHISTORY_URL = `http://127.0.0.1:${address.port}`;
+  process.env.RELAY_SESSION_ID = 'relay-session-test';
+  process.env.RELAY_SESSION_OWNER = 'session-owner';
+  const logs: Array<{ message: string; attrs?: Record<string, unknown> }> = [];
+  let harnessEnv: Record<string, string> | undefined;
+
+  try {
+    await startRunner({
+      persona,
+      agent: runtimeAgent,
+      deployment: runtimeDeployment,
+      workspaceId: 'ws-test',
+      handler: handler(async (ctx) => {
+        const result = await ctx.harness.run({ prompt: 'Do the work' });
+        assert.equal(result.output, 'Finished');
+      }),
+      harnessRunner: async (args) => {
+        harnessEnv = args.env;
+        return { output: 'Finished [[NO_REPLY]]', exitCode: 0, durationMs: 1 };
+      },
+      subsystems: {
+        sandbox: stubSandbox,
+        log: (_level, message, attrs) => logs.push({ message, attrs })
+      },
+      envelopes: streamOf([
+        { id: 'e1', workspace: 'ws-test', type: 'cron.tick', occurredAt: 'x' }
+      ])
+    });
+
+    const deadline = Date.now() + 2_000;
+    while (requests.length < 2 && Date.now() < deadline) {
+      await new Promise((resolve) => setTimeout(resolve, 10));
+    }
+    assert.equal(requests.length, 2);
+    assert.equal(harnessEnv?.RELAY_SESSION_ID, 'relay-session-test');
+    assert.equal(
+      logs.find((entry) => entry.message === 'runner.started')?.attrs?.relaySessionId,
+      'relay-session-test'
+    );
+    const turns = requests
+      .flatMap((request) => request.turns as Array<Record<string, unknown>>)
+      .sort((left, right) => Number(left.turnIndex) - Number(right.turnIndex));
+    assert.deepEqual(
+      turns.map((turn) => [turn.role, turn.content]),
+      [
+        ['user', 'Do the work'],
+        ['assistant', 'Finished']
+      ]
+    );
+  } finally {
+    for (const [key, value] of [
+      ['RELAYHISTORY_URL', previousEnv.url],
+      ['RELAY_SESSION_ID', previousEnv.sessionId],
+      ['RELAY_SESSION_OWNER', previousEnv.owner]
+    ] as const) {
+      if (value === undefined) delete process.env[key];
+      else process.env[key] = value;
+    }
+    await new Promise<void>((resolve, reject) =>
+      server.close((error) => (error ? reject(error) : resolve()))
+    );
+  }
+});
+
 test('startRunner logs and continues when the handler throws', async () => {
   const logs: Array<{ level: string; message: string }> = [];
   let invocations = 0;
