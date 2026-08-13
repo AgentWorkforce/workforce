@@ -2,15 +2,20 @@
 
 ## Result
 
-**Deployed production proof passed.** The proof seeded an authenticated,
-Codex-originated session in production and retrieved it by relay session ID.
-A new `claude --print` invocation then reproduced the linked-list reversal
-function using only the reconstructed prior conversation supplied on stdin.
+**Deployed production protocol proof passed (same-machine synthetic run).** The
+proof seeded an authenticated synthetic Codex transcript in production and
+retrieved it by relay session ID. A new `claude --print` invocation then
+reproduced the linked-list reversal function using only the reconstructed prior
+conversation supplied on stdin.
 
 - Relay session ID: `ac7c0ab8-1c00-4ddd-9484-a59abf2f5bd5`
 - Service: `https://history.agentrelay.com` (strict remote mode; no mock fallback)
 - Observable artifacts: `/var/folders/_z/f_fpl8j533g_r63706k2xvp00000gn/T/relayhistory-continuity.YTM9qw`
 - Health check: HTTP 200, `{"ok":true,"service":"relayhistory"}`
+
+This is not yet the stricter `sf-mini` → `finn-mini` acceptance run. That requires
+a real session ID from the streaming agent on `sf-mini`; the receiver is ready and
+will append that evidence when it arrives.
 
 ## Turn-journal round trip
 
