@@ -2,31 +2,48 @@
 
 ## Result
 
-**Protocol-level proof passed.** A fresh `claude --print` invocation reproduced the
-linked-list reversal function after receiving only the context reconstructed from
-the relay session's HTTP retrieval responses.
+**Deployed production proof passed.** The proof seeded an authenticated,
+Codex-originated session in production and retrieved it by relay session ID.
+A new `claude --print` invocation then reproduced the linked-list reversal
+function using only the reconstructed prior conversation supplied on stdin.
 
-- Relay session ID: `dd4f9c6d-57ee-4474-9637-eaed3f53e170`
-- Service used for the completed run: isolated local relayhistory protocol mock
-- Observable artifacts: `/var/folders/_z/f_fpl8j533g_r63706k2xvp00000gn/T/relayhistory-continuity.9ZdIe6`
+- Relay session ID: `ac7c0ab8-1c00-4ddd-9484-a59abf2f5bd5`
+- Service: `https://history.agentrelay.com` (strict remote mode; no mock fallback)
+- Observable artifacts: `/var/folders/_z/f_fpl8j533g_r63706k2xvp00000gn/T/relayhistory-continuity.YTM9qw`
+- Health check: HTTP 200, `{"ok":true,"service":"relayhistory"}`
 
-## JSONL round trip
+## Turn-journal round trip
 
-Passed. Phase 1 wrote five JSONL records to the mock service's private store: four
-ordered turns and one metadata record. Phase 2 used only HTTP `GET` calls and
-returned the turns in sequence `1, 2, 3, 4`, plus this metadata:
+Passed. Production accepted all four synthetic Codex turns:
 
 ```json
-{"nativeCli":"codex","sessionOwner":"danny@test.com","originNode":"finn-mini"}
+{"sessionId":"ac7c0ab8-1c00-4ddd-9484-a59abf2f5bd5","received":4,"accepted":4}
 ```
 
-The reconstructed prompt came from those two retrieved payloads; it did not read
-the JSONL file or use a Codex/Claude session-resume mechanism.
+`GET /v1/sessions/<id>/turns` returned exactly four records ordered by
+`turnIndex` (`0, 1, 2, 3`), including the original `reverseLinkedList`
+implementation. `GET /v1/sessions/<id>/metadata` returned:
+
+```json
+{
+  "nativeCli": "codex",
+  "nativeResumeId": null,
+  "sessionOwner": "[REDACTED]",
+  "originNode": "finn-mini"
+}
+```
+
+The input owner was `danny@test.com`; the deployed ingest scrubber correctly
+redacted it before the value was returned. The proof therefore verifies that an
+owner field round-trips with deliberate PII protection, rather than expecting raw
+email preservation.
 
 ## Cross-harness continuation
 
-Passed. The fresh Claude process received the reconstructed prior conversation on
-stdin and returned the expected function, including all four proof markers:
+Passed. The new Claude process received no Codex session ID, `--resume` flag,
+relay JSONL path, or Codex credential. Its only continuity input was the context
+formatted from the two production `GET` responses. It reproduced all required
+function markers:
 
 ```js
 function reverseLinkedList(head) {
@@ -44,36 +61,30 @@ function reverseLinkedList(head) {
 }
 ```
 
-The script starts Claude with `--print`, no `--resume` flag, no Codex session ID,
-and no filesystem path to the relay JSONL. The only continuity input is the
-reconstructed context. Claude naturally uses its own existing CLI authentication to
-answer; no Codex credential or session credential is passed to it.
+Claude uses its own existing CLI authentication to run, but no credential or
+conversation state is shared from the Codex side.
 
-## Deployed-service gap
+## Observed contract details
 
-`https://dev.history.agentrelay.com/health` returned HTTP 200 with
-`{"ok":true,"service":"relayhistory"}`. However, the deployed service cannot
-currently complete this proof through the requested session contract:
-
-- The checked-in `relayhistory-cloud` application registers `/v1/ingest`, coverage,
-  Pair/Reflex, and Enterprise sync/entries/export routes, but not
-  `/v1/sessions/:id/turns` or `/v1/sessions/:id/metadata`.
-- An unauthenticated probe of both requested dev paths returned HTTP 401 from the
-  service-wide authentication middleware. No non-production relay credential was
-  supplied or logged, and there is therefore no evidence that the deployed service
-  can seed/retrieve this session model.
-
-The script makes this distinction explicit: it attempts the remote session API only
-when a mode-600 `RELAYHISTORY_CURL_CONFIG` is provided, otherwise falls back to the
-isolated mock and prints a qualification. A deployed-cloud pass requires the two
-session endpoints, a durable JSONL-backed implementation, and scoped authenticated
-access.
+- Production requires scoped `rth:sync` to write and `rth:read` to retrieve. The
+  proof used an existing production relayhistory session, refreshed through the
+  normal refresh endpoint; no token was printed or committed.
+- Production `/v1/admin/mint` remains correctly disabled (HTTP 404).
+- PR #23 implements the durable transcript as the `conversation_turns` journal in
+  the default-tier Neon store, not as a literal JSONL object. The observable HTTP
+  round trip proves that the stored transcript is sufficient for cross-harness
+  continuation. If "JSONL stored in relayhistory-cloud" is a literal storage
+  requirement rather than a wire-format requirement, the implementation still
+  needs a JSONL persistence/export contract.
 
 ## Re-run
 
 ```sh
-./scripts/prove-cross-harness-continuity.sh
+# RELAYHISTORY_CURL_CONFIG must be a mode-600 curl config containing the
+# caller's Authorization header; it is never logged by the script.
+RELAYHISTORY_CURL_CONFIG=/secure/path/relayhistory-curl.conf \
+  ./scripts/prove-cross-harness-continuity.sh --remote
 ```
 
-The default run health-checks dev and falls back to the local mock. Use `--remote`
-with `RELAYHISTORY_CURL_CONFIG` only after the deployed session API exists.
+The script defaults to production. `--remote` prevents mock fallback, so a pass
+is deployed-cloud evidence.

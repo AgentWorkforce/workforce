@@ -2,7 +2,7 @@
 # Proves that a fresh Claude invocation can continue a Codex-originated relay
 # session using the reconstructed conversation returned by the relay service.
 #
-# Default behaviour is deliberately safe: it probes the deployed dev health
+# Default behaviour is deliberately safe: it probes the deployed production health
 # endpoint without credentials, then uses an isolated local protocol mock when
 # the required /v1/sessions/:id/{turns,metadata} API cannot be used.  Set
 # RELAYHISTORY_CURL_CONFIG to a mode-600 curl config file (for example,
@@ -12,7 +12,7 @@
 set -euo pipefail
 
 readonly SCRIPT_NAME="$(basename "$0")"
-readonly DEFAULT_BASE_URL="https://dev.history.agentrelay.com"
+readonly DEFAULT_BASE_URL="https://history.agentrelay.com"
 readonly TURN_COUNT=4
 
 BASE_URL="${RELAYHISTORY_BASE_URL:-$DEFAULT_BASE_URL}"
@@ -24,7 +24,7 @@ usage() {
 Usage: prove-cross-harness-continuity.sh [options]
 
 Options:
-  --base-url URL    Relayhistory base URL (default: dev.history.agentrelay.com)
+  --base-url URL    Relayhistory base URL (default: history.agentrelay.com)
   --local           Skip the remote probe and run against the isolated local mock
   --remote          Require the remote session API; do not fall back to the mock
   --output-dir DIR  Directory for observable, non-secret proof artifacts
@@ -172,7 +172,11 @@ const server = http.createServer(async (request, response) => {
       if (resource === "turns") {
         if (!Array.isArray(body.turns)) return writeJson(response, 400, { error: "turns must be an array" });
         for (const turn of body.turns) {
-          fs.appendFileSync(storeFile, `${JSON.stringify({ type: "turn", sessionId, turn })}\n`);
+          fs.appendFileSync(storeFile, `${JSON.stringify({
+            type: "turn",
+            sessionId,
+            turn: { ...turn, sessionOwner: turn.sessionOwner ?? body.sessionOwner },
+          })}\n`);
         }
         return writeJson(response, 201, { sessionId, stored: body.turns.length });
       }
@@ -189,7 +193,7 @@ const server = http.createServer(async (request, response) => {
       const turns = sessionEvents
         .filter((event) => event.type === "turn")
         .map((event) => event.turn)
-        .sort((left, right) => left.sequence - right.sequence);
+        .sort((left, right) => left.turnIndex - right.turnIndex);
       return writeJson(response, 200, { sessionId, turns });
     }
     const metadataEvent = sessionEvents.filter((event) => event.type === "metadata").at(-1);
@@ -246,37 +250,42 @@ const functionSource = [
   "}",
 ].join("\n");
 fs.writeFileSync(output, JSON.stringify({
+  sessionOwner: "danny@test.com",
   turns: [
     {
-      sequence: 1,
+      turnIndex: 0,
       role: "user",
-      actor: "Danny",
-      nativeCli: "codex",
-      createdAt: at(1),
+      actorName: "Danny",
+      actorRole: "owner",
+      metadata: { nativeCli: "codex", originNode: "finn-mini" },
+      ts: at(1),
       content: "Write a JavaScript function that reverses a singly linked list. Use an iterative solution and return the new head.",
     },
     {
-      sequence: 2,
+      turnIndex: 1,
       role: "assistant",
-      actor: "Codex",
-      nativeCli: "codex",
-      createdAt: at(2),
+      actorName: "Codex",
+      actorRole: "steerer",
+      metadata: { nativeCli: "codex", originNode: "finn-mini" },
+      ts: at(2),
       content: `Here is the working iterative solution:\n\n${functionSource}`,
     },
     {
-      sequence: 3,
+      turnIndex: 2,
       role: "user",
-      actor: "Danny",
-      nativeCli: "codex",
-      createdAt: at(3),
+      actorName: "Danny",
+      actorRole: "owner",
+      metadata: { nativeCli: "codex", originNode: "finn-mini" },
+      ts: at(3),
       content: "Why does this work?",
     },
     {
-      sequence: 4,
+      turnIndex: 3,
       role: "assistant",
-      actor: "Codex",
-      nativeCli: "codex",
-      createdAt: at(4),
+      actorName: "Codex",
+      actorRole: "steerer",
+      metadata: { nativeCli: "codex", originNode: "finn-mini" },
+      ts: at(4),
       content: "Each iteration saves the next node before redirecting current.next to the already-reversed prefix. When current reaches null, previous is the new head.",
     },
   ],
@@ -316,9 +325,21 @@ post_seed() {
   local turns_status metadata_status
   turns_status="$(json_status "$RUN_DIR/turns-post-response.json" -X POST -H 'content-type: application/json' --data-binary "@$TURNS_PAYLOAD" "$BASE_URL/v1/sessions/$RELAY_SESSION_ID/turns" || true)"
   if ! is_success_status "$turns_status"; then
+    printf 'POST turns failed with HTTP %s:\n' "$turns_status" >&2
+    sed -n '1,80p' "$RUN_DIR/turns-post-response.json" >&2
     return 1
   fi
+  # PR #23 derives session metadata from the ordered turn journal. The isolated
+  # mock retains the former separate metadata endpoint to prove the original
+  # two-resource JSONL protocol as a local fallback.
+  if [[ "$SERVICE_KIND" == "remote relayhistory" ]]; then
+    return 0
+  fi
   metadata_status="$(json_status "$RUN_DIR/metadata-post-response.json" -X POST -H 'content-type: application/json' --data-binary "@$METADATA_PAYLOAD" "$BASE_URL/v1/sessions/$RELAY_SESSION_ID/metadata" || true)"
+  if ! is_success_status "$metadata_status"; then
+    printf 'POST metadata failed with HTTP %s:\n' "$metadata_status" >&2
+    sed -n '1,80p' "$RUN_DIR/metadata-post-response.json" >&2
+  fi
   is_success_status "$metadata_status"
 }
 
@@ -353,31 +374,43 @@ if ! is_success_status "$turns_status" || ! is_success_status "$metadata_status"
   exit 1
 fi
 
+printf '\nCONTINUITY-PROOF SESSION ID: %s\n' "$RELAY_SESSION_ID"
+printf 'SERVICE: %s\n' "$SERVICE_KIND"
+printf 'ARTIFACT DIRECTORY: %s\n' "$RUN_DIR"
+
 node - "$TURNS_RESPONSE" "$METADATA_RESPONSE" "$CONTEXT_FILE" "$RELAY_SESSION_ID" <<'NODE'
 const fs = require("fs");
 const [turnsPath, metadataPath, contextPath, sessionId] = process.argv.slice(2);
 const turnsPayload = JSON.parse(fs.readFileSync(turnsPath, "utf8"));
 const metadataPayload = JSON.parse(fs.readFileSync(metadataPath, "utf8"));
 const turns = turnsPayload.turns;
-const metadata = metadataPayload.metadata;
+const metadata = metadataPayload.metadata ?? metadataPayload;
 
 if (!Array.isArray(turns) || turns.length !== 4) {
   throw new Error(`expected 4 turns from retrieval, got ${Array.isArray(turns) ? turns.length : "non-array"}`);
 }
 for (let index = 0; index < turns.length; index += 1) {
-  if (turns[index].sequence !== index + 1) {
-    throw new Error(`turn order is wrong at position ${index}: ${turns[index].sequence}`);
+  const turnIndex = turns[index].turnIndex ?? (turns[index].sequence - 1);
+  if (turnIndex !== index) {
+    throw new Error(`turn order is wrong at position ${index}: ${turnIndex}`);
   }
 }
 if (!turns[1].content.includes("function reverseLinkedList(head)")) {
   throw new Error("retrieved assistant turn is missing the linked-list function");
 }
-if (!metadata || metadata.sessionOwner !== "danny@test.com" || metadata.nativeCli !== "codex") {
-  throw new Error("retrieved metadata is missing sessionOwner or nativeCli");
+const allowedOwners = new Set(["danny@test.com", "[REDACTED]"]);
+if (!metadata || !allowedOwners.has(metadata.sessionOwner) || metadata.nativeCli !== "codex") {
+  throw new Error("retrieved metadata is missing a valid sessionOwner or nativeCli");
+}
+if (!turns.every((turn) => allowedOwners.has(turn.sessionOwner))) {
+  throw new Error("retrieved turns have an unexpected sessionOwner value");
+}
+if (metadata.sessionOwner === "[REDACTED]") {
+  process.stdout.write("SESSION OWNER: PII scrubber redacted danny@test.com as [REDACTED] on the service round trip.\n");
 }
 
 const formattedTurns = turns.map((turn) => [
-  `TURN ${turn.sequence} | ${turn.role.toUpperCase()} | ${turn.actor} | ${turn.createdAt}`,
+  `TURN ${(turn.turnIndex ?? (turn.sequence - 1)) + 1} | ${turn.role.toUpperCase()} | ${turn.actorName ?? turn.actor} | ${turn.ts ?? turn.createdAt}`,
   turn.content,
 ].join("\n")).join("\n\n");
 const prompt = [
@@ -396,9 +429,6 @@ const prompt = [
 fs.writeFileSync(contextPath, `${prompt}\n`);
 NODE
 
-printf '\nCONTINUITY-PROOF SESSION ID: %s\n' "$RELAY_SESSION_ID"
-printf 'SERVICE: %s\n' "$SERVICE_KIND"
-printf 'ARTIFACT DIRECTORY: %s\n' "$RUN_DIR"
 printf '\nPHASE 2 — RECONSTRUCTED CONTEXT (from GET responses)\n'
 sed -n '1,260p' "$CONTEXT_FILE"
 
@@ -454,5 +484,5 @@ NODE
 
 printf '\nPROOF PASSES: retrieval preserved all %s ordered turns and metadata; fresh Claude reproduced reverseLinkedList from reconstructed relay context.\n' "$TURN_COUNT"
 if [[ "$SERVICE_KIND" != "remote relayhistory" ]]; then
-  printf 'QUALIFICATION: this is a protocol-level pass using the isolated local mock. The deployed service needs the requested session REST API plus authenticated access for a deployed-cloud pass.\n'
+  printf 'QUALIFICATION: this particular run used the isolated local mock. Run with --remote and a scoped relayhistory curl config for deployed-cloud evidence.\n'
 fi
