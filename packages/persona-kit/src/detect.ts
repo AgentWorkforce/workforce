@@ -63,7 +63,20 @@ export function detectHarness(
   if (!path) {
     return { harness, available: false, error: 'not found on PATH' };
   }
-  const res = spawnSync(bin, ['--version'], {
+  // Probe the exact entry we found rather than asking spawnSync to resolve the
+  // bare name a second time. On Windows, package-manager shims are commonly
+  // .cmd/.bat files; those are not directly executable with shell:false, so
+  // route only that trusted, resolved script path through the command
+  // processor. Other executables keep the direct (non-shell) path.
+  const isWindowsCommandScript =
+    process.platform === 'win32' && /\.(?:cmd|bat)$/i.test(path);
+  const probeBin = isWindowsCommandScript
+    ? process.env.ComSpec ?? process.env.COMSPEC ?? 'cmd.exe'
+    : path;
+  const probeArgs = isWindowsCommandScript
+    ? ['/d', '/s', '/c', `"${path}" --version`]
+    : ['--version'];
+  const res = spawnSync(probeBin, probeArgs, {
     timeout: timeoutMs,
     encoding: 'utf8',
     shell: false
