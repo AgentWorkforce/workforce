@@ -376,6 +376,25 @@ export async function deploy(opts: DeployOptions, resolvers: DeployResolvers = {
   });
   io.info(`launched: ${mode}/${handle.id}`);
 
+  // Print the URL an external app POSTs to in order to wake this agent.
+  //
+  // Deploy is the moment someone is wiring the agent up, so it is the moment
+  // the URL is worth knowing. Without this, the only way to learn it was to be
+  // told the shape by hand — the endpoint is not otherwise advertised anywhere
+  // the deploying user looks.
+  //
+  // Uses the persona id (the deployed NAME), not `handle.id`: names are unique
+  // per workspace and survive a redeploy, while the uuid does not, so the name
+  // is what an app should hard-code.
+  if (mode === 'cloud' && cloudUrl && workspace) {
+    const triggerUrl =
+      `${cloudUrl.replace(/\/+$/, '')}/api/v1/workspaces/${encodeURIComponent(workspace)}` +
+      `/deployments/${encodeURIComponent(activePreflight.persona.id)}/trigger`;
+    io.info(`trigger from your app: POST ${triggerUrl}`);
+    io.info('  auth: Bearer <deployment API token>  (dashboard → Workspace → Deployment API tokens)');
+    io.info('  body: any JSON object; it reaches the handler as the event payload');
+  }
+
   return {
     deploymentId: activePreflight.persona.id,
     mode,
