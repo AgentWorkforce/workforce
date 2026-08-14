@@ -2544,6 +2544,18 @@ test('cloud deploy advertises the trigger URL in both addressing forms', async (
       lines.includes(`  by id (portable): POST ${base}/agent-uuid-1/trigger`),
       `missing id-form trigger URL in:\n${lines.join('\n')}`
     );
+    // The auth and body lines are part of the same copied instructions: a URL
+    // without them is not actually usable, so regressions there matter too.
+    assert.ok(
+      lines.includes(
+        '  auth: Bearer <deployment API token>  (dashboard \u2192 Workspace \u2192 Deployment API tokens)'
+      ),
+      `missing auth guidance in:\n${lines.join('\n')}`
+    );
+    assert.ok(
+      lines.includes('  body: any JSON object; it reaches the handler as the event payload'),
+      `missing body guidance in:\n${lines.join('\n')}`
+    );
     // The trailing slash on cloudUrl must not produce a double slash.
     assert.ok(!lines.some((line) => line.includes('test//api')));
   } finally {
