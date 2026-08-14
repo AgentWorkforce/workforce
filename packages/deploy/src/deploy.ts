@@ -376,6 +376,32 @@ export async function deploy(opts: DeployOptions, resolvers: DeployResolvers = {
   });
   io.info(`launched: ${mode}/${handle.id}`);
 
+  // Print the URL an external app POSTs to in order to wake this agent.
+  //
+  // Deploy is the moment someone is wiring the agent up, so it is the moment
+  // the URL is worth knowing. Without this, the only way to learn it was to be
+  // told the shape by hand — the endpoint is not otherwise advertised anywhere
+  // the deploying user looks.
+  //
+  // Prints BOTH addressing forms, because which one works depends on the
+  // backend. Agent Workforce cloud resolves an agent by its deployed NAME, and
+  // that is the better thing for an app to hard-code: it is unique per
+  // workspace and survives a destroy/redeploy that changes the uuid. But
+  // `--cloud-url` may point at any compatible runtime (see modes/cloud), and a
+  // backend that only implements the original uuid-keyed route would 404 on the
+  // name form. Printing one URL means printing one that is wrong for somebody;
+  // the id line is the portable fallback.
+  if (mode === 'cloud' && cloudUrl && workspace) {
+    const base =
+      `${cloudUrl.replace(/\/+$/, '')}/api/v1/workspaces/${encodeURIComponent(workspace)}/deployments`;
+    io.info(
+      `trigger from your app: POST ${base}/${encodeURIComponent(activePreflight.persona.id)}/trigger`,
+    );
+    io.info(`  by id (portable): POST ${base}/${encodeURIComponent(handle.id)}/trigger`);
+    io.info('  auth: Bearer <deployment API token>  (dashboard → Workspace → Deployment API tokens)');
+    io.info('  body: any JSON object; it reaches the handler as the event payload');
+  }
+
   return {
     deploymentId: activePreflight.persona.id,
     mode,

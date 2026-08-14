@@ -2489,3 +2489,76 @@ test('deploy merges explicit --input with picker-collected values for the launch
     await cleanup();
   }
 });
+
+test('cloud deploy advertises the trigger URL in both addressing forms', async () => {
+  // The whole point of printing this is that a user hand-copies it into their
+  // app, so the exact path is load-bearing: a future change to the route shape
+  // must not silently mis-advertise it.
+  const { personaPath, cleanup } = await withTempPersona(basePersonaJson());
+  const io = createBufferedIO();
+  try {
+    await deploy(
+      {
+        personaPath,
+        mode: 'cloud',
+        cloudUrl: 'https://cloud.example.test/',
+        io
+      },
+      {
+        workspaceAuth: {
+          async resolveWorkspace() {
+            return { workspace: 'ws-test', token: 'tok' };
+          }
+        },
+        providerConfigKeys: { async resolve() { return undefined; } },
+        integrations: {
+          async isConnected() { return true; },
+          async connect() { return { connectionId: 'conn-github' }; }
+        },
+        bundle: successfulBundleStager(),
+        modes: {
+          cloud: {
+            async launch() {
+              return {
+                id: 'agent-uuid-1',
+                async stop() { /* no-op */ },
+                done: Promise.resolve({ code: 0 })
+              };
+            }
+          }
+        }
+      }
+    );
+
+    const base = 'https://cloud.example.test/api/v1/workspaces/ws-test/deployments';
+    const lines = io.messages.map((m) => m.message);
+
+    // Name form leads: unique per workspace and stable across a redeploy.
+    assert.ok(
+      lines.includes(`trigger from your app: POST ${base}/demo/trigger`),
+      `missing name-form trigger URL in:\n${lines.join('\n')}`
+    );
+    // Id form is the portable fallback for a compatible backend that only
+    // implements the original uuid-keyed route.
+    assert.ok(
+      lines.includes(`  by id (portable): POST ${base}/agent-uuid-1/trigger`),
+      `missing id-form trigger URL in:\n${lines.join('\n')}`
+    );
+    // The auth and body lines are part of the same copied instructions: a URL
+    // without them is not actually usable, so regressions there matter too.
+    assert.ok(
+      lines.includes(
+        '  auth: Bearer <deployment API token>  (dashboard \u2192 Workspace \u2192 Deployment API tokens)'
+      ),
+      `missing auth guidance in:\n${lines.join('\n')}`
+    );
+    assert.ok(
+      lines.includes('  body: any JSON object; it reaches the handler as the event payload'),
+      `missing body guidance in:\n${lines.join('\n')}`
+    );
+    // The trailing slash on cloudUrl must not produce a double slash.
+    assert.ok(!lines.some((line) => line.includes('test//api')));
+  } finally {
+    await cleanup();
+  }
+});
