@@ -175,6 +175,28 @@ test('an app-triggered cron.tick carries its payload through to the handler', as
   });
 });
 
+test('a scheduled cron.tick carrying a canonical resource is still payload-less', async () => {
+  // The legacy decoder builds `{path, kind, id, provider}` for cron envelopes
+  // and the canonical cron fixture uses exactly that shape. Treating any object
+  // resource as a payload would make expansion start RESOLVING for ordinary
+  // schedule firings, so a handler reading expansion success as "this run
+  // carried input" would see every clock tick as payload-bearing.
+  const ev = envelopeToAgentEvent({
+    id: 'evt-canonical',
+    workspace: 'ws-acme',
+    type: 'cron.tick',
+    occurredAt: '2026-07-15T09:00:00Z',
+    name: 'scan',
+    cron: '0 9 * * *',
+    resource: { path: '/cron/schedules/scan', kind: 'cron.schedule', id: 'scan', provider: 'cron' }
+  } as never);
+
+  assert.ok(ev);
+  assert.ok(isCronTickEvent(ev));
+  if (!isCronTickEvent(ev)) return;
+  await assert.rejects(() => ev.expand('full'), /no gateway loader was configured/u);
+});
+
 test('a scheduled cron.tick without a resource is unchanged', async () => {
   const ev = envelopeToAgentEvent({
     id: 'evt-plain',
