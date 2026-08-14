@@ -1,6 +1,6 @@
 # Changelog
 
-All notable changes to `@agentworkforce/local-surface` will be documented in this file.
+All notable changes to `@agentworkforce/persona-registry` will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
@@ -12,10 +12,4 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Released
 
 - v4.1.41
-
-## [4.1.39] - 2026-08-11
-
-### Added
-
-- **Expose SDK-backed persona fleet spawning** (#307)
 

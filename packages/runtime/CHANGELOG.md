@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [4.1.41] - 2026-08-14
+
+### Changed
+
+- Runtime: carry an app-triggered payload through the cron.tick event (#310)
+
 ## [4.1.37] - 2026-07-25
 
 ### Added
