@@ -42,7 +42,7 @@ export function envelopeToAgentEvent(env: RawGatewayEnvelope): AgentEvent | null
   const summary = isPlainObject(env.summary) ? (env.summary as EventSummary) : undefined;
 
   if (env.type === 'cron.tick' || env.type.startsWith('cron.')) {
-    return createCronTickEvent({
+    const cron = createCronTickEvent({
       workspace: env.workspace,
       // The SDK's cron event carries the expression as `schedule`; the human
       // schedule name (cloud's `env.name`) becomes the synthetic resource id.
@@ -54,6 +54,51 @@ export function envelopeToAgentEvent(env: RawGatewayEnvelope): AgentEvent | null
       digest,
       summary
     });
+
+    // A clock tick carries no payload, and `createCronTickEvent` has no slot
+    // for one — its resource is the synthetic `/_cron/<schedule>` identity.
+    //
+    // But cloud reuses the `cron.tick` envelope for an APP-TRIGGERED run: a
+    // customer's product POSTs a JSON body to
+    // `/deployments/<agent>/trigger`, and cloud carries it in the envelope's
+    // `resource` (see its `buildEnvelope`). Returning the bare cron event
+    // therefore dropped that payload on the floor — the envelope had it, the
+    // handler never saw it, and the run looked indistinguishable from a
+    // scheduled tick. Observed end-to-end: an app trigger whose persisted
+    // envelope held `{source:"app.trigger",payload:{…}}` reached the handler
+    // as a contentless tick.
+    //
+    // Wire it through the same way the relaycast branch does — `loadFull`, so
+    // `await event.expand('full')` yields the payload — while keeping the cron
+    // event's own identity (`isCronTickEvent`, `schedule`, `scheduledFor`, and
+    // the `/_cron/…` resource) exactly as before. Ticks without a resource are
+    // untouched and return the bare event.
+    if (!isPlainObject(env.resource)) return cron;
+
+    return createAgentEvent(
+      {
+        workspace: env.workspace,
+        type: 'cron.tick',
+        id: env.id,
+        attempt,
+        occurredAt,
+        digest,
+        summary,
+        // Reuse the SDK-derived values rather than recomputing the schedule id,
+        // so this stays correct if that derivation changes.
+        schedule: cron.schedule,
+        scheduledFor: cron.scheduledFor,
+        resource: cron.resource
+      },
+      {
+        loadFull: async () => ({
+          level: 'full' as const,
+          path: cron.resource.path,
+          data: env.resource as Record<string, unknown>,
+          digest
+        })
+      }
+    );
   }
 
   if (env.type === 'startup') {

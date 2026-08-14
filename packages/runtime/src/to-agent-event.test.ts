@@ -139,3 +139,59 @@ test('envelopeToAgentEvent drops malformed envelopes', () => {
   // provider type with a valid source but no event-name suffix
   assert.equal(envelopeToAgentEvent({ id: 'x', workspace: 'ws', type: 'github.' } as never), null);
 });
+
+test('an app-triggered cron.tick carries its payload through to the handler', async () => {
+  // Cloud reuses the cron.tick envelope for an app trigger: a customer's
+  // product POSTs JSON to /deployments/<agent>/trigger and cloud puts it in
+  // the envelope's `resource`. Returning the bare cron event dropped it — the
+  // envelope had the payload, the handler saw a contentless tick.
+  const ev = envelopeToAgentEvent({
+    id: 'app:usage-spike-acme-1',
+    workspace: 'ws-acme',
+    type: 'cron.tick',
+    occurredAt: '2026-08-14T21:43:00Z',
+    name: 'manual',
+    cron: '',
+    resource: {
+      source: 'app.trigger',
+      payload: { accountId: 'acme', reason: 'usage_spike' }
+    }
+  } as never);
+
+  assert.ok(ev);
+  // Still a cron tick: identity, schedule fields and the synthetic /_cron
+  // resource are unchanged, so nothing that keys off those regresses.
+  assert.ok(isCronTickEvent(ev));
+  if (!isCronTickEvent(ev)) return;
+  assert.equal(ev.id, 'app:usage-spike-acme-1');
+  assert.equal(ev.resource.kind, 'cron.tick');
+  assert.ok(ev.resource.path.startsWith('/_cron/'));
+
+  // …and the payload is now reachable, the same way relaycast surfaces its own.
+  const full = await ev.expand('full');
+  assert.deepEqual(full.data, {
+    source: 'app.trigger',
+    payload: { accountId: 'acme', reason: 'usage_spike' }
+  });
+});
+
+test('a scheduled cron.tick without a resource is unchanged', async () => {
+  const ev = envelopeToAgentEvent({
+    id: 'evt-plain',
+    workspace: 'ws-acme',
+    type: 'cron.tick',
+    occurredAt: '2026-08-14T07:00:00Z',
+    name: 'credential-canary',
+    cron: '0 7 * * 1'
+  });
+
+  assert.ok(ev);
+  assert.ok(isCronTickEvent(ev));
+  if (!isCronTickEvent(ev)) return;
+  assert.equal(ev.schedule, '0 7 * * 1');
+  // No resource on the envelope means no loader is wired, so expansion still
+  // rejects exactly as it did before this change — the clock-tick path must
+  // not start inventing a payload. (This is also why a handler reading
+  // `expand('full')` has to guard it.)
+  await assert.rejects(() => ev.expand('full'), /no gateway loader was configured/u);
+});
