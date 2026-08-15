@@ -271,10 +271,19 @@ Commands:
                       Discover workspace integrations, connection status, and
                       known trigger events. JSON output includes registration
                       health when the cloud status API provides it.
-  trigger <agent-name-or-id> [flags]
+  trigger <agent-name-or-id> [payload-json] [flags]
                       Manually fire an active deployed persona for testing.
                       The selector accepts agent id, compact agent id,
-                      deployed name, persona slug, or persona id. Flags:
+                      deployed name, persona slug, or persona id. A payload is
+                      optional; without one the agent gets a contentless fire,
+                      which is what a schedule looks like. Flags:
+                        --payload <json>    JSON object sent as the event
+                                            payload
+                        --payload-file <p>  Read the payload from a file, or
+                                            "-" for stdin
+                        --idempotency-key <key>
+                                            Retrying with the same key returns
+                                            the original run
                         --workspace <name>  Workforce workspace; defaults to
                                             the active workspace
                         --cloud-url <url>   Override the cloud base URL
