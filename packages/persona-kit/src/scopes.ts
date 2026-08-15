@@ -11,11 +11,25 @@ import type { PersonaSpec } from './types.js';
  * so reads come back empty and writebacks land on unmounted disk as no-ops.
  * Nothing throws. The agent simply does nothing and reports success.
  *
- * Every rule below mirrors the authoritative validation in cloud's
+ * Every path rule below mirrors the authoritative validation in cloud's
  * `relayfile/mount-intent.ts`, so a path this lint rejects is one the mount
  * would also reject. The lint runs at deploy time, where the author can still
  * fix it, rather than leaving them to infer it from an agent that quietly
  * read nothing.
+ *
+ * ## Why only `/`-leading values are checked
+ *
+ * `scope` is overloaded. {@link PersonaIntegrationConfig} documents it as
+ * "provider-specific filter metadata" — `{ repo: 'org/repo' }` for github,
+ * `{ database: '<id>' }` for notion, `{ team: 'ENG' }` for linear — while the
+ * cloud-persona docs use it for Relayfile mount globs. Both are real and in use.
+ *
+ * A value that does not start with `/` is therefore filter metadata, not a
+ * malformed path, and this lint says nothing about it. There is no way to tell
+ * `'org/repo'` (correct) from a path someone forgot to anchor, and guessing
+ * wrong would fire a warning on every github and notion persona in the fleet.
+ * A warning channel only works while every warning is worth reading, so this
+ * one stays silent where it cannot be sure.
  */
 export type ScopeLintLevel = 'warning';
 
@@ -24,8 +38,8 @@ export type ScopeLintLevel = 'warning';
  * without parsing the human-readable `message`.
  */
 export type ScopeLintCode =
-  | 'scope_empty'
-  | 'scope_not_absolute'
+  | 'scope_empty_value'
+  | 'scope_untrimmed'
   | 'scope_trailing_slash'
   | 'scope_mid_path_wildcard'
   | 'scope_traversal_segment'
@@ -88,45 +102,57 @@ export function lintScopes(persona: PersonaSpec): ScopeLintIssue[] {
   for (const [provider, config] of Object.entries(integrations)) {
     if (!isRecord(config)) continue;
 
-    // An integration declared with no scope at all is legitimate — a
-    // credential-only provider (an MCP server, say) has no VFS side. But an
-    // explicitly EMPTY scope object reads as "I meant to scope this" while
-    // mirroring nothing, which is the trap worth naming.
+    // An empty `scope: {}` is deliberately NOT flagged: `parseIntegrationConfig`
+    // drops it before the spec ever reaches this lint (it only assigns
+    // `out.scope` when the parsed map is non-empty), so by deploy time it is
+    // indistinguishable from an omitted scope — which is itself legitimate, as a
+    // credential-only provider like an MCP server has no Relayfile side at all.
+    // There is no signal here to warn on.
     const scope = config.scope;
-    if (isRecord(scope) && Object.keys(scope).length === 0) {
-      issues.push({
-        level: 'warning',
-        code: 'scope_empty',
-        provider,
-        resource: '',
-        path: `integrations.${provider}.scope`,
-        message:
-          `integrations.${provider}.scope is an empty object, which mirrors nothing. ` +
-          `Reads return empty and writebacks are silent no-ops. Either list the ` +
-          `concrete paths this agent touches, or omit \`scope\` entirely if the ` +
-          `provider has no Relayfile side.`
-      });
-      continue;
-    }
     if (!isRecord(scope)) continue;
 
     for (const [resource, raw] of Object.entries(scope)) {
       if (typeof raw !== 'string') continue;
       const path = `integrations.${provider}.scope.${resource}`;
-      const value = raw.trim();
-      if (!value) continue;
 
-      if (!value.startsWith('/')) {
+      // Lint the value DEPLOY sees, not a cleaned-up copy of it. `parseStringMap`
+      // stores scope values verbatim — no trimming — so checking `raw.trim()`
+      // here would clear a padded path that then fails at the mount.
+      const value = raw;
+
+      if (!value.trim()) {
         issues.push({
           level: 'warning',
-          code: 'scope_not_absolute',
+          code: 'scope_empty_value',
           provider,
           resource,
           path,
-          message: `${path}: "${value}" is not an absolute Relayfile path; it must start with "/".`
+          message:
+            `${path} is empty, which mirrors nothing and filters nothing. Reads come ` +
+            `back empty and writebacks are silent no-ops. Give it the concrete path or ` +
+            `filter this agent needs, or drop the key.`
         });
         continue;
       }
+
+      if (value !== value.trim()) {
+        issues.push({
+          level: 'warning',
+          code: 'scope_untrimmed',
+          provider,
+          resource,
+          path,
+          message:
+            `${path}: "${value}" has leading or trailing whitespace, which is stored and ` +
+            `forwarded verbatim — the mount sees the padded string and will not match.`
+        });
+        continue;
+      }
+
+      // Everything below is a PATH rule. A value that does not start with "/" is
+      // provider filter metadata (`{ repo: 'org/repo' }`), not a malformed path,
+      // and is left alone — see the note on this module.
+      if (!value.startsWith('/')) continue;
 
       if (value !== '/' && value.endsWith('/')) {
         issues.push({

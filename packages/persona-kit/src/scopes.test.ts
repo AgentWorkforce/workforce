@@ -23,13 +23,42 @@ test('an integration with no scope at all is clean', () => {
   assert.deepEqual(lintScopes(persona({ 'supabase-mcp': {} })), []);
 });
 
-test('an explicitly empty scope object is flagged', () => {
-  // Distinct from omitting scope: `scope: {}` reads as "I scoped this" while
-  // mirroring nothing, so reads come back empty and writes no-op silently.
-  const issues = lintScopes(persona({ slack: { scope: {} } }));
+test('provider filter metadata is left alone', () => {
+  // `scope` is overloaded: PersonaIntegrationConfig documents it as
+  // provider-specific filter metadata, and these are the documented examples.
+  // Treating them as malformed paths would warn on every github/notion/linear
+  // persona in the fleet, which is exactly how a warning channel dies.
+  const issues = lintScopes(
+    persona({
+      github: { scope: { repo: 'org/repo' } },
+      notion: { scope: { database: 'abc123' } },
+      linear: { scope: { team: 'ENG' } }
+    })
+  );
+  assert.deepEqual(issues, []);
+});
+
+test('an empty scope object is not flagged — the parser drops it first', () => {
+  // parseIntegrationConfig only assigns out.scope when the parsed map is
+  // non-empty, so by deploy time `scope: {}` is indistinguishable from an
+  // omitted scope. Warning here would advertise protection that does not exist.
+  assert.deepEqual(lintScopes(persona({ slack: { scope: {} } })), []);
+});
+
+test('an empty scope VALUE is flagged', () => {
+  // Unlike `scope: {}`, an empty string survives parseStringMap verbatim and
+  // reaches the mount, where it matches nothing under either interpretation.
+  const issues = lintScopes(persona({ slack: { scope: { channels: '   ' } } }));
   assert.equal(issues.length, 1);
-  assert.equal(issues[0].code, 'scope_empty');
-  assert.equal(issues[0].provider, 'slack');
+  assert.equal(issues[0].code, 'scope_empty_value');
+});
+
+test('a padded path is flagged, not silently accepted', () => {
+  // parseStringMap does not trim, so deploy forwards the padded string. Linting
+  // a trimmed copy would pass a value the mount then fails to match.
+  const issues = lintScopes(persona({ slack: { scope: { c: ' /slack/channels/C1/** ' } } }));
+  assert.equal(issues.length, 1);
+  assert.equal(issues[0].code, 'scope_untrimmed');
 });
 
 test('a mid-path wildcard is flagged — the mount rejects it silently', () => {
@@ -49,9 +78,8 @@ test('a provider-root mirror is flagged as a cost, not an error', () => {
   assert.match(issues[0].message, /mirrors the whole slack tree/u);
 });
 
-test('non-absolute, trailing-slash and traversal scopes are flagged', () => {
+test('trailing-slash and traversal paths are flagged', () => {
   const cases: [string, string][] = [
-    ['slack/channels/**', 'scope_not_absolute'],
     ['/slack/channels/', 'scope_trailing_slash'],
     ['/slack/../linear/issues/**', 'scope_traversal_segment']
   ];
@@ -60,6 +88,13 @@ test('non-absolute, trailing-slash and traversal scopes are flagged', () => {
     assert.equal(issues.length, 1, `expected one issue for ${value}`);
     assert.equal(issues[0].code, code, `wrong code for ${value}`);
   }
+});
+
+test('a path missing its leading slash is NOT flagged', () => {
+  // Ambiguous by construction: `slack/channels/**` may be a forgotten anchor or
+  // deliberate filter metadata, and nothing in the value distinguishes them.
+  // The lint stays silent rather than guess — see `provider filter metadata`.
+  assert.deepEqual(lintScopes(persona({ slack: { scope: { x: 'slack/channels/**' } } })), []);
 });
 
 test('never throws on malformed personas', () => {
