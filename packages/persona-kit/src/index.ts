@@ -160,6 +160,12 @@ export {
   type TriggerLintIssue,
   type TriggerLintLevel
 } from './triggers.js';
+export {
+  lintScopes,
+  type ScopeLintCode,
+  type ScopeLintIssue,
+  type ScopeLintLevel
+} from './scopes.js';
 
 // Skill materialization
 export {
