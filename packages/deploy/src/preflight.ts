@@ -2,6 +2,7 @@ import { stat } from 'node:fs/promises';
 import path from 'node:path';
 import {
   KNOWN_TRIGGER_PROVIDER_ALIASES,
+  lintScopes,
   lintTriggers,
   type AgentSpec
 } from '@agentworkforce/persona-kit';
@@ -97,9 +98,15 @@ export async function preflightPersona(personaPath: string): Promise<DeployPrefl
   const normalizedAgent = normalizeTriggerProviderAliases(agent);
 
   const triggerLint = lintTriggers(normalizedAgent);
-  const warnings = triggerLint.map(
-    (issue) => `${issue.path}: ${issue.message}`
-  );
+  // Scope lints ride the same warning channel as trigger lints: surfaced at
+  // deploy time, non-fatal. A bad scope mirrors nothing and the agent reads an
+  // empty tree without erroring, so a warning here is the only place it gets
+  // said before the author is debugging a silently inert agent.
+  const scopeLint = lintScopes(persona);
+  const warnings = [
+    ...triggerLint.map((issue) => `${issue.path}: ${issue.message}`),
+    ...scopeLint.map((issue) => issue.message)
+  ];
 
   return {
     persona,
