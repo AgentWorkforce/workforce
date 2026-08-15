@@ -148,7 +148,14 @@ test('parseTriggerArgs accepts "-" as a payload file without reading it', () => 
   const parsed = parseTriggerArgs(['app-signal', '--payload-file', '-']);
   assert.ok(!('help' in parsed));
   assert.deepEqual(parsed.payloadSource, { kind: 'file', value: '-' });
+  assert.deepEqual(
+    (parseTriggerArgs(['app-signal', '--payload-file=-']) as { payloadSource?: unknown }).payloadSource,
+    { kind: 'file', value: '-' }
+  );
+  // Both spellings guard alike — the equals form previously skipped the path
+  // check and would have gone looking for a file called "--json".
   assert.throws(() => parseTriggerArgs(['app-signal', '--payload-file', '--json']), /--payload-file expects a value/);
+  assert.throws(() => parseTriggerArgs(['app-signal', '--payload-file=--json']), /--payload-file expects a value/);
 });
 
 test('parseTriggerArgs carries an idempotency key', () => {

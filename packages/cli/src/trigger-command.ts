@@ -112,7 +112,7 @@ export function parseTriggerArgs(args: readonly string[]): ParsedTriggerArgs {
     } else if (arg.startsWith('--payload-file=')) {
       payloadSource = {
         kind: 'file',
-        value: expectInlineValue('--payload-file', arg.slice('--payload-file='.length))
+        value: expectPathValue('--payload-file', arg.slice('--payload-file='.length))
       };
     } else if (arg === '--idempotency-key') {
       idempotencyKey = expectValue('--idempotency-key', args[++i]);
