@@ -86,6 +86,46 @@ function isRecord(value: unknown): value is Record<string, unknown> {
 }
 
 /**
+ * Is this collection scope already narrowed for us at deploy time?
+ *
+ * Cloud rewrites a picker-gated collection scope down to the single record the
+ * deploy input resolves to — `/slack/channels/**` becomes
+ * `/slack/channels/<id>/**` for both reads and writebacks (cloud's
+ * `persona-deploy.ts`, `pickerTargetPath`). It fires only when the integration
+ * carries `enabledByInput` AND the named input carries a `picker` whose
+ * `provider` matches this integration and whose `resource` matches the
+ * collection segment being scoped.
+ *
+ * Warning on that arrangement would flag the CORRECT configuration — the one
+ * that preserves the operator's choice of channel instead of hard-coding an id —
+ * which is worse than staying quiet, so it is excluded here.
+ */
+function isPickerNarrowed(
+  persona: PersonaSpec,
+  provider: string,
+  config: Record<string, unknown>,
+  collection: string
+): boolean {
+  const gate = config.enabledByInput;
+  if (typeof gate !== 'string' || !gate.trim()) return false;
+
+  const inputs = (persona as { inputs?: unknown }).inputs;
+  if (!isRecord(inputs)) return false;
+  const spec = inputs[gate.trim()];
+  if (!isRecord(spec)) return false;
+  const picker = spec.picker;
+  if (!isRecord(picker)) return false;
+
+  // Compared the same way cloud does: lowercased provider, and the resource
+  // stripped of surrounding slashes.
+  const pickerProvider =
+    typeof picker.provider === 'string' ? picker.provider.trim().toLowerCase() : '';
+  const pickerResource =
+    typeof picker.resource === 'string' ? picker.resource.trim().replace(/^\/+|\/+$/gu, '') : '';
+  return pickerProvider === provider.trim().toLowerCase() && pickerResource === collection;
+}
+
+/**
  * Walk a persona's `integrations[].scope` globs and flag ones the runtime
  * mount would reject or silently over-mirror. Always returns; never throws.
  *
@@ -204,7 +244,12 @@ export function lintScopes(persona: PersonaSpec): ScopeLintIssue[] {
       // channels being the usual one) can outgrow the mount budget and leave
       // the agent running degraded — or, once a deployment cancels a
       // non-converging mount, failing outright.
-      if (segments.length === 2 && value.endsWith('/**') && HIGH_CARDINALITY_ROOTS.has(segments.join('/'))) {
+      if (
+        segments.length === 2 &&
+        value.endsWith('/**') &&
+        HIGH_CARDINALITY_ROOTS.has(segments.join('/')) &&
+        !isPickerNarrowed(persona, provider, config, segments[1])
+      ) {
         issues.push({
           level: 'warning',
           code: 'scope_high_cardinality_root',

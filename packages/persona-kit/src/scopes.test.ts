@@ -122,6 +122,40 @@ test('a history-sized collection wildcard IS flagged', () => {
   assert.match(issues[0].message, /only WRITES here/u);
 });
 
+test('a picker-gated collection is not flagged — cloud narrows it at deploy', () => {
+  // The supported fix, and the one that keeps the channel choice with the
+  // operator: cloud rewrites this to /slack/channels/<resolved id>/** when the
+  // integration is gated by an input carrying a matching picker. Warning here
+  // would flag the correct configuration.
+  const spec = {
+    id: 'x',
+    integrations: {
+      slack: {
+        optional: true,
+        enabledByInput: 'SLACK_CHANNEL',
+        scope: { channels: '/slack/channels/**' }
+      }
+    },
+    inputs: { SLACK_CHANNEL: { picker: { provider: 'slack', resource: 'channels' } } }
+  } as unknown as PersonaSpec;
+  assert.deepEqual(lintScopes(spec), []);
+});
+
+test('a gate without a matching picker is still flagged', () => {
+  // The rewrite is picker-driven; `enabledByInput` alone does not narrow
+  // anything, so the broad mount is still paid and still worth warning about.
+  const spec = {
+    id: 'x',
+    integrations: {
+      slack: { optional: true, enabledByInput: 'SLACK_CHANNEL', scope: { channels: '/slack/channels/**' } }
+    },
+    inputs: { SLACK_CHANNEL: { description: 'no picker' } }
+  } as unknown as PersonaSpec;
+  const issues = lintScopes(spec);
+  assert.equal(issues.length, 1);
+  assert.equal(issues[0].code, 'scope_high_cardinality_root');
+});
+
 test('a single entry under a history-sized collection is clean', () => {
   // The fix the warning above points at: scoping the one channel the agent
   // posts to must not itself warn, or the advice is unfollowable.
