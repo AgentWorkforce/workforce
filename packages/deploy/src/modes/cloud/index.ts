@@ -356,7 +356,19 @@ async function resolveHarnessSource(args: {
   if (fromEnv) return expectHarnessSource(fromEnv);
 
   const available = await isHarnessOauthConnected(args);
-  if (available) return 'oauth';
+  if (available === true) return 'oauth';
+
+  if (available === null) {
+    // Undeterminable, not absent — see isHarnessOauthConnected. Assume the
+    // source the user already defaults to and let CLOUD be the authority on
+    // whether the credential exists: it validates at deploy time and fails with
+    // a message about the actual credential, instead of this CLI guessing "not
+    // connected" from its own missing login.
+    args.io.info(
+      `cloud: cannot verify ${args.persona.harness} credentials without a stored CLI login; assuming oauth (cloud will reject if it is genuinely not connected).`
+    );
+    return 'oauth';
+  }
 
   if (args.noPrompt) {
     throw new Error(
@@ -385,12 +397,24 @@ async function resolveHarnessSource(args: {
  * 404 made every deploy with `--no-prompt` fail with "credentials are
  * not connected" even when they were — see workforce#118 follow-up.
  */
+/**
+ * Whether a connected harness credential exists for this persona's provider.
+ *
+ * Tri-state on purpose. `null` means WE COULD NOT CHECK — not "not connected".
+ * The check reads `/api/v1/cloud-agents`, which requires the user's stored CLI
+ * login (session or `cli:auth` scope); a headless deploy authenticates with a
+ * workspace deploy token instead and has no stored login, so the check is
+ * simply unavailable there. Collapsing that into `false` is what made every
+ * `--no-prompt` deploy fail with "credentials are not connected" even when they
+ * were connected — the same false negative the `/users/me/provider_credentials`
+ * 404 caused before it (see fetchCloudAgents' note).
+ */
 async function isHarnessOauthConnected(args: {
   cloudUrl: string;
   persona: PersonaSpec;
-}): Promise<boolean> {
+}): Promise<boolean | null> {
   const body = await fetchCloudAgents(args.cloudUrl);
-  if (!body) return false;
+  if (!body) return null;
   return hasConnectedHarness(body, deriveModelProvider(args.persona));
 }
 
@@ -509,8 +533,17 @@ async function ensureHarnessOauth(args: {
   // redeploy can never refresh a dead harness credential. `--reconnect
   // <provider>` forces the connect flow to re-run and overwrite the stored
   // token — the escape hatch for codex/ChatGPT refresh-token rotation.
-  if (connected && !reconnect) {
+  if (connected === true && !reconnect) {
     args.io.info(`cloud: ${args.persona.harness} credentials already connected`);
+    return;
+  }
+  if (connected === null && !reconnect) {
+    // Undeterminable, not absent — see isHarnessOauthConnected. Proceed and let
+    // cloud reject a genuinely missing credential; blocking here fails every
+    // headless deploy regardless of what the workspace actually has connected.
+    args.io.info(
+      `cloud: cannot verify ${args.persona.harness} credentials without a stored CLI login; proceeding (cloud will reject if it is genuinely not connected).`
+    );
     return;
   }
   if (args.noPrompt) {
@@ -544,7 +577,10 @@ async function ensureHarnessOauth(args: {
     }
   });
   await pollUntil(
-    () => isHarnessOauthConnected(args),
+    // Only a definite `true` ends the wait: after a connect flow the probe IS
+    // runnable, so `null` here means still-unknown and should keep polling
+    // rather than count as connected.
+    async () => (await isHarnessOauthConnected(args)) === true,
     `timed out waiting for ${args.persona.harness} OAuth credentials`
   );
   args.io.info(`cloud: ${args.persona.harness} credentials connected`);
@@ -645,8 +681,17 @@ async function ensureSubscriptionOauth(args: {
   const connected = await isHarnessOauthConnected(args);
   // See ensureHarnessOauth: a `connected` row can hold a revoked token, so
   // `--reconnect <provider>` forces a fresh connect that overwrites it.
-  if (connected && !reconnect) {
+  if (connected === true && !reconnect) {
     args.io.info(`subscription: ${provider} credentials already connected`);
+    return;
+  }
+  if (connected === null && !reconnect) {
+    // Undeterminable, not absent — see isHarnessOauthConnected. Proceed and let
+    // cloud reject a genuinely missing credential, rather than blocking every
+    // headless deploy of a useSubscription persona on a check that cannot run.
+    args.io.info(
+      `subscription: cannot verify ${provider} credentials without a stored CLI login; proceeding (cloud will reject if it is genuinely not connected).`
+    );
     return;
   }
   if (args.noPrompt) {
@@ -680,7 +725,10 @@ async function ensureSubscriptionOauth(args: {
     }
   });
   await pollUntil(
-    () => isHarnessOauthConnected(args),
+    // Only a definite `true` ends the wait: after a connect flow the probe IS
+    // runnable, so `null` here means still-unknown and should keep polling
+    // rather than count as connected.
+    async () => (await isHarnessOauthConnected(args)) === true,
     `timed out waiting for ${provider} OAuth credentials`
   );
   args.io.info(`subscription: ${provider} credentials connected`);

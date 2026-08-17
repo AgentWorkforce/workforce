@@ -1748,3 +1748,75 @@ test('cloud oauth deploy cross-stamps a connected anthropic credential for an op
     restoreDeps();
   }
 });
+
+test('a headless deploy proceeds when the harness probe cannot run at all', async () => {
+  // Regression for the false negative that blocked EVERY CI deploy: the probe
+  // reads /api/v1/cloud-agents, which needs the user's stored CLI login
+  // (session or cli:auth scope). A headless deploy authenticates with a
+  // workspace deploy token and has no stored login, so the probe cannot run —
+  // and "cannot check" was being collapsed into "not connected", failing with
+  // `credentials are not connected` no matter what the workspace actually had.
+  const restoreDeps = configureCloudCredentialDepsForTest({
+    readStoredAuth: async () => null,
+    createCloudApiClient() {
+      throw new Error('the probe must not be attempted without stored auth');
+    }
+  });
+
+  const { handle, io } = await launch({
+    env: {
+      WORKFORCE_DEPLOY_CLOUD_URL: 'https://cloud.example.test',
+      WORKFORCE_DEPLOY_NO_PROMPT: '1',
+      WORKFORCE_DEPLOY_HARNESS_SOURCE: undefined
+    },
+    fetch(url, init) {
+      if (init?.method === 'GET' && url.endsWith('/deployments')) return okJson({ agents: [] });
+      if (url.endsWith('/deployments')) {
+        return okJson({ agentId: 'agent-headless', deploymentId: 'dep-1', status: 'active' }, 201);
+      }
+      throw new Error(`unexpected URL ${url}`);
+    }
+  }).finally(restoreDeps);
+
+  assert.equal(handle.id, 'agent-headless');
+  assert.ok(
+    io.messages.some((m) => /cannot verify .* credentials without a stored CLI login; assuming oauth/.test(m.message)),
+    'the deploy says why it could not check, instead of asserting "not connected"'
+  );
+});
+
+test('a probe that CAN run and reports nothing connected still fails closed', async () => {
+  // The complement of the test above: "cannot check" must not become a blanket
+  // bypass. With a stored login the probe runs, and an empty list is a real
+  // negative that must still stop a --no-prompt deploy.
+  const restoreDeps = configureCloudCredentialDepsForTest({
+    readStoredAuth: async () => ({
+      apiUrl: 'https://cloud.example.test',
+      accessToken: 'access',
+      refreshToken: 'refresh',
+      accessTokenExpiresAt: '2999-01-01T00:00:00.000Z'
+    }),
+    createCloudApiClient() {
+      return {
+        async fetch() {
+          return okJson({ agents: [] });
+        }
+      };
+    }
+  });
+
+  await assert.rejects(
+    launch({
+      env: {
+        WORKFORCE_DEPLOY_CLOUD_URL: 'https://cloud.example.test',
+        WORKFORCE_DEPLOY_NO_PROMPT: '1',
+        WORKFORCE_DEPLOY_HARNESS_SOURCE: undefined
+      },
+      fetch(url, init) {
+        if (init?.method === 'GET' && url.endsWith('/deployments')) return okJson({ agents: [] });
+        throw new Error(`unexpected URL ${url}`);
+      }
+    }).finally(restoreDeps),
+    /credentials are not connected/
+  );
+});
