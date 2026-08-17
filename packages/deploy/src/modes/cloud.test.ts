@@ -432,6 +432,28 @@ test('cloud harness legacy plan env alias maps to managed provider credentials',
 });
 
 test('cloud harness prompt default chooses managed provider credentials', async () => {
+  // The probe must actually RUN for this test to mean anything: it asserts what
+  // happens when the probe reports nothing connected. Stub the stored login
+  // rather than leaning on the developer's own — without this the test passes
+  // on a machine that happens to be logged in and takes a different path in CI,
+  // where there is no stored auth and the probe is simply unavailable.
+  const restoreDeps = configureCloudCredentialDepsForTest({
+    readStoredAuth: async () => ({
+      apiUrl: 'https://cloud.example.test',
+      accessToken: 'access',
+      refreshToken: 'refresh',
+      accessTokenExpiresAt: '2999-01-01T00:00:00.000Z'
+    }),
+    createCloudApiClient() {
+      return {
+        async fetch(pathname: string) {
+          assert.equal(pathname, '/api/v1/cloud-agents');
+          return okJson({ agents: [] });
+        }
+      };
+    }
+  });
+
   const prompted = await launch({
     defaultManagedCredential: false,
     env: {
@@ -439,7 +461,6 @@ test('cloud harness prompt default chooses managed provider credentials', async 
       WORKFORCE_DEPLOY_HARNESS_SOURCE: undefined
     },
     fetch(url, init) {
-      if (init?.method === 'GET' && url.endsWith('/cloud-agents')) return okJson({ agents: [] });
       if (url.endsWith('/provider-credentials/managed?provider=openai')) {
         assert.equal(init?.method, 'POST');
         return okJson({ providerCredentialId: 'cred-managed-prompt' });
@@ -452,7 +473,7 @@ test('cloud harness prompt default chooses managed provider credentials', async 
       }
       throw new Error(`unexpected URL ${url}`);
     }
-  });
+  }).finally(restoreDeps);
 
   assert.equal(prompted.handle.id, 'agent-managed-prompt');
 });
