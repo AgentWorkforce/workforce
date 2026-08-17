@@ -432,6 +432,28 @@ test('cloud harness legacy plan env alias maps to managed provider credentials',
 });
 
 test('cloud harness prompt default chooses managed provider credentials', async () => {
+  // The probe must actually RUN for this test to mean anything: it asserts what
+  // happens when the probe reports nothing connected. Stub the stored login
+  // rather than leaning on the developer's own — without this the test passes
+  // on a machine that happens to be logged in and takes a different path in CI,
+  // where there is no stored auth and the probe is simply unavailable.
+  const restoreDeps = configureCloudCredentialDepsForTest({
+    readStoredAuth: async () => ({
+      apiUrl: 'https://cloud.example.test',
+      accessToken: 'access',
+      refreshToken: 'refresh',
+      accessTokenExpiresAt: '2999-01-01T00:00:00.000Z'
+    }),
+    createCloudApiClient() {
+      return {
+        async fetch(pathname: string) {
+          assert.equal(pathname, '/api/v1/cloud-agents');
+          return okJson({ agents: [] });
+        }
+      };
+    }
+  });
+
   const prompted = await launch({
     defaultManagedCredential: false,
     env: {
@@ -439,7 +461,6 @@ test('cloud harness prompt default chooses managed provider credentials', async 
       WORKFORCE_DEPLOY_HARNESS_SOURCE: undefined
     },
     fetch(url, init) {
-      if (init?.method === 'GET' && url.endsWith('/cloud-agents')) return okJson({ agents: [] });
       if (url.endsWith('/provider-credentials/managed?provider=openai')) {
         assert.equal(init?.method, 'POST');
         return okJson({ providerCredentialId: 'cred-managed-prompt' });
@@ -452,7 +473,7 @@ test('cloud harness prompt default chooses managed provider credentials', async 
       }
       throw new Error(`unexpected URL ${url}`);
     }
-  });
+  }).finally(restoreDeps);
 
   assert.equal(prompted.handle.id, 'agent-managed-prompt');
 });
@@ -1747,4 +1768,86 @@ test('cloud oauth deploy cross-stamps a connected anthropic credential for an op
   } finally {
     restoreDeps();
   }
+});
+
+test('a headless deploy proceeds when the harness probe cannot run at all', async () => {
+  // Regression for the false negative that blocked EVERY CI deploy: the probe
+  // reads /api/v1/cloud-agents, which needs the user's stored CLI login
+  // (session or cli:auth scope). A headless deploy authenticates with a
+  // workspace deploy token and has no stored login, so the probe cannot run —
+  // and "cannot check" was being collapsed into "not connected", failing with
+  // `credentials are not connected` no matter what the workspace actually had.
+  const restoreDeps = configureCloudCredentialDepsForTest({
+    readStoredAuth: async () => null,
+    createCloudApiClient() {
+      throw new Error('the probe must not be attempted without stored auth');
+    }
+  });
+
+  const { handle, io } = await launch({
+    env: {
+      WORKFORCE_DEPLOY_CLOUD_URL: 'https://cloud.example.test',
+      WORKFORCE_DEPLOY_NO_PROMPT: '1',
+      WORKFORCE_DEPLOY_HARNESS_SOURCE: undefined
+    },
+    fetch(url, init) {
+      if (init?.method === 'GET' && url.endsWith('/deployments')) return okJson({ agents: [] });
+      if (url.endsWith('/deployments')) {
+        return okJson({ agentId: 'agent-headless', deploymentId: 'dep-1', status: 'active' }, 201);
+      }
+      throw new Error(`unexpected URL ${url}`);
+    }
+  }).finally(restoreDeps);
+
+  assert.equal(handle.id, 'agent-headless');
+  assert.ok(
+    io.messages.some((m) => /credential check is unavailable here/.test(m.message)),
+    'the deploy says why it could not check, instead of asserting "not connected"'
+  );
+  // The stamping lookup reads the same unavailable route, so this deployment
+  // carries no ctx.llm selection. That is survivable for a ctx.harness.run
+  // persona and fatal for a ctx.llm one, so it must WARN, not read like the
+  // ordinary "checked, found nothing" info line.
+  assert.ok(
+    io.messages.some(
+      (m) => m.level === 'warn' && /NO ctx\.llm credential selection/.test(m.message)
+    ),
+    'an unstamped deployment is surfaced as a warning'
+  );
+});
+
+test('a probe that CAN run and reports nothing connected still fails closed', async () => {
+  // The complement of the test above: "cannot check" must not become a blanket
+  // bypass. With a stored login the probe runs, and an empty list is a real
+  // negative that must still stop a --no-prompt deploy.
+  const restoreDeps = configureCloudCredentialDepsForTest({
+    readStoredAuth: async () => ({
+      apiUrl: 'https://cloud.example.test',
+      accessToken: 'access',
+      refreshToken: 'refresh',
+      accessTokenExpiresAt: '2999-01-01T00:00:00.000Z'
+    }),
+    createCloudApiClient() {
+      return {
+        async fetch() {
+          return okJson({ agents: [] });
+        }
+      };
+    }
+  });
+
+  await assert.rejects(
+    launch({
+      env: {
+        WORKFORCE_DEPLOY_CLOUD_URL: 'https://cloud.example.test',
+        WORKFORCE_DEPLOY_NO_PROMPT: '1',
+        WORKFORCE_DEPLOY_HARNESS_SOURCE: undefined
+      },
+      fetch(url, init) {
+        if (init?.method === 'GET' && url.endsWith('/deployments')) return okJson({ agents: [] });
+        throw new Error(`unexpected URL ${url}`);
+      }
+    }).finally(restoreDeps),
+    /credentials are not connected/
+  );
 });
