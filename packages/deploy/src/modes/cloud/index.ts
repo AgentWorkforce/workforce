@@ -365,7 +365,9 @@ async function resolveHarnessSource(args: {
     // a message about the actual credential, instead of this CLI guessing "not
     // connected" from its own missing login.
     args.io.info(
-      `cloud: cannot verify ${args.persona.harness} credentials without a stored CLI login; assuming oauth (cloud will reject if it is genuinely not connected).`
+      `cloud: the ${args.persona.harness} credential check is unavailable here ` +
+        '(no stored CLI login, or this cloud does not serve the route); ' +
+        'assuming oauth — cloud will reject the deploy if it is genuinely not connected.'
     );
     return 'oauth';
   }
@@ -387,6 +389,14 @@ async function resolveHarnessSource(args: {
  * Check whether the user already has a connected harness credential in
  * cloud for this persona's model provider.
  *
+ * Tri-state on purpose: `null` means WE COULD NOT CHECK — not "not connected".
+ * The check is unavailable whenever `fetchCloudAgents` yields nothing: no
+ * stored CLI login (every headless/CI deploy authenticates with a workspace
+ * deploy token instead), or a cloud without the route (404/405). Collapsing
+ * that into `false` made every `--no-prompt` deploy fail with "credentials are
+ * not connected" even when they were connected — the same false negative the
+ * `/users/me/provider_credentials` 404 caused before it, described below.
+ *
  * Cloud surfaces this via `GET /api/v1/cloud-agents`, which returns one
  * row per (user, workspace, harness) — `harness` is the provider key
  * ("anthropic", "openai", …) and `status === 'connected'` means the
@@ -396,18 +406,6 @@ async function resolveHarnessSource(args: {
  * which doesn't exist on cloud at all (the route was never built). That
  * 404 made every deploy with `--no-prompt` fail with "credentials are
  * not connected" even when they were — see workforce#118 follow-up.
- */
-/**
- * Whether a connected harness credential exists for this persona's provider.
- *
- * Tri-state on purpose. `null` means WE COULD NOT CHECK — not "not connected".
- * The check reads `/api/v1/cloud-agents`, which requires the user's stored CLI
- * login (session or `cli:auth` scope); a headless deploy authenticates with a
- * workspace deploy token instead and has no stored login, so the check is
- * simply unavailable there. Collapsing that into `false` is what made every
- * `--no-prompt` deploy fail with "credentials are not connected" even when they
- * were connected — the same false negative the `/users/me/provider_credentials`
- * 404 caused before it (see fetchCloudAgents' note).
  */
 async function isHarnessOauthConnected(args: {
   cloudUrl: string;
@@ -463,6 +461,21 @@ async function resolveOauthCredentialSelections(args: {
 }): Promise<Record<string, string>> {
   const provider = deriveModelProvider(args.persona);
   const body = await fetchCloudAgents(args.cloudUrl);
+  if (!body) {
+    // The stamping lookup reads the SAME route as the probe, so when that route
+    // is unavailable a headless oauth deploy cannot resolve a credential id
+    // even when one is connected. Cloud accepts the deployment and every
+    // ctx.llm call then hits the throwing stub (workforce#196). A persona that
+    // only uses ctx.harness.run is unaffected, which is why this warns instead
+    // of failing — but it must be loud, and distinct from the "looked, found
+    // nothing" info lines below.
+    args.io.warn(
+      'cloud: could not read connected credentials, so this deployment carries NO ctx.llm credential selection. ' +
+        'ctx.harness.run is unaffected; if this persona calls ctx.llm, deploy it once interactively ' +
+        'or use --harness-source managed/byok so a credential is stamped.'
+    );
+    return {};
+  }
   if (provider !== 'anthropic') {
     // Cross-provider fallback: the runtime's credential pick already
     // prefers the persona's model family but falls back to whatever
@@ -471,7 +484,7 @@ async function resolveOauthCredentialSelections(args: {
     // family can't back ctx.llm (codex/ChatGPT OAuth is harness-only), a
     // connected anthropic credential is the honest deploy-time encoding
     // of what the runtime would do anyway.
-    const anthropicId = body ? findConnectedHarnessCredentialId(body, 'anthropic') : null;
+    const anthropicId = findConnectedHarnessCredentialId(body, 'anthropic');
     if (anthropicId) {
       args.io.info(
         `cloud: ${provider} subscriptions are harness-only and cannot back ctx.llm; ` +
@@ -485,7 +498,7 @@ async function resolveOauthCredentialSelections(args: {
     );
     return {};
   }
-  const credentialId = body ? findConnectedHarnessCredentialId(body, provider) : null;
+  const credentialId = findConnectedHarnessCredentialId(body, provider);
   if (!credentialId) {
     args.io.info(
       `cloud: no connected ${provider} credential row found; deploying without a ctx.llm credential selection.`
@@ -542,13 +555,19 @@ async function ensureHarnessOauth(args: {
     // cloud reject a genuinely missing credential; blocking here fails every
     // headless deploy regardless of what the workspace actually has connected.
     args.io.info(
-      `cloud: cannot verify ${args.persona.harness} credentials without a stored CLI login; proceeding (cloud will reject if it is genuinely not connected).`
+      `cloud: the ${args.persona.harness} credential check is unavailable here ` +
+        '(no stored CLI login, or this cloud does not serve the route); ' +
+        'proceeding — cloud will reject the deploy if it is genuinely not connected.'
     );
     return;
   }
   if (args.noPrompt) {
     throw new Error(
-      connected
+      // Branch on the REQUEST, not on `connected`: reaching here with a
+      // reconnect requested means the browser flow is the blocker regardless of
+      // whether the probe could run, and `null` must never be reported as "not
+      // connected" — that is the false claim this change exists to remove.
+      reconnect
         ? `cloud: --reconnect ${deriveModelProvider(args.persona)} opens a browser connect flow; re-run without --no-prompt.`
         : `cloud: ${args.persona.harness} OAuth credentials are not connected. Run without --no-prompt or choose --harness-source managed/byok.`
     );
@@ -690,13 +709,19 @@ async function ensureSubscriptionOauth(args: {
     // cloud reject a genuinely missing credential, rather than blocking every
     // headless deploy of a useSubscription persona on a check that cannot run.
     args.io.info(
-      `subscription: cannot verify ${provider} credentials without a stored CLI login; proceeding (cloud will reject if it is genuinely not connected).`
+      `subscription: the ${provider} credential check is unavailable here ` +
+        '(no stored CLI login, or this cloud does not serve the route); ' +
+        'proceeding — cloud will reject the deploy if it is genuinely not connected.'
     );
     return;
   }
   if (args.noPrompt) {
     throw new Error(
-      connected
+      // Branch on the REQUEST, not on `connected`: reaching here with a
+      // reconnect requested means the browser flow is the blocker regardless of
+      // whether the probe could run, and `null` must never be reported as "not
+      // connected" — that is the false claim this change exists to remove.
+      reconnect
         ? `cloud: --reconnect ${provider} opens a browser connect flow; re-run without --no-prompt.`
         : `persona "${args.persona.id}" sets useSubscription:true but ${provider} credentials are not connected. ` +
             'Run without --no-prompt to connect them, pass --harness-source byok with --byok-key, or remove useSubscription to use workforce-billed inference.'

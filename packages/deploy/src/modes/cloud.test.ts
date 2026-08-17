@@ -1801,8 +1801,18 @@ test('a headless deploy proceeds when the harness probe cannot run at all', asyn
 
   assert.equal(handle.id, 'agent-headless');
   assert.ok(
-    io.messages.some((m) => /cannot verify .* credentials without a stored CLI login; assuming oauth/.test(m.message)),
+    io.messages.some((m) => /credential check is unavailable here/.test(m.message)),
     'the deploy says why it could not check, instead of asserting "not connected"'
+  );
+  // The stamping lookup reads the same unavailable route, so this deployment
+  // carries no ctx.llm selection. That is survivable for a ctx.harness.run
+  // persona and fatal for a ctx.llm one, so it must WARN, not read like the
+  // ordinary "checked, found nothing" info line.
+  assert.ok(
+    io.messages.some(
+      (m) => m.level === 'warn' && /NO ctx\.llm credential selection/.test(m.message)
+    ),
+    'an unstamped deployment is surfaced as a warning'
   );
 });
 
