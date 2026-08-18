@@ -402,39 +402,40 @@ async function requestJson(
   );
   const timeoutPromise = new Promise<never>((_, reject) => {
     timeout = setTimeout(() => {
-      controller.abort(timeoutError);
       reject(timeoutError);
+      controller.abort(timeoutError);
     }, timeoutMs);
   });
 
-  let response: Response;
   try {
-    const request = options.client
-      ? options.client.fetch(pathname, { ...init, signal: controller.signal })
-      : (options.fetch ?? fetch)(`${cloudUrl}${pathname}`, {
-          ...init,
-          signal: controller.signal,
-          headers: {
-            accept: 'application/json',
-            'content-type': 'application/json',
-            ...(auth.token ? { authorization: `Bearer ${auth.token}` } : {}),
-            ...(init.headers ?? {})
-          }
-        });
-    response = await Promise.race([request, timeoutPromise]);
+    const request = (async (): Promise<unknown> => {
+      const response = options.client
+        ? await options.client.fetch(pathname, { ...init, signal: controller.signal })
+        : await (options.fetch ?? fetch)(`${cloudUrl}${pathname}`, {
+            ...init,
+            signal: controller.signal,
+            headers: {
+              accept: 'application/json',
+              'content-type': 'application/json',
+              ...(auth.token ? { authorization: `Bearer ${auth.token}` } : {}),
+              ...(init.headers ?? {})
+            }
+          });
+      if (!response.ok) {
+        const body = await response.text().catch(() => '');
+        const excerpt = body.length > 400 ? `${body.slice(0, 400)}...` : body;
+        throw new IntegrationsListError(
+          `integration catalog/status request failed: ${response.status} ${pathname}${excerpt ? ` ${excerpt}` : ''}`,
+          { status: response.status, endpoint: pathname, body: excerpt }
+        );
+      }
+      return await response.json();
+    })();
+    return await Promise.race([request, timeoutPromise]);
   } finally {
     if (timeout) clearTimeout(timeout);
     upstreamSignal?.removeEventListener('abort', abortFromUpstream);
   }
-  if (!response.ok) {
-    const body = await response.text().catch(() => '');
-    const excerpt = body.length > 400 ? `${body.slice(0, 400)}...` : body;
-    throw new IntegrationsListError(
-      `integration catalog/status request failed: ${response.status} ${pathname}${excerpt ? ` ${excerpt}` : ''}`,
-      { status: response.status, endpoint: pathname, body: excerpt }
-    );
-  }
-  return await response.json();
 }
 
 function adapterSlugForCloudProvider(provider: string): string {
