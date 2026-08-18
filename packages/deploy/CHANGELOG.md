@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [4.1.44] - 2026-08-18
+
+### Fixed
+
+- Don't treat an unrunnable harness probe as "not connected" (#313)
+
 ## [4.1.42] - 2026-08-15
 
 ### Added
