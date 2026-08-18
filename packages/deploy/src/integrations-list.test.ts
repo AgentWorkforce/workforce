@@ -140,6 +140,50 @@ test('listIntegrations throws loud endpoint errors while authenticated', async (
   );
 });
 
+test('listIntegrations bounds a status endpoint that never settles', async () => {
+  const startedAt = Date.now();
+  const operation = listIntegrations({
+    workspaceId: 'ws-1',
+    token: 'tok',
+    requestTimeoutMs: 20,
+    client: {
+      async fetch(pathname) {
+        if (pathname === '/api/v1/integrations/catalog') {
+          return json({ providers: [{ id: 'daytona' }] });
+        }
+        if (pathname === '/api/v1/me/integrations') {
+          return json({ integrations: [] });
+        }
+        if (pathname === '/api/v1/workspaces/ws-1/integrations') {
+          return json({ integrations: [] });
+        }
+        if (pathname.endsWith('/status?scope=deployer_user')) {
+          return json({ provider: 'daytona', status: 'connected' });
+        }
+        return new Promise<Response>(() => {});
+      }
+    }
+  });
+  const guard = new Promise<never>((_, reject) => {
+    setTimeout(() => reject(new Error('test guard: integration request never settled')), 500);
+  });
+
+  await assert.rejects(
+    Promise.race([operation, guard]),
+    (err) => {
+      assert.ok(err instanceof IntegrationsListError);
+      assert.equal(err.status, 408);
+      assert.equal(
+        err.endpoint,
+        '/api/v1/workspaces/ws-1/integrations/daytona/status?scope=workspace'
+      );
+      assert.match(err.message, /timed out after 20ms/);
+      return true;
+    }
+  );
+  assert.ok(Date.now() - startedAt < 500);
+});
+
 test('listIntegrations accepts adapter slug as provider filter and suggests it on unknown providers', async () => {
   const base = {
     activeWorkspace: null,
