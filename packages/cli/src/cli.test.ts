@@ -694,11 +694,106 @@ test('main: --version prints the package version', async () => {
   try {
     const { stderr, stdout, exitCode } = await runCliCapturingStderr(
       ['--version'],
-      { AGENT_WORKFORCE_HOME: workforceHome }
+      {
+        AGENT_WORKFORCE_HOME: workforceHome,
+        // Keep the registry out of this assertion; the update check has its
+        // own tests below.
+        AGENTWORKFORCE_NO_UPDATE_CHECK: '1'
+      }
     );
     assert.equal(exitCode, 0);
     assert.equal(stderr, '');
     assert.equal(stdout, `${CLI_VERSION}\n`);
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+/**
+ * Stand-in npm registry serving one `dist-tags` response, so the `--version`
+ * update check can be exercised end to end without the network.
+ */
+async function withStubRegistry<T>(
+  latest: string,
+  run: (registry: string) => Promise<T>
+): Promise<T> {
+  const { createServer } = await import('node:http');
+  const server = createServer((req, res) => {
+    if (req.url === '/-/package/agentworkforce/dist-tags') {
+      res.writeHead(200, { 'content-type': 'application/json' });
+      res.end(JSON.stringify({ latest }));
+      return;
+    }
+    res.writeHead(404).end('{}');
+  });
+  await new Promise<void>((resolve) => server.listen(0, '127.0.0.1', resolve));
+  const address = server.address();
+  const port = typeof address === 'object' && address ? address.port : 0;
+  try {
+    return await run(`http://127.0.0.1:${port}`);
+  } finally {
+    await new Promise<void>((resolve) => server.close(() => resolve()));
+  }
+}
+
+test('main: --version reports a newer published release and how to install it', async () => {
+  const root = mkdtempSync(join(tmpdir(), 'aw-version-update-'));
+  const workforceHome = join(root, 'home', '.agentworkforce', 'workforce');
+  mkdirSync(join(workforceHome, 'personas'), { recursive: true });
+  try {
+    const { stderr, stdout, exitCode } = await withStubRegistry('999.0.0', (registry) =>
+      runCliCapturingStderr(['--version'], {
+        AGENT_WORKFORCE_HOME: workforceHome,
+        AGENTWORKFORCE_REGISTRY: registry
+      })
+    );
+    assert.equal(exitCode, 0);
+    // stdout stays exactly the version so `$(agentworkforce --version)` keeps
+    // working; the notice goes to stderr.
+    assert.equal(stdout, `${CLI_VERSION}\n`);
+    assert.ok(
+      stderr.includes(`Update available: ${CLI_VERSION} → 999.0.0`),
+      `expected an update notice on stderr, got: ${JSON.stringify(stderr)}`
+    );
+    assert.match(stderr, /npm install (-g )?agentworkforce@latest/);
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test('main: --version says nothing when the installed build is current', async () => {
+  const root = mkdtempSync(join(tmpdir(), 'aw-version-current-'));
+  const workforceHome = join(root, 'home', '.agentworkforce', 'workforce');
+  mkdirSync(join(workforceHome, 'personas'), { recursive: true });
+  try {
+    const { stderr, stdout, exitCode } = await withStubRegistry(CLI_VERSION, (registry) =>
+      runCliCapturingStderr(['--version'], {
+        AGENT_WORKFORCE_HOME: workforceHome,
+        AGENTWORKFORCE_REGISTRY: registry
+      })
+    );
+    assert.equal(exitCode, 0);
+    assert.equal(stdout, `${CLI_VERSION}\n`);
+    assert.equal(stderr, '');
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test('main: --version still prints when the registry is unreachable', async () => {
+  const root = mkdtempSync(join(tmpdir(), 'aw-version-offline-'));
+  const workforceHome = join(root, 'home', '.agentworkforce', 'workforce');
+  mkdirSync(join(workforceHome, 'personas'), { recursive: true });
+  try {
+    // Port 1 on loopback refuses connections immediately.
+    const { stderr, stdout, exitCode } = await runCliCapturingStderr(['--version'], {
+      AGENT_WORKFORCE_HOME: workforceHome,
+      AGENTWORKFORCE_REGISTRY: 'http://127.0.0.1:1',
+      AGENTWORKFORCE_UPDATE_CHECK_TIMEOUT_MS: '750'
+    });
+    assert.equal(exitCode, 0);
+    assert.equal(stdout, `${CLI_VERSION}\n`);
+    assert.equal(stderr, '');
   } finally {
     rmSync(root, { recursive: true, force: true });
   }

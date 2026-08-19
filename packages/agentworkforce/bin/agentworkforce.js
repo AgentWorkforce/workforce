@@ -49,7 +49,12 @@ function resolveCli() {
         ].join('\n')
       );
     }
-    return { version: project.cli.version, entryUrl: project.cli.entryUrl };
+    return {
+      version: project.cli.version,
+      entryUrl: project.cli.entryUrl,
+      // A project dependency won: `-g` would update a different copy.
+      scope: 'project'
+    };
   }
 
   // Only require the invoked wrapper's dependency after checking whether a
@@ -79,7 +84,8 @@ function resolveCli() {
 
   return {
     version: bundled.version,
-    entryUrl: bundled.entryUrl
+    entryUrl: bundled.entryUrl,
+    scope: 'global'
   };
 }
 
@@ -218,6 +224,24 @@ function parseVersion(version, label = 'package') {
   };
 }
 
+/**
+ * Tell the user when the resolved implementation is behind the published
+ * `latest`, and how to update. The check lives in the CLI package so both this
+ * wrapper and a directly-invoked `dist/cli.js` print the same notice; an
+ * installation old enough to predate that module, or any failure inside it,
+ * simply prints no notice.
+ */
+async function reportAvailableUpdate(cli) {
+  try {
+    const { writeUpdateNotice } = await import(
+      new URL('./update-check.js', cli.entryUrl).href
+    );
+    await writeUpdateNotice(cli.version, { scope: cli.scope });
+  } catch {
+    // Never let an update check fail `--version`.
+  }
+}
+
 try {
   // Resolve and validate the implementation even for --version. Reporting the
   // wrapper version alone used to hide partially-updated installations where
@@ -226,6 +250,7 @@ try {
 
   if (process.argv[2] === '-v' || process.argv[2] === '--version') {
     process.stdout.write(`${cli.version}\n`);
+    await reportAvailableUpdate(cli);
     process.exit(0);
   }
 

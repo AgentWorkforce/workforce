@@ -7,6 +7,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- `--version` now checks the npm registry for a newer published release and,
+  when the installed build is behind, writes `Update available: <current> →
+  <latest>` and the install command to stderr. stdout stays exactly the version
+  string. The check is best-effort (1.5s timeout, silent on any failure),
+  honours `AGENTWORKFORCE_REGISTRY` / `npm_config_registry`, and is skipped with
+  `AGENTWORKFORCE_NO_UPDATE_CHECK=1` or `NO_UPDATE_NOTIFIER=1`.
+
 ## [4.1.43] - 2026-08-16
 
 ### Added

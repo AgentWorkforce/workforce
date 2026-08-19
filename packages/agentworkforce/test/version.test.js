@@ -48,6 +48,48 @@ test('agentworkforce --version prints the implementation version it validated', 
   assert.equal(stdout, `${pkg.version}\n`);
 });
 
+test('--version delegates the update check to the CLI it validated', async (t) => {
+  const fixture = await createInstalledTree(t, {
+    wrapperVersion: '4.1.26',
+    cliVersion: '4.1.26',
+    updateNotice: true
+  });
+
+  const { exitCode, stdout, stderr } = await runBin(
+    fixture.binPath,
+    ['--version'],
+    { cwd: fixture.root }
+  );
+
+  assert.equal(exitCode, 0);
+  // The version stays alone on stdout; the notice is stderr-only.
+  assert.equal(stdout, '4.1.26\n');
+  assert.equal(stderr, 'UPDATE NOTICE 4.1.26 global\n');
+});
+
+test('--version reports a project-local install as project-scoped', async (t) => {
+  const fixture = await createInstalledTree(t, {
+    wrapperVersion: '4.1.25',
+    cliVersion: '4.1.25',
+    projectWrapperVersion: '4.1.26',
+    projectCliVersion: '4.1.26',
+    projectCliLayout: 'hoisted',
+    updateNotice: true
+  });
+
+  const { exitCode, stdout, stderr } = await runBin(
+    fixture.binPath,
+    ['--version'],
+    { cwd: fixture.projectRoot }
+  );
+
+  assert.equal(exitCode, 0);
+  assert.equal(stdout, '4.1.26\n');
+  // The winning install is a project dependency, so the notice must not
+  // suggest updating a global copy that did not run.
+  assert.equal(stderr, 'UPDATE NOTICE 4.1.26 project\n');
+});
+
 test('refuses to execute a stale nested CLI and reports both resolved versions', async (t) => {
   const fixture = await createInstalledTree(t, {
     wrapperVersion: '4.1.26',
@@ -323,7 +365,8 @@ async function createInstalledTree(t, {
   bareProjectCliVersion,
   omitCliPackage,
   omitCliEntry,
-  projectWrapperExports
+  projectWrapperExports,
+  updateNotice
 }) {
   const tempParent = await mkdtemp(path.join(os.tmpdir(), 'agentworkforce install '));
   const root = path.join(tempParent, 'global tree');
@@ -354,6 +397,16 @@ async function createInstalledTree(t, {
         `export async function main() { process.stdout.write(${JSON.stringify(
           `WRAPPER CLI ${cliVersion} EXECUTED\n`
         )}); }\n`
+      );
+    }
+    if (updateNotice) {
+      // Stand-in for the CLI's compiled update-check module: echoes the
+      // arguments the wrapper handed it so the delegation is observable.
+      await writeFile(
+        path.join(cliRoot, 'dist', 'update-check.js'),
+        'export async function writeUpdateNotice(version, options = {}) {\n' +
+        '  process.stderr.write(`UPDATE NOTICE ${version} ${options.scope}\\n`);\n' +
+        '}\n'
       );
     }
   }
@@ -394,6 +447,14 @@ async function createInstalledTree(t, {
         `PROJECT CLI ${projectCliVersion} EXECUTED\n`
       )}); }\n`
     );
+    if (updateNotice) {
+      await writeFile(
+        path.join(projectCliRoot, 'dist', 'update-check.js'),
+        'export async function writeUpdateNotice(version, options = {}) {\n' +
+        '  process.stderr.write(`UPDATE NOTICE ${version} ${options.scope}\\n`);\n' +
+        '}\n'
+      );
+    }
   } else if (bareProjectCliVersion) {
     const projectCliRoot = path.join(projectRoot, 'node_modules', '@agentworkforce', 'cli');
     await mkdir(path.join(projectCliRoot, 'dist'), { recursive: true });
