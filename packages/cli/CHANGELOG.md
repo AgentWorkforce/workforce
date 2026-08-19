@@ -18,6 +18,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   from the working tree's own `node_modules` — including an ancestor's — is
   told to update without `-g`.
 
+## [4.1.46] - 2026-08-19
+
+### Added
+
+- **Load agents/<name>/persona.json as a cascade layer**
+
 ## [4.1.43] - 2026-08-16
 
 ### Added

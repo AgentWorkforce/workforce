@@ -107,6 +107,7 @@ import { createLogger } from './logger.js';
 import {
   buildPersonaSourceDirectories,
   defaultCwdPersonaDir,
+  NESTED_PERSONA_FILENAME,
   formatPersonaSourceLabel,
   loadLocalPersonas,
   loadPersonaSourceConfig,
@@ -1758,7 +1759,15 @@ function buildFastLaunchPlan(input: {
     // Persona ids live in file contents and same-id layers merge across
     // dirs, so every persona JSON in every layer is a resolution input.
     for (const name of entries) {
-      if (name.endsWith('.json')) digests.push(statDigestOf(join(dir.dir, name)));
+      if (dir.nested) {
+        // One persona per subdirectory. The subdirectory's own mtime witnesses
+        // the compile that first creates persona.json, which the parent dir's
+        // stat does not see.
+        digests.push(statDigestOf(join(dir.dir, name)));
+        digests.push(statDigestOf(join(dir.dir, name, NESTED_PERSONA_FILENAME)));
+      } else if (name.endsWith('.json')) {
+        digests.push(statDigestOf(join(dir.dir, name)));
+      }
     }
   }
   // Dotfiles shape the mount patterns. Persona ids are kebab-case, so the

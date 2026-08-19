@@ -92,9 +92,10 @@ agentworkforce agent <persona>[@<tier>]
 
 - `<persona>` — matches, in order:
   1. A **cwd-local** id (files in `<cwd>/.agentworkforce/workforce/personas/*.json`)
-  2. A configured persona source dir, in order. The default is
+  2. A **cwd agent** id (`<cwd>/.agentworkforce/workforce/agents/<name>/persona.json`)
+  3. A configured persona source dir, in order. The default is
      `~/.agentworkforce/workforce/personas/*.json`.
-  3. An internal **library** persona — by intent first, then by id. The built-in
+  4. An internal **library** persona — by intent first, then by id. The built-in
      library is system-only; optional personas such as `code-reviewer` come from
      installed persona packs.
 - `<tier>` — `best` | `best-value` | `minimum`. Defaults to `best-value`.
@@ -376,8 +377,9 @@ agentworkforce sources add <dir> [--position <n>]
 agentworkforce sources remove <dir|config-position>
 ```
 
-The fixed project source is always first:
-`<cwd>/.agentworkforce/workforce/personas/*.json`.
+Two fixed project sources always lead the cascade:
+`<cwd>/.agentworkforce/workforce/personas/*.json`, then
+`<cwd>/.agentworkforce/workforce/agents/<name>/persona.json`.
 
 After that, the CLI reads an ordered list of configurable persona directories
 from `~/.agentworkforce/workforce/config.json`. If no config exists, the list
@@ -472,12 +474,44 @@ Local persona files layer on top of the library. Resolution precedence (highest
 wins):
 
 1. `<cwd>/.agentworkforce/workforce/personas/*.json` — **cwd**
-2. Configurable persona source dirs, in order. Default:
+2. `<cwd>/.agentworkforce/workforce/agents/<name>/persona.json` — **cwd:agents**
+3. Configurable persona source dirs, in order. Default:
    `~/.agentworkforce/workforce/personas/*.json` — **user**
-3. Internal built-in system personas in `/personas/` — **library**
+4. Internal built-in system personas in `/personas/` — **library**
 
 Local files are **partial overlays**: only the fields you set replace the
 inherited value. Everything else cascades through from below.
+
+### Agents that ship their own handler
+
+An agent with code of its own keeps persona, handler, tests, and README in one
+directory:
+
+```
+.agentworkforce/workforce/
+  skills/sales-voice.md
+  agents/proposal-agent/
+    persona.ts        # authored source
+    persona.json      # compiled — this is what the cascade reads
+    agent.ts          # handler
+```
+
+The persona resolves its relative `skills`, `claudeMd`, and `agentsMd` paths
+against its **own** directory, so `../../skills/sales-voice.md` points where the
+handler's imports do. Copying that file up into `personas/` would break those
+paths — the directory is a cascade layer instead.
+
+`persona.json` is generated, so keep it gitignored and compile it:
+
+```
+agentworkforce persona compile .agentworkforce/workforce/agents/proposal-agent/persona.ts
+```
+
+An agent directory holding a `persona.ts` with no compiled `persona.json` is
+reported as a warning rather than skipped in silence.
+
+A file in `personas/` with the same id still wins, so a project can overlay an
+agent's persona without editing the agent's directory.
 
 Set `AGENT_WORKFORCE_HOME` to move the `~/.agentworkforce/workforce` config
 root. The legacy `AGENT_WORKFORCE_CONFIG_DIR` env var is still honored as a
