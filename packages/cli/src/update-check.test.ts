@@ -5,6 +5,7 @@ import { pathToFileURL } from 'node:url';
 
 import {
   DEFAULT_REGISTRY,
+  classifyInstallPath,
   DEFAULT_UPDATE_CHECK_TIMEOUT_MS,
   compareVersions,
   fetchLatestVersion,
@@ -163,6 +164,43 @@ test('resolveInstallScope treats an install that owns the working tree as projec
   // A global install is not project-local just because the shell sits above it.
   assert.equal(resolveInstallScope(globalModule, path.resolve('/usr')), 'global');
   assert.equal(resolveInstallScope('not-a-url', cwd), 'global');
+});
+
+test('resolveInstallScope treats a dot-prefixed directory name as an ordinary child', () => {
+  // path.relative() reports '..cache' for this descendant; only a real '..'
+  // segment means the working directory sits outside the install root.
+  const root = path.resolve('/work/app');
+  const module = pathToFileURL(
+    path.join(root, 'node_modules', '@agentworkforce', 'cli', 'dist', 'update-check.js')
+  ).href;
+  assert.equal(resolveInstallScope(module, path.join(root, '..cache')), 'project');
+  assert.equal(resolveInstallScope(module, path.join(root, '..cache', 'deep')), 'project');
+  // A genuine parent traversal still lands outside.
+  assert.equal(resolveInstallScope(module, path.resolve('/work')), 'global');
+});
+
+test('classifyInstallPath applies Windows path rules, including a drive root', () => {
+  const win = path.win32;
+  const driveRoot = 'C:\\node_modules\\agentworkforce\\node_modules\\@agentworkforce\\cli\\dist\\update-check.js';
+  // The prefix before `node_modules` is the bare `C:`, which resolves to the
+  // current directory on that drive rather than to `C:\`.
+  assert.equal(classifyInstallPath(driveRoot, 'C:\\node_modules\\agentworkforce', win), 'project');
+  assert.equal(classifyInstallPath(driveRoot, 'C:\\', win), 'project');
+
+  const project = 'C:\\work\\app\\node_modules\\@agentworkforce\\cli\\dist\\update-check.js';
+  assert.equal(classifyInstallPath(project, 'C:\\work\\app', win), 'project');
+  assert.equal(classifyInstallPath(project, 'C:\\work\\app\\src', win), 'project');
+  assert.equal(classifyInstallPath(project, 'C:\\work\\other', win), 'global');
+
+  // POSIX semantics stay reachable through the same helper.
+  assert.equal(
+    classifyInstallPath('/node_modules/@agentworkforce/cli/dist/update-check.js', '/srv', path.posix),
+    'project'
+  );
+  assert.equal(
+    classifyInstallPath('/opt/tool/dist/update-check.js', '/opt/tool', path.posix),
+    'global'
+  );
 });
 
 test('resolveUpdateCommand drops -g for a project-local install', () => {

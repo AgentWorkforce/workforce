@@ -199,11 +199,38 @@ export async function fetchLatestVersion(options: {
   }
 }
 
-/** Whether `child` is `parent` or sits underneath it. */
-function isWithin(child: string, parent: string): boolean {
+/**
+ * Whether `child` is `parent` or sits underneath it. Only a `..` segment means
+ * "outside"; a directory whose *name* merely starts with dots (`..cache`) is an
+ * ordinary child.
+ */
+function isWithin(child: string, parent: string, pathImpl: path.PlatformPath): boolean {
   if (child === parent) return true;
-  const relative = path.relative(parent, child);
-  return relative !== '' && !relative.startsWith('..') && !path.isAbsolute(relative);
+  const relative = pathImpl.relative(parent, child);
+  if (relative === '' || relative === '..') return false;
+  return !relative.startsWith(`..${pathImpl.sep}`) && !pathImpl.isAbsolute(relative);
+}
+
+/**
+ * The scope decision as pure path arithmetic, split out from `resolveInstallScope`
+ * so both POSIX and Windows semantics can be exercised on either platform by
+ * passing `path.posix` / `path.win32`.
+ */
+export function classifyInstallPath(
+  modulePath: string,
+  cwd: string,
+  pathImpl: path.PlatformPath = path
+): InstallScope {
+  const resolved = pathImpl.resolve(modulePath);
+  // Segment off the filesystem root first and rejoin onto it: on Windows the
+  // prefix before a drive-root `node_modules` is the bare `C:`, and resolving
+  // that yields the *current directory* on C:, not the drive root.
+  const { root } = pathImpl.parse(resolved);
+  const segments = pathImpl.relative(root, resolved).split(pathImpl.sep);
+  const depth = segments.indexOf('node_modules');
+  if (depth < 0) return 'global';
+  const installRoot = pathImpl.join(root, ...segments.slice(0, depth));
+  return isWithin(pathImpl.resolve(cwd), installRoot, pathImpl) ? 'project' : 'global';
 }
 
 /**
@@ -221,17 +248,11 @@ export function resolveInstallScope(
   moduleUrl: string = import.meta.url,
   cwd: string = process.cwd()
 ): InstallScope {
-  let modulePath: string;
   try {
-    modulePath = path.resolve(fileURLToPath(moduleUrl));
+    return classifyInstallPath(fileURLToPath(moduleUrl), cwd);
   } catch {
     return 'global';
   }
-  const segments = modulePath.split(path.sep);
-  const depth = segments.indexOf('node_modules');
-  if (depth < 0) return 'global';
-  const installRoot = path.resolve(segments.slice(0, depth).join(path.sep) || path.sep);
-  return isWithin(path.resolve(cwd), installRoot) ? 'project' : 'global';
 }
 
 /** The command that replaces the running install with the published latest. */
