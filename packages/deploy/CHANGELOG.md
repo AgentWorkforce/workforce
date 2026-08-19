@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [4.1.45] - 2026-08-19
+
+### Fixed
+
+- Bound integration status requests (#314)
+
 ## [4.1.44] - 2026-08-18
 
 ### Fixed
