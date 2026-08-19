@@ -862,8 +862,11 @@ test('main: sources add/list/remove manages persona source dirs', async () => {
       sources: Array<{ source: string; config: string; dir: string }>;
     };
     assert.deepEqual(parsed.personaDirs, [userPersonaDir]);
+    // The two working-tree dirs are fixed and always lead the cascade;
+    // configurable dirs are appended after them.
     assert.equal(parsed.sources[0]?.source, 'cwd');
-    assert.equal(parsed.sources[1]?.source, 'user');
+    assert.equal(parsed.sources[1]?.source, 'cwd:agents');
+    assert.equal(parsed.sources[2]?.source, 'user');
 
     res = await runCliCapturingStderr(
       ['sources', 'add', customDir, '--position', '1'],
@@ -876,8 +879,8 @@ test('main: sources add/list/remove manages persona source dirs', async () => {
     assert.equal(res.exitCode, 0);
     parsed = JSON.parse(res.stdout) as typeof parsed;
     assert.deepEqual(parsed.personaDirs, [customDir, userPersonaDir]);
-    assert.equal(parsed.sources[1]?.source, 'dir:1');
-    assert.equal(parsed.sources[2]?.source, 'user');
+    assert.equal(parsed.sources[2]?.source, 'dir:1');
+    assert.equal(parsed.sources[3]?.source, 'user');
 
     res = await runCliCapturingStderr(['sources', 'remove', '1'], env);
     assert.equal(res.exitCode, 0);

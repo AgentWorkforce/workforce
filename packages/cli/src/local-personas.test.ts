@@ -924,3 +924,113 @@ test('formatPersonaSourceLabel maps internal cascade keys to display labels', ()
   assert.equal(formatPersonaSourceLabel('dir:1'), 'dir:1');
   assert.equal(formatPersonaSourceLabel('dir:42'), 'dir:42');
 });
+
+// --- cwd:agents layer --------------------------------------------------------
+// Agents that ship their own handler keep persona, handler, and skills together
+// in `.agentworkforce/workforce/agents/<name>/`. That directory is a cascade
+// layer of its own so the persona is discoverable without being copied into
+// `personas/`, where its relative paths would no longer resolve.
+
+function withAgentLayer<T>(fn: (dirs: Dirs & { agentsDir: string }) => T): T {
+  return withLayers((dirs) => {
+    const agentsDir = join(dirs.cwd, '.agentworkforce', 'workforce', 'agents');
+    mkdirSync(agentsDir, { recursive: true });
+    return fn({ ...dirs, agentsDir });
+  });
+}
+
+test('agents/<name>/persona.json is discovered as the cwd:agents layer', () => {
+  withAgentLayer(({ cwd, homeDir, agentsDir }) => {
+    mkdirSync(join(agentsDir, 'proposal-agent'), { recursive: true });
+    writeJson(join(agentsDir, 'proposal-agent', 'persona.json'), {
+      id: 'proposal-agent',
+      extends: 'persona-maker',
+      env: { FROM_AGENT_DIR: 'yes' }
+    });
+    const loaded = loadLocalPersonas({ cwd, homeDir });
+    assert.deepEqual(loaded.warnings, []);
+    assert.equal(loaded.sources.get('proposal-agent'), 'cwd:agents');
+    assert.equal(loaded.byId.get('proposal-agent')?.env?.FROM_AGENT_DIR, 'yes');
+    assert.equal(
+      loaded.paths.get('proposal-agent'),
+      join(agentsDir, 'proposal-agent', 'persona.json')
+    );
+  });
+});
+
+test('agent relative skill and sidecar paths resolve against its own subdirectory', () => {
+  withAgentLayer(({ cwd, homeDir, agentsDir }) => {
+    // The layout the loader has to honour: shared skills one level above the
+    // agent dirs, reached with the same `../../skills/…` the handler uses.
+    const sharedSkills = join(cwd, '.agentworkforce', 'workforce', 'skills');
+    mkdirSync(sharedSkills, { recursive: true });
+    writeFileSync(join(sharedSkills, 'sales-voice.md'), '# sales voice\n');
+    const agentDir = join(agentsDir, 'proposal-agent');
+    mkdirSync(agentDir, { recursive: true });
+    writeFileSync(join(agentDir, 'persona.md'), '# proposal agent\n');
+    writeJson(join(agentDir, 'persona.json'), {
+      id: 'proposal-agent',
+      extends: 'persona-maker',
+      claudeMd: 'persona.md',
+      skills: [
+        { id: 'local/sales-voice', source: '../../skills/sales-voice.md', description: 'voice' }
+      ]
+    });
+    const loaded = loadLocalPersonas({ cwd, homeDir });
+    assert.deepEqual(loaded.warnings, []);
+    const spec = loaded.byId.get('proposal-agent');
+    assert.equal(spec?.skills[0]?.source, join(sharedSkills, 'sales-voice.md'));
+    assert.equal(spec?.claudeMd, join(agentDir, 'persona.md'));
+  });
+});
+
+test('a personas/ file overlays an agent of the same id', () => {
+  withAgentLayer(({ cwd, homeDir, pwdDir, agentsDir }) => {
+    mkdirSync(join(agentsDir, 'proposal-agent'), { recursive: true });
+    writeJson(join(agentsDir, 'proposal-agent', 'persona.json'), {
+      id: 'proposal-agent',
+      extends: 'persona-maker',
+      env: { CHANNEL: 'agent-default', KEPT: 'yes' }
+    });
+    writeJson(join(pwdDir, 'proposal-agent.json'), {
+      id: 'proposal-agent',
+      env: { CHANNEL: 'team-override' }
+    });
+    const loaded = loadLocalPersonas({ cwd, homeDir });
+    assert.deepEqual(loaded.warnings, []);
+    assert.equal(loaded.sources.get('proposal-agent'), 'cwd');
+    const spec = loaded.byId.get('proposal-agent');
+    assert.equal(spec?.env?.CHANNEL, 'team-override');
+    assert.equal(spec?.env?.KEPT, 'yes');
+  });
+});
+
+test('an uncompiled persona.ts warns instead of vanishing', () => {
+  withAgentLayer(({ cwd, homeDir, agentsDir }) => {
+    const agentDir = join(agentsDir, 'proposal-agent');
+    mkdirSync(agentDir, { recursive: true });
+    writeFileSync(join(agentDir, 'persona.ts'), 'export default {}\n');
+    const loaded = loadLocalPersonas({ cwd, homeDir });
+    assert.equal(loaded.byId.has('proposal-agent'), false);
+    assert.equal(loaded.warnings.length, 1);
+    assert.match(loaded.warnings[0] ?? '', /persona\.ts has no compiled persona\.json/);
+    assert.match(loaded.warnings[0] ?? '', /agentworkforce persona compile/);
+  });
+});
+
+test('subdirectories with no persona at all are ignored silently', () => {
+  withAgentLayer(({ cwd, homeDir, agentsDir }) => {
+    mkdirSync(join(agentsDir, 'notes'), { recursive: true });
+    writeFileSync(join(agentsDir, 'notes', 'README.md'), '# notes\n');
+    writeFileSync(join(agentsDir, 'loose.json'), '{}');
+    const loaded = loadLocalPersonas({ cwd, homeDir });
+    assert.deepEqual(loaded.warnings, []);
+  });
+});
+
+test('a missing agents/ directory is not an error', () => {
+  withLayers(({ cwd, homeDir }) => {
+    const loaded = loadLocalPersonas({ cwd, homeDir });
+    assert.deepEqual(loaded.warnings, []);
+  });
+});

@@ -100,6 +100,9 @@ export type PersonaSource = string;
  *                  the working-tree dir; both installed library packs and
  *                  hand-authored team overrides live here. Kept as-is
  *                  because it's a precise pointer to a real directory.
+ *   - `cwd:agents` → same — `<cwd>/.agentworkforce/workforce/agents/<name>/persona.json`,
+ *                  agents that keep their persona next to their handler.
+ *                  Also a precise pointer, so also kept as-is.
  *   - `dir:N`    → `dir:N`    — extra configurable persona dirs (passed
  *                  through unchanged so position is still legible).
  *
@@ -118,12 +121,24 @@ interface SourceLayer {
   dir: string;
   /** When set, this priority layer loads only the explicitly selected file. */
   file?: string;
+  /**
+   * One persona per subdirectory (`<dir>/<name>/persona.json`) instead of one
+   * per file. See {@link PersonaSourceDirectory.nested}.
+   */
+  nested?: boolean;
 }
 
 export interface PersonaSourceDirectory {
   source: PersonaSource;
   dir: string;
   configurable: boolean;
+  /**
+   * The directory holds one persona per subdirectory — `<dir>/<name>/persona.json`
+   * — rather than one persona per top-level `.json`. Each persona resolves its
+   * relative skill and sidecar paths against its own subdirectory, so an agent
+   * that ships alongside its handler keeps pointing at its neighboring files.
+   */
+  nested?: boolean;
 }
 
 export interface PersonaSourceConfig {
@@ -186,6 +201,26 @@ export function defaultPersonaConfigPath(workforceHomeDir = defaultWorkforceHome
 export function defaultCwdPersonaDir(cwd: string): string {
   return join(cwd, '.agentworkforce', 'workforce', 'personas');
 }
+
+/**
+ * Working-tree directory holding one agent per subdirectory. An agent that
+ * ships its own handler keeps persona, handler, tests, and README together in
+ * `<cwd>/.agentworkforce/workforce/agents/<name>/`, so its persona is
+ * `<name>/persona.json` rather than a loose file under `personas/`.
+ */
+export function defaultCwdAgentDir(cwd: string): string {
+  return join(cwd, '.agentworkforce', 'workforce', 'agents');
+}
+
+/** Persona filename read from each subdirectory of a nested source dir. */
+export const NESTED_PERSONA_FILENAME = 'persona.json';
+
+/**
+ * Authoring source compiled into {@link NESTED_PERSONA_FILENAME}. Present
+ * without its compiled sibling, it means the agent was never compiled — the
+ * loader is synchronous and cannot bundle TypeScript, so it warns instead.
+ */
+const NESTED_PERSONA_SOURCE_FILENAMES = ['persona.ts', 'persona.js', 'persona.mjs'];
 
 export function expandHomePath(input: string): string {
   if (input === '~') return homedir();
@@ -336,6 +371,14 @@ export function buildPersonaSourceDirectories(
       dir: defaultCwdPersonaDir(cwd),
       configurable: false
     },
+    // Ranked below `personas/` so a loose override there can still overlay an
+    // agent that ships its own persona.
+    {
+      source: 'cwd:agents',
+      dir: defaultCwdAgentDir(cwd),
+      configurable: false,
+      nested: true
+    },
     ...config.personaDirs.map((dir, idx) => ({
       source: sourceForPersonaDir(dir, idx, config.userPersonaDir),
       dir,
@@ -343,6 +386,74 @@ export function buildPersonaSourceDirectories(
     }))
   ];
   return { directories, config };
+}
+
+/** One persona file to read, with the directory its relative paths resolve against. */
+interface LayerEntry {
+  /** Path relative to the layer dir, used in warnings. */
+  label: string;
+  path: string;
+  sourceDir: string;
+}
+
+/**
+ * List the persona files a nested layer contributes: `<dir>/<name>/persona.json`
+ * for every subdirectory that has one. A subdirectory carrying only the
+ * authoring source is reported rather than skipped silently — that is an agent
+ * whose `persona.json` was never compiled, which otherwise looks identical to
+ * one that does not exist.
+ */
+function readNestedLayerEntries(
+  dir: string,
+  layer: SourceLayer,
+  warnings: string[]
+): LayerEntry[] {
+  let names: string[];
+  try {
+    names = readdirSync(dir);
+  } catch (err) {
+    warnings.push(`[${layer.source}] could not read ${dir}: ${(err as Error).message}`);
+    return [];
+  }
+
+  const entries: LayerEntry[] = [];
+  for (const name of names) {
+    const sourceDir = join(dir, name);
+    const path = join(sourceDir, NESTED_PERSONA_FILENAME);
+    if (isFile(path)) {
+      entries.push({ label: `${name}/${NESTED_PERSONA_FILENAME}`, path, sourceDir });
+      continue;
+    }
+    const authored = NESTED_PERSONA_SOURCE_FILENAMES.find((file) =>
+      isFile(join(sourceDir, file))
+    );
+    if (authored) {
+      warnings.push(
+        `[${layer.source}] ${name}: ${authored} has no compiled ${NESTED_PERSONA_FILENAME}; run \`agentworkforce persona compile ${join(sourceDir, authored)}\` to make it loadable.`
+      );
+    }
+  }
+  return entries;
+}
+
+function readLayerEntries(
+  dir: string,
+  layer: SourceLayer,
+  warnings: string[]
+): LayerEntry[] {
+  if (layer.file) {
+    const file = basename(layer.file);
+    return [{ label: file, path: join(dir, file), sourceDir: dir }];
+  }
+  if (layer.nested) return readNestedLayerEntries(dir, layer, warnings);
+  try {
+    return readdirSync(dir)
+      .filter((n) => n.endsWith('.json'))
+      .map((file) => ({ label: file, path: join(dir, file), sourceDir: dir }));
+  } catch (err) {
+    warnings.push(`[${layer.source}] could not read ${dir}: ${(err as Error).message}`);
+    return [];
+  }
 }
 
 function readLayerDir(
@@ -354,30 +465,19 @@ function readLayerDir(
   const out = new Map<string, LocalPersonaOverride>();
   if (!existsSync(dir)) return out;
 
-  let entries: string[];
-  try {
-    entries = layer.file
-      ? [basename(layer.file)]
-      : readdirSync(dir).filter((n) => n.endsWith('.json'));
-  } catch (err) {
-    warnings.push(`[${layer.source}] could not read ${dir}: ${(err as Error).message}`);
-    return out;
-  }
-
-  for (const file of entries) {
-    const path = join(dir, file);
+  for (const entry of readLayerEntries(dir, layer, warnings)) {
     try {
-      const raw = readFileSync(path, 'utf8');
-      const parsed = parseOverride(JSON.parse(raw), `[${layer.source}] ${file}`);
-      parsed.__sourceDir = dir;
+      const raw = readFileSync(entry.path, 'utf8');
+      const parsed = parseOverride(JSON.parse(raw), `[${layer.source}] ${entry.label}`);
+      parsed.__sourceDir = entry.sourceDir;
       if (out.has(parsed.id)) {
-        warnings.push(`[${layer.source}] ${file}: duplicate id "${parsed.id}" within layer; skipping.`);
+        warnings.push(`[${layer.source}] ${entry.label}: duplicate id "${parsed.id}" within layer; skipping.`);
         continue;
       }
       out.set(parsed.id, parsed);
-      filePaths.set(`${layer.key}:${parsed.id}`, path);
+      filePaths.set(`${layer.key}:${parsed.id}`, entry.path);
     } catch (err) {
-      warnings.push(`[${layer.source}] ${file}: ${(err as Error).message}`);
+      warnings.push(`[${layer.source}] ${entry.label}: ${(err as Error).message}`);
     }
   }
   return out;
@@ -1175,7 +1275,8 @@ export function loadLocalPersonas(options: LoadOptions = {}): LoadedLocalPersona
     key: `${idx}:${sourceDir.source}:${sourceDir.file ?? sourceDir.dir}`,
     source: sourceDir.source,
     dir: sourceDir.dir,
-    ...(sourceDir.file ? { file: sourceDir.file } : {})
+    ...(sourceDir.file ? { file: sourceDir.file } : {}),
+    ...(sourceDir.nested ? { nested: true } : {})
   }));
 
   const overrides = new Map<string, Map<string, LocalPersonaOverride>>();
