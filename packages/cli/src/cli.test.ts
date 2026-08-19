@@ -710,6 +710,15 @@ test('main: --version prints the package version', async () => {
 });
 
 /**
+ * Neutralizes both update-check opt-outs for a child process, so a test that
+ * asserts on the notice does not depend on the environment it runs in.
+ */
+const UPDATE_CHECK_ENABLED = {
+  AGENTWORKFORCE_NO_UPDATE_CHECK: '',
+  NO_UPDATE_NOTIFIER: ''
+} as const;
+
+/**
  * Stand-in npm registry serving one `dist-tags` response, so the `--version`
  * update check can be exercised end to end without the network.
  */
@@ -744,7 +753,10 @@ test('main: --version reports a newer published release and how to install it', 
     const { stderr, stdout, exitCode } = await withStubRegistry('999.0.0', (registry) =>
       runCliCapturingStderr(['--version'], {
         AGENT_WORKFORCE_HOME: workforceHome,
-        AGENTWORKFORCE_REGISTRY: registry
+        AGENTWORKFORCE_REGISTRY: registry,
+        // The child inherits this process's env, and CI images commonly set
+        // NO_UPDATE_NOTIFIER=1 — which would make this assertion vacuous.
+        ...UPDATE_CHECK_ENABLED
       })
     );
     assert.equal(exitCode, 0);
@@ -769,7 +781,8 @@ test('main: --version says nothing when the installed build is current', async (
     const { stderr, stdout, exitCode } = await withStubRegistry(CLI_VERSION, (registry) =>
       runCliCapturingStderr(['--version'], {
         AGENT_WORKFORCE_HOME: workforceHome,
-        AGENTWORKFORCE_REGISTRY: registry
+        AGENTWORKFORCE_REGISTRY: registry,
+        ...UPDATE_CHECK_ENABLED
       })
     );
     assert.equal(exitCode, 0);
@@ -784,17 +797,25 @@ test('main: --version still prints when the registry is unreachable', async () =
   const root = mkdtempSync(join(tmpdir(), 'aw-version-offline-'));
   const workforceHome = join(root, 'home', '.agentworkforce', 'workforce');
   mkdirSync(join(workforceHome, 'personas'), { recursive: true });
+  const { createServer } = await import('node:net');
+  // A port we own that hangs up on contact, rather than a low port guessed to
+  // be free: the failure is then the same on any host.
+  const dead = createServer((socket) => socket.destroy());
+  await new Promise<void>((resolve) => dead.listen(0, '127.0.0.1', resolve));
+  const address = dead.address();
+  const port = typeof address === 'object' && address ? address.port : 0;
   try {
-    // Port 1 on loopback refuses connections immediately.
     const { stderr, stdout, exitCode } = await runCliCapturingStderr(['--version'], {
       AGENT_WORKFORCE_HOME: workforceHome,
-      AGENTWORKFORCE_REGISTRY: 'http://127.0.0.1:1',
-      AGENTWORKFORCE_UPDATE_CHECK_TIMEOUT_MS: '750'
+      AGENTWORKFORCE_REGISTRY: `http://127.0.0.1:${port}`,
+      AGENTWORKFORCE_UPDATE_CHECK_TIMEOUT_MS: '750',
+      ...UPDATE_CHECK_ENABLED
     });
     assert.equal(exitCode, 0);
     assert.equal(stdout, `${CLI_VERSION}\n`);
     assert.equal(stderr, '');
   } finally {
+    await new Promise<void>((resolve) => dead.close(() => resolve()));
     rmSync(root, { recursive: true, force: true });
   }
 });

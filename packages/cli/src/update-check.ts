@@ -24,8 +24,12 @@ export const UPDATE_CHECK_PACKAGE = 'agentworkforce';
 /** Registry used when neither agentworkforce nor npm config names one. */
 export const DEFAULT_REGISTRY = 'https://registry.npmjs.org';
 
-/** Registry budget for the whole check. `--version` must stay near-instant. */
-export const DEFAULT_UPDATE_CHECK_TIMEOUT_MS = 1500;
+/**
+ * Registry budget for the whole check. `--version` does not exit until the
+ * check settles, so this doubles as the worst case it can add to a run against
+ * a black-holed registry; the response itself is a few dozen bytes.
+ */
+export const DEFAULT_UPDATE_CHECK_TIMEOUT_MS = 1000;
 
 /** Where the running CLI was resolved from; decides whether to suggest `-g`. */
 export type InstallScope = 'global' | 'project';
@@ -195,9 +199,23 @@ export async function fetchLatestVersion(options: {
   }
 }
 
+/** Whether `child` is `parent` or sits underneath it. */
+function isWithin(child: string, parent: string): boolean {
+  if (child === parent) return true;
+  const relative = path.relative(parent, child);
+  return relative !== '' && !relative.startsWith('..') && !path.isAbsolute(relative);
+}
+
 /**
- * A CLI resolved from `<cwd>/node_modules` was installed as a project
- * dependency, so `-g` would update a different copy than the one that just ran.
+ * A CLI installed as a project dependency must not be told to run `-g`: that
+ * would update a different copy than the one that just ran.
+ *
+ * The directory owning the *outermost* `node_modules` on the module's path is
+ * the install root — `<root>` for both `<root>/node_modules/@agentworkforce/cli`
+ * and the nested `<root>/node_modules/agentworkforce/node_modules/…` layout.
+ * The install is project-local when the command was run from inside that root,
+ * which includes subdirectories: node resolves a dependency from an ancestor's
+ * `node_modules` just as readily as from the working directory's own.
  */
 export function resolveInstallScope(
   moduleUrl: string = import.meta.url,
@@ -209,8 +227,11 @@ export function resolveInstallScope(
   } catch {
     return 'global';
   }
-  const projectModules = path.resolve(cwd, 'node_modules') + path.sep;
-  return modulePath.startsWith(projectModules) ? 'project' : 'global';
+  const segments = modulePath.split(path.sep);
+  const depth = segments.indexOf('node_modules');
+  if (depth < 0) return 'global';
+  const installRoot = path.resolve(segments.slice(0, depth).join(path.sep) || path.sep);
+  return isWithin(path.resolve(cwd), installRoot) ? 'project' : 'global';
 }
 
 /** The command that replaces the running install with the published latest. */

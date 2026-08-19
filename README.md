@@ -262,10 +262,13 @@ Run `npm install -g agentworkforce@latest` to update.
 ```
 
 The check reads the `latest` dist-tag from the npm registry (or
-`AGENTWORKFORCE_REGISTRY` / npm's configured registry), times out after 1.5s,
-and stays silent when it cannot reach one — so the version itself always
-prints. Set `AGENTWORKFORCE_NO_UPDATE_CHECK=1` (or `NO_UPDATE_NOTIFIER=1`) to
-skip it entirely.
+`AGENTWORKFORCE_REGISTRY` / npm's configured registry) and stays silent when it
+cannot reach one, so the version itself always prints. It is bounded by
+`AGENTWORKFORCE_UPDATE_CHECK_TIMEOUT_MS` (1s by default), which is also the
+most it can add to a run against an unresponsive registry. Set
+`AGENTWORKFORCE_NO_UPDATE_CHECK=1` (or `NO_UPDATE_NOTIFIER=1`) to skip it
+entirely. A CLI installed as a project dependency is told to update itself
+without `-g`.
 
 Local personas resolve from project-local files, configured source directories,
 the personal persona directory, and the small built-in catalog. Higher layers

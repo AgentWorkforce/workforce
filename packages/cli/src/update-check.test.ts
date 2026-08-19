@@ -135,18 +135,33 @@ test('fetchLatestVersion gives up once the timeout elapses', async () => {
   assert.equal(await fetchLatestVersion({ fetchImpl: hang, timeoutMs: 25 }), undefined);
 });
 
-test('resolveInstallScope only calls a cwd-local node_modules copy project-scoped', () => {
+test('resolveInstallScope treats an install that owns the working tree as project-local', () => {
   const cwd = path.resolve('/work/app');
-  const projectModule = pathToFileURL(
+  const hoisted = pathToFileURL(
     path.join(cwd, 'node_modules', '@agentworkforce', 'cli', 'dist', 'update-check.js')
+  ).href;
+  // npm's nested layout: the CLI sits under the wrapper's own node_modules.
+  const nested = pathToFileURL(
+    path.join(
+      cwd,
+      'node_modules', 'agentworkforce',
+      'node_modules', '@agentworkforce', 'cli', 'dist', 'update-check.js'
+    )
   ).href;
   const globalModule = pathToFileURL(
     path.resolve('/usr/lib/node_modules/agentworkforce/node_modules/@agentworkforce/cli/dist/update-check.js')
   ).href;
-  assert.equal(resolveInstallScope(projectModule, cwd), 'project');
+
+  assert.equal(resolveInstallScope(hoisted, cwd), 'project');
+  assert.equal(resolveInstallScope(nested, cwd), 'project');
+  // Run from a subdirectory, node still resolves the ancestor's install — so
+  // `-g` would still update the wrong copy.
+  assert.equal(resolveInstallScope(hoisted, path.join(cwd, 'packages', 'api')), 'project');
   assert.equal(resolveInstallScope(globalModule, cwd), 'global');
   // A sibling directory that merely shares a prefix is not inside the project.
-  assert.equal(resolveInstallScope(globalModule, path.resolve('/work/app-2')), 'global');
+  assert.equal(resolveInstallScope(hoisted, path.resolve('/work/app-2')), 'global');
+  // A global install is not project-local just because the shell sits above it.
+  assert.equal(resolveInstallScope(globalModule, path.resolve('/usr')), 'global');
   assert.equal(resolveInstallScope('not-a-url', cwd), 'global');
 });
 

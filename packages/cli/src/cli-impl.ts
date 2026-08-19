@@ -5067,7 +5067,9 @@ export async function main(): Promise<void> {
     // on stdout before the registry is asked anything.
     const { writeUpdateNotice } = await import('./update-check.js');
     await writeUpdateNotice(CLI_VERSION);
-    process.exit(0);
+    // Return rather than process.exit(0), which can terminate before a pending
+    // write to a piped stdout/stderr flushes.
+    return;
   }
 
   if (subcommand === 'list') {

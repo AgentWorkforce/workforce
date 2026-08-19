@@ -11,6 +11,30 @@ const pkg = JSON.parse(
 );
 const binPath = fileURLToPath(new URL('../bin/agentworkforce.js', import.meta.url));
 
+/**
+ * Stand-in for the CLI's compiled update-check module. It echoes the arguments
+ * the wrapper handed it, so what the wrapper claims about the install — and
+ * what it leaves for the module to infer — is observable from the outside.
+ */
+const UPDATE_CHECK_STUB = [
+  'export async function writeUpdateNotice(version, options = {}) {',
+  '  const seen = {',
+  '    version,',
+  '    scope: options.scope ?? null,',
+  '    moduleUrl: options.moduleUrl ?? null',
+  '  };',
+  '  process.stderr.write(`UPDATE NOTICE ${JSON.stringify(seen)}\\n`);',
+  '}',
+  ''
+].join('\n');
+
+/** The single `UPDATE NOTICE` line the stub emitted, parsed back into an object. */
+function parseUpdateNotice(stderr) {
+  const match = /^UPDATE NOTICE (.*)$/m.exec(stderr);
+  assert.ok(match, `expected an UPDATE NOTICE line, got: ${JSON.stringify(stderr)}`);
+  return JSON.parse(match[1]);
+}
+
 async function runBin(targetBinPath, args, options = {}) {
   const child = spawn(process.execPath, [targetBinPath, ...args], {
     cwd: options.cwd,
@@ -64,7 +88,35 @@ test('--version delegates the update check to the CLI it validated', async (t) =
   assert.equal(exitCode, 0);
   // The version stays alone on stdout; the notice is stderr-only.
   assert.equal(stdout, '4.1.26\n');
-  assert.equal(stderr, 'UPDATE NOTICE 4.1.26 global\n');
+  const notice = parseUpdateNotice(stderr);
+  assert.equal(notice.version, '4.1.26');
+  // The wrapper hands over the entry it actually validated, so the module can
+  // work out where the running copy lives.
+  assert.ok(
+    notice.moduleUrl?.endsWith('/@agentworkforce/cli/dist/cli.js'),
+    `expected the validated entry URL, got: ${notice.moduleUrl}`
+  );
+});
+
+test('--version does not claim a scope the wrapper cannot know', async (t) => {
+  // Invoking the project's own launcher (npx, node_modules/.bin, an npm
+  // script) takes the bundled branch, because the project candidate is this
+  // very file. Asserting 'global' there would send a project-local user to
+  // `npm install -g`, updating a copy that never ran.
+  const fixture = await createInstalledTree(t, {
+    wrapperVersion: '4.1.26',
+    cliVersion: '4.1.26',
+    updateNotice: true
+  });
+
+  const { exitCode, stderr } = await runBin(
+    fixture.binPath,
+    ['--version'],
+    { cwd: fixture.root }
+  );
+
+  assert.equal(exitCode, 0);
+  assert.equal(parseUpdateNotice(stderr).scope, null);
 });
 
 test('--version reports a project-local install as project-scoped', async (t) => {
@@ -85,9 +137,9 @@ test('--version reports a project-local install as project-scoped', async (t) =>
 
   assert.equal(exitCode, 0);
   assert.equal(stdout, '4.1.26\n');
-  // The winning install is a project dependency, so the notice must not
-  // suggest updating a global copy that did not run.
-  assert.equal(stderr, 'UPDATE NOTICE 4.1.26 project\n');
+  // A newer project dependency beat the invoked install, which the wrapper —
+  // unlike the module — knows for certain, so it says so.
+  assert.equal(parseUpdateNotice(stderr).scope, 'project');
 });
 
 test('refuses to execute a stale nested CLI and reports both resolved versions', async (t) => {
@@ -400,14 +452,7 @@ async function createInstalledTree(t, {
       );
     }
     if (updateNotice) {
-      // Stand-in for the CLI's compiled update-check module: echoes the
-      // arguments the wrapper handed it so the delegation is observable.
-      await writeFile(
-        path.join(cliRoot, 'dist', 'update-check.js'),
-        'export async function writeUpdateNotice(version, options = {}) {\n' +
-        '  process.stderr.write(`UPDATE NOTICE ${version} ${options.scope}\\n`);\n' +
-        '}\n'
-      );
+      await writeFile(path.join(cliRoot, 'dist', 'update-check.js'), UPDATE_CHECK_STUB);
     }
   }
 
@@ -448,12 +493,7 @@ async function createInstalledTree(t, {
       )}); }\n`
     );
     if (updateNotice) {
-      await writeFile(
-        path.join(projectCliRoot, 'dist', 'update-check.js'),
-        'export async function writeUpdateNotice(version, options = {}) {\n' +
-        '  process.stderr.write(`UPDATE NOTICE ${version} ${options.scope}\\n`);\n' +
-        '}\n'
-      );
+      await writeFile(path.join(projectCliRoot, 'dist', 'update-check.js'), UPDATE_CHECK_STUB);
     }
   } else if (bareProjectCliVersion) {
     const projectCliRoot = path.join(projectRoot, 'node_modules', '@agentworkforce', 'cli');
