@@ -207,7 +207,11 @@ export async function fetchLatestVersion(options: {
 function isWithin(child: string, parent: string, pathImpl: path.PlatformPath): boolean {
   if (child === parent) return true;
   const relative = pathImpl.relative(parent, child);
-  if (relative === '' || relative === '..') return false;
+  // An empty relative path means the two name the same directory without being
+  // the same string — Windows compares case-insensitively, so `c:\work\app`
+  // and `C:\Work\App` are one place.
+  if (relative === '') return true;
+  if (relative === '..') return false;
   return !relative.startsWith(`..${pathImpl.sep}`) && !pathImpl.isAbsolute(relative);
 }
 

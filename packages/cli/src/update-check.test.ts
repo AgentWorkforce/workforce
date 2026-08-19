@@ -190,6 +190,16 @@ test('classifyInstallPath applies Windows path rules, including a drive root', (
   const project = 'C:\\work\\app\\node_modules\\@agentworkforce\\cli\\dist\\update-check.js';
   assert.equal(classifyInstallPath(project, 'C:\\work\\app', win), 'project');
   assert.equal(classifyInstallPath(project, 'C:\\work\\app\\src', win), 'project');
+  // Windows compares paths case-insensitively, so these name one directory and
+  // path.relative() collapses them to '' rather than to a traversal.
+  assert.equal(
+    classifyInstallPath(
+      'C:\\Work\\App\\node_modules\\@agentworkforce\\cli\\dist\\update-check.js',
+      'c:\\work\\app',
+      win
+    ),
+    'project'
+  );
   assert.equal(classifyInstallPath(project, 'C:\\work\\other', win), 'global');
 
   // POSIX semantics stay reachable through the same helper.
