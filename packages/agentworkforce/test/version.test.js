@@ -4,7 +4,7 @@ import { spawn } from 'node:child_process';
 import { chmod, cp, mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
-import { fileURLToPath } from 'node:url';
+import { fileURLToPath, pathToFileURL } from 'node:url';
 
 const pkg = JSON.parse(
   await readFile(new URL('../package.json', import.meta.url), 'utf8')
@@ -98,25 +98,41 @@ test('--version delegates the update check to the CLI it validated', async (t) =
   );
 });
 
-test('--version does not claim a scope the wrapper cannot know', async (t) => {
-  // Invoking the project's own launcher (npx, node_modules/.bin, an npm
-  // script) takes the bundled branch, because the project candidate is this
-  // very file. Asserting 'global' there would send a project-local user to
-  // `npm install -g`, updating a copy that never ran.
+test('--version leaves the scope open when the project runs its own launcher', async (t) => {
+  // `npx agentworkforce`, `node_modules/.bin/agentworkforce`, and npm scripts
+  // all execute the project's own launcher. resolveProjectInstall() then finds
+  // a candidate that is this very file and returns undefined, so the bundled
+  // branch runs for an install that is entirely project-local. Claiming
+  // 'global' there would send the user to `npm install -g`, updating a copy
+  // that never ran; the wrapper must leave the scope to be inferred from where
+  // the entry resolved.
   const fixture = await createInstalledTree(t, {
     wrapperVersion: '4.1.26',
     cliVersion: '4.1.26',
+    projectWrapperVersion: '4.1.26',
+    projectCliVersion: '4.1.26',
+    projectCliLayout: 'hoisted',
+    installProjectLauncher: true,
     updateNotice: true
   });
 
-  const { exitCode, stderr } = await runBin(
-    fixture.binPath,
+  const { exitCode, stdout, stderr } = await runBin(
+    fixture.projectBinPath,
     ['--version'],
-    { cwd: fixture.root }
+    { cwd: fixture.projectRoot }
   );
 
   assert.equal(exitCode, 0);
-  assert.equal(parseUpdateNotice(stderr).scope, null);
+  assert.equal(stdout, '4.1.26\n');
+  const notice = parseUpdateNotice(stderr);
+  assert.equal(notice.scope, null);
+  // The entry it handed over is the project's own copy, which is what makes
+  // resolveInstallScope() answer 'project'.
+  const projectModules = `${pathToFileURL(fixture.projectRoot).href}/node_modules/`;
+  assert.ok(
+    notice.moduleUrl?.startsWith(projectModules),
+    `expected an entry inside the project tree, got: ${notice.moduleUrl}`
+  );
 });
 
 test('--version reports a project-local install as project-scoped', async (t) => {
@@ -418,7 +434,8 @@ async function createInstalledTree(t, {
   omitCliPackage,
   omitCliEntry,
   projectWrapperExports,
-  updateNotice
+  updateNotice,
+  installProjectLauncher
 }) {
   const tempParent = await mkdtemp(path.join(os.tmpdir(), 'agentworkforce install '));
   const root = path.join(tempParent, 'global tree');
@@ -457,6 +474,7 @@ async function createInstalledTree(t, {
   }
 
   const projectRoot = path.join(tempParent, 'project tree');
+  let projectBinPath;
   if (projectWrapperVersion) {
     const projectWrapperRoot = path.join(projectRoot, 'node_modules', 'agentworkforce');
     const projectCliRoot = projectCliLayout === 'hoisted'
@@ -495,6 +513,14 @@ async function createInstalledTree(t, {
     if (updateNotice) {
       await writeFile(path.join(projectCliRoot, 'dist', 'update-check.js'), UPDATE_CHECK_STUB);
     }
+    if (installProjectLauncher) {
+      // The real launcher, installed as the project's own `agentworkforce`
+      // dependency — what `npx` and `node_modules/.bin` actually execute.
+      projectBinPath = path.join(projectWrapperRoot, 'bin', 'agentworkforce.js');
+      await mkdir(path.dirname(projectBinPath), { recursive: true });
+      await cp(binPath, projectBinPath);
+      await chmod(projectBinPath, 0o755);
+    }
   } else if (bareProjectCliVersion) {
     const projectCliRoot = path.join(projectRoot, 'node_modules', '@agentworkforce', 'cli');
     await mkdir(path.join(projectCliRoot, 'dist'), { recursive: true });
@@ -514,7 +540,7 @@ async function createInstalledTree(t, {
     await mkdir(projectRoot, { recursive: true });
   }
 
-  return { root, projectRoot, binPath: fixtureBinPath };
+  return { root, projectRoot, binPath: fixtureBinPath, projectBinPath };
 }
 
 function escapeRegExp(value) {
