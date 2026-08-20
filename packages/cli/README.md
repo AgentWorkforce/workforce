@@ -481,7 +481,9 @@ wins):
    `~/.agentworkforce/workforce/personas/*.json` — **user**
 4. `~/.agentworkforce/workforce/agents/<name>/persona.json` — **user:agents**,
    the personal mirror of `cwd:agents`. It rides directly behind the personal
-   personas dir, so moving that dir in the cascade moves both.
+   personas dir, so moving that dir in the cascade moves both. The tables
+   printed by `list` and `sources list` show it as **personal:agents**,
+   following `user` → `personal`; `user:agents` is the value `--json` emits.
 5. Internal built-in system personas in `/personas/` — **library**
 
 Local files are **partial overlays**: only the fields you set replace the
