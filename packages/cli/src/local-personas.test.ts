@@ -1034,3 +1034,88 @@ test('a missing agents/ directory is not an error', () => {
     assert.deepEqual(loaded.warnings, []);
   });
 });
+
+// --- handler agents ---------------------------------------------------------
+// An agent driven by its `onEvent` entry has no interactive launch to
+// configure, so harness/model/systemPrompt are optional. Requiring them kept
+// exactly these agents out of the cascade the agents/ dir was added for.
+
+test('a handler persona loads without interactive fields', () => {
+  withAgentLayer(({ cwd, homeDir, agentsDir }) => {
+    const agentDir = join(agentsDir, 'digest');
+    mkdirSync(agentDir, { recursive: true });
+    writeJson(join(agentDir, 'persona.json'), {
+      id: 'digest',
+      intent: 'documentation',
+      description: 'Weekly digest handler.',
+      cloud: true,
+      onEvent: './agent.ts',
+      harnessSettings: { reasoning: 'medium', timeoutSeconds: 600 }
+    });
+    const loaded = loadLocalPersonas({ cwd, homeDir });
+    assert.deepEqual(loaded.warnings, []);
+    const spec = loaded.byId.get('digest');
+    assert.ok(spec);
+    assert.equal(spec.onEvent, './agent.ts');
+    assert.equal(spec.cloud, true);
+    assert.equal(spec.harness, undefined);
+    assert.equal(spec.model, undefined);
+    assert.equal(spec.systemPrompt, undefined);
+  });
+});
+
+test('a standalone persona with no handler still requires harness', () => {
+  withAgentLayer(({ cwd, homeDir, agentsDir }) => {
+    const agentDir = join(agentsDir, 'interactive');
+    mkdirSync(agentDir, { recursive: true });
+    writeJson(join(agentDir, 'persona.json'), {
+      id: 'interactive',
+      intent: 'documentation',
+      description: 'No handler, so an operator launches it.',
+      harnessSettings: { reasoning: 'medium', timeoutSeconds: 600 }
+    });
+    const loaded = loadLocalPersonas({ cwd, homeDir });
+    assert.equal(loaded.byId.has('interactive'), false);
+    assert.match(loaded.warnings[0] ?? '', /harness is required for standalone personas/);
+  });
+});
+
+test('an overlay tweaking env keeps the handler entry it inherits', () => {
+  withAgentLayer(({ cwd, homeDir, pwdDir, agentsDir }) => {
+    const agentDir = join(agentsDir, 'digest');
+    mkdirSync(agentDir, { recursive: true });
+    writeJson(join(agentDir, 'persona.json'), {
+      id: 'digest',
+      intent: 'documentation',
+      description: 'Weekly digest handler.',
+      cloud: true,
+      onEvent: './agent.ts',
+      harnessSettings: { reasoning: 'medium', timeoutSeconds: 600 }
+    });
+    writeJson(join(pwdDir, 'digest.json'), { id: 'digest', env: { TONE: 'terse' } });
+
+    const loaded = loadLocalPersonas({ cwd, homeDir });
+    assert.deepEqual(loaded.warnings, []);
+    const spec = loaded.byId.get('digest');
+    assert.equal(spec?.onEvent, './agent.ts');
+    assert.equal(spec?.cloud, true);
+    assert.equal(spec?.env?.TONE, 'terse');
+  });
+});
+
+test('onEvent may not escape the agent directory', () => {
+  withAgentLayer(({ cwd, homeDir, agentsDir }) => {
+    const agentDir = join(agentsDir, 'digest');
+    mkdirSync(agentDir, { recursive: true });
+    writeJson(join(agentDir, 'persona.json'), {
+      id: 'digest',
+      intent: 'documentation',
+      description: 'Escapes its directory.',
+      onEvent: '../../../elsewhere/agent.ts',
+      harnessSettings: { reasoning: 'medium', timeoutSeconds: 600 }
+    });
+    const loaded = loadLocalPersonas({ cwd, homeDir });
+    assert.equal(loaded.byId.has('digest'), false);
+    assert.match(loaded.warnings[0] ?? '', /onEvent must not contain "\.\." segments/);
+  });
+});
