@@ -710,7 +710,10 @@ function sidecarForPersona(
     };
   }
   if (
-    (persona.harness === 'codex' || persona.harness === 'opencode' || persona.harness === 'grok') &&
+    (persona.harness === 'codex' ||
+      persona.harness === 'opencode' ||
+      persona.harness === 'grok' ||
+      persona.harness === 'cursor') &&
     persona.agentsMdContent
   ) {
     return {

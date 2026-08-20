@@ -5,6 +5,14 @@ import { delimiter, join } from 'node:path';
 import { HARNESS_VALUES } from './constants.js';
 import type { Harness } from './types.js';
 
+const HARNESS_BINARIES: Record<Harness, string> = {
+  claude: 'claude',
+  codex: 'codex',
+  opencode: 'opencode',
+  grok: 'grok',
+  cursor: 'cursor-agent'
+};
+
 /**
  * Result of probing a harness binary on the caller's machine.
  *
@@ -50,11 +58,25 @@ export function detectHarness(
   options: { timeoutMs?: number } = {}
 ): HarnessAvailability {
   const timeoutMs = options.timeoutMs ?? 3000;
-  const path = findOnPath(harness);
+  const bin = HARNESS_BINARIES[harness];
+  const path = findOnPath(bin);
   if (!path) {
     return { harness, available: false, error: 'not found on PATH' };
   }
-  const res = spawnSync(harness, ['--version'], {
+  // Probe the exact entry we found rather than asking spawnSync to resolve the
+  // bare name a second time. On Windows, package-manager shims are commonly
+  // .cmd/.bat files; those are not directly executable with shell:false, so
+  // route only that trusted, resolved script path through the command
+  // processor. Other executables keep the direct (non-shell) path.
+  const isWindowsCommandScript =
+    process.platform === 'win32' && /\.(?:cmd|bat)$/i.test(path);
+  const probeBin = isWindowsCommandScript
+    ? process.env.ComSpec ?? process.env.COMSPEC ?? 'cmd.exe'
+    : path;
+  const probeArgs = isWindowsCommandScript
+    ? ['/d', '/s', '/c', `"${path}" --version`]
+    : ['--version'];
+  const res = spawnSync(probeBin, probeArgs, {
     timeout: timeoutMs,
     encoding: 'utf8',
     shell: false

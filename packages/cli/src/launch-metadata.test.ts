@@ -208,4 +208,5 @@ test('launchMetadataIngestHarness maps AgentWorkforce claude to backend claude-c
   assert.equal(launchMetadataIngestHarness('codex'), 'codex');
   assert.equal(launchMetadataIngestHarness('opencode'), 'opencode');
   assert.equal(launchMetadataIngestHarness('grok'), 'grok');
+  assert.equal(launchMetadataIngestHarness('cursor'), 'cursor');
 });

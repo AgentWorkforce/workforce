@@ -296,6 +296,68 @@ test('cloud harness runner materializes AGENTS.md for grok personas', async () =
   }
 });
 
+test('cloud harness runner materializes AGENTS.md for cursor personas', async () => {
+  const root = await mkdtemp(path.join(os.tmpdir(), 'workforce-cursor-cloud-'));
+  const binDir = path.join(root, 'bin');
+  await mkdir(binDir, { recursive: true });
+  await writeFile(
+    path.join(binDir, 'cursor-agent'),
+    [
+      '#!/usr/bin/env node',
+      'const fs = require("node:fs");',
+      'const path = require("node:path");',
+      'const agents = fs.readFileSync(path.join(process.cwd(), "AGENTS.md"), "utf8");',
+      'let prompt = "";',
+      'process.stdin.setEncoding("utf8");',
+      'process.stdin.on("data", (chunk) => { prompt += chunk; });',
+      'process.stdin.on("end", () => {',
+      '  process.stdout.write(JSON.stringify({ args: process.argv.slice(2), agents, prompt }));',
+      '});'
+    ].join('\n'),
+    'utf8'
+  );
+  await chmod(path.join(binDir, 'cursor-agent'), 0o755);
+
+  const envSnapshot = snapshotEnv(['PATH', 'WORKFORCE_SANDBOX_ROOT']);
+  process.env.PATH = `${binDir}${path.delimiter}${envSnapshot.PATH ?? ''}`;
+  process.env.WORKFORCE_SANDBOX_ROOT = root;
+  try {
+    const logs: Array<{ level: string; message: string; details?: unknown }> = [];
+    const defaults = createCloudRuntimeDefaults({
+      persona: {
+        ...persona,
+        harness: 'cursor',
+        model: 'gpt-5',
+        systemPrompt: 'Cursor system prompt',
+        agentsMdContent: 'Cursor agents sidecar',
+        agentsMdMode: 'overwrite'
+      },
+      agent: runtimeAgent,
+      deployment: runtimeDeployment,
+      workspaceId: 'ws-test',
+      log: (level, message, details) => logs.push({ level, message, details }),
+      env: process.env
+    });
+
+    const result = await defaults.harnessRunner({ prompt: 'say hello' });
+    assert.equal(result.exitCode, 0);
+    const parsed = JSON.parse(result.output) as { args: string[]; agents: string; prompt: string };
+    assert.deepEqual(parsed.args, [
+      '--model',
+      'gpt-5',
+      '--print',
+      '--output-format',
+      'text'
+    ]);
+    assert.equal(parsed.prompt, 'say hello');
+    assert.equal(parsed.agents, 'Cursor agents sidecar\n');
+    assert.ok(logs.find((l) => l.message === 'harness.sidecar.materialized'));
+  } finally {
+    restoreEnv(envSnapshot);
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
 test('cloud harness runner injects the no-reply contract into opencode config', async () => {
   const root = await mkdtemp(path.join(os.tmpdir(), 'workforce-opencode-cloud-'));
   const binDir = path.join(root, 'bin');
