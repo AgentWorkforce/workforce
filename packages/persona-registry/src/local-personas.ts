@@ -429,9 +429,16 @@ function readNestedLayerEntries(
   for (const name of names) {
     const sourceDir = join(dir, name);
     const path = join(sourceDir, NESTED_PERSONA_FILENAME);
-    const authored = NESTED_PERSONA_SOURCE_FILENAMES.map((file) => join(sourceDir, file)).find(
-      (candidate) => fileMtimeMs(candidate) !== undefined
-    );
+    // Compare against the NEWEST authoring file, not the first one that
+    // exists: a directory that still carries an old persona.ts after moving to
+    // persona.js would otherwise be measured against the file nobody edits.
+    const authoredCandidate = NESTED_PERSONA_SOURCE_FILENAMES.map((file) => ({
+      file: join(sourceDir, file),
+      mtimeMs: fileMtimeMs(join(sourceDir, file))
+    }))
+      .filter((candidate): candidate is { file: string; mtimeMs: number } => candidate.mtimeMs !== undefined)
+      .sort((a, b) => b.mtimeMs - a.mtimeMs)[0];
+    const authored = authoredCandidate?.file;
     const compiledAt = fileMtimeMs(path);
 
     if (compiledAt === undefined) {
@@ -447,7 +454,7 @@ function readNestedLayerEntries(
     // nothing looks wrong while the edits sitting in the authoring file are
     // simply absent. Say so, and keep serving the compiled spec — dropping it
     // would turn a forgotten compile into a missing persona.
-    const authoredAt = authored === undefined ? undefined : fileMtimeMs(authored);
+    const authoredAt = authoredCandidate?.mtimeMs;
     if (authored !== undefined && authoredAt !== undefined && authoredAt > compiledAt) {
       warnings.push(
         `[${layer.source}] ${name}: ${NESTED_PERSONA_FILENAME} is older than ${basename(authored)}, so this persona is loading without the latest edits; re-run \`agentworkforce persona compile ${authored}\`.`

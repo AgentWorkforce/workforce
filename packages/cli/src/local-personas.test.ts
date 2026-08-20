@@ -1215,3 +1215,24 @@ test('a persona.json newer than its authoring source is silent', () => {
     assert.ok(loaded.byId.has('proposal-agent'));
   });
 });
+
+test('staleness is measured against the newest authoring file, not the first', () => {
+  withAgentLayer(({ cwd, homeDir, agentsDir }) => {
+    const agentDir = join(agentsDir, 'proposal-agent');
+    mkdirSync(agentDir, { recursive: true });
+    // An abandoned persona.ts predates the artifact; the live persona.js is
+    // newer. Measuring against the .ts alone would call this fresh.
+    writeFileSync(join(agentDir, 'persona.ts'), 'export default {}\n');
+    writeJson(join(agentDir, 'persona.json'), { id: 'proposal-agent', extends: 'persona-maker' });
+    writeFileSync(join(agentDir, 'persona.js'), 'export default {}\n');
+
+    const old = new Date(Date.now() - 120_000);
+    utimesSync(join(agentDir, 'persona.ts'), old, old);
+    const mid = new Date(Date.now() - 60_000);
+    utimesSync(join(agentDir, 'persona.json'), mid, mid);
+
+    const loaded = loadLocalPersonas({ cwd, homeDir });
+    assert.equal(loaded.warnings.length, 1);
+    assert.match(loaded.warnings[0] ?? '', /persona\.json is older than persona\.js/);
+  });
+});
