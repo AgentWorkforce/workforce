@@ -4,7 +4,9 @@ import path from 'node:path';
 import {
   configureDeployCommandForTest,
   formatDeployFailure,
+  looksLikeDeployPath,
   parseDeployArgs,
+  resolveDeployPersonaSelector,
   runLogin,
   runLogout,
   withDefaultDeployMode
@@ -479,4 +481,75 @@ test('runLogin canonicalizes origin.agentrelay.cloud apiUrl before resolving the
     trap.restore();
     restoreDeps();
   }
+});
+
+// --- persona selector -------------------------------------------------------
+// `deploy` takes a persona id as well as a path, so an agent living in
+// `.agentworkforce/workforce/agents/<name>/` deploys by name.
+
+test('looksLikeDeployPath: path syntax and persona extensions are paths', () => {
+  for (const selector of [
+    './persona.json',
+    '../agents/x/persona.ts',
+    '/tmp/review/persona.ts',
+    '~/personas/thing.json',
+    'agents/proposal-agent/persona.json',
+    'persona.json',
+    'persona.ts'
+  ]) {
+    assert.equal(looksLikeDeployPath(selector), true, selector);
+  }
+});
+
+test('looksLikeDeployPath: a bare id is not a path', () => {
+  for (const selector of ['proposal-agent', 'customer-dev', 'persona-maker']) {
+    assert.equal(looksLikeDeployPath(selector), false, selector);
+  }
+});
+
+test('resolveDeployPersonaSelector: a path resolves without touching the registry', () => {
+  assert.equal(
+    resolveDeployPersonaSelector('./persona.json'),
+    path.resolve('./persona.json')
+  );
+});
+
+test('resolveDeployPersonaSelector: an id resolves to the declaring file', async () => {
+  const { mkdtempSync, mkdirSync, rmSync, writeFileSync } = await import('node:fs');
+  const { tmpdir } = await import('node:os');
+  const { join } = await import('node:path');
+
+  const root = mkdtempSync(join(tmpdir(), 'aw-deploy-selector-'));
+  const agentDir = join(root, '.agentworkforce', 'workforce', 'agents', 'proposal-agent');
+  mkdirSync(agentDir, { recursive: true });
+  writeFileSync(
+    join(agentDir, 'persona.json'),
+    JSON.stringify({ id: 'proposal-agent', extends: 'persona-maker' })
+  );
+  const cwd = process.cwd();
+  try {
+    process.chdir(root);
+    // realpath: macOS tmpdirs are symlinks, and the registry resolves through them.
+    const { realpathSync } = await import('node:fs');
+    assert.equal(
+      realpathSync(resolveDeployPersonaSelector('proposal-agent')),
+      realpathSync(join(agentDir, 'persona.json'))
+    );
+  } finally {
+    process.chdir(cwd);
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test('resolveDeployPersonaSelector: a built-in id explains it has no file', () => {
+  const trap = trapExit();
+  try {
+    assert.throws(
+      () => resolveDeployPersonaSelector('persona-maker'),
+      /__exit_trap__/
+    );
+  } finally {
+    trap.restore();
+  }
+  assert.match(trap.stderr, /no file to deploy/);
 });
