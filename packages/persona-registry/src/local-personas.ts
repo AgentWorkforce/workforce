@@ -112,6 +112,9 @@ export type PersonaSource = string;
  *   - `cwd:agents` → same — `<cwd>/.agentworkforce/workforce/agents/<name>/persona.json`,
  *                  agents that keep their persona next to their handler.
  *                  Also a precise pointer, so also kept as-is.
+ *   - `user:agents` → `personal:agents` — the `agents/` sibling of the personal
+ *                  personas dir; personal agents-with-handlers, available in
+ *                  any repo. Renamed to follow `user` → `personal`.
  *   - `dir:N`    → `dir:N`    — extra configurable persona dirs (passed
  *                  through unchanged so position is still legible).
  *
@@ -121,6 +124,7 @@ export type PersonaSource = string;
 export function formatPersonaSourceLabel(source: PersonaSource): string {
   if (source === 'library') return 'built-in';
   if (source === 'user') return 'personal';
+  if (source === 'user:agents') return 'personal:agents';
   return source;
 }
 
@@ -219,6 +223,16 @@ export function defaultCwdPersonaDir(cwd: string): string {
  */
 export function defaultCwdAgentDir(cwd: string): string {
   return join(cwd, '.agentworkforce', 'workforce', 'agents');
+}
+
+/**
+ * Personal counterpart to {@link defaultCwdAgentDir}: agents-with-handlers a
+ * user keeps across every repo. Derived from wherever their personal personas
+ * live so the pair travels together, including under
+ * `AGENT_WORKFORCE_CONFIG_DIR` and test overrides.
+ */
+export function userAgentDirFor(userPersonaDir: string): string {
+  return join(dirname(userPersonaDir), 'agents');
 }
 
 /** Persona filename read from each subdirectory of a nested source dir. */
@@ -388,13 +402,35 @@ export function buildPersonaSourceDirectories(
       configurable: false,
       nested: true
     },
-    ...config.personaDirs.map((dir, idx) => ({
-      source: sourceForPersonaDir(dir, idx, config.userPersonaDir),
-      dir,
-      configurable: true
-    }))
+    ...config.personaDirs.flatMap((dir, idx) => {
+      const entry: PersonaSourceDirectory = {
+        source: sourceForPersonaDir(dir, idx, config.userPersonaDir),
+        dir,
+        configurable: true
+      };
+      // The personal agents dir rides directly behind the personal personas
+      // dir, the same way cwd:agents rides behind cwd, so the pair keeps its
+      // relative rank wherever the user has moved it in the cascade.
+      return dir === config.userPersonaDir
+        ? [entry, userAgentSourceDir(config.userPersonaDir)]
+        : [entry];
+    }),
+    // A user who dropped their personal personas dir from the cascade still
+    // gets their personal agents, ranked last among file layers.
+    ...(config.personaDirs.includes(config.userPersonaDir)
+      ? []
+      : [userAgentSourceDir(config.userPersonaDir)])
   ];
   return { directories, config };
+}
+
+function userAgentSourceDir(userPersonaDir: string): PersonaSourceDirectory {
+  return {
+    source: 'user:agents',
+    dir: userAgentDirFor(userPersonaDir),
+    configurable: false,
+    nested: true
+  };
 }
 
 /** One persona file to read, with the directory its relative paths resolve against. */

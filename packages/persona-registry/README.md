@@ -2,7 +2,7 @@
 
 Programmatic resolution for AgentWorkforce personas. It owns the same source
 cascade used by the CLI: cwd personas, cwd agents, configured directories
-(including the personal directory), then the built-in catalog.
+(including the personal directory), personal agents, then the built-in catalog.
 
 ```ts
 import { resolvePersonaReference } from '@agentworkforce/persona-registry';

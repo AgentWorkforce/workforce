@@ -1236,3 +1236,79 @@ test('staleness is measured against the newest authoring file, not the first', (
     assert.match(loaded.warnings[0] ?? '', /persona\.json is older than persona\.js/);
   });
 });
+
+// --- user:agents layer ------------------------------------------------------
+// The personal mirror of cwd:agents — an agent-with-handler a user keeps
+// across every repo, in the `agents/` sibling of their personal personas dir.
+
+test('the personal agents dir loads as user:agents', () => {
+  withLayers(({ cwd, home, homeDir }) => {
+    const userAgents = join(home, '.agentworkforce', 'workforce', 'agents');
+    mkdirSync(join(userAgents, 'note-taker'), { recursive: true });
+    writeJson(join(userAgents, 'note-taker', 'persona.json'), {
+      id: 'note-taker',
+      extends: 'persona-maker',
+      env: { SCOPE: 'personal' }
+    });
+    const loaded = loadLocalPersonas({ cwd, homeDir });
+    assert.deepEqual(loaded.warnings, []);
+    assert.equal(loaded.sources.get('note-taker'), 'user:agents');
+    assert.equal(loaded.byId.get('note-taker')?.env?.SCOPE, 'personal');
+  });
+});
+
+test('a personal agent resolves its skills against its own directory', () => {
+  withLayers(({ cwd, home, homeDir }) => {
+    const workforceHome = join(home, '.agentworkforce', 'workforce');
+    mkdirSync(join(workforceHome, 'skills'), { recursive: true });
+    writeFileSync(join(workforceHome, 'skills', 'voice.md'), '# voice\n');
+    const agentDir = join(workforceHome, 'agents', 'note-taker');
+    mkdirSync(agentDir, { recursive: true });
+    writeJson(join(agentDir, 'persona.json'), {
+      id: 'note-taker',
+      extends: 'persona-maker',
+      skills: [{ id: 'local/voice', source: '../../skills/voice.md', description: 'voice' }]
+    });
+    const loaded = loadLocalPersonas({ cwd, homeDir });
+    assert.deepEqual(loaded.warnings, []);
+    assert.equal(
+      loaded.byId.get('note-taker')?.skills[0]?.source,
+      join(workforceHome, 'skills', 'voice.md')
+    );
+  });
+});
+
+test('a repo agent outranks a personal agent of the same id', () => {
+  withAgentLayer(({ cwd, home, homeDir, agentsDir }) => {
+    const userAgents = join(home, '.agentworkforce', 'workforce', 'agents');
+    mkdirSync(join(userAgents, 'note-taker'), { recursive: true });
+    writeJson(join(userAgents, 'note-taker', 'persona.json'), {
+      id: 'note-taker',
+      extends: 'persona-maker',
+      env: { SCOPE: 'personal', KEPT: 'yes' }
+    });
+    mkdirSync(join(agentsDir, 'note-taker'), { recursive: true });
+    writeJson(join(agentsDir, 'note-taker', 'persona.json'), {
+      id: 'note-taker',
+      env: { SCOPE: 'repo' }
+    });
+    const loaded = loadLocalPersonas({ cwd, homeDir });
+    assert.deepEqual(loaded.warnings, []);
+    assert.equal(loaded.sources.get('note-taker'), 'cwd:agents');
+    const spec = loaded.byId.get('note-taker');
+    assert.equal(spec?.env?.SCOPE, 'repo');
+    assert.equal(spec?.env?.KEPT, 'yes');
+  });
+});
+
+test('user:agents displays as personal:agents, following user -> personal', () => {
+  assert.equal(formatPersonaSourceLabel('user:agents'), 'personal:agents');
+  assert.equal(formatPersonaSourceLabel('cwd:agents'), 'cwd:agents');
+});
+
+test('a missing personal agents dir is not an error', () => {
+  withLayers(({ cwd, homeDir }) => {
+    const loaded = loadLocalPersonas({ cwd, homeDir });
+    assert.deepEqual(loaded.warnings, []);
+  });
+});
