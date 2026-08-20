@@ -103,6 +103,11 @@ export type PersonaSource = string;
  *   - `cwd:agents` → same — `<cwd>/.agentworkforce/workforce/agents/<name>/persona.json`,
  *                  agents that keep their persona next to their handler.
  *                  Also a precise pointer, so also kept as-is.
+ *   - `repo`     → `repo`     — `<repo root>/.agentworkforce/workforce/personas/`,
+ *                  the repository's own personas, visible from any
+ *                  subdirectory of it. Present only when cwd is below the
+ *                  root and the directory exists. `repo:agents` is its
+ *                  nested counterpart.
  *   - `dir:N`    → `dir:N`    — extra configurable persona dirs (passed
  *                  through unchanged so position is still legible).
  *
@@ -210,6 +215,27 @@ export function defaultCwdPersonaDir(cwd: string): string {
  */
 export function defaultCwdAgentDir(cwd: string): string {
   return join(cwd, '.agentworkforce', 'workforce', 'agents');
+}
+
+/**
+ * The repository root at or above `cwd`, or `undefined` outside a repository.
+ *
+ * A repo's personas live at its root, but commands are typically run from a
+ * package or source subdirectory. Without this the cascade looks only at the
+ * exact cwd, so the same repo yields different personas depending on which
+ * directory you happen to be standing in. The walk stops at the home directory
+ * — `~/.agentworkforce/workforce/personas/` is already the `user` layer.
+ */
+export function findRepoRoot(cwd: string): string | undefined {
+  const home = resolvePath(homedir());
+  let dir = resolvePath(cwd);
+  while (true) {
+    if (existsSync(join(dir, '.git'))) return dir;
+    if (dir === home) return undefined;
+    const parent = dirname(dir);
+    if (parent === dir) return undefined;
+    dir = parent;
+  }
 }
 
 /** Persona filename read from each subdirectory of a nested source dir. */
@@ -360,6 +386,30 @@ function sourceForPersonaDir(
   return dir === userPersonaDir ? 'user' : `dir:${idx + 1}`;
 }
 
+/**
+ * Persona directories contributed by the repository root when the command runs
+ * from a subdirectory. Ranked directly below the cwd layers: the directory you
+ * are standing in stays the most specific, and the repo answers for everywhere
+ * else inside it.
+ */
+function repoSourceDirectories(cwd: string): PersonaSourceDirectory[] {
+  const root = findRepoRoot(cwd);
+  if (!root || resolvePath(root) === resolvePath(cwd)) return [];
+  // Unlike the cwd layers — which are always listed because they are where
+  // `create` writes — a repo layer is only worth naming when it exists. Most
+  // repositories keep no personas, and listing a path nobody created is noise.
+  const dirs: PersonaSourceDirectory[] = [];
+  const personas = defaultCwdPersonaDir(root);
+  if (existsSync(personas)) {
+    dirs.push({ source: 'repo', dir: personas, configurable: false });
+  }
+  const agents = defaultCwdAgentDir(root);
+  if (existsSync(agents)) {
+    dirs.push({ source: 'repo:agents', dir: agents, configurable: false, nested: true });
+  }
+  return dirs;
+}
+
 export function buildPersonaSourceDirectories(
   options: LoadOptions = {}
 ): { directories: PersonaSourceDirectory[]; config: PersonaSourceConfig } {
@@ -379,6 +429,7 @@ export function buildPersonaSourceDirectories(
       configurable: false,
       nested: true
     },
+    ...repoSourceDirectories(cwd),
     ...config.personaDirs.map((dir, idx) => ({
       source: sourceForPersonaDir(dir, idx, config.userPersonaDir),
       dir,
