@@ -429,18 +429,31 @@ function readNestedLayerEntries(
   for (const name of names) {
     const sourceDir = join(dir, name);
     const path = join(sourceDir, NESTED_PERSONA_FILENAME);
-    if (isFile(path)) {
-      entries.push({ label: `${name}/${NESTED_PERSONA_FILENAME}`, path, sourceDir });
+    const authored = NESTED_PERSONA_SOURCE_FILENAMES.map((file) => join(sourceDir, file)).find(
+      (candidate) => fileMtimeMs(candidate) !== undefined
+    );
+    const compiledAt = fileMtimeMs(path);
+
+    if (compiledAt === undefined) {
+      if (authored) {
+        warnings.push(
+          `[${layer.source}] ${name}: ${basename(authored)} has no compiled ${NESTED_PERSONA_FILENAME}; run \`agentworkforce persona compile ${authored}\` to make it loadable.`
+        );
+      }
       continue;
     }
-    const authored = NESTED_PERSONA_SOURCE_FILENAMES.find((file) =>
-      isFile(join(sourceDir, file))
-    );
-    if (authored) {
+
+    // A stale artifact is the quieter failure: the persona still loads, so
+    // nothing looks wrong while the edits sitting in the authoring file are
+    // simply absent. Say so, and keep serving the compiled spec — dropping it
+    // would turn a forgotten compile into a missing persona.
+    const authoredAt = authored === undefined ? undefined : fileMtimeMs(authored);
+    if (authored !== undefined && authoredAt !== undefined && authoredAt > compiledAt) {
       warnings.push(
-        `[${layer.source}] ${name}: ${authored} has no compiled ${NESTED_PERSONA_FILENAME}; run \`agentworkforce persona compile ${join(sourceDir, authored)}\` to make it loadable.`
+        `[${layer.source}] ${name}: ${NESTED_PERSONA_FILENAME} is older than ${basename(authored)}, so this persona is loading without the latest edits; re-run \`agentworkforce persona compile ${authored}\`.`
       );
     }
+    entries.push({ label: `${name}/${NESTED_PERSONA_FILENAME}`, path, sourceDir });
   }
   return entries;
 }
@@ -1054,6 +1067,16 @@ function isFile(path: string): boolean {
     return statSync(path).isFile();
   } catch {
     return false;
+  }
+}
+
+/** Modification time of a regular file, or undefined if it is not one. */
+function fileMtimeMs(path: string): number | undefined {
+  try {
+    const st = statSync(path);
+    return st.isFile() ? st.mtimeMs : undefined;
+  } catch {
+    return undefined;
   }
 }
 

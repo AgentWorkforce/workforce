@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdtempSync, mkdirSync, rmSync, writeFileSync } from 'node:fs';
+import { mkdtempSync, mkdirSync, rmSync, utimesSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
@@ -1172,5 +1172,46 @@ test('a padded onEvent cannot smuggle a .. segment past the guard', () => {
     assert.equal(loaded.byId.has('digest'), false);
     // Trimmed before validation, so the traversal guard sees the real path.
     assert.match(loaded.warnings[0] ?? '', /onEvent must not contain "\.\." segments/);
+  });
+});
+
+test('a persona.json older than its authoring source warns but still loads', () => {
+  withAgentLayer(({ cwd, homeDir, agentsDir }) => {
+    const agentDir = join(agentsDir, 'proposal-agent');
+    mkdirSync(agentDir, { recursive: true });
+    writeJson(join(agentDir, 'persona.json'), {
+      id: 'proposal-agent',
+      extends: 'persona-maker',
+      env: { COMPILED: 'stale' }
+    });
+    writeFileSync(join(agentDir, 'persona.ts'), 'export default {}\n');
+    // Backdate the artifact rather than sleeping — same relation, no wall clock.
+    const past = new Date(Date.now() - 60_000);
+    utimesSync(join(agentDir, 'persona.json'), past, past);
+
+    const loaded = loadLocalPersonas({ cwd, homeDir });
+    assert.equal(loaded.warnings.length, 1);
+    assert.match(loaded.warnings[0] ?? '', /persona\.json is older than persona\.ts/);
+    assert.match(loaded.warnings[0] ?? '', /agentworkforce persona compile/);
+    // Still served: a forgotten compile must not read as a missing persona.
+    assert.equal(loaded.byId.get('proposal-agent')?.env?.COMPILED, 'stale');
+  });
+});
+
+test('a persona.json newer than its authoring source is silent', () => {
+  withAgentLayer(({ cwd, homeDir, agentsDir }) => {
+    const agentDir = join(agentsDir, 'proposal-agent');
+    mkdirSync(agentDir, { recursive: true });
+    writeFileSync(join(agentDir, 'persona.ts'), 'export default {}\n');
+    writeJson(join(agentDir, 'persona.json'), {
+      id: 'proposal-agent',
+      extends: 'persona-maker'
+    });
+    const past = new Date(Date.now() - 60_000);
+    utimesSync(join(agentDir, 'persona.ts'), past, past);
+
+    const loaded = loadLocalPersonas({ cwd, homeDir });
+    assert.deepEqual(loaded.warnings, []);
+    assert.ok(loaded.byId.has('proposal-agent'));
   });
 });
