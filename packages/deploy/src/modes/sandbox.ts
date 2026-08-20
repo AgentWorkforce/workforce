@@ -19,7 +19,7 @@ const DEFAULT_CLOUD_URL = 'https://cloud.agentworkforce.com';
  *
  *   - **BYO** — `DAYTONA_API_KEY` (or `DAYTONA_JWT_TOKEN` +
  *     `DAYTONA_ORGANIZATION_ID`) is present in env. The launcher talks
- *     directly to Daytona via `@daytonaio/sdk`. Zero workforce-cloud
+ *     directly to Daytona via `@daytona/sdk`. Zero workforce-cloud
  *     round-trips; useful in CI or for power users with their own
  *     Daytona accounts.
  *   - **Workforce-managed** — `DAYTONA_API_KEY` is absent but

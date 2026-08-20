@@ -5,15 +5,15 @@ Daytona-backed `WorkflowRuntime` adapter for AgentWorkforce deploy workflows. Th
 ## Install
 
 ```sh
-npm install @agentworkforce/daytona-runner @daytonaio/sdk
+npm install @agentworkforce/daytona-runner @daytona/sdk
 ```
 
-`@daytonaio/sdk` is a peer dependency — consumers bring their own version (^0.148.0).
+`@daytona/sdk` is a peer dependency — consumers bring their own version (>=0.185.0).
 
 ## Usage
 
 ```ts
-import { Daytona } from '@daytonaio/sdk';
+import { Daytona } from '@daytona/sdk';
 import {
   DaytonaRuntime,
   resolveDaytonaAuthCredentials,

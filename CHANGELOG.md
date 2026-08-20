@@ -8,6 +8,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+
+- `@agentworkforce/deploy` and `@agentworkforce/daytona-runner` migrated off the
+  deprecated `@daytonaio/sdk` to its replacement `@daytona/sdk` (same API, no
+  breaking changes upstream). Installing workforce no longer prints a
+  deprecation warning for it.
+- `@agentworkforce/deploy` tracks `@agent-relay/cloud` ^10.1.0, matching
+  `@agentworkforce/cli`, so an install resolves one copy instead of two.
+
 ## [4.1.39] - 2026-08-11
 
 ### Added

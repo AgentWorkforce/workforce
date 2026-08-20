@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import { mkdtemp, rm, writeFile } from 'node:fs/promises';
 import path from 'node:path';
 import os from 'node:os';
-import { createProxySandboxClient, SANDBOX_BUNDLE_DIR } from './sandbox-client.js';
+import { createByoSandboxClient, createProxySandboxClient, SANDBOX_BUNDLE_DIR } from './sandbox-client.js';
 import type { BundleResult } from '../types.js';
 
 interface RecordedCall {
@@ -254,4 +254,18 @@ test('proxy client throws when npm install in the sandbox fails', async () => {
   } finally {
     await rm(dir, { recursive: true, force: true });
   }
+});
+
+test('createByoSandboxClient builds a client from Daytona credentials', () => {
+  const client = createByoSandboxClient({ apiKey: 'sk_byo' });
+
+  assert.equal(typeof client.mint, 'function');
+  assert.equal(typeof client.exec, 'function');
+});
+
+test('createByoSandboxClient rejects missing Daytona credentials up front', () => {
+  assert.throws(
+    () => createByoSandboxClient({}),
+    /BYO sandbox client requires DAYTONA_API_KEY/
+  );
 });

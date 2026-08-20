@@ -1,4 +1,4 @@
-import type { Daytona, Sandbox } from '@daytonaio/sdk';
+import type { Daytona, Sandbox } from '@daytona/sdk';
 import type {
   ExecOptions,
   ExecResult,

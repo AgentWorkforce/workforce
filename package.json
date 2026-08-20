@@ -13,13 +13,6 @@
       "hono": ">=4.12.21",
       "ws": ">=8.20.1",
       "qs": ">=6.15.2"
-    },
-    "packageExtensions": {
-      "@daytonaio/sdk@*": {
-        "dependencies": {
-          "ws": ">=8.20.1"
-        }
-      }
     }
   },
   "devDependencies": {
