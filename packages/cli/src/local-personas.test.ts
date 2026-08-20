@@ -1119,3 +1119,39 @@ test('onEvent may not escape the agent directory', () => {
     assert.match(loaded.warnings[0] ?? '', /onEvent must not contain "\.\." segments/);
   });
 });
+
+test('onEvent must point at a handler source file', () => {
+  withAgentLayer(({ cwd, homeDir, agentsDir }) => {
+    const agentDir = join(agentsDir, 'digest');
+    mkdirSync(agentDir, { recursive: true });
+    writeJson(join(agentDir, 'persona.json'), {
+      id: 'digest',
+      intent: 'documentation',
+      description: 'Points at prose, not a handler.',
+      onEvent: 'README.md',
+      harnessSettings: { reasoning: 'medium', timeoutSeconds: 600 }
+    });
+    const loaded = loadLocalPersonas({ cwd, homeDir });
+    // Without the extension rule this would read as a handler and skip the
+    // interactive fields it never declared.
+    assert.equal(loaded.byId.has('digest'), false);
+    assert.match(loaded.warnings[0] ?? '', /must point at a \.ts/);
+  });
+});
+
+test('a padded onEvent cannot smuggle a .. segment past the guard', () => {
+  withAgentLayer(({ cwd, homeDir, agentsDir }) => {
+    const agentDir = join(agentsDir, 'digest');
+    mkdirSync(agentDir, { recursive: true });
+    writeJson(join(agentDir, 'persona.json'), {
+      id: 'digest',
+      intent: 'documentation',
+      description: 'Escapes once trimmed.',
+      onEvent: ' ../outside/agent.ts ',
+      harnessSettings: { reasoning: 'medium', timeoutSeconds: 600 }
+    });
+    const loaded = loadLocalPersonas({ cwd, homeDir });
+    assert.equal(loaded.byId.has('digest'), false);
+    assert.ok((loaded.warnings[0] ?? '').includes('onEvent'), loaded.warnings[0]);
+  });
+});

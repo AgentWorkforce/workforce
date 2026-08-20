@@ -21,7 +21,8 @@ import {
   type PersonaTag,
   type SidecarMdMode,
   parseHarnessSettings,
-  parseInputs
+  parseInputs,
+  parseOnEvent
 } from '@agentworkforce/persona-kit';
 import { listBuiltInPersonas, personaCatalog } from '@agentworkforce/workload-router';
 
@@ -501,27 +502,6 @@ function isPlainObject(value: unknown): value is Record<string, unknown> {
  * requirement called out in the schema. Throws on absolute paths,
  * `..` segments, empty strings, or non-`.md` extensions.
  */
-/**
- * Relative-path guard shared by `onEvent` and, with an added `.md` rule, by
- * sidecars. A handler that escaped its agent directory would bundle files the
- * persona does not own.
- */
-function assertSafeRelativePath(value: unknown, context: string): void {
-  if (typeof value !== 'string' || !value.trim()) {
-    throw new Error(`${context} must be a non-empty string`);
-  }
-  if (
-    value.startsWith('/') ||
-    value.startsWith('\\') ||
-    /^[A-Za-z]:/.test(value)
-  ) {
-    throw new Error(`${context} must be a relative path; got absolute "${value}"`);
-  }
-  if (value.split(/[\\/]+/).some((segment) => segment === '..')) {
-    throw new Error(`${context} must not contain ".." segments`);
-  }
-}
-
 function assertSidecarPath(value: unknown, context: string): void {
   if (typeof value !== 'string' || !value.trim()) {
     throw new Error(`${context} must be a non-empty string`);
@@ -617,12 +597,13 @@ function parseOverride(value: unknown, context: string): LocalPersonaOverride {
       `${context}.defaultTier is no longer supported (tiers have been removed)`
     );
   }
-  if (raw.onEvent !== undefined) {
-    if (typeof raw.onEvent !== 'string' || !raw.onEvent.trim()) {
-      throw new Error(`${context}.onEvent must be a non-empty string if provided`);
-    }
-    assertSafeRelativePath(raw.onEvent, `${context}.onEvent`);
-  }
+  // Delegate to persona-kit rather than re-deriving the rule: it owns the
+  // containment guard AND the handler-extension check, and it returns the
+  // exact string it validated, so the stored value can never differ from the
+  // one that passed. A locally trimmed copy would let " ../x/agent.ts " clear
+  // a `..` check as the segment " .." and then escape once trimmed.
+  const onEventValue =
+    raw.onEvent === undefined ? undefined : parseOnEvent(raw.onEvent, `${context}.onEvent`);
   if (raw.cloud !== undefined && typeof raw.cloud !== 'boolean') {
     throw new Error(`${context}.cloud must be a boolean if provided`);
   }
@@ -669,7 +650,7 @@ function parseOverride(value: unknown, context: string): LocalPersonaOverride {
     mount: raw.mount as LocalPersonaOverride['mount'],
     permissions: raw.permissions as LocalPersonaOverride['permissions'],
     systemPrompt: raw.systemPrompt as string | undefined,
-    ...(raw.onEvent !== undefined ? { onEvent: (raw.onEvent as string).trim() } : {}),
+    ...(onEventValue !== undefined ? { onEvent: onEventValue } : {}),
     ...(raw.cloud !== undefined ? { cloud: raw.cloud as boolean } : {}),
     ...(raw.harness !== undefined ? { harness: raw.harness as Harness } : {}),
     ...(raw.model !== undefined ? { model: raw.model as string } : {}),
