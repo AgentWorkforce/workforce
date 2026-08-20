@@ -597,13 +597,21 @@ function parseOverride(value: unknown, context: string): LocalPersonaOverride {
       `${context}.defaultTier is no longer supported (tiers have been removed)`
     );
   }
-  // Delegate to persona-kit rather than re-deriving the rule: it owns the
-  // containment guard AND the handler-extension check, and it returns the
-  // exact string it validated, so the stored value can never differ from the
-  // one that passed. A locally trimmed copy would let " ../x/agent.ts " clear
-  // a `..` check as the segment " .." and then escape once trimmed.
+  // Normalize first, then delegate to persona-kit, which owns both the
+  // containment guard and the handler-extension check. Order matters in both
+  // directions: validating the raw string and storing a trimmed copy lets
+  // " ../x/agent.ts " clear the `..` check as the segment " .." and escape
+  // once trimmed, while validating without trimming stores " ./agent.ts",
+  // which passes every check and then resolves to a directory named " ."
+  // at deploy. Trimming up front makes the validated and stored value one
+  // and the same.
   const onEventValue =
-    raw.onEvent === undefined ? undefined : parseOnEvent(raw.onEvent, `${context}.onEvent`);
+    raw.onEvent === undefined
+      ? undefined
+      : parseOnEvent(
+          typeof raw.onEvent === 'string' ? raw.onEvent.trim() : raw.onEvent,
+          `${context}.onEvent`
+        );
   if (raw.cloud !== undefined && typeof raw.cloud !== 'boolean') {
     throw new Error(`${context}.cloud must be a boolean if provided`);
   }

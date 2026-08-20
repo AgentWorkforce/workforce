@@ -1120,6 +1120,24 @@ test('onEvent may not escape the agent directory', () => {
   });
 });
 
+test('a padded onEvent is normalized before it is stored', () => {
+  withAgentLayer(({ cwd, homeDir, agentsDir }) => {
+    const agentDir = join(agentsDir, 'digest');
+    mkdirSync(agentDir, { recursive: true });
+    writeJson(join(agentDir, 'persona.json'), {
+      id: 'digest',
+      intent: 'documentation',
+      description: 'Padded but legal handler path.',
+      onEvent: ' ./agent.ts',
+      harnessSettings: { reasoning: 'medium', timeoutSeconds: 600 }
+    });
+    const loaded = loadLocalPersonas({ cwd, homeDir });
+    assert.deepEqual(loaded.warnings, []);
+    // Stored untrimmed this resolves against a directory named " .".
+    assert.equal(loaded.byId.get('digest')?.onEvent, './agent.ts');
+  });
+});
+
 test('onEvent must point at a handler source file', () => {
   withAgentLayer(({ cwd, homeDir, agentsDir }) => {
     const agentDir = join(agentsDir, 'digest');
@@ -1152,6 +1170,7 @@ test('a padded onEvent cannot smuggle a .. segment past the guard', () => {
     });
     const loaded = loadLocalPersonas({ cwd, homeDir });
     assert.equal(loaded.byId.has('digest'), false);
-    assert.ok((loaded.warnings[0] ?? '').includes('onEvent'), loaded.warnings[0]);
+    // Trimmed before validation, so the traversal guard sees the real path.
+    assert.match(loaded.warnings[0] ?? '', /onEvent must not contain "\.\." segments/);
   });
 });
