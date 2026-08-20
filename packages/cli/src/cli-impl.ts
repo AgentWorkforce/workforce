@@ -1757,10 +1757,11 @@ function buildFastLaunchPlan(input: {
     // dirs, so every persona JSON in every layer is a resolution input.
     for (const name of entries) {
       if (dir.nested) {
-        // One persona per subdirectory. The subdirectory's own mtime witnesses
-        // the compile that first creates persona.json, which the parent dir's
-        // stat does not see.
-        digests.push(statDigestOf(join(dir.dir, name)));
+        // One persona per subdirectory. A missing file digests to nulls, so
+        // this one entry witnesses both the compile that first writes
+        // persona.json and later edits to it. Digesting the subdirectory too
+        // would invalidate the plan every time an unrelated sibling — the
+        // handler, the README, agent-card.json — is added or rewritten.
         digests.push(statDigestOf(join(dir.dir, name, NESTED_PERSONA_FILENAME)));
       } else if (name.endsWith('.json')) {
         digests.push(statDigestOf(join(dir.dir, name)));

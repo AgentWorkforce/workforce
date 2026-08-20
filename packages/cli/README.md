@@ -406,13 +406,13 @@ the override without editing JSON by hand.
 
 `sources add` appends by default. `--position <n>` inserts at the 1-based
 position among configurable directories, so `--position 1` gives that directory
-the highest priority after the fixed cwd source. `sources remove` accepts either
-that configurable position or an exact path.
+the highest priority after the fixed `cwd` and `cwd:agents` sources. `sources
+remove` accepts either that configurable position or an exact path.
 
 Examples:
 
 ```sh
-# Show the full source cascade, including fixed cwd and library entries
+# Show the full source cascade, including fixed cwd/cwd:agents and library entries
 agentworkforce sources list
 
 # Install personas from another checkout, below the default user persona dir
