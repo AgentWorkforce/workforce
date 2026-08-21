@@ -12,11 +12,81 @@ import {
   isSlackChannelId,
   linkSlackMentions,
   loadSlackUsers,
+  readSlackReaction,
   requireSlackReceipt,
   resolveSlackUserId,
   type SlackUser
 } from './slack.js';
 import type { WorkforceCtx } from '@agentworkforce/runtime';
+
+test('readSlackReaction normalizes wrapped message reactions', () => {
+  assert.deepEqual(
+    readSlackReaction({
+      data: {
+        raw_event: {
+          item: {
+            type: 'message',
+            channel: 'C12345678__engineering',
+            ts: '1787300000.000100'
+          },
+          user: 'U12345678',
+          reaction: ':white_check_mark:',
+          event_ts: '1787300001.000200'
+        }
+      }
+    }),
+    {
+      channel: 'C12345678',
+      messageTs: '1787300000.000100',
+      actorId: 'U12345678',
+      emoji: 'white_check_mark',
+      eventTs: '1787300001.000200'
+    }
+  );
+});
+
+test('readSlackReaction accepts event wrappers and rejects unusable reaction items', () => {
+  assert.deepEqual(
+    readSlackReaction({
+      event: {
+        item: { channel: 'D12345678', ts: '1787300000.000100' },
+        user_id: 'U12345678',
+        reaction: 'eyes'
+      }
+    }),
+    {
+      channel: 'D12345678',
+      messageTs: '1787300000.000100',
+      actorId: 'U12345678',
+      emoji: 'eyes'
+    }
+  );
+  assert.equal(
+    readSlackReaction({
+      item: { type: 'file', channel: 'C12345678', ts: '1787300000.000100' },
+      user: 'U12345678',
+      reaction: 'white_check_mark'
+    }),
+    null
+  );
+  assert.equal(
+    readSlackReaction({
+      item: { type: 'message', channel: 'C12345678' },
+      user: 'U12345678',
+      reaction: 'white_check_mark'
+    }),
+    null
+  );
+  assert.equal(
+    readSlackReaction({
+      channel: 'C12345678',
+      ts: '1787300001.000200',
+      user: 'U12345678',
+      reaction: 'white_check_mark'
+    }),
+    null
+  );
+});
 
 test('loadSlackUsers prefers the compact index and excludes bots and Slackbot', async (t) => {
   const root = await tempMount(t);

@@ -80,6 +80,15 @@ export {
   type NormalizedCronFire
 } from './cron.js';
 
+// Authenticated manual/app-trigger decoding. Cloud delivers these as cron.tick
+// events, so consumers need an explicit marker-aware discriminator rather than
+// branching on event.type or treating expansion success as sufficient.
+export {
+  readAppTriggerIntent,
+  type AppTriggerIntent,
+  type MalformedAppTriggerReason
+} from './app-trigger.js';
+
 // Relay (agent-to-agent) client used by ctx.relay; exported for external ctx
 // builders and tests.
 export { buildRelayContext, DEFAULT_RELAYCAST_URL } from './relay.js';
