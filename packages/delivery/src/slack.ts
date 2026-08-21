@@ -126,15 +126,14 @@ export function readSlackReaction(payload: unknown): SlackReaction | null {
   if (!action) return null;
   const item = firstSlackRecord(candidates, 'item');
   const itemType = slackStr(item?.type) ?? firstSlackString(candidates, 'item_type');
-  if (itemType && itemType !== 'message') return null;
+  if (itemType !== 'message') return null;
 
   const channel = slackStr(item?.channel) ?? firstSlackString(candidates, 'channel');
   // Do not fall back to a generic top-level `ts`: on raw reaction events that
   // can be the reaction event time rather than the reacted message. An item ts
   // or explicitly named message_ts is required for exact-message binding.
   const messageTs = slackStr(item?.ts) ?? firstSlackString(candidates, 'message_ts');
-  const actorId = firstSlackString(candidates, 'user')
-    ?? firstSlackString(candidates, 'user_id');
+  const actorId = firstSlackStringOfKeys(candidates, ['user', 'user_id']);
   const reaction = firstSlackString(candidates, 'reaction');
   if (!channel || !messageTs || !actorId || !reaction) return null;
 
@@ -409,6 +408,19 @@ function firstSlackString(
   for (const record of records) {
     const value = slackStr(record[key]);
     if (value) return value;
+  }
+  return undefined;
+}
+
+function firstSlackStringOfKeys(
+  records: ReadonlyArray<Record<string, unknown>>,
+  keys: readonly string[]
+): string | undefined {
+  for (const record of records) {
+    for (const key of keys) {
+      const value = slackStr(record[key]);
+      if (value) return value;
+    }
   }
   return undefined;
 }

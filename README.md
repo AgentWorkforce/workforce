@@ -223,10 +223,12 @@ const card = buildSlackApprovalCard({
 
 const reaction = readSlackReaction((await event.expand('full')).data);
 if (reaction) {
-  // Fetch exactly reaction.channel + reaction.messageTs before matching.
+  // Fetch exactly reaction.channel + reaction.messageTs with
+  // include_all_metadata: true before matching.
   const approval = matchSlackApprovalReaction(reaction, reactedMessage, {
     namespace: 'inbox.archive',
     approverId: ownerSlackId,
+    appId: slackAppId,
     validateActionId: isValidThreadId
   });
   if (approval) await archiveThreads(approval.actionIds);

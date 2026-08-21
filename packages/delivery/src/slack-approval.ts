@@ -45,6 +45,8 @@ export interface ReadSlackApprovalOptions {
 export interface MatchSlackApprovalOptions extends ReadSlackApprovalOptions {
   /** Slack emoji name, with or without surrounding colons. */
   emoji?: string;
+  /** Required Slack app id of the card author, for example `A012345678`. */
+  appId: string;
 }
 
 export interface SlackApproval {
@@ -133,6 +135,7 @@ export function readSlackApproval(
   const metadata = asRecord(record.metadata);
   const eventPayload = asRecord(metadata?.event_payload);
   const standardMetadata = metadata?.event_type === APPROVAL_METADATA_EVENT;
+  if (!standardMetadata) return null;
   const metadataHasIdentity = eventPayload !== null && (
     'namespace' in eventPayload || 'approver_id' in eventPayload
   );
@@ -210,6 +213,13 @@ export function matchSlackApprovalReaction(
   if (typeof messageRecord?.ts !== 'string' || messageRecord.ts !== reaction.messageTs) {
     return null;
   }
+  const botProfile = asRecord(messageRecord.bot_profile);
+  const messageAppId = typeof messageRecord.app_id === 'string'
+    ? messageRecord.app_id
+    : typeof botProfile?.app_id === 'string'
+      ? botProfile.app_id
+      : undefined;
+  if (!options.appId.trim() || messageAppId !== options.appId) return null;
   return readSlackApproval(message, options);
 }
 

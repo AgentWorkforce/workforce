@@ -11,6 +11,7 @@ const options = {
   namespace: 'github-inbox.archive',
   approverId: 'U12345678'
 } as const;
+const matchOptions = { ...options, appId: 'A12345678' } as const;
 
 test('buildSlackApprovalCard keeps exact ids out of rendered text and decodes them', () => {
   const card = buildSlackApprovalCard({
@@ -58,6 +59,26 @@ test('readSlackApproval recovers from Slack-redacted metadata through hidden blo
       actionIds: ['thread-1', 'thread-2']
     }
   );
+  assert.deepEqual(
+    readSlackApproval({ ts: '1787300000.000100', metadata: card.metadata }, options),
+    {
+      namespace: 'github-inbox.archive',
+      approverId: 'U12345678',
+      actionIds: ['thread-1', 'thread-2']
+    }
+  );
+  assert.equal(
+    readSlackApproval({ ts: '1787300000.000100', blocks: card.blocks }, options),
+    null
+  );
+  assert.equal(
+    readSlackApproval({
+      ts: '1787300000.000100',
+      metadata: { event_type: 'another_event', event_payload: {} },
+      blocks: card.blocks
+    }, options),
+    null
+  );
 });
 
 test('matchSlackApprovalReaction binds actor, emoji, and exact message timestamp', () => {
@@ -73,23 +94,46 @@ test('matchSlackApprovalReaction binds actor, emoji, and exact message timestamp
     actorId: 'U12345678',
     emoji: 'white_check_mark'
   };
-  const message = { ts: reaction.messageTs, ...card };
+  const message = { ts: reaction.messageTs, app_id: matchOptions.appId, ...card };
 
-  assert.deepEqual(matchSlackApprovalReaction(reaction, message, options)?.actionIds, ['thread-1']);
+  assert.deepEqual(
+    matchSlackApprovalReaction(reaction, message, matchOptions)?.actionIds,
+    ['thread-1']
+  );
+  assert.deepEqual(
+    matchSlackApprovalReaction(
+      reaction,
+      { ...message, app_id: undefined, bot_profile: { app_id: matchOptions.appId } },
+      matchOptions
+    )?.actionIds,
+    ['thread-1']
+  );
   assert.equal(
-    matchSlackApprovalReaction({ ...reaction, actorId: 'U87654321' }, message, options),
+    matchSlackApprovalReaction({ ...reaction, actorId: 'U87654321' }, message, matchOptions),
     null
   );
   assert.equal(
-    matchSlackApprovalReaction({ ...reaction, emoji: 'eyes' }, message, options),
+    matchSlackApprovalReaction({ ...reaction, emoji: 'eyes' }, message, matchOptions),
     null
   );
   assert.equal(
-    matchSlackApprovalReaction(reaction, { ...message, ts: '1787300002.000300' }, options),
+    matchSlackApprovalReaction(
+      reaction,
+      { ...message, ts: '1787300002.000300' },
+      matchOptions
+    ),
     null
   );
   assert.equal(
-    matchSlackApprovalReaction({ ...reaction, action: 'removed' }, message, options),
+    matchSlackApprovalReaction({ ...reaction, action: 'removed' }, message, matchOptions),
+    null
+  );
+  assert.equal(
+    matchSlackApprovalReaction(
+      reaction,
+      { ...message, app_id: 'A87654321' },
+      matchOptions
+    ),
     null
   );
 });
