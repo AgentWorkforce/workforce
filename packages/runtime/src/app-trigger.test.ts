@@ -38,13 +38,16 @@ test('readAppTriggerIntent distinguishes scheduled ticks from app triggers', asy
   assert.deepEqual(await readAppTriggerIntent(event), { kind: 'not-app-trigger' });
 });
 
-test('readAppTriggerIntent does not mistake provider data for an app trigger', async () => {
+test('readAppTriggerIntent does not mistake app-trigger-shaped provider data for a trigger', async () => {
   const event = envelopeToAgentEvent({
     id: 'github-1',
     workspace: 'workspace-1',
     type: 'github.issue.opened',
     occurredAt: '2026-08-21T10:00:00Z',
-    resource: { issue: { number: 42 } }
+    resource: {
+      source: 'app.trigger',
+      payload: { issue: { number: 42 } }
+    }
   });
   assert.ok(event);
 
@@ -53,8 +56,9 @@ test('readAppTriggerIntent does not mistake provider data for an app trigger', a
 
 test('readAppTriggerIntent reports missing and non-object payloads as malformed', async () => {
   const eventWith = (data: unknown) => ({
+    type: 'cron.tick',
     expand: async () => ({ data })
-  }) as unknown as Pick<AgentEvent, 'expand'>;
+  }) as unknown as Pick<AgentEvent, 'type' | 'expand'>;
 
   assert.deepEqual(
     await readAppTriggerIntent(eventWith({ source: 'app.trigger' })),
@@ -72,6 +76,7 @@ test('readAppTriggerIntent reports missing and non-object payloads as malformed'
 
 test('readAppTriggerIntent accepts the older nested resource wrapper', async () => {
   const event = {
+    type: 'cron.tick',
     expand: async () => ({
       data: {
         resource: {
@@ -80,7 +85,7 @@ test('readAppTriggerIntent accepts the older nested resource wrapper', async () 
         }
       }
     })
-  } as unknown as Pick<AgentEvent, 'expand'>;
+  } as unknown as Pick<AgentEvent, 'type' | 'expand'>;
 
   assert.deepEqual(await readAppTriggerIntent(event), {
     kind: 'app-trigger',

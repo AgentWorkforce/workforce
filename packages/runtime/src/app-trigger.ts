@@ -25,6 +25,10 @@ export type AppTriggerIntent =
 /**
  * Read Cloud's authenticated app-trigger wrapper from a normalized event.
  *
+ * Manual triggers are delivered only as `cron.tick` events. Other event types
+ * fail closed before their provider payload is expanded, even if that payload
+ * happens to contain an app-trigger-shaped object.
+ *
  * Current v4 events expose the original envelope through
  * `event.expand('full').data`. One nested `resource` wrapper is also accepted
  * for compatibility with older gateway fixtures. Bare objects are never
@@ -38,8 +42,10 @@ export type AppTriggerIntent =
  * schedule firing.
  */
 export async function readAppTriggerIntent(
-  event: Pick<AgentEvent, 'expand'>
+  event: Pick<AgentEvent, 'type' | 'expand'>
 ): Promise<AppTriggerIntent> {
+  if (event.type !== 'cron.tick') return { kind: 'not-app-trigger' };
+
   let data: unknown;
   try {
     data = (await event.expand('full')).data;
