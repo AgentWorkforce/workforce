@@ -20,6 +20,8 @@ export interface SlackInboundMessage {
 }
 
 export interface SlackReaction {
+  /** Whether Slack added or removed the reaction. */
+  action: 'added' | 'removed';
   channel: string;
   messageTs: string;
   actorId: string;
@@ -116,6 +118,12 @@ export function readSlackReaction(payload: unknown): SlackReaction | null {
   const event = slackAsRecord(data.event) ?? data;
   const raw = slackAsRecord(event.raw_event) ?? slackAsRecord(data.raw_event) ?? event;
   const candidates = [raw, event, data, root];
+  const eventType = firstSlackString(candidates, 'type')
+    ?? firstSlackString(candidates, 'event_type');
+  const action = slackReactionAction(eventType);
+  // Approval handlers must never infer an addition from an untyped event: a
+  // reaction_removed payload otherwise has the same actor/item/emoji fields.
+  if (!action) return null;
   const item = firstSlackRecord(candidates, 'item');
   const itemType = slackStr(item?.type) ?? firstSlackString(candidates, 'item_type');
   if (itemType && itemType !== 'message') return null;
@@ -134,12 +142,23 @@ export function readSlackReaction(payload: unknown): SlackReaction | null {
   if (!emoji) return null;
   const eventTs = firstSlackString(candidates, 'event_ts');
   return {
+    action,
     channel: bareSlackChannelId(channel),
     messageTs,
     actorId,
     emoji,
     ...(eventTs ? { eventTs } : {})
   };
+}
+
+function slackReactionAction(value: string | undefined): SlackReaction['action'] | null {
+  if (value === 'reaction_added' || value === 'reaction.added' || value === 'slack.reaction.added') {
+    return 'added';
+  }
+  if (value === 'reaction_removed' || value === 'reaction.removed' || value === 'slack.reaction.removed') {
+    return 'removed';
+  }
+  return null;
 }
 
 /**

@@ -1,6 +1,7 @@
 import type { SlackReaction } from './slack.js';
 
 const APPROVAL_METADATA_EVENT = 'agentworkforce_slack_approval_v1';
+const MAX_EVENT_PAYLOAD_CHARACTERS = 3_000;
 const MAX_METADATA_BYTES = 3_800;
 const MAX_BLOCK_ID_BYTES = 255;
 const MAX_BLOCKS = 50;
@@ -83,6 +84,12 @@ export function buildSlackApprovalCard(
     event_type: APPROVAL_METADATA_EVENT,
     event_payload: eventPayload
   };
+  const encodedEventPayload = stringifyApprovalJson(eventPayload, 'event payload');
+  if (textLength(encodedEventPayload) > MAX_EVENT_PAYLOAD_CHARACTERS) {
+    throw new Error(
+      `Slack approval event payload is too large (${textLength(encodedEventPayload)} characters)`
+    );
+  }
   const encodedMetadata = stringifyMetadata(metadata);
   if (Buffer.byteLength(encodedMetadata, 'utf8') > MAX_METADATA_BYTES) {
     throw new Error(
@@ -194,7 +201,11 @@ export function matchSlackApprovalReaction(
   options: MatchSlackApprovalOptions
 ): SlackApproval | null {
   const emoji = normalizeEmoji(options.emoji ?? 'white_check_mark');
-  if (reaction.actorId !== options.approverId || reaction.emoji !== emoji) return null;
+  if (
+    reaction.action !== 'added'
+    || reaction.actorId !== options.approverId
+    || reaction.emoji !== emoji
+  ) return null;
   const messageRecord = asRecord(message);
   if (typeof messageRecord?.ts !== 'string' || messageRecord.ts !== reaction.messageTs) {
     return null;
@@ -336,11 +347,15 @@ function textLength(text: string): number {
 }
 
 function stringifyMetadata(metadata: SlackApprovalCard['metadata']): string {
+  return stringifyApprovalJson(metadata, 'metadata');
+}
+
+function stringifyApprovalJson(value: unknown, label: string): string {
   try {
-    return JSON.stringify(metadata);
+    return JSON.stringify(value);
   } catch (error) {
     throw new Error(
-      `Slack approval metadata is not JSON-serializable: ${error instanceof Error ? error.message : String(error)}`
+      `Slack approval ${label} is not JSON-serializable: ${error instanceof Error ? error.message : String(error)}`
     );
   }
 }

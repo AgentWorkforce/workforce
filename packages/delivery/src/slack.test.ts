@@ -24,6 +24,7 @@ test('readSlackReaction normalizes wrapped message reactions', () => {
     readSlackReaction({
       data: {
         raw_event: {
+          type: 'reaction_added',
           item: {
             type: 'message',
             channel: 'C12345678__engineering',
@@ -36,6 +37,7 @@ test('readSlackReaction normalizes wrapped message reactions', () => {
       }
     }),
     {
+      action: 'added',
       channel: 'C12345678',
       messageTs: '1787300000.000100',
       actorId: 'U12345678',
@@ -49,12 +51,14 @@ test('readSlackReaction accepts event wrappers and rejects unusable reaction ite
   assert.deepEqual(
     readSlackReaction({
       event: {
+        type: 'reaction_added',
         item: { channel: 'D12345678', ts: '1787300000.000100' },
         user_id: 'U12345678',
         reaction: 'eyes'
       }
     }),
     {
+      action: 'added',
       channel: 'D12345678',
       messageTs: '1787300000.000100',
       actorId: 'U12345678',
@@ -63,6 +67,7 @@ test('readSlackReaction accepts event wrappers and rejects unusable reaction ite
   );
   assert.equal(
     readSlackReaction({
+      type: 'reaction_added',
       item: { type: 'file', channel: 'C12345678', ts: '1787300000.000100' },
       user: 'U12345678',
       reaction: 'white_check_mark'
@@ -71,7 +76,33 @@ test('readSlackReaction accepts event wrappers and rejects unusable reaction ite
   );
   assert.equal(
     readSlackReaction({
+      type: 'reaction_added',
       item: { type: 'message', channel: 'C12345678' },
+      user: 'U12345678',
+      reaction: 'white_check_mark'
+    }),
+    null
+  );
+  assert.deepEqual(
+    readSlackReaction({
+      type: 'reaction_removed',
+      item: { type: 'message', channel: 'C12345678', ts: '1787300000.000100' },
+      user: 'U12345678',
+      reaction: 'white_check_mark'
+    }),
+    {
+      action: 'removed',
+      channel: 'C12345678',
+      messageTs: '1787300000.000100',
+      actorId: 'U12345678',
+      emoji: 'white_check_mark'
+    }
+  );
+  assert.equal(
+    readSlackReaction({
+      type: 'reaction_added',
+      channel: 'C12345678',
+      ts: '1787300001.000200',
       user: 'U12345678',
       reaction: 'white_check_mark'
     }),
@@ -79,8 +110,7 @@ test('readSlackReaction accepts event wrappers and rejects unusable reaction ite
   );
   assert.equal(
     readSlackReaction({
-      channel: 'C12345678',
-      ts: '1787300001.000200',
+      item: { type: 'message', channel: 'C12345678', ts: '1787300000.000100' },
       user: 'U12345678',
       reaction: 'white_check_mark'
     }),

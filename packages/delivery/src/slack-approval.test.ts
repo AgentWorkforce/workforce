@@ -67,6 +67,7 @@ test('matchSlackApprovalReaction binds actor, emoji, and exact message timestamp
     actionIds: ['thread-1']
   });
   const reaction: SlackReaction = {
+    action: 'added',
     channel: 'D12345678',
     messageTs: '1787300000.000100',
     actorId: 'U12345678',
@@ -85,6 +86,10 @@ test('matchSlackApprovalReaction binds actor, emoji, and exact message timestamp
   );
   assert.equal(
     matchSlackApprovalReaction(reaction, { ...message, ts: '1787300002.000300' }, options),
+    null
+  );
+  assert.equal(
+    matchSlackApprovalReaction({ ...reaction, action: 'removed' }, message, options),
     null
   );
 });
@@ -145,7 +150,7 @@ test('Slack approval cards enforce metadata, block-id, and section limits', () =
       actionIds: ['thread-1'],
       context: { note: 'x'.repeat(4_000) }
     }),
-    /metadata is too large/
+    /event payload is too large/
   );
   assert.throws(
     () => buildSlackApprovalCard({
