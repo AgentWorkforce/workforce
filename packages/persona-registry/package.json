@@ -1,6 +1,6 @@
 {
   "name": "@agentworkforce/persona-registry",
-  "version": "4.1.46",
+  "version": "4.1.47",
   "private": false,
   "type": "module",
   "main": "dist/index.js",
