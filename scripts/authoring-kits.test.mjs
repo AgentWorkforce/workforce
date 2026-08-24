@@ -21,14 +21,16 @@ function personaAuthoringKits() {
   for (const dir of readdirSync('packages')) {
     let sources;
     try {
-      sources = readdirSync(`packages/${dir}/src`);
+      sources = readdirSync(`packages/${dir}/src`, { recursive: true });
     } catch {
       continue; // not a source package
     }
     const authorsPersonas = sources.some((file) => {
       if (!file.endsWith('.ts') || file.endsWith('.test.ts')) return false;
       const source = readFileSync(`packages/${dir}/src/${file}`, 'utf8');
-      return /export function define\w*Persona\b/.test(source);
+      // `function`, `const`, `async function`, and nested files all count — a
+      // kit that hides from this check is a kit that breaks on a fresh install.
+      return /export (?:async )?(?:function|const) define\w*Persona\b/.test(source);
     });
     if (authorsPersonas) kits.push(packageJson(dir).name);
   }
@@ -56,8 +58,13 @@ test('every persona-authoring kit ships in the CLI install tree', () => {
 
 test('authoring kits are published in lockstep with the CLI', () => {
   const publishWorkflow = readFileSync('.github/workflows/publish.yml', 'utf8');
-  const targets = publishWorkflow.match(/echo "packages=([^"]+)"/)[1].trim().split(/\s+/);
-  const published = new Set(targets.map((dir) => packageJson(dir).name));
+  const targets = publishWorkflow.match(/echo "packages=([^"]+)"/);
+  // Without this the reformatted-workflow case throws an unrelated TypeError
+  // and reads as a broken test rather than a broken workflow.
+  assert.ok(targets, 'publish workflow must declare its package targets');
+  const published = new Set(
+    targets[1].trim().split(/\s+/).map((dir) => packageJson(dir).name)
+  );
 
   for (const kit of personaAuthoringKits()) {
     assert.ok(published.has(kit), `${kit} must publish with the CLI to stay version-matched`);
