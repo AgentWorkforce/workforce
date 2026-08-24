@@ -2,7 +2,7 @@ import { randomUUID } from 'node:crypto';
 import { builtinModules } from 'node:module';
 import { mkdtemp, readFile, rm, stat } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
-import { dirname, join, resolve } from 'node:path';
+import { basename, dirname, join, resolve } from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 
 import { build, type Loader, type Plugin } from 'esbuild';
@@ -74,6 +74,8 @@ export async function loadPersonaSourceFile(
       resolveExtensions: RESOLVE_EXTENSIONS,
       plugins: [preserveLocalImportMetaUrlPlugin()],
       nodePaths: packageNodePaths(absInput)
+    }).catch((err) => {
+      throw withUnresolvedImportHint(err, absInput);
     });
 
     const mod = await import(pathToFileURL(compiledPath).href);
@@ -106,14 +108,88 @@ function extensionOf(inputPath: string): string {
   return idx === -1 ? '' : normalized.slice(idx);
 }
 
+/**
+ * esbuild `nodePaths` fallbacks for compiling authored `.ts`/`.js` personas
+ * and agents.
+ *
+ * An authored persona lives in the user's own repo, which on a fresh install
+ * usually has no `node_modules` at all — the CLI is installed globally, so
+ * `@agentworkforce/*` exists only inside the CLI's own install tree. esbuild
+ * resolves bare imports by walking up from the importer, so without these
+ * fallbacks `import { definePersona } from '@agentworkforce/persona-kit'`
+ * fails with "Could not resolve".
+ *
+ * Fallbacks are the full `node_modules` lookup chains of (in order) the
+ * persona file, this module (the installed `@agentworkforce/deploy`), and the
+ * cwd. The chain is computed the way Node's own resolver does it, including
+ * the case a naive `join(dir, 'node_modules')` gets wrong: when an ancestor
+ * *is* `node_modules`, that directory is itself the search root. Missing that
+ * produced `<prefix>/node_modules/node_modules` — a path that only exists in
+ * a monorepo checkout, which is why every installed CLI failed here while the
+ * dev layout worked.
+ *
+ * Order matters: the persona's own dependencies win over the CLI's copies,
+ * and every entry is only consulted after normal resolution has failed.
+ */
 export function packageNodePaths(absInput: string): string[] {
   const here = dirname(fileURLToPath(import.meta.url));
-  return [
-    join(dirname(absInput), 'node_modules'),
-    join(here, '..', 'node_modules'),
-    join(here, '..', '..', '..', 'node_modules'),
-    join(process.cwd(), 'node_modules')
-  ];
+  const seen = new Set<string>();
+  const paths: string[] = [];
+  for (const root of [dirname(resolve(absInput)), here, process.cwd()]) {
+    for (const dir of nodeModulesChain(root)) {
+      if (seen.has(dir)) continue;
+      seen.add(dir);
+      paths.push(dir);
+    }
+  }
+  return paths;
+}
+
+/** Every `node_modules` directory Node would search from `fromDir` upward. */
+export function nodeModulesChain(fromDir: string): string[] {
+  const chain: string[] = [];
+  let dir = resolve(fromDir);
+  for (;;) {
+    chain.push(basename(dir) === 'node_modules' ? dir : join(dir, 'node_modules'));
+    const parent = dirname(dir);
+    if (parent === dir) break;
+    dir = parent;
+  }
+  return chain;
+}
+
+/**
+ * Turn esbuild's bare "Could not resolve" into an actionable install hint.
+ *
+ * After `packageNodePaths`, an `@agentworkforce/*` import the CLI ships
+ * resolves on its own; what reaches here is a package neither the project nor
+ * the CLI has (a persona kit the CLI does not depend on, a third-party SDK the
+ * handler imports). Naming it plus the directory to install it in is the
+ * difference between a dead end and a one-line fix.
+ */
+export function withUnresolvedImportHint(error: unknown, absInput: string): unknown {
+  if (!(error instanceof Error)) return error;
+  const missing = unresolvedSpecifiers(error.message);
+  if (missing.length === 0) return error;
+
+  const projectDir = dirname(resolve(absInput));
+  error.message = [
+    error.message,
+    `Install the missing package${missing.length > 1 ? 's' : ''} where the persona lives:`,
+    `  cd ${projectDir} && npm install ${missing.join(' ')}`
+  ].join('\n');
+  return error;
+}
+
+function unresolvedSpecifiers(message: string): string[] {
+  const found = new Set<string>();
+  for (const match of message.matchAll(/Could not resolve "([^"]+)"/g)) {
+    const specifier = match[1];
+    // Relative/absolute imports are authoring mistakes, not missing installs.
+    if (specifier.startsWith('.') || specifier.startsWith('/')) continue;
+    found.add(specifier);
+  }
+  return [...found];
 }
 
 export function preserveLocalImportMetaUrlPlugin(): Plugin {
