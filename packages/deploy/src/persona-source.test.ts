@@ -1,5 +1,6 @@
 import assert from 'node:assert/strict';
 import { cp, mkdir, mkdtemp, rm, symlink, writeFile } from 'node:fs/promises';
+import { execFileSync } from 'node:child_process';
 import { createRequire } from 'node:module';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
@@ -43,6 +44,35 @@ test('withUnresolvedImportHint names the missing package and where to install it
   assert.ok(hinted instanceof Error);
   assert.match(hinted.message, /npm install @agentworkforce\/turn-kit/);
   assert.match(hinted.message, /\/repo\/customer-success\/app-signal/);
+});
+
+test('withUnresolvedImportHint installs the package, not the deep import path', () => {
+  const hinted = withUnresolvedImportHint(
+    new Error(
+      [
+        'ERROR: Could not resolve "@relayfile/adapter-core/triggers"',
+        'ERROR: Could not resolve "lodash/fp"'
+      ].join('\n')
+    ),
+    '/repo/persona.ts'
+  ) as Error;
+  assert.match(hinted.message, /npm install @relayfile\/adapter-core lodash$/m);
+});
+
+test('withUnresolvedImportHint quotes shell metacharacters', () => {
+  const hinted = withUnresolvedImportHint(
+    new Error(String.raw`ERROR: Could not resolve "evil; touch pwned"`),
+    "/repo/it's a dir/persona.ts"
+  ) as Error;
+  const command = hinted.message.split('\n').at(-1) as string;
+  assert.equal(command, String.raw`  cd '/repo/it'\''s a dir' && npm install 'evil; touch pwned'`);
+  // Round-trip through a shell to prove the injected command cannot run.
+  assert.deepEqual(
+    execFileSync('/bin/sh', ['-c', `set -- ${command.trim().split('npm install ')[1]}; printf '%s' "$1"`], {
+      encoding: 'utf8'
+    }),
+    'evil; touch pwned'
+  );
 });
 
 test('withUnresolvedImportHint ignores relative imports', () => {

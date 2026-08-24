@@ -173,10 +173,11 @@ export function withUnresolvedImportHint(error: unknown, absInput: string): unkn
   if (missing.length === 0) return error;
 
   const projectDir = dirname(resolve(absInput));
+  const install = missing.map(shellQuote).join(' ');
   error.message = [
     error.message,
     `Install the missing package${missing.length > 1 ? 's' : ''} where the persona lives:`,
-    `  cd ${projectDir} && npm install ${missing.join(' ')}`
+    `  cd ${shellQuote(projectDir)} && npm install ${install}`
   ].join('\n');
   return error;
 }
@@ -187,9 +188,32 @@ function unresolvedSpecifiers(message: string): string[] {
     const specifier = match[1];
     // Relative/absolute imports are authoring mistakes, not missing installs.
     if (specifier.startsWith('.') || specifier.startsWith('/')) continue;
-    found.add(specifier);
+    found.add(packageNameOf(specifier));
   }
   return [...found];
+}
+
+/**
+ * The package to install for an import specifier. A deep import
+ * (`@relayfile/adapter-core/triggers`, `lodash/fp`) must be reduced to its
+ * package name — npm reads the full specifier as a local directory or a git
+ * remote and would install the wrong thing, or nothing.
+ */
+function packageNameOf(specifier: string): string {
+  const segments = specifier.split('/');
+  return specifier.startsWith('@') ? segments.slice(0, 2).join('/') : segments[0];
+}
+
+/**
+ * Quote a value for the copy-pasteable `cd … && npm install …` hint. Both the
+ * path and the specifiers originate in the user's own source, but the hint is
+ * written to be pasted into a shell, so a specifier like `x; rm -rf ~` must not
+ * survive as two commands. Ordinary paths and package names are left bare so
+ * the common message stays readable.
+ */
+function shellQuote(value: string): string {
+  if (value.length > 0 && /^[\w@./:+-]+$/.test(value)) return value;
+  return `'${value.split("'").join(`'\\''`)}'`;
 }
 
 export function preserveLocalImportMetaUrlPlugin(): Plugin {
