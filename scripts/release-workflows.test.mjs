@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import { execFileSync } from 'node:child_process';
-import { mkdirSync, mkdtempSync, readFileSync, readdirSync, writeFileSync } from 'node:fs';
+import { mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
 import test from 'node:test';
@@ -114,6 +114,11 @@ const GIT_ENV = {
 
 function git(cwd, ...args) {
   return execFileSync('git', args, { cwd, encoding: 'utf8', env: GIT_ENV });
+}
+
+/** Temp repos are throwaway, but leaving a pile of them in tmpdir is rude. */
+function cleanup(...paths) {
+  for (const path of paths) rmSync(path, { recursive: true, force: true });
 }
 
 function writeVersions(dir, version) {
@@ -246,6 +251,29 @@ test('exhausted attempts fail loudly instead of stranding a rebuilt commit', () 
   assert.equal(git(run, 'rev-parse', 'HEAD').trim(), releaseBefore);
 });
 
+test('a non-branch target is refused before anything is pushed', () => {
+  const { root, seed, run } = stageRelease();
+  try {
+    // What a tag dispatch produces: github.ref_name is the tag, not a branch.
+    git(seed, 'tag', '-a', 'v9.9.9', '-m', 'a tag');
+    git(seed, 'push', '-q', 'origin', 'refs/tags/v9.9.9');
+    git(run, 'fetch', '-q', 'origin');
+
+    assert.throws(
+      () => runPushStep(run, { BRANCH: 'v9.9.9' }),
+      /not an existing branch on origin/,
+      'pushing HEAD to refs/heads/<tag> would invent a branch named after the tag'
+    );
+    git(seed, 'fetch', '-q', 'origin');
+    assert.throws(
+      () => git(seed, 'rev-parse', '--verify', 'origin/v9.9.9'),
+      'no branch may be created for the tag'
+    );
+  } finally {
+    cleanup(root);
+  }
+});
+
 test('release commit is a no-op when the branch already carries its files', () => {
   const { seed, run } = stageRelease();
 
@@ -281,6 +309,15 @@ for (const [name, workflow, push] of [
       !/git push origin HEAD --follow-tags/.test(workflow),
       'the unreconciled push is what left npm ahead of git on 2026-08-24'
     );
+  });
+
+  test(`${name} refuses a dispatch that is not from a branch`, () => {
+    const lines = workflow.split('\n');
+    const guard = lines.findIndex((line) => line.trim() === '- name: Require a branch dispatch');
+    assert.notEqual(guard, -1, 'a tag dispatch would push the release commit to refs/heads/<tag>');
+    const firstStep = lines.findIndex((line) => /^\s*- name: /.test(line));
+    assert.equal(guard, firstStep, 'the guard must run before anything is published');
+    assert.match(workflow, /if: \$\{\{ github\.ref_type != 'branch' \}\}/);
   });
 
   test(`${name} checks out the branch tip, not the dispatch SHA`, () => {
@@ -331,4 +368,6 @@ test('internal personas make a single release commit for every pack', () => {
   assert.equal(subjects.length, 2, 'one release commit on top of the base, not one per pack');
   assert.equal(subjects[0], 'chore(release): @scope/persona-a@1.2.4 @scope/persona-b@4.5.7');
   assert.ok(readdirSync(root).includes('pushed.marker'), 'must delegate to the push script');
+
+  cleanup(root, '/tmp/persona-publish-targets.tsv');
 });

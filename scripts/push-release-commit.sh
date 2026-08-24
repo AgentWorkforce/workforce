@@ -23,6 +23,15 @@ set -euo pipefail
 BRANCH="${BRANCH:-main}"
 ATTEMPTS="${PUSH_ATTEMPTS:-5}"
 
+# Callers pass `github.ref_name`, which is a tag name on a tag dispatch. Pushing
+# HEAD to refs/heads/<tag> would invent a branch named after the tag and leave
+# the real branch stale while npm already has the new versions. The workflows
+# reject a non-branch dispatch before publishing; this is the backstop.
+if ! git show-ref --verify --quiet "refs/remotes/origin/$BRANCH"; then
+  echo "::error title=Release commit not pushed::'$BRANCH' is not an existing branch on origin. Publish from a branch." >&2
+  exit 1
+fi
+
 for attempt in $(seq 1 "$ATTEMPTS"); do
   if git push origin "HEAD:refs/heads/$BRANCH"; then
     echo "Pushed the release commit to $BRANCH on attempt $attempt."
