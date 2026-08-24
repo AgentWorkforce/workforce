@@ -119,6 +119,10 @@ function stageRelease() {
   git(root, 'clone', '-q', origin, seed);
   writeVersions(seed, '4.1.47');
   writeFileSync(join(seed, 'packages', 'cli', 'source.ts'), 'export const x = 1;\n');
+  // A package this release does not bump, present in both trees — the shape
+  // that separates "files this commit changed" from "files matching a pattern".
+  mkdirSync(join(seed, 'packages', 'other'), { recursive: true });
+  writeFileSync(join(seed, 'packages', 'other', 'package.json'), '{"version":"4.1.47"}\n');
   git(seed, 'add', '-A');
   git(seed, 'commit', '-qm', 'base 4.1.47');
   git(seed, 'push', '-q', 'origin', 'HEAD:refs/heads/main');
@@ -132,13 +136,13 @@ function stageRelease() {
   return { root, seed, run };
 }
 
-function runPushStep(cwd) {
+function runPushStep(cwd, env = {}) {
   // /bin/bash, not the PATH bash: the runner's is 5.x but macOS ships 3.2,
   // so this also pins the script to portable syntax.
   return execFileSync('/bin/bash', [resolve(pushScript)], {
     cwd,
     encoding: 'utf8',
-    env: { ...GIT_ENV, BRANCH: 'main' },
+    env: { ...GIT_ENV, BRANCH: 'main', ...env },
     stdio: ['ignore', 'pipe', 'pipe'],
   });
 }
@@ -181,6 +185,46 @@ test('release commit is rebuilt on the tip when the branch moved mid-run', () =>
   assert.match(history, /@scope\/cli@4\.1\.49/);
   assert.match(history, /@scope\/cli@4\.1\.48/);
   assert.match(history, /feat: merged mid-run/);
+});
+
+test('rebuilding leaves files the release commit never touched alone', () => {
+  const { seed, run } = stageRelease();
+
+  // A concurrent release bumps a package that this run's release commit left
+  // untouched — e.g. the lockstep workflow landing while a persona run retries.
+  writeFileSync(join(seed, 'packages', 'other', 'package.json'), '{"version":"9.9.9"}\n');
+  git(seed, 'commit', '-qam', 'chore(release): @scope/other@9.9.9');
+  git(seed, 'push', '-q', 'origin', 'HEAD:refs/heads/main');
+
+  runPushStep(run);
+
+  // A pattern over the tree would have reverted this to the release commit's
+  // base; only the files the release commit actually changed may move.
+  assert.equal(versionOnMain(seed, 'other'), '9.9.9');
+  assert.equal(versionOnMain(seed, 'cli'), '4.1.49');
+});
+
+test('exhausted attempts fail loudly instead of stranding a rebuilt commit', () => {
+  const { seed, run } = stageRelease();
+
+  writeVersions(seed, '4.1.48');
+  git(seed, 'commit', '-qam', 'chore(release): @scope/cli@4.1.48 @scope/deploy@4.1.48');
+  git(seed, 'push', '-q', 'origin', 'HEAD:refs/heads/main');
+
+  const tipBefore = git(seed, 'rev-parse', 'origin/main').trim();
+  const releaseBefore = git(run, 'rev-parse', 'HEAD').trim();
+  assert.throws(
+    () => runPushStep(run, { PUSH_ATTEMPTS: '1' }),
+    /Release commit not pushed/,
+    'a spent attempt budget must surface, not exit clean'
+  );
+
+  git(seed, 'fetch', '-q', 'origin');
+  assert.equal(git(seed, 'rev-parse', 'origin/main').trim(), tipBefore, 'branch must be untouched');
+  // No rebuild on the last attempt: rebuilding one that can never be pushed
+  // burns the release commit and leaves the checkout disagreeing with the
+  // "reconcile by hand" the error message asks for.
+  assert.equal(git(run, 'rev-parse', 'HEAD').trim(), releaseBefore);
 });
 
 test('release commit is a no-op when the branch already carries its files', () => {

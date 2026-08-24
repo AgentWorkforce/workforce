@@ -11,55 +11,63 @@
 # it. Anything landing on the branch mid-run does this — a merged PR, another
 # release commit — so reconcile instead of failing.
 #
-# HEAD must be a single release commit. Callers that create several commits per
-# run need a different shape and should not use this script.
+# HEAD must be a single release commit with a parent. Callers that create
+# several commits per run need a different shape and should not use this script.
 #
 # Env:
-#   BRANCH      branch to push to (default: main)
-#   RELEASE_RE  regex matching the files the release commit owns
+#   BRANCH         branch to push to (default: main)
+#   PUSH_ATTEMPTS  how many pushes to make before giving up (default: 5)
 #
 set -euo pipefail
 
 BRANCH="${BRANCH:-main}"
+ATTEMPTS="${PUSH_ATTEMPTS:-5}"
 
-# The files a release commit owns. Matched with a regex over the full tree
-# listing rather than a git pathspec: `git ls-tree` does not glob, and quietly
-# returns a short list instead of erroring — which would rebuild the release
-# commit with no version bumps in it.
-RELEASE_RE="${RELEASE_RE:-^(packages/[^/]+/(package\.json|CHANGELOG\.md)|CHANGELOG\.md)\$}"
-
-for attempt in 1 2 3 4 5; do
+for attempt in $(seq 1 "$ATTEMPTS"); do
   if git push origin "HEAD:refs/heads/$BRANCH"; then
     echo "Pushed the release commit to $BRANCH on attempt $attempt."
     exit 0
   fi
 
+  # Every rebuild must get a push of its own, so stop rebuilding once the last
+  # attempt has been spent rather than leaving a commit that never gets tried.
+  if [ "$attempt" -eq "$ATTEMPTS" ]; then
+    break
+  fi
+
   echo "::warning::push to $BRANCH was rejected (attempt $attempt) - rebuilding the release commit on the current tip"
   REL=$(git rev-parse HEAD)
+  if ! git rev-parse -q --verify "$REL^" >/dev/null; then
+    echo "::error title=Release commit not pushed::HEAD has no parent, so there is no release commit to rebuild. Reconcile $BRANCH by hand." >&2
+    exit 1
+  fi
   MSG=$(git log -1 --format=%B "$REL")
   git fetch origin "$BRANCH"
 
-  # Re-apply only files present in BOTH trees: `git checkout` with a
-  # path that is missing from either side aborts under `set -e`, and
-  # this is the one code path that must not die. Intersecting also
-  # avoids resurrecting a file the newer tip deleted.
-  FILES=$(comm -12 \
-    <(git ls-tree -r --name-only "$REL" | grep -E "$RELEASE_RE" | sort) \
-    <(git ls-tree -r --name-only "origin/$BRANCH" | grep -E "$RELEASE_RE" | sort))
+  # Exactly the files this release commit changed, taken from its own diff.
+  # A pattern over the tree would also pick up files the release never touched
+  # and revert them — another package's version bumped by whatever landed on
+  # the branch mid-run, say. `--diff-filter=d` drops paths the commit deleted,
+  # which cannot be checked out of it.
+  FILES=$(git diff --name-only --diff-filter=d "$REL^" "$REL")
   if [ -z "$FILES" ]; then
-    echo "::error title=Release commit not pushed::None of this run's release files exist on $BRANCH. Packages are on npm; reconcile $BRANCH by hand." >&2
+    echo "::error title=Release commit not pushed::The commit at HEAD adds or modifies no files. Packages may already be on npm; reconcile $BRANCH by hand." >&2
     exit 1
   fi
 
-  # $FILES is deliberately unquoted below so it splits into one
-  # argument per path; every path is a literal package.json or
-  # CHANGELOG.md, so there is nothing to split on but newlines.
-  # noglob keeps the shell from expanding them as patterns.
+  git diff --name-only --diff-filter=D "$REL^" "$REL" |
+    while read -r removed; do
+      echo "::warning::$removed was deleted by the release commit; the rebuild does not re-apply that deletion"
+    done
+
+  # $FILES is deliberately unquoted below so it splits into one argument per
+  # path. Release files are package.json / CHANGELOG.md paths with no spaces;
+  # noglob keeps the shell from expanding any of them as a pattern.
   set -f
 
-  # Our copy of a release file overwrites the tip's. That is right for
-  # a concurrent release commit and wrong for a hand-edited changelog,
-  # so say which files it applies to instead of losing them silently.
+  # This run's copy of a file it owns overwrites the tip's. That is right for a
+  # concurrent release commit and wrong for a hand-edited changelog, so name the
+  # overlap instead of losing it silently.
   git diff --name-only "$REL^" "origin/$BRANCH" -- $FILES |
     while read -r changed; do
       echo "::warning::$changed also changed on $BRANCH during this run - this run's copy wins"
@@ -69,6 +77,7 @@ for attempt in 1 2 3 4 5; do
   git checkout "$REL" -- $FILES
   git add -- $FILES
   set +f
+
   if git diff --cached --quiet; then
     echo "$BRANCH already carries this run's release files; nothing to push."
     exit 0
@@ -77,5 +86,5 @@ for attempt in 1 2 3 4 5; do
   sleep $((attempt * 5))
 done
 
-echo "::error title=Release commit not pushed::Packages are on npm but $BRANCH could not be updated after 5 attempts. Reconcile the workspace versions on $BRANCH by hand." >&2
+echo "::error title=Release commit not pushed::Packages are on npm but $BRANCH could not be updated in $ATTEMPTS attempts. Reconcile the workspace versions on $BRANCH by hand." >&2
 exit 1
