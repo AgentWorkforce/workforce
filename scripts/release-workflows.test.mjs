@@ -110,7 +110,10 @@ function writeVersions(dir, version) {
 function stageRelease() {
   const root = mkdtempSync(join(tmpdir(), 'publish-push-'));
   const origin = join(root, 'origin.git');
-  git(root, 'init', '-q', '--bare', origin);
+  // -b main: the clones take their branch from the bare repo's HEAD, and a
+  // runner whose init.defaultBranch is `master` would otherwise track a ref
+  // these tests never push.
+  git(root, 'init', '-q', '--bare', '-b', 'main', origin);
 
   const seed = join(root, 'seed');
   git(root, 'clone', '-q', origin, seed);
@@ -157,7 +160,6 @@ test('release commit is rebuilt on the tip when the branch moved mid-run', () =>
   const { seed, run } = stageRelease();
 
   // Another publish run's release commit, then a PR merging mid-run.
-  git(seed, 'pull', '-q');
   writeVersions(seed, '4.1.48');
   git(seed, 'commit', '-qam', 'chore(release): @scope/cli@4.1.48 @scope/deploy@4.1.48');
   writeFileSync(join(seed, 'packages', 'cli', 'source.ts'), 'export const x = 2;\n');
@@ -187,7 +189,6 @@ test('release commit is a no-op when the branch already carries its files', () =
   // Same release files, different commit — a re-dispatched run that got there
   // first. The differing message keeps the SHAs apart; identical content and
   // timestamps would otherwise produce the same commit and fast-forward.
-  git(seed, 'pull', '-q');
   writeVersions(seed, '4.1.49');
   git(seed, 'commit', '-qam', 'chore(release): 4.1.49 from an earlier dispatch');
   git(seed, 'push', '-q', 'origin', 'HEAD:refs/heads/main');
