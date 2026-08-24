@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import { execFileSync } from 'node:child_process';
-import { mkdirSync, mkdtempSync, readFileSync, writeFileSync } from 'node:fs';
+import { mkdirSync, mkdtempSync, readFileSync, readdirSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
 import test from 'node:test';
@@ -8,6 +8,10 @@ import test from 'node:test';
 const publishWorkflow = readFileSync('.github/workflows/publish.yml', 'utf8');
 const verifyWorkflow = readFileSync('.github/workflows/verify-publish.yml', 'utf8');
 const personaWorkflow = readFileSync('.github/workflows/publish-persona.yml', 'utf8');
+const internalPersonaWorkflow = readFileSync(
+  '.github/workflows/publish-internal-personas.yml',
+  'utf8'
+);
 
 function publishTargetDirectories(workflow) {
   const match = workflow.match(/echo "packages=([^"]+)"/);
@@ -84,6 +88,21 @@ test('scoped CLI verification checks only the supported thin-entry contract', ()
  * against throwaway git repos that replay that shape.
  */
 const pushScript = 'scripts/push-release-commit.sh';
+
+function stepScript(workflow, name) {
+  const lines = workflow.replaceAll('\r\n', '\n').split('\n');
+  const start = lines.findIndex((line) => line.trim() === `- name: ${name}`);
+  assert.notEqual(start, -1, `workflow must define a "${name}" step`);
+
+  const next = lines.findIndex((line, index) => index > start && /^\s*- name: /.test(line));
+  const stepLines = lines.slice(start, next === -1 ? lines.length : next);
+  const runIndex = stepLines.findIndex((line) => /^\s+run: \|\s*$/.test(line));
+  assert.notEqual(runIndex, -1, `"${name}" must carry a literal run block`);
+
+  const body = stepLines.slice(runIndex + 1);
+  const indent = body.find((line) => line.trim())?.match(/^\s*/)[0] ?? '';
+  return body.map((line) => (line.startsWith(indent) ? line.slice(indent.length) : line)).join('\n');
+}
 
 const GIT_ENV = {
   ...process.env,
@@ -242,20 +261,25 @@ test('release commit is a no-op when the branch already carries its files', () =
   assert.equal(versionOnMain(seed, 'cli'), '4.1.49');
 });
 
-for (const [name, workflow] of [
-  ['publish.yml', publishWorkflow],
-  ['publish-persona.yml', personaWorkflow],
+// Every workflow that publishes to npm and then updates git. `push` names the
+// step that lands the release commit; each must reconcile, and must tag only
+// after that commit is on the branch.
+for (const [name, workflow, push] of [
+  ['publish.yml', publishWorkflow, 'Push release commit'],
+  ['publish-persona.yml', personaWorkflow, 'Push release commit'],
+  ['publish-internal-personas.yml', internalPersonaWorkflow, 'Commit + push release'],
 ]) {
   test(`${name} pushes the release commit before tagging it`, () => {
     const lines = workflow.split('\n');
-    const push = lines.findIndex((line) => line.trim() === '- name: Push release commit');
+    const pushStep = lines.findIndex((line) => line.trim() === `- name: ${push}`);
     const tag = lines.findIndex((line) => line.trim() === '- name: Tag + push tags');
-    assert.notEqual(push, -1, 'must reconcile its push');
+    assert.notEqual(pushStep, -1, 'must reconcile its push');
     assert.notEqual(tag, -1, 'must tag in its own step');
-    assert.ok(push < tag, 'tagging before the push can strand tags on an unreachable commit');
+    assert.ok(pushStep < tag, 'tagging before the push can strand tags on an unreachable commit');
+    assert.ok(workflow.includes(pushScript), 'must use the shared reconciling push script');
     assert.ok(
-      workflow.includes(`run: ${pushScript}`),
-      'must use the shared reconciling push script'
+      !/git push origin HEAD --follow-tags/.test(workflow),
+      'the unreconciled push is what left npm ahead of git on 2026-08-24'
     );
   });
 
@@ -267,3 +291,44 @@ for (const [name, workflow] of [
     );
   });
 }
+
+/**
+ * publish-internal-personas.yml used to commit and tag once per persona inside
+ * its publish loop, which cannot be reconciled onto a branch that moved. It now
+ * stages every bump and makes one release commit after the loop; this exercises
+ * that step against a staged index rather than trusting the YAML to read right.
+ */
+test('internal personas make a single release commit for every pack', () => {
+  const root = mkdtempSync(join(tmpdir(), 'persona-release-'));
+  git(root, 'init', '-q', '-b', 'main', root);
+
+  for (const [dir, version] of [['persona-a', '1.2.3'], ['persona-b', '4.5.6']]) {
+    mkdirSync(join(root, 'packages', dir), { recursive: true });
+    writeFileSync(join(root, 'packages', dir, 'package.json'), `{"version":"${version}"}\n`);
+  }
+  git(root, 'add', '-A');
+  git(root, 'commit', '-qm', 'base');
+
+  // What the publish loop leaves behind: bumped manifests, staged, uncommitted.
+  writeFileSync(join(root, 'packages', 'persona-a', 'package.json'), '{"version":"1.2.4"}\n');
+  writeFileSync(join(root, 'packages', 'persona-b', 'package.json'), '{"version":"4.5.7"}\n');
+  git(root, 'add', '-A');
+  writeFileSync(
+    '/tmp/persona-publish-targets.tsv',
+    '@scope/persona-a\tpackages/persona-a\t1.2.4\n@scope/persona-b\tpackages/persona-b\t4.5.7\n'
+  );
+
+  // The step ends by delegating the push; stub it so the test stays local.
+  mkdirSync(join(root, 'scripts'), { recursive: true });
+  writeFileSync(join(root, 'scripts', 'push-release-commit.sh'), '#!/bin/sh\ntouch pushed.marker\n');
+  execFileSync('chmod', ['+x', join(root, 'scripts', 'push-release-commit.sh')]);
+
+  const script = join(root, 'commit-step.sh');
+  writeFileSync(script, stepScript(internalPersonaWorkflow, 'Commit + push release'));
+  execFileSync('/bin/bash', [script], { cwd: root, encoding: 'utf8', env: GIT_ENV });
+
+  const subjects = git(root, 'log', '--format=%s').trim().split('\n');
+  assert.equal(subjects.length, 2, 'one release commit on top of the base, not one per pack');
+  assert.equal(subjects[0], 'chore(release): @scope/persona-a@1.2.4 @scope/persona-b@4.5.7');
+  assert.ok(readdirSync(root).includes('pushed.marker'), 'must delegate to the push script');
+});
