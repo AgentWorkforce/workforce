@@ -10,6 +10,11 @@ import {
   type StoredAuth
 } from '@agent-relay/cloud';
 import {
+  formatPersonaSourceLabel,
+  PersonaResolutionError,
+  resolvePersonaReference
+} from '@agentworkforce/persona-registry';
+import {
   canonicalizeCloudUrl,
   clearActiveWorkspace,
   clearStoredWorkspaceToken,
@@ -67,7 +72,7 @@ export function configureDeployCommandForTest(overrides: Partial<DeployCommandDe
 }
 
 /**
- * Argv parser + dispatcher for `agentworkforce deploy <persona-path> [flags]`.
+ * Argv parser + dispatcher for `agentworkforce deploy <persona-id|persona-path>`.
  * Keeps cli.ts itself slim — the file is already a large dispatcher and
  * each command lands in its own module when it grows past trivial.
  */
@@ -253,7 +258,11 @@ export async function runLogout(args: readonly string[]): Promise<void> {
   }
 }
 
-const DEPLOY_USAGE = `usage: agentworkforce deploy <persona-path> [flags]
+const DEPLOY_USAGE = `usage: agentworkforce deploy <persona-id|persona-path> [flags]
+
+A bare id resolves through the registry cascade — including agents kept in
+.agentworkforce/workforce/agents/<name>/. A path may be a prebuilt persona.json
+or an authored persona.ts/js.
 
 Flags:
   --mode dev|sandbox|cloud    Pick a run mode (prompts in an interactive terminal)
@@ -302,6 +311,49 @@ Flags:
 `;
 
 const ON_EXISTS_CHOICES = ['update', 'destroy', 'cancel'] as const;
+
+/**
+ * A selector is a path when it carries path syntax or a persona-source
+ * extension. Anything else is a persona id looked up through the registry
+ * cascade, so an agent that lives in `.agentworkforce/workforce/agents/<name>/`
+ * deploys by name from anywhere in the repo.
+ *
+ * Syntax decides, not the filesystem: a bare `proposal-agent` that happens to
+ * match a directory in cwd must still mean the persona, or the same command
+ * would deploy different things depending on where it ran.
+ */
+export function looksLikeDeployPath(selector: string): boolean {
+  return (
+    selector.startsWith('.') ||
+    selector.startsWith('/') ||
+    selector.startsWith('~') ||
+    selector.includes(path.sep) ||
+    selector.includes('/') ||
+    isPersonaSourcePath(selector) ||
+    selector.toLowerCase().endsWith('.json')
+  );
+}
+
+export function resolveDeployPersonaSelector(selector: string): string {
+  if (looksLikeDeployPath(selector)) return path.resolve(selector);
+
+  let resolved;
+  try {
+    resolved = resolvePersonaReference(selector);
+  } catch (err) {
+    if (err instanceof PersonaResolutionError) {
+      die(`deploy: ${err.message}`);
+    }
+    throw err;
+  }
+  if (!resolved.path) {
+    die(
+      `deploy: persona "${selector}" resolves to the ${formatPersonaSourceLabel(resolved.source)} catalog, which has no file to deploy. ` +
+        'Pass a path to a persona.json or persona.ts instead.'
+    );
+  }
+  return resolved.path;
+}
 
 export function parseDeployArgs(args: readonly string[]): DeployOptions {
   let personaPath: string | undefined;
@@ -373,14 +425,14 @@ export function parseDeployArgs(args: readonly string[]): DeployOptions {
     } else if (a.startsWith('--')) {
       die(`deploy: unknown flag "${a}"`);
     } else if (!personaPath) {
-      personaPath = path.resolve(a);
+      personaPath = resolveDeployPersonaSelector(a);
     } else {
       die(`deploy: unexpected positional argument "${a}"`);
     }
   }
 
   if (!personaPath) {
-    die('deploy: missing persona path. Usage: agentworkforce deploy <persona-path>');
+    die('deploy: missing persona. Usage: agentworkforce deploy <persona-id|persona-path>');
   }
 
   return {

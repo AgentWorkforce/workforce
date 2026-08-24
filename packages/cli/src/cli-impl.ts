@@ -299,9 +299,11 @@ Commands:
                       persona-maker with the task as input, or exits non-zero
                       (non-TTY) with a hint.
                       Exit codes: 0 match, 2 no match, 3 picker unavailable.
-  deploy <persona-path> [flags]
-                      Deploy a persona as a managed agent. <persona-path> may
-                      be prebuilt persona.json or authored persona.ts/js.
+  deploy <persona-id|persona-path> [flags]
+                      Deploy a persona as a managed agent. A bare id resolves
+                      through the registry cascade (including agents kept in
+                      .agentworkforce/workforce/agents/<name>/); a path may be
+                      prebuilt persona.json or authored persona.ts/js.
                       Modes:
                         --mode dev          run the persona locally (default if
                                             no Daytona/workspace creds resolve)
