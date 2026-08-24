@@ -1,6 +1,6 @@
 {
   "name": "@agentworkforce/compose",
-  "version": "4.1.49",
+  "version": "4.1.50",
   "private": false,
   "type": "module",
   "main": "dist/index.js",
