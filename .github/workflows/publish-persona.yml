@@ -65,6 +65,10 @@ jobs:
         uses: actions/checkout@v6
         with:
           fetch-depth: 0
+          # `workflow_dispatch` pins `github.sha` at dispatch time; a queued run
+          # would otherwise bump and changelog from a stale commit. See the same
+          # note in publish.yml.
+          ref: ${{ github.ref_name }}
 
       - name: Setup pnpm
         uses: pnpm/action-setup@v5
@@ -177,11 +181,26 @@ jobs:
           echo "==> Publishing $TARBALL $COMMON_FLAGS"
           npm publish "$TARBALL" $COMMON_FLAGS
 
-      - name: Tag + push
+      # Same shape as publish.yml: the package is already on npm by now, so the
+      # push reconciles onto whatever landed on the branch mid-run rather than
+      # failing, and the tag is created only once the commit is on the branch.
+      - name: Push release commit
+        if: ${{ github.event.inputs.dry_run != 'true' && (github.event.inputs.version != 'none' || github.event.inputs.custom_version != '') }}
+        env:
+          BRANCH: ${{ github.ref_name }}
+        run: scripts/push-release-commit.sh
+
+      - name: Tag + push tags
         if: ${{ github.event.inputs.dry_run != 'true' && (github.event.inputs.version != 'none' || github.event.inputs.custom_version != '') }}
         run: |
-          git tag -a "personas-core-v${{ steps.bump.outputs.version }}" -m "${{ steps.package.outputs.npm_name }}@${{ steps.bump.outputs.version }}"
-          git push origin HEAD --follow-tags
+          set -euo pipefail
+          TAG="personas-core-v${{ steps.bump.outputs.version }}"
+          if git rev-parse -q --verify "refs/tags/$TAG" >/dev/null; then
+            echo "::warning::tag $TAG already exists - leaving it as is"
+            exit 0
+          fi
+          git tag -a "$TAG" -m "${{ steps.package.outputs.npm_name }}@${{ steps.bump.outputs.version }}"
+          git push origin "refs/tags/$TAG"
 
       - name: Summary
         run: |
