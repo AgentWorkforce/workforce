@@ -7,6 +7,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+
+- Migrated from the deprecated `@daytonaio/sdk` to `@daytona/sdk` (same API, no
+  breaking changes upstream).
+- Bumped `@agent-relay/cloud` to ^10.1.0 to match `@agentworkforce/cli` and
+  deduplicate the installed tree.
+
 ## [4.1.50] - 2026-08-24
 
 ### Released

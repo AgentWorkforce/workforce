@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import { mkdtemp, rm, writeFile } from 'node:fs/promises';
 import path from 'node:path';
 import os from 'node:os';
-import { createProxySandboxClient, SANDBOX_BUNDLE_DIR } from './sandbox-client.js';
+import { createByoSandboxClient, createProxySandboxClient, SANDBOX_BUNDLE_DIR } from './sandbox-client.js';
 import type { BundleResult } from '../types.js';
 
 interface RecordedCall {
@@ -254,4 +254,34 @@ test('proxy client throws when npm install in the sandbox fails', async () => {
   } finally {
     await rm(dir, { recursive: true, force: true });
   }
+});
+
+test('createByoSandboxClient builds a client from Daytona credentials', () => {
+  const client = createByoSandboxClient({ apiKey: 'sk_byo' });
+
+  assert.equal(typeof client.mint, 'function');
+  assert.equal(typeof client.exec, 'function');
+});
+
+test('createByoSandboxClient rejects missing Daytona credentials up front', () => {
+  assert.throws(
+    () => createByoSandboxClient({}),
+    /BYO sandbox client requires DAYTONA_API_KEY/
+  );
+});
+
+// A JWT token is only usable with an organization id. The SDK enforces that in
+// its constructor, which runs eagerly here — so an incomplete JWT config fails
+// while building the client rather than at the first mint().
+test('createByoSandboxClient rejects a JWT token with no organization id', () => {
+  assert.throws(
+    () => createByoSandboxClient({ jwtToken: 'jwt_probe' }),
+    /DAYTONA_ORGANIZATION_ID is required/
+  );
+});
+
+test('createByoSandboxClient accepts a JWT token paired with an organization id', () => {
+  const client = createByoSandboxClient({ jwtToken: 'jwt_probe', organizationId: 'org_1' });
+
+  assert.equal(typeof client.mint, 'function');
 });
