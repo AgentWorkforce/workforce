@@ -35,7 +35,7 @@
     "dev:cli": "node packages/cli/dist/cli.js",
     "typecheck": "pnpm -r typecheck && pnpm run typecheck:examples",
     "typecheck:examples": "tsc -p examples/tsconfig.json --noEmit",
-    "test": "node --test scripts/release-workflows.test.mjs && pnpm -r test && pnpm run test:e2e:agent-card",
+    "test": "node --test \"scripts/*.test.mjs\" && pnpm -r test && pnpm run test:e2e:agent-card",
     "test:e2e:agent-card": "pnpm -r build && tsx scripts/e2e-agent-card.ts",
     "lint": "pnpm -r lint",
     "check": "pnpm run lint && pnpm run typecheck && pnpm run test"

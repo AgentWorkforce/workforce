@@ -18,6 +18,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   from the working tree's own `node_modules` — including an ancestor's — is
   told to update without `-g`.
 
+## [4.1.50] - 2026-08-24
+
+### Fixed
+
+- Ship every persona-authoring kit in the CLI install tree (#327)
+
 ## [4.1.46] - 2026-08-19
 
 ### Added

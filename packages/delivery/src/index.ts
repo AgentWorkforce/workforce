@@ -27,16 +27,29 @@ export {
   linkSlackMentions,
   loadSlackUsers,
   readSlackMessage,
+  readSlackReaction,
   requireSlackReceipt,
   resolveSlackUserId,
   slackSkipReason,
   stripSlackLeadingMention,
   type SlackInboundMessage,
+  type SlackReaction,
   type SlackMentionIndex,
   type SlackUser,
   type SlackUsersOptions,
   type SlackUsersWarning
 } from './slack.js';
+
+export {
+  buildSlackApprovalCard,
+  matchSlackApprovalReaction,
+  readSlackApproval,
+  type MatchSlackApprovalOptions,
+  type ReadSlackApprovalOptions,
+  type SlackApproval,
+  type SlackApprovalCard,
+  type SlackApprovalCardOptions
+} from './slack-approval.js';
 
 export { input, list, withTimeout, fetchWithTimeout } from './helpers.js';
 

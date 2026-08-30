@@ -55,10 +55,26 @@ jobs:
       versions: ${{ steps.bump.outputs.versions }}
       release_version: ${{ steps.bump.outputs.release_version }}
     steps:
+      # `github.ref_name` is the branch this run pushes its release commit to.
+      # On a tag dispatch it would be the tag name, and the push would create a
+      # branch named after the tag while npm already has the new versions.
+      - name: Require a branch dispatch
+        if: ${{ github.ref_type != 'branch' }}
+        run: |
+          echo "::error title=Dispatch from a branch::This workflow publishes and then pushes a release commit to '${{ github.ref_name }}', which is a ${{ github.ref_type }}. Re-run it from a branch."
+          exit 1
+
       - name: Checkout
         uses: actions/checkout@v6
         with:
           fetch-depth: 0
+          # `workflow_dispatch` pins `github.sha` at dispatch time, but the
+          # concurrency group above makes a second dispatch *queue* — so by the
+          # time it runs, that SHA can be several commits stale. Building,
+          # bumping and changelogging from it produced 2026-08-24's split brain
+          # (run 32713237250 bumped from a pre-release commit and then could not
+          # push). Take the branch tip at run start instead.
+          ref: ${{ github.ref_name }}
 
       - name: Setup pnpm
         uses: pnpm/action-setup@v5
@@ -625,18 +641,50 @@ jobs:
             fi
           done
 
-      # Annotated tags (-a) so `git push --follow-tags` actually pushes them;
-      # lightweight tags are skipped by --follow-tags.
-      - name: Tag + push
+      # This step runs *after* the packages are already on npm, so failing
+      # here is the worst outcome available: the registry moves ahead of git
+      # and the next run bumps from a version main has never seen. A plain
+      # `git push` is rejected by anything that landed on the branch mid-run —
+      # a merged PR, or another publish run's release commit (2026-08-24).
+      #
+      # So don't fail: rebuild the release commit on the current tip and retry.
+      # This run's version strings are what was actually published, so they win;
+      # every other file comes from the newer branch tip.
+      - name: Push release commit
+        if: ${{ github.event.inputs.dry_run != 'true' && (github.event.inputs.version != 'none' || github.event.inputs.custom_version != '') }}
+        env:
+          BRANCH: ${{ github.ref_name }}
+        run: scripts/push-release-commit.sh
+
+      # Tags are created only once the release commit is on the branch, so a
+      # rejected push can never strand them on an unreachable commit — which is
+      # exactly what run 32713237250 did with fifteen 4.1.49 tags. Annotated
+      # (-a) because the create-release job checks the canonical tag out.
+      - name: Tag + push tags
         if: ${{ github.event.inputs.dry_run != 'true' && (github.event.inputs.version != 'none' || github.event.inputs.custom_version != '') }}
         run: |
+          set -euo pipefail
+          CREATED=""
           for entry in ${{ steps.bump.outputs.versions }}; do
             pkg="${entry%%:*}"
             version="${entry##*:}"
+            TAG="$pkg-v$version"
             NPM_NAME=$(node -p "require('./packages/$pkg/package.json').name")
-            git tag -a "$pkg-v$version" -m "$NPM_NAME@$version"
+            if git rev-parse -q --verify "refs/tags/$TAG" >/dev/null; then
+              # Left behind by an earlier run that published this version but
+              # failed before its commit landed. Repointing a published tag is
+              # not this workflow's call, so leave it and say so.
+              echo "::warning::tag $TAG already exists - leaving it as is"
+              continue
+            fi
+            git tag -a "$TAG" -m "$NPM_NAME@$version"
+            CREATED="$CREATED refs/tags/$TAG"
           done
-          git push origin HEAD --follow-tags
+          if [ -n "$CREATED" ]; then
+            set -f
+            git push origin $CREATED
+            set +f
+          fi
 
       - name: Summary
         run: |

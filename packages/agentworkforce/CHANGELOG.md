@@ -15,6 +15,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   including when the project's own launcher is the one invoked, via `npx`,
   `node_modules/.bin`, or an npm script.
 
+## [4.1.50] - 2026-08-24
+
+### Released
+
+- v4.1.50
+
 ## [4.1.41] - 2026-08-14
 
 ### Released
