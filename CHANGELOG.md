@@ -8,6 +8,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- `agentworkforce --version` tells you when a newer release is published and
+  prints the command that installs it.
+
 ### Changed
 
 - `@agentworkforce/deploy` and `@agentworkforce/daytona-runner` migrated off the

@@ -694,12 +694,128 @@ test('main: --version prints the package version', async () => {
   try {
     const { stderr, stdout, exitCode } = await runCliCapturingStderr(
       ['--version'],
-      { AGENT_WORKFORCE_HOME: workforceHome }
+      {
+        AGENT_WORKFORCE_HOME: workforceHome,
+        // Keep the registry out of this assertion; the update check has its
+        // own tests below.
+        AGENTWORKFORCE_NO_UPDATE_CHECK: '1'
+      }
     );
     assert.equal(exitCode, 0);
     assert.equal(stderr, '');
     assert.equal(stdout, `${CLI_VERSION}\n`);
   } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+/**
+ * Neutralizes both update-check opt-outs for a child process, so a test that
+ * asserts on the notice does not depend on the environment it runs in.
+ */
+const UPDATE_CHECK_ENABLED = {
+  AGENTWORKFORCE_NO_UPDATE_CHECK: '',
+  NO_UPDATE_NOTIFIER: ''
+} as const;
+
+/**
+ * Stand-in npm registry serving one `dist-tags` response, so the `--version`
+ * update check can be exercised end to end without the network.
+ */
+async function withStubRegistry<T>(
+  latest: string,
+  run: (registry: string) => Promise<T>
+): Promise<T> {
+  const { createServer } = await import('node:http');
+  const server = createServer((req, res) => {
+    if (req.url === '/-/package/agentworkforce/dist-tags') {
+      res.writeHead(200, { 'content-type': 'application/json' });
+      res.end(JSON.stringify({ latest }));
+      return;
+    }
+    res.writeHead(404).end('{}');
+  });
+  await new Promise<void>((resolve) => server.listen(0, '127.0.0.1', resolve));
+  const address = server.address();
+  const port = typeof address === 'object' && address ? address.port : 0;
+  try {
+    return await run(`http://127.0.0.1:${port}`);
+  } finally {
+    await new Promise<void>((resolve) => server.close(() => resolve()));
+  }
+}
+
+test('main: --version reports a newer published release and how to install it', async () => {
+  const root = mkdtempSync(join(tmpdir(), 'aw-version-update-'));
+  const workforceHome = join(root, 'home', '.agentworkforce', 'workforce');
+  mkdirSync(join(workforceHome, 'personas'), { recursive: true });
+  try {
+    const { stderr, stdout, exitCode } = await withStubRegistry('999.0.0', (registry) =>
+      runCliCapturingStderr(['--version'], {
+        AGENT_WORKFORCE_HOME: workforceHome,
+        AGENTWORKFORCE_REGISTRY: registry,
+        // The child inherits this process's env, and CI images commonly set
+        // NO_UPDATE_NOTIFIER=1 — which would make this assertion vacuous.
+        ...UPDATE_CHECK_ENABLED
+      })
+    );
+    assert.equal(exitCode, 0);
+    // stdout stays exactly the version so `$(agentworkforce --version)` keeps
+    // working; the notice goes to stderr.
+    assert.equal(stdout, `${CLI_VERSION}\n`);
+    assert.ok(
+      stderr.includes(`Update available: ${CLI_VERSION} → 999.0.0`),
+      `expected an update notice on stderr, got: ${JSON.stringify(stderr)}`
+    );
+    assert.match(stderr, /npm install (-g )?agentworkforce@latest/);
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test('main: --version says nothing when the installed build is current', async () => {
+  const root = mkdtempSync(join(tmpdir(), 'aw-version-current-'));
+  const workforceHome = join(root, 'home', '.agentworkforce', 'workforce');
+  mkdirSync(join(workforceHome, 'personas'), { recursive: true });
+  try {
+    const { stderr, stdout, exitCode } = await withStubRegistry(CLI_VERSION, (registry) =>
+      runCliCapturingStderr(['--version'], {
+        AGENT_WORKFORCE_HOME: workforceHome,
+        AGENTWORKFORCE_REGISTRY: registry,
+        ...UPDATE_CHECK_ENABLED
+      })
+    );
+    assert.equal(exitCode, 0);
+    assert.equal(stdout, `${CLI_VERSION}\n`);
+    assert.equal(stderr, '');
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test('main: --version still prints when the registry is unreachable', async () => {
+  const root = mkdtempSync(join(tmpdir(), 'aw-version-offline-'));
+  const workforceHome = join(root, 'home', '.agentworkforce', 'workforce');
+  mkdirSync(join(workforceHome, 'personas'), { recursive: true });
+  const { createServer } = await import('node:net');
+  // A port we own that hangs up on contact, rather than a low port guessed to
+  // be free: the failure is then the same on any host.
+  const dead = createServer((socket) => socket.destroy());
+  await new Promise<void>((resolve) => dead.listen(0, '127.0.0.1', resolve));
+  const address = dead.address();
+  const port = typeof address === 'object' && address ? address.port : 0;
+  try {
+    const { stderr, stdout, exitCode } = await runCliCapturingStderr(['--version'], {
+      AGENT_WORKFORCE_HOME: workforceHome,
+      AGENTWORKFORCE_REGISTRY: `http://127.0.0.1:${port}`,
+      AGENTWORKFORCE_UPDATE_CHECK_TIMEOUT_MS: '750',
+      ...UPDATE_CHECK_ENABLED
+    });
+    assert.equal(exitCode, 0);
+    assert.equal(stdout, `${CLI_VERSION}\n`);
+    assert.equal(stderr, '');
+  } finally {
+    await new Promise<void>((resolve) => dead.close(() => resolve()));
     rmSync(root, { recursive: true, force: true });
   }
 });
