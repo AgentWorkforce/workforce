@@ -59,9 +59,15 @@ importers:
       '@agentworkforce/persona-registry':
         specifier: workspace:*
         version: link:../persona-registry
+      '@agentworkforce/review-kit':
+        specifier: workspace:*
+        version: link:../review-kit
       '@agentworkforce/runtime':
         specifier: workspace:*
         version: link:../runtime
+      '@agentworkforce/turn-kit':
+        specifier: workspace:*
+        version: link:../turn-kit
       '@agentworkforce/workload-router':
         specifier: workspace:*
         version: link:../workload-router

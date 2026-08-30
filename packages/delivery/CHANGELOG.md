@@ -7,6 +7,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [4.1.50] - 2026-08-24
+
+### Released
+
+- v4.1.50
+
+## [4.1.47] - 2026-08-21
+
+### Added
+
+- Add normalized Slack reaction parsing and reusable approval-card utilities
+  that bind bounded hidden action ids to an exact app-authored message,
+  approver, and emoji.
+
 ## [4.1.41] - 2026-08-14
 
 ### Released

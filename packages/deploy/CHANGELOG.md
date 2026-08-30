@@ -14,6 +14,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Bumped `@agent-relay/cloud` to ^10.1.0 to match `@agentworkforce/cli` and
   deduplicate the installed tree.
 
+## [4.1.50] - 2026-08-24
+
+### Released
+
+- v4.1.50
+
+## [4.1.48] - 2026-08-24
+
+### Fixed
+
+- Resolve authored persona imports from the installed CLI tree (#325)
+
 ## [4.1.45] - 2026-08-19
 
 ### Fixed

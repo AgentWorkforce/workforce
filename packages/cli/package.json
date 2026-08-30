@@ -1,6 +1,6 @@
 {
   "name": "@agentworkforce/cli",
-  "version": "4.1.46",
+  "version": "4.1.50",
   "private": false,
   "type": "module",
   "files": [
@@ -16,7 +16,9 @@
     "@agentworkforce/local-surface": "workspace:*",
     "@agentworkforce/persona-kit": "workspace:*",
     "@agentworkforce/persona-registry": "workspace:*",
+    "@agentworkforce/review-kit": "workspace:*",
     "@agentworkforce/runtime": "workspace:*",
+    "@agentworkforce/turn-kit": "workspace:*",
     "@agentworkforce/workload-router": "workspace:*",
     "@relayburn/sdk": "^2.5.2",
     "@relayfile/local-mount": "^0.10.23",
