@@ -49,7 +49,13 @@ function resolveCli() {
         ].join('\n')
       );
     }
-    return { version: project.cli.version, entryUrl: project.cli.entryUrl };
+    return {
+      version: project.cli.version,
+      entryUrl: project.cli.entryUrl,
+      // A newer project dependency beat the invoked install, so this is
+      // definitively project-local: `-g` would update a different copy.
+      scope: 'project'
+    };
   }
 
   // Only require the invoked wrapper's dependency after checking whether a
@@ -79,7 +85,12 @@ function resolveCli() {
 
   return {
     version: bundled.version,
-    entryUrl: bundled.entryUrl
+    entryUrl: bundled.entryUrl,
+    // Not necessarily global: this branch is also taken when the invoked
+    // wrapper *is* the project's own (npx, node_modules/.bin, an npm script),
+    // because resolveProjectInstall() skips a candidate that is this very
+    // file. Leave the scope to be inferred from where the entry resolved.
+    scope: undefined
   };
 }
 
@@ -218,6 +229,27 @@ function parseVersion(version, label = 'package') {
   };
 }
 
+/**
+ * Tell the user when the resolved implementation is behind the published
+ * `latest`, and how to update. The check lives in the CLI package so both this
+ * wrapper and a directly-invoked `dist/cli.js` print the same notice; an
+ * installation old enough to predate that module, or any failure inside it,
+ * simply prints no notice.
+ */
+async function reportAvailableUpdate(cli) {
+  try {
+    const { writeUpdateNotice } = await import(
+      new URL('./update-check.js', cli.entryUrl).href
+    );
+    await writeUpdateNotice(cli.version, {
+      scope: cli.scope,
+      moduleUrl: cli.entryUrl
+    });
+  } catch {
+    // Never let an update check fail `--version`.
+  }
+}
+
 try {
   // Resolve and validate the implementation even for --version. Reporting the
   // wrapper version alone used to hide partially-updated installations where
@@ -226,14 +258,16 @@ try {
 
   if (process.argv[2] === '-v' || process.argv[2] === '--version') {
     process.stdout.write(`${cli.version}\n`);
-    process.exit(0);
+    await reportAvailableUpdate(cli);
+    // Exit by running out of work rather than through process.exit(), which
+    // can terminate before a pending write to a piped stdout/stderr flushes.
+  } else {
+    // Import the entry from the exact package whose version was checked above;
+    // do not ask the module resolver a second time and risk selecting a
+    // different hoisted or nested copy.
+    const { main } = await import(cli.entryUrl);
+    await main();
   }
-
-  // Import the entry from the exact package whose version was checked above;
-  // do not ask the module resolver a second time and risk selecting a different
-  // hoisted or nested copy.
-  const { main } = await import(cli.entryUrl);
-  await main();
 } catch (err) {
   process.stderr.write(
     `${err instanceof InstallationError ? err.message : (err?.stack ?? String(err))}\n`

@@ -377,7 +377,10 @@ Commands:
 
 Options:
   -h, --help          Show this help text.
-  -v, --version       Print the agentworkforce version.
+  -v, --version       Print the agentworkforce version, and note on stderr
+                      when a newer one is published along with the command
+                      that installs it. Skip the check with
+                      AGENTWORKFORCE_NO_UPDATE_CHECK=1.
 
 Local personas cascade: <cwd>/.agentworkforce/workforce/personas/*.json → configured persona dirs → repo library.
 Each layer only needs to specify fields it overrides; everything else inherits
@@ -5069,7 +5072,13 @@ export async function main(): Promise<void> {
 
   if (subcommand === '-v' || subcommand === '--version') {
     process.stdout.write(`${CLI_VERSION}\n`);
-    process.exit(0);
+    // Best-effort, stderr-only, and never fatal: the version itself is already
+    // on stdout before the registry is asked anything.
+    const { writeUpdateNotice } = await import('./update-check.js');
+    await writeUpdateNotice(CLI_VERSION);
+    // Return rather than process.exit(0), which can terminate before a pending
+    // write to a piped stdout/stderr flushes.
+    return;
   }
 
   if (subcommand === 'list') {
