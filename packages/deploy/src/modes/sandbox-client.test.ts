@@ -269,3 +269,19 @@ test('createByoSandboxClient rejects missing Daytona credentials up front', () =
     /BYO sandbox client requires DAYTONA_API_KEY/
   );
 });
+
+// A JWT token is only usable with an organization id. The SDK enforces that in
+// its constructor, which runs eagerly here — so an incomplete JWT config fails
+// while building the client rather than at the first mint().
+test('createByoSandboxClient rejects a JWT token with no organization id', () => {
+  assert.throws(
+    () => createByoSandboxClient({ jwtToken: 'jwt_probe' }),
+    /DAYTONA_ORGANIZATION_ID is required/
+  );
+});
+
+test('createByoSandboxClient accepts a JWT token paired with an organization id', () => {
+  const client = createByoSandboxClient({ jwtToken: 'jwt_probe', organizationId: 'org_1' });
+
+  assert.equal(typeof client.mint, 'function');
+});
