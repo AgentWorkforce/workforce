@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [4.1.51] - 2026-08-31
+
 ### Added
 
 - Collect a Supabase project ref before generic MCP OAuth so the connection is
