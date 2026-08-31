@@ -255,6 +255,9 @@ export async function deploy(opts: DeployOptions, resolvers: DeployResolvers = {
     noConnect: opts.noConnect === true,
     ...(opts.noPrompt ? { noPrompt: true } : {}),
     ...(opts.reconnectProviders ? { reconnectProviders: opts.reconnectProviders } : {}),
+    ...(opts.supabaseMcpProjectRef
+      ? { supabaseMcpProjectRef: opts.supabaseMcpProjectRef }
+      : {}),
     io,
     integrations: resolvers.integrations ?? defaultIntegrationResolver({
       mode,

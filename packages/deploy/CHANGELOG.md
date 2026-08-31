@@ -7,6 +7,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- Collect a Supabase project ref before generic MCP OAuth so the connection is
+  project-scoped and read-only instead of account-wide.
+
 ### Changed
 
 - Migrated from the deprecated `@daytonaio/sdk` to `@daytona/sdk` (same API, no

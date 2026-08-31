@@ -404,6 +404,36 @@ test('parseDeployArgs: --reconnect is repeatable and comma-aware', () => {
   assert.deepEqual(parsed.reconnectProviders, ['slack', 'github', 'linear']);
 });
 
+test('parseDeployArgs: --supabase-project-ref normalizes and forwards the project', () => {
+  const parsed = parseDeployArgs([
+    './persona.json',
+    '--supabase-project-ref',
+    'BVZZCAFZOYSEZUMRDVIF',
+  ]);
+
+  assert.equal(parsed.supabaseMcpProjectRef, 'bvzzcafzoysezumrdvif');
+});
+
+test('parseDeployArgs: malformed --supabase-project-ref exits with a clean error', () => {
+  const trap = trapExit();
+  try {
+    assert.throws(
+      () => parseDeployArgs([
+        './persona.json',
+        '--supabase-project-ref=not-a-project',
+      ]),
+      /__exit_trap__:1/
+    );
+    assert.deepEqual(trap.exits, [1]);
+    assert.match(
+      trap.stderr,
+      /--supabase-project-ref: expected exactly 20 lowercase letters or digits/,
+    );
+  } finally {
+    trap.restore();
+  }
+});
+
 test('parseDeployArgs: --harness-source managed is accepted', () => {
   const parsed = parseDeployArgs(['./persona.json', '--harness-source', 'managed']);
 

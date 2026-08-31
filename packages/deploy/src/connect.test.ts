@@ -45,6 +45,36 @@ test('relayfileIntegrationResolver isConnected reads workspace provider status b
   ]);
 });
 
+test('relayfileIntegrationResolver makes Supabase status checks project-aware', async () => {
+  const urls: string[] = [];
+  const resolver = relayfileIntegrationResolver({
+    apiUrl: 'https://cloud.example.test',
+    workspaceId: 'ws-1',
+    workspaceToken: 'tok',
+    fetch: async (url) => {
+      urls.push(String(url));
+      return okJson({
+        provider: 'supabase-mcp',
+        configKey: 'supabase-mcp-relay',
+        ready: false,
+        connectionMatched: false
+      });
+    }
+  });
+
+  assert.equal(
+    await resolver.isConnected({
+      workspace: 'ws-runtime',
+      provider: 'supabase-mcp',
+      supabaseMcpProjectRef: 'BVZZCAFZOYSEZUMRDVIF'
+    }),
+    false
+  );
+  assert.deepEqual(urls, [
+    'https://cloud.example.test/api/v1/workspaces/ws-runtime/integrations/supabase-mcp/status?supabaseMcpProjectRef=bvzzcafzoysezumrdvif&scope=deployer_user'
+  ]);
+});
+
 test('relayfileIntegrationResolver isConnected scopes workspace provider status checks', async () => {
   const urls: string[] = [];
   const resolver = relayfileIntegrationResolver({
@@ -372,6 +402,36 @@ test('relayfileIntegrationResolver isConnected falls back to deployer-user list 
   );
 });
 
+test('relayfileIntegrationResolver fails closed when project-aware Supabase status is unavailable', async () => {
+  const io = createBufferedIO();
+  const urls: string[] = [];
+  const resolver = relayfileIntegrationResolver({
+    apiUrl: 'https://cloud.example.test',
+    workspaceId: 'ws-1',
+    workspaceToken: 'tok',
+    io,
+    fetch: async (url) => {
+      urls.push(String(url));
+      return new Response('not found', { status: 404 });
+    }
+  });
+
+  assert.equal(
+    await resolver.isConnected({
+      workspace: 'ws-runtime',
+      provider: 'supabase-mcp',
+      supabaseMcpProjectRef: 'bvzzcafzoysezumrdvif'
+    }),
+    false
+  );
+  assert.deepEqual(urls, [
+    'https://cloud.example.test/api/v1/workspaces/ws-runtime/integrations/supabase-mcp/status?supabaseMcpProjectRef=bvzzcafzoysezumrdvif&scope=deployer_user'
+  ]);
+  assert.ok(io.messages.some((message) =>
+    message.level === 'warn' && /project-aware Supabase MCP status/.test(message.message)
+  ));
+});
+
 test('relayfileIntegrationResolver isConnected falls back to workspace list matching for workspace source when status 404s', async () => {
   const urls: string[] = [];
   const resolver = relayfileIntegrationResolver({
@@ -568,6 +628,176 @@ test('relayfileIntegrationResolver connect opens a session and polls until conne
   assert.ok(urls.every((url) => url.includes('/workspaces/ws-runtime/')));
   assert.equal(polls, 3);
   assert.ok(io.messages.some((message) => message.message.includes('notion connected')));
+});
+
+test('relayfileIntegrationResolver sends a normalized Supabase project ref', async () => {
+  const resolver = relayfileIntegrationResolver({
+    apiUrl: 'https://cloud.example.test',
+    workspaceId: 'ws-1',
+    workspaceToken: 'tok',
+    pollIntervalMs: 0,
+    timeoutMs: 100,
+    openUrl: () => undefined,
+    sleep: async () => undefined,
+    fetch: async (input, init) => {
+      const url = input.toString();
+      if (url.endsWith('/integrations/connect-session')) {
+        assert.deepEqual(JSON.parse(String(init?.body)), {
+          allowedIntegrations: ['supabase-mcp'],
+          scope: { kind: 'deployer_user' },
+          supabaseMcpProjectRef: 'bvzzcafzoysezumrdvif',
+        });
+        return okJson({
+          connectLink: 'https://connect.example.test/supabase',
+          connectionId: 'conn-supabase',
+        });
+      }
+      if (url.includes('/integrations/supabase-mcp/status')) {
+        return okJson({
+          ready: true,
+          state: 'ready',
+          currentConnectionId: 'conn-supabase',
+        });
+      }
+      throw new Error(`unexpected URL ${url}`);
+    },
+  });
+
+  assert.deepEqual(
+    await resolver.connect({
+      workspace: 'ws-runtime',
+      provider: 'supabase-mcp',
+      supabaseMcpProjectRef: 'BVZZCAFZOYSEZUMRDVIF',
+    }),
+    { connectionId: 'conn-supabase' },
+  );
+});
+
+test('relayfileIntegrationResolver refuses Supabase OAuth without a project ref', async () => {
+  let fetched = false;
+  const resolver = relayfileIntegrationResolver({
+    apiUrl: 'https://cloud.example.test',
+    workspaceId: 'ws-1',
+    workspaceToken: 'tok',
+    fetch: async () => {
+      fetched = true;
+      return okJson({});
+    },
+  });
+
+  await assert.rejects(
+    resolver.connect({ workspace: 'ws-runtime', provider: 'supabase-mcp' }),
+    /requires a valid 20-character project ref/,
+  );
+  assert.equal(fetched, false);
+});
+
+test('connectIntegrations prompts for the Supabase project ref before OAuth', async () => {
+  const io = createBufferedIO();
+  io.scriptConfirmations([true]);
+  io.scriptAnswers(['BVZZCAFZOYSEZUMRDVIF']);
+  let connectArgs: Record<string, unknown> | undefined;
+
+  const result = await connectIntegrations({
+    persona: {
+      id: 'supabase-watchdog',
+      intent: 'monitor',
+      description: 'test persona',
+      tags: ['implementation'],
+      integrations: { 'supabase-mcp': {} },
+    } as never,
+    workspace: 'ws-1',
+    noConnect: false,
+    io,
+    integrations: {
+      async isConnected() {
+        return false;
+      },
+      async connect(args) {
+        connectArgs = args;
+        return { connectionId: 'conn-supabase' };
+      },
+    },
+  });
+
+  assert.equal(connectArgs?.supabaseMcpProjectRef, 'bvzzcafzoysezumrdvif');
+  assert.deepEqual(result.outcomes, [
+    { provider: 'supabase-mcp', status: 'connected-now' },
+  ]);
+});
+
+test('connectIntegrations checks the requested Supabase project before reusing OAuth', async () => {
+  const io = createBufferedIO();
+  io.scriptConfirmations([true]);
+  io.scriptAnswers(['BVZZCAFZOYSEZUMRDVIF']);
+  let statusProjectRef: string | undefined;
+  let connectProjectRef: string | undefined;
+
+  const result = await connectIntegrations({
+    persona: {
+      id: 'supabase-watchdog',
+      intent: 'monitor',
+      description: 'test persona',
+      tags: ['implementation'],
+      integrations: { 'supabase-mcp': {} },
+    } as never,
+    workspace: 'ws-1',
+    noConnect: false,
+    io,
+    integrations: {
+      async isConnected(args) {
+        statusProjectRef = args.supabaseMcpProjectRef;
+        // Cloud reports project A as unmatched when project B is requested.
+        return false;
+      },
+      async connect(args) {
+        connectProjectRef = args.supabaseMcpProjectRef;
+        return { connectionId: 'conn-project-b' };
+      },
+    },
+  });
+
+  assert.equal(statusProjectRef, 'bvzzcafzoysezumrdvif');
+  assert.equal(connectProjectRef, 'bvzzcafzoysezumrdvif');
+  assert.deepEqual(result.outcomes, [
+    { provider: 'supabase-mcp', status: 'connected-now' },
+  ]);
+});
+
+test('connectIntegrations allows project-scoped Supabase OAuth under --no-prompt', async () => {
+  const io = createBufferedIO();
+  let connectCalled = false;
+
+  const result = await connectIntegrations({
+    persona: {
+      id: 'supabase-watchdog',
+      intent: 'monitor',
+      description: 'test persona',
+      tags: ['implementation'],
+      integrations: { 'supabase-mcp': {} },
+    } as never,
+    workspace: 'ws-1',
+    noConnect: false,
+    noPrompt: true,
+    supabaseMcpProjectRef: 'bvzzcafzoysezumrdvif',
+    io,
+    integrations: {
+      async isConnected(args) {
+        assert.equal(args.supabaseMcpProjectRef, 'bvzzcafzoysezumrdvif');
+        return false;
+      },
+      async connect(args) {
+        connectCalled = true;
+        assert.equal(args.supabaseMcpProjectRef, 'bvzzcafzoysezumrdvif');
+        return { connectionId: 'conn-project-b' };
+      },
+    },
+  });
+
+  assert.equal(connectCalled, true);
+  assert.deepEqual(result.outcomes, [
+    { provider: 'supabase-mcp', status: 'connected-now' },
+  ]);
 });
 
 test('relayfileIntegrationResolver never retries a failed POST connect session', async () => {
