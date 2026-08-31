@@ -9,6 +9,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- Add `--supabase-project-ref <ref>` for non-interactive, project-scoped
+  Supabase MCP deploys; interactive deploys prompt for the same value.
+
 - `--version` now checks the npm registry for a newer published release and,
   when the installed build is behind, writes `Update available: <current> →
   <latest>` and the install command to stderr. stdout stays exactly the version

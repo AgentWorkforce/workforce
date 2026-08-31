@@ -570,6 +570,102 @@ test('relayfileIntegrationResolver connect opens a session and polls until conne
   assert.ok(io.messages.some((message) => message.message.includes('notion connected')));
 });
 
+test('relayfileIntegrationResolver sends a normalized Supabase project ref', async () => {
+  const resolver = relayfileIntegrationResolver({
+    apiUrl: 'https://cloud.example.test',
+    workspaceId: 'ws-1',
+    workspaceToken: 'tok',
+    pollIntervalMs: 0,
+    timeoutMs: 100,
+    openUrl: () => undefined,
+    sleep: async () => undefined,
+    fetch: async (input, init) => {
+      const url = input.toString();
+      if (url.endsWith('/integrations/connect-session')) {
+        assert.deepEqual(JSON.parse(String(init?.body)), {
+          allowedIntegrations: ['supabase-mcp'],
+          scope: { kind: 'deployer_user' },
+          supabaseMcpProjectRef: 'bvzzcafzoysezumrdvif',
+        });
+        return okJson({
+          connectLink: 'https://connect.example.test/supabase',
+          connectionId: 'conn-supabase',
+        });
+      }
+      if (url.includes('/integrations/supabase-mcp/status')) {
+        return okJson({
+          ready: true,
+          state: 'ready',
+          currentConnectionId: 'conn-supabase',
+        });
+      }
+      throw new Error(`unexpected URL ${url}`);
+    },
+  });
+
+  assert.deepEqual(
+    await resolver.connect({
+      workspace: 'ws-runtime',
+      provider: 'supabase-mcp',
+      supabaseMcpProjectRef: 'BVZZCAFZOYSEZUMRDVIF',
+    }),
+    { connectionId: 'conn-supabase' },
+  );
+});
+
+test('relayfileIntegrationResolver refuses Supabase OAuth without a project ref', async () => {
+  let fetched = false;
+  const resolver = relayfileIntegrationResolver({
+    apiUrl: 'https://cloud.example.test',
+    workspaceId: 'ws-1',
+    workspaceToken: 'tok',
+    fetch: async () => {
+      fetched = true;
+      return okJson({});
+    },
+  });
+
+  await assert.rejects(
+    resolver.connect({ workspace: 'ws-runtime', provider: 'supabase-mcp' }),
+    /requires a valid 20-character project ref/,
+  );
+  assert.equal(fetched, false);
+});
+
+test('connectIntegrations prompts for the Supabase project ref before OAuth', async () => {
+  const io = createBufferedIO();
+  io.scriptConfirmations([true]);
+  io.scriptAnswers(['BVZZCAFZOYSEZUMRDVIF']);
+  let connectArgs: Record<string, unknown> | undefined;
+
+  const result = await connectIntegrations({
+    persona: {
+      id: 'supabase-watchdog',
+      intent: 'monitor',
+      description: 'test persona',
+      tags: ['implementation'],
+      integrations: { 'supabase-mcp': {} },
+    } as never,
+    workspace: 'ws-1',
+    noConnect: false,
+    io,
+    integrations: {
+      async isConnected() {
+        return false;
+      },
+      async connect(args) {
+        connectArgs = args;
+        return { connectionId: 'conn-supabase' };
+      },
+    },
+  });
+
+  assert.equal(connectArgs?.supabaseMcpProjectRef, 'bvzzcafzoysezumrdvif');
+  assert.deepEqual(result.outcomes, [
+    { provider: 'supabase-mcp', status: 'connected-now' },
+  ]);
+});
+
 test('relayfileIntegrationResolver never retries a failed POST connect session', async () => {
   let calls = 0;
   const resolver = relayfileIntegrationResolver({

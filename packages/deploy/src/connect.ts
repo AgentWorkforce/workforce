@@ -18,6 +18,18 @@ import type { DeployIO, IntegrationConnectOutcome } from './types.js';
  * `DeployResolvers.integrations` once Relayfile's OAuth surface is wired.
  */
 const PROVIDER_ENV_PREFIX = 'WORKFORCE_INTEGRATION_';
+const SUPABASE_MCP_PROVIDERS = new Set(['supabase-mcp', 'supabase-mcp-relay']);
+const SUPABASE_MCP_PROJECT_REF_PATTERN = /^[a-z0-9]{20}$/u;
+
+export function normalizeSupabaseMcpProjectRef(value: unknown): string | undefined {
+  if (typeof value !== 'string') return undefined;
+  const projectRef = value.trim().toLowerCase();
+  return SUPABASE_MCP_PROJECT_REF_PATTERN.test(projectRef) ? projectRef : undefined;
+}
+
+function isSupabaseMcpProvider(provider: string): boolean {
+  return SUPABASE_MCP_PROVIDERS.has(provider.trim().toLowerCase());
+}
 
 /**
  * Resolver the orchestrator uses to check + connect a Relayfile-backed
@@ -72,6 +84,7 @@ export interface IntegrationConnectResolver {
     provider: string;
     source?: IntegrationSource;
     allowWorkspaceFallback?: boolean;
+    supabaseMcpProjectRef?: string;
   }): Promise<{ connectionId: string }>;
 }
 
@@ -182,10 +195,24 @@ const fallbackSource = workspaceFallbackSource(
         expectedConfigKey
       );
     },
-    async connect({ workspace, provider, source, allowWorkspaceFallback }) {
+    async connect({
+      workspace,
+      provider,
+      source,
+      allowWorkspaceFallback,
+      supabaseMcpProjectRef,
+    }) {
       const workspaceId = workspace || opts.workspaceId;
       const token = await resolveWorkspaceToken(opts.workspaceToken);
       const effectiveSource: IntegrationSource = source ?? { kind: 'deployer_user' };
+      const normalizedSupabaseMcpProjectRef = isSupabaseMcpProvider(provider)
+        ? normalizeSupabaseMcpProjectRef(supabaseMcpProjectRef)
+        : undefined;
+      if (isSupabaseMcpProvider(provider) && !normalizedSupabaseMcpProjectRef) {
+        throw new Error(
+          'Supabase MCP requires a valid 20-character project ref. Pass --supabase-project-ref <ref> or enter it when prompted.'
+        );
+      }
 
       // Tell the cloud which table to write the new row into. Per
       // AgentWorkforce/cloud#1001, when `scope` is omitted the cloud
@@ -197,6 +224,9 @@ const fallbackSource = workspaceFallbackSource(
       const sessionBody = {
         allowedIntegrations: [provider],
         scope: scopeRequest(effectiveSource),
+        ...(normalizedSupabaseMcpProjectRef
+          ? { supabaseMcpProjectRef: normalizedSupabaseMcpProjectRef }
+          : {}),
         ...(provider === 'github' && effectiveSource.kind === 'deployer_user'
           ? { githubInstallationFlow: true }
           : {})
@@ -553,6 +583,8 @@ export interface ConnectAllInput {
   noConnect: boolean;
   noPrompt?: boolean;
   reconnectProviders?: readonly string[];
+  /** Optional non-interactive Supabase project selection. */
+  supabaseMcpProjectRef?: string;
   io: DeployIO;
   integrations: IntegrationConnectResolver;
   /** Optional cloud-login recovery for interactive 401s. */
@@ -781,11 +813,15 @@ export async function connectIntegrations(input: ConnectAllInput): Promise<Conne
     }
 
     try {
+      const supabaseMcpProjectRef = isSupabaseMcpProvider(provider)
+        ? await resolveSupabaseMcpProjectRefForConnect(input)
+        : undefined;
       const result = await input.integrations.connect({
         workspace: input.workspace,
         provider,
         source,
-        allowWorkspaceFallback: integrationAllowsWorkspaceFallback(integrationEntry)
+        allowWorkspaceFallback: integrationAllowsWorkspaceFallback(integrationEntry),
+        ...(supabaseMcpProjectRef ? { supabaseMcpProjectRef } : {})
       });
       input.io.info(`integrations.${provider}: connected (${result.connectionId})`);
       outcomes.push({ provider, status: 'connected-now' });
@@ -800,6 +836,36 @@ export async function connectIntegrations(input: ConnectAllInput): Promise<Conne
     outcomes,
     ...(subscriptionProvider ? { subscriptionProvider } : {})
   };
+}
+
+async function resolveSupabaseMcpProjectRefForConnect(
+  input: ConnectAllInput,
+): Promise<string> {
+  const configured = normalizeSupabaseMcpProjectRef(
+    input.supabaseMcpProjectRef,
+  );
+  if (input.supabaseMcpProjectRef !== undefined && !configured) {
+    throw new Error(
+      'Supabase MCP project ref must contain exactly 20 lowercase letters or digits.'
+    );
+  }
+  if (configured) return configured;
+  if (input.noPrompt) {
+    throw new Error(
+      'Supabase MCP project ref is required with --no-prompt. Pass --supabase-project-ref <ref>.'
+    );
+  }
+
+  const answer = await input.io.prompt(
+    'Supabase project ref (20 characters)',
+  );
+  const prompted = normalizeSupabaseMcpProjectRef(answer);
+  if (!prompted) {
+    throw new Error(
+      'Supabase MCP project ref must contain exactly 20 lowercase letters or digits.'
+    );
+  }
+  return prompted;
 }
 
 async function connectSubscriptionProvider(
