@@ -58,6 +58,9 @@ export interface IntegrationConnectResolver {
    * not match are ignored — protecting against false positives when the
    * workspace has multiple Slack providers (slack-relay / slack-ricky /
    * slack-nightcto / slack-my-senior-dev / slack-sage).
+   *
+   * `supabaseMcpProjectRef` makes the status lookup project-aware so a ready
+   * connection for a different Supabase project cannot satisfy deployment.
    */
   isConnected(args: {
     workspace: string;
@@ -65,6 +68,7 @@ export interface IntegrationConnectResolver {
     source?: IntegrationSource;
     expectedConfigKey?: string;
     allowWorkspaceFallback?: boolean;
+    supabaseMcpProjectRef?: string;
   }): Promise<boolean>;
   /**
    * Run the browser-based OAuth flow and resolve when the user finishes.
@@ -152,11 +156,20 @@ export function relayfileIntegrationResolver(opts: {
       provider,
       source,
       expectedConfigKey,
-      allowWorkspaceFallback
+      allowWorkspaceFallback,
+      supabaseMcpProjectRef,
     }) {
       const workspaceId = workspace || opts.workspaceId;
       const token = await resolveWorkspaceToken(opts.workspaceToken);
       const effectiveSource: IntegrationSource = source ?? { kind: 'deployer_user' };
+      const normalizedSupabaseMcpProjectRef = isSupabaseMcpProvider(provider)
+        ? normalizeSupabaseMcpProjectRef(supabaseMcpProjectRef)
+        : undefined;
+      if (supabaseMcpProjectRef !== undefined && !normalizedSupabaseMcpProjectRef) {
+        throw new Error(
+          'Supabase MCP project ref must contain exactly 20 lowercase letters or digits.'
+        );
+      }
 
       const status = await fetchIntegrationStatusForScope({
         fetchImpl,
@@ -166,6 +179,9 @@ export function relayfileIntegrationResolver(opts: {
         workspaceId,
         provider,
         source: effectiveSource,
+        ...(normalizedSupabaseMcpProjectRef
+          ? { supabaseMcpProjectRef: normalizedSupabaseMcpProjectRef }
+          : {}),
         io
       });
       if (statusIsConnectedForSource(status, provider, effectiveSource, expectedConfigKey)) {
@@ -186,6 +202,9 @@ const fallbackSource = workspaceFallbackSource(
         workspaceId,
         provider,
         source: fallbackSource,
+        ...(normalizedSupabaseMcpProjectRef
+          ? { supabaseMcpProjectRef: normalizedSupabaseMcpProjectRef }
+          : {}),
         io
       });
       return statusIsConnectedForSource(
@@ -317,6 +336,9 @@ const fallbackSource = workspaceFallbackSource(
           workspaceId,
           provider,
           source: effectiveSource,
+          ...(normalizedSupabaseMcpProjectRef
+            ? { supabaseMcpProjectRef: normalizedSupabaseMcpProjectRef }
+            : {}),
           io
         };
         const status = await fetchIntegrationStatusForScope({
@@ -667,7 +689,8 @@ export async function resolveExpectedProviderConfigKey(
  *   - already-connected provider → no prompt; emits `already-connected`
  *   - 401 while checking status + authRecovery → prompts login and retries once
  *   - other auth failure while checking status → fails without integration prompts
- *   - not connected + noPrompt=true → fails immediately without prompting
+ *   - not connected + noPrompt=true → fails immediately, except project-scoped
+ *     Supabase OAuth can proceed when `supabaseMcpProjectRef` is supplied
  *   - not connected + noConnect=true → fails the deploy with a clear message
  *   - not connected + noConnect=false → prompts; on yes runs `connect`,
  *     on no marks `skipped`. The orchestrator decides what to do with
@@ -691,6 +714,17 @@ export async function connectIntegrations(input: ConnectAllInput): Promise<Conne
       provider,
       input.providerConfigKeys
     );
+    let supabaseMcpProjectRef: string | undefined;
+    if (isSupabaseMcpProvider(provider)) {
+      try {
+        supabaseMcpProjectRef = await resolveSupabaseMcpProjectRefForConnect(input);
+      } catch (err) {
+        const message = err instanceof Error ? err.message : String(err);
+        input.io.error(`integrations.${provider}: ${message}`);
+        outcomes.push({ provider, status: 'failed', message });
+        return { outcomes };
+      }
+    }
 
     let statusCheckFailure: string | undefined;
     let connected = await checkProviderConnected(
@@ -698,6 +732,7 @@ export async function connectIntegrations(input: ConnectAllInput): Promise<Conne
       provider,
       source,
       expectedConfigKey,
+      supabaseMcpProjectRef,
       (message) => {
         statusCheckFailure = message;
       }
@@ -734,6 +769,7 @@ export async function connectIntegrations(input: ConnectAllInput): Promise<Conne
           provider,
           source,
           expectedConfigKey,
+          supabaseMcpProjectRef,
           (message) => {
             statusCheckFailure = message;
           }
@@ -758,7 +794,10 @@ export async function connectIntegrations(input: ConnectAllInput): Promise<Conne
       continue;
     }
 
-    if (input.noPrompt && !forceReconnect) {
+    const canConnectWithoutPrompt = Boolean(
+      supabaseMcpProjectRef && isSupabaseMcpProvider(provider)
+    );
+    if (input.noPrompt && !forceReconnect && !canConnectWithoutPrompt) {
       input.io.error(
         `integrations.${provider}: not connected, and --no-prompt was passed. Connect it before deploying or run without --no-prompt.`
       );
@@ -801,7 +840,7 @@ export async function connectIntegrations(input: ConnectAllInput): Promise<Conne
       continue;
     }
 
-    if (!forceReconnect) {
+    if (!forceReconnect && !input.noPrompt) {
       const shouldConnect = await input.io.confirm(
         `Connect ${provider} now? (opens browser)`,
         { defaultValue: true }
@@ -813,9 +852,6 @@ export async function connectIntegrations(input: ConnectAllInput): Promise<Conne
     }
 
     try {
-      const supabaseMcpProjectRef = isSupabaseMcpProvider(provider)
-        ? await resolveSupabaseMcpProjectRefForConnect(input)
-        : undefined;
       const result = await input.integrations.connect({
         workspace: input.workspace,
         provider,
@@ -917,6 +953,7 @@ async function checkProviderConnected(
   provider: string,
   source: IntegrationSource,
   expectedConfigKey: string | undefined,
+  supabaseMcpProjectRef: string | undefined,
   onFailure: (message: string) => void
 ): Promise<boolean> {
   return await input.integrations
@@ -927,7 +964,8 @@ async function checkProviderConnected(
       allowWorkspaceFallback: integrationAllowsWorkspaceFallback(
         input.persona.integrations?.[provider]
       ),
-      ...(expectedConfigKey ? { expectedConfigKey } : {})
+      ...(expectedConfigKey ? { expectedConfigKey } : {}),
+      ...(supabaseMcpProjectRef ? { supabaseMcpProjectRef } : {})
     })
     .catch((err) => {
       const message = err instanceof Error ? err.message : String(err);
@@ -1218,12 +1256,16 @@ async function fetchIntegrationStatusForScope(args: {
   provider: string;
   source: IntegrationSource;
   connectionId?: string;
+  supabaseMcpProjectRef?: string;
   io?: Pick<DeployIO, 'info' | 'warn'>;
 }): Promise<unknown> {
   const url = new URL(
     `${args.apiUrl}/api/v1/workspaces/${encodeURIComponent(args.workspaceId)}/integrations/${encodeURIComponent(args.provider)}/status`
   );
   if (args.connectionId) url.searchParams.set('connectionId', args.connectionId);
+  if (args.supabaseMcpProjectRef) {
+    url.searchParams.set('supabaseMcpProjectRef', args.supabaseMcpProjectRef);
+  }
   url.searchParams.set('scope', args.source.kind);
   if (args.source.kind === 'workspace_service_account') {
     url.searchParams.set('serviceAccountName', args.source.name);
@@ -1232,6 +1274,12 @@ async function fetchIntegrationStatusForScope(args: {
     return await requestJson(args.fetchImpl, url.toString(), args.token, {}, args.retrySleep);
   } catch (err) {
     if (isCloudRequestError(err) && (err.status === 404 || err.status === 405)) {
+      if (args.supabaseMcpProjectRef) {
+        args.io?.warn?.(
+          'cloud does not expose project-aware Supabase MCP status yet; treating the existing connection as unmatched.'
+        );
+        return { ready: false, state: 'pending', connectionMatched: false };
+      }
       args.io?.warn?.(
         'cloud does not expose /integrations/<provider>/status yet; falling back to the integrations list with ready-only matching.'
       );
