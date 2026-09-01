@@ -761,9 +761,19 @@ export function buildNonInteractiveSpec(
       // the real opencode process and its exit code is reported verbatim. Only
       // the opencode branch is routed this way; claude / codex / grok spawn
       // directly and are unaffected.
+      //
+      // Windows has no `/bin/sh`, and `cmd.exe` has no exec-replacement
+      // semantics — wrapping there would ADD a process rather than replace one,
+      // breaking exit-code and signal passthrough. The failure this works around
+      // is observed in the Linux cloud sandboxes, so win32 keeps the direct
+      // spawn. Same platform split the sandbox exec path already uses
+      // (runtime/src/cloud-defaults.ts).
+      const execThroughShell = process.platform !== 'win32';
       return {
-        bin: '/bin/sh',
-        args: ['-c', 'exec "$0" "$@"', interactive.bin, ...args],
+        bin: execThroughShell ? '/bin/sh' : interactive.bin,
+        args: execThroughShell
+          ? ['-c', 'exec "$0" "$@"', interactive.bin, ...args]
+          : args,
         prompt: { mode: 'stdin', contents: input.task },
         configFiles: interactive.configFiles,
         warnings: interactive.warnings

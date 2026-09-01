@@ -340,11 +340,11 @@ test('opencode non-interactive spec execs through a shell, omits cwd/model flags
   // `UnknownError: Unexpected server error`; with one shell in between the
   // identical invocation runs normally. `exec` means the shell is replaced, so
   // the caller still waits on the real opencode process.
-  assert.equal(result.bin, '/bin/sh');
+  // Windows has no /bin/sh, so the wrapper is POSIX-only (see the spec builder).
+  const expectShell = process.platform !== 'win32';
+  assert.equal(result.bin, expectShell ? '/bin/sh' : 'opencode');
   assert.deepEqual(result.args, [
-    '-c',
-    'exec "$0" "$@"',
-    'opencode',
+    ...(expectShell ? ['-c', 'exec "$0" "$@"', 'opencode'] : []),
     'run',
     '--agent',
     'daily-ship',
