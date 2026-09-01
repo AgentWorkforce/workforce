@@ -738,9 +738,32 @@ export function buildNonInteractiveSpec(
       // separately, and `opencode run` does not support `--dir`.
       const args = ['run', ...interactive.args, '--format', 'default'];
       if (input.name) args.push('--title', input.name);
+      // Spawn opencode through `sh -c 'exec "$0" "$@"'` rather than exec'ing the
+      // binary directly (workforce#330). Spawned directly by the runtime,
+      // opencode fails in ~1.2s with an opaque
+      //   Error: {"name":"UnknownError","data":{"message":"Unexpected server
+      //           error. Check server logs for details.","ref":"..."}}
+      // and its own log file is created but stays 0 bytes. With one shell
+      // between Node and the binary — same binary, args, cwd, env, stdin,
+      // model and credential — it runs normally. Verified end to end on
+      // daily-ship: opaque failure without, real digests posted with.
+      //
+      // Ruled out by direct experiment in a live sandbox, so this is narrower
+      // than "wrap it and hope": PATH; prompt size and content (119KB synthetic
+      // and a real 72KB prompt both fine); provider flakiness (6/6 clean);
+      // NODE_OPTIONS; HOME / XDG_DATA_HOME; USER / LOGNAME; cwd; FD limits down
+      // to `ulimit -n 64`; a stdin write race (delayed stdin is read fine);
+      // inherited SIGPIPE disposition (deliberately re-ignoring it still
+      // succeeded); and the process group (`timeout`'s setpgid — bash exec with
+      // no timeout also succeeded). The shell alone is what matters.
+      //
+      // `exec` keeps the process count unchanged, so the caller still waits on
+      // the real opencode process and its exit code is reported verbatim. Only
+      // the opencode branch is routed this way; claude / codex / grok spawn
+      // directly and are unaffected.
       return {
-        bin: interactive.bin,
-        args,
+        bin: '/bin/sh',
+        args: ['-c', 'exec "$0" "$@"', interactive.bin, ...args],
         prompt: { mode: 'stdin', contents: input.task },
         configFiles: interactive.configFiles,
         warnings: interactive.warnings

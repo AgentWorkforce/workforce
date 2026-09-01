@@ -324,7 +324,7 @@ test('opencode configFiles carries a well-formed opencode.json with the agent de
   });
 });
 
-test('opencode non-interactive spec omits cwd/model flags and normalizes the agent model', () => {
+test('opencode non-interactive spec execs through a shell, omits cwd/model flags, and normalizes the agent model', () => {
   const result = buildNonInteractiveSpec({
     harness: 'opencode',
     personaId: 'daily-ship',
@@ -335,8 +335,16 @@ test('opencode non-interactive spec omits cwd/model flags and normalizes the age
     workingDirectory: '/tmp/project'
   });
 
-  assert.equal(result.bin, 'opencode');
+  // workforce#330: opencode is spawned through `sh -c 'exec "$0" "$@"'`.
+  // Spawned directly by the runtime it fails in ~1.2s with an opaque
+  // `UnknownError: Unexpected server error`; with one shell in between the
+  // identical invocation runs normally. `exec` means the shell is replaced, so
+  // the caller still waits on the real opencode process.
+  assert.equal(result.bin, '/bin/sh');
   assert.deepEqual(result.args, [
+    '-c',
+    'exec "$0" "$@"',
+    'opencode',
     'run',
     '--agent',
     'daily-ship',
