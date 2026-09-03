@@ -8,7 +8,10 @@ import {
 const ENV_KEY_PATTERN = /^[A-Za-z_][A-Za-z0-9_]{0,127}$/;
 const MAX_ENV_VALUE_BYTES = 64 * 1024;
 
-export const ENV_USAGE = `usage: agentworkforce env <set|list|unset> [key] [flags]
+export const ENV_USAGE = `usage:
+  agentworkforce env set <KEY> [flags]
+  agentworkforce env list [flags]
+  agentworkforce env unset <KEY> [flags]
 
 Manage environment variables for the active workspace. Values are never
 accepted as arguments: \`env set\` reads the value only from stdin.
@@ -159,16 +162,25 @@ export async function readWorkspaceEnvValue(input: ReadableInput): Promise<strin
   for await (const chunk of input) {
     const buffer = typeof chunk === 'string' ? Buffer.from(chunk) : Buffer.from(chunk);
     total += buffer.byteLength;
-    if (total > MAX_ENV_VALUE_BYTES) {
+    // Permit one LF/CRLF framing suffix while still bounding streamed input.
+    if (total > MAX_ENV_VALUE_BYTES + 2) {
       throw new Error(`environment variable value exceeds ${MAX_ENV_VALUE_BYTES} bytes`);
     }
     chunks.push(buffer);
   }
 
-  let value = Buffer.concat(chunks).toString('utf8');
+  let value: string;
+  try {
+    value = new TextDecoder('utf-8', { fatal: true }).decode(Buffer.concat(chunks));
+  } catch {
+    throw new Error('environment variable value from stdin must be valid UTF-8');
+  }
   if (value.endsWith('\n')) {
     value = value.slice(0, -1);
     if (value.endsWith('\r')) value = value.slice(0, -1);
+  }
+  if (Buffer.byteLength(value, 'utf8') > MAX_ENV_VALUE_BYTES) {
+    throw new Error(`environment variable value exceeds ${MAX_ENV_VALUE_BYTES} bytes`);
   }
   if (!value) throw new Error('environment variable value from stdin is empty');
   if (value.includes('\0')) throw new Error('environment variable value from stdin contains a NUL byte');
@@ -186,6 +198,7 @@ export async function runEnv(args: readonly string[]): Promise<void> {
   const cloudUrl = envCommandDeps.resolveCloudUrl({
     ...(options.cloudUrl ? { flag: options.cloudUrl } : {})
   });
+  assertSecureCloudUrl(cloudUrl);
   const auth = await envCommandDeps.resolveWorkspaceToken({
     ...(options.workspace ? { workspace: options.workspace } : {}),
     cloudUrl,
@@ -195,14 +208,13 @@ export async function runEnv(args: readonly string[]): Promise<void> {
   // Cloud APIs are scoped by the canonical cloud workspace id. The relaycast
   // provider id exposed as `auth.workspace` may be numeric and is not the id
   // used by Relayfile-backed runtime storage.
-  const workspace = auth.workspaceDescriptor?.cloudWorkspaceId?.trim()
-    || auth.workspace?.trim()
-    || options.workspace?.trim();
-  if (!workspace) {
-    throw new Error(
-      'env: workspace is ambiguous; pass --workspace, set WORKFORCE_WORKSPACE_ID, or select an active workspace'
-    );
-  }
+  const workspace = await resolveCanonicalWorkspaceId({
+    cloudUrl,
+    token: auth.token,
+    descriptorWorkspaceId: auth.workspaceDescriptor?.cloudWorkspaceId,
+    requestedWorkspace: auth.workspace ?? options.workspace,
+    fetchImpl: envCommandDeps.fetchImpl
+  });
 
   if (options.action === 'set') {
     const value = await readWorkspaceEnvValue(envCommandDeps.stdin);
@@ -250,24 +262,36 @@ async function setWorkspaceEnv(input: {
   now: () => string;
 }): Promise<WorkspaceEnvMetadata & { workspace: string; overwritten: boolean }> {
   const detailUrl = workspaceEnvDetailUrl(input.cloudUrl, input.workspace, input.key);
-  const existing = await input.fetchImpl(detailUrl, {
+  const existing = await fetchWorkspaceApi(input.fetchImpl, detailUrl, {
     method: 'GET',
     headers: authHeaders(input.token)
   });
   if (existing.status !== 404 && !existing.ok) {
     throw requestError('check', existing.status, input.workspace);
   }
+  if (existing.ok) {
+    const existingMetadata = toWorkspaceEnvMetadata(await readJsonRecord(existing));
+    if (!existingMetadata || existingMetadata.key !== input.key) {
+      throw new Error(
+        `env set: ${input.key} already exists as a non-environment secret in workspace ${input.workspace}`
+      );
+    }
+  }
 
-  const response = await input.fetchImpl(workspaceEnvCollectionUrl(input.cloudUrl, input.workspace), {
-    method: 'POST',
-    headers: jsonAuthHeaders(input.token),
-    body: JSON.stringify({
-      name: input.key,
-      envVar: input.key,
-      kind: 'environment',
-      value: input.value
-    })
-  });
+  const response = await fetchWorkspaceApi(
+    input.fetchImpl,
+    workspaceEnvCollectionUrl(input.cloudUrl, input.workspace),
+    {
+      method: 'POST',
+      headers: jsonAuthHeaders(input.token),
+      body: JSON.stringify({
+        name: input.key,
+        envVar: input.key,
+        kind: 'environment',
+        value: input.value
+      })
+    }
+  );
   if (!response.ok) throw requestError('set', response.status, input.workspace);
 
   const record = await readJsonRecord(response);
@@ -286,10 +310,14 @@ async function listWorkspaceEnv(input: {
   token: string;
   fetchImpl: typeof fetch;
 }): Promise<WorkspaceEnvMetadata[]> {
-  const response = await input.fetchImpl(workspaceEnvCollectionUrl(input.cloudUrl, input.workspace), {
-    method: 'GET',
-    headers: authHeaders(input.token)
-  });
+  const response = await fetchWorkspaceApi(
+    input.fetchImpl,
+    workspaceEnvCollectionUrl(input.cloudUrl, input.workspace),
+    {
+      method: 'GET',
+      headers: authHeaders(input.token)
+    }
+  );
   if (!response.ok) throw requestError('list', response.status, input.workspace);
 
   const payload = await readJsonRecord(response);
@@ -309,7 +337,7 @@ async function unsetWorkspaceEnv(input: {
   fetchImpl: typeof fetch;
 }): Promise<void> {
   const detailUrl = workspaceEnvDetailUrl(input.cloudUrl, input.workspace, input.key);
-  const existing = await input.fetchImpl(detailUrl, {
+  const existing = await fetchWorkspaceApi(input.fetchImpl, detailUrl, {
     method: 'GET',
     headers: authHeaders(input.token)
   });
@@ -322,7 +350,7 @@ async function unsetWorkspaceEnv(input: {
     throw missingWorkspaceEnvError(input.key, input.workspace);
   }
 
-  const response = await input.fetchImpl(detailUrl, {
+  const response = await fetchWorkspaceApi(input.fetchImpl, detailUrl, {
     method: 'DELETE',
     headers: authHeaders(input.token)
   });
@@ -354,7 +382,8 @@ function writeSetOutput(
     return;
   }
   io.info(
-    `${result.overwritten ? 'Overwrote' : 'Set'} ${result.key} in workspace ${result.workspace}.`
+    `${result.overwritten ? 'Overwrote' : 'Set'} ${result.key} in workspace ${result.workspace}. ` +
+      `Last set: ${result.updatedAt}. Set by: ${result.setBy}.`
   );
 }
 
@@ -404,6 +433,65 @@ function workspaceEnvDetailUrl(cloudUrl: string, workspace: string, key: string)
   return `${workspaceEnvCollectionUrl(cloudUrl, workspace)}/${encodeURIComponent(key)}`;
 }
 
+async function resolveCanonicalWorkspaceId(input: {
+  cloudUrl: string;
+  token: string;
+  descriptorWorkspaceId?: string;
+  requestedWorkspace?: string;
+  fetchImpl: typeof fetch;
+}): Promise<string> {
+  const descriptorWorkspaceId = input.descriptorWorkspaceId?.trim();
+  if (descriptorWorkspaceId) return descriptorWorkspaceId;
+
+  const requestedWorkspace = input.requestedWorkspace?.trim();
+  if (!requestedWorkspace) {
+    throw new Error(
+      'env: workspace is ambiguous; pass --workspace, set WORKFORCE_WORKSPACE_ID, or select an active workspace'
+    );
+  }
+  const response = await fetchWorkspaceApi(
+    input.fetchImpl,
+    `${input.cloudUrl.replace(/\/+$/, '')}/api/v1/workspaces/${encodeURIComponent(requestedWorkspace)}/resolve`,
+    {
+      method: 'GET',
+      headers: authHeaders(input.token)
+    }
+  );
+  if (!response.ok) throw requestError('resolve', response.status, requestedWorkspace);
+  const record = await readJsonRecord(response);
+  const workspaceId = readString(record, 'cloudWorkspaceId');
+  if (!workspaceId) {
+    throw new Error(
+      `env: workspace ${requestedWorkspace} did not resolve to a canonical cloud workspace`
+    );
+  }
+  return workspaceId;
+}
+
+function fetchWorkspaceApi(
+  fetchImpl: typeof fetch,
+  url: string,
+  init: RequestInit
+): Promise<Response> {
+  return fetchImpl(url, { ...init, redirect: 'error' });
+}
+
+function assertSecureCloudUrl(cloudUrl: string): void {
+  let url: URL;
+  try {
+    url = new URL(cloudUrl);
+  } catch {
+    throw new Error('env: cloud URL must be a valid HTTPS URL');
+  }
+  const hostname = url.hostname.toLowerCase();
+  const loopbackHttp = url.protocol === 'http:' && (
+    hostname === 'localhost' || hostname === '127.0.0.1' || hostname === '[::1]'
+  );
+  if (url.protocol !== 'https:' && !loopbackHttp) {
+    throw new Error('env: cloud URL must use HTTPS (HTTP is allowed only for localhost loopback development)');
+  }
+}
+
 function authHeaders(token: string): Record<string, string> {
   return {
     authorization: `Bearer ${token}`,
@@ -443,7 +531,9 @@ function readString(value: Record<string, unknown>, key: string): string | undef
 }
 
 function expectFlagValue(flag: string, value: string | undefined): string {
-  if (!value || value.startsWith('-')) throw new Error(`env: ${flag} requires a value`);
+  if (!value || value.startsWith('-') || !value.trim()) {
+    throw new Error(`env: ${flag} requires a value`);
+  }
   return value.trim();
 }
 

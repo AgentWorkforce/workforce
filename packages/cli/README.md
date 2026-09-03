@@ -14,7 +14,9 @@ agentworkforce persona compile <path/to/persona.ts|persona.js>
 agentworkforce install [flags] <pkg|path>
 agentworkforce deploy <path/to/persona.json|persona.ts|persona.js> [flags]
 agentworkforce integrations [provider] [--all] [--json]
-agentworkforce env <set|list|unset> [key] [--workspace <name>] [--json]
+agentworkforce env set <KEY> [--workspace <name>] [--cloud-url <url>] [--json] [--no-prompt]
+agentworkforce env list [--workspace <name>] [--cloud-url <url>] [--json] [--no-prompt]
+agentworkforce env unset <KEY> [--workspace <name>] [--cloud-url <url>] [--json] [--no-prompt]
 agentworkforce trigger <agent-name-or-id> [--workspace <id>] [--cloud-url <url>] [--json] [--no-prompt]
 agentworkforce sources <list|add|remove>
 agentworkforce harness check

@@ -24,25 +24,33 @@ function response(body: unknown, status = 200): Response {
 function installDeps(input: {
   workspace?: string;
   cloudWorkspaceId?: string;
+  includeWorkspaceDescriptor?: boolean;
+  cloudUrl?: string;
   stdin?: Readable;
   fetchImpl: (url: string, init?: RequestInit) => Promise<Response>;
-}): { io: BufferedIO; restore: () => void } {
+}): { io: BufferedIO; restore: () => void; authCalls: string[] } {
   const io = createBufferedIO();
+  const authCalls: string[] = [];
   const restore = configureEnvCommandForTest({
     createTerminalIO: () => io,
-    resolveCloudUrl: () => CLOUD,
-    resolveWorkspaceToken: async ({ workspace }) => ({
-      token: 'workspace-bearer',
-      ...(input.workspace ?? workspace ? { workspace: input.workspace ?? workspace } : {}),
-      ...(input.cloudWorkspaceId
-        ? { workspaceDescriptor: { cloudWorkspaceId: input.cloudWorkspaceId } as never }
-        : {})
-    }),
+    resolveCloudUrl: () => input.cloudUrl ?? CLOUD,
+    resolveWorkspaceToken: async ({ workspace, cloudUrl }) => {
+      authCalls.push(cloudUrl);
+      const resolvedWorkspace = input.workspace ?? workspace;
+      const cloudWorkspaceId = input.cloudWorkspaceId ?? resolvedWorkspace;
+      return {
+        token: 'workspace-bearer',
+        ...(resolvedWorkspace ? { workspace: resolvedWorkspace } : {}),
+        ...(input.includeWorkspaceDescriptor !== false && cloudWorkspaceId
+          ? { workspaceDescriptor: { cloudWorkspaceId } as never }
+          : {})
+      };
+    },
     stdin: input.stdin ?? Readable.from([]),
     fetchImpl: input.fetchImpl as typeof fetch,
     now: () => '2026-09-03T12:00:00.000Z'
   });
-  return { io, restore };
+  return { io, restore, authCalls };
 }
 
 test('env set accepts a key only and never echoes a positional secret', () => {
@@ -73,11 +81,17 @@ test('env keys use a strict portable environment-variable shape', () => {
 
 test('stdin value reader strips one pipe newline and rejects unsafe input', async () => {
   assert.equal(await readWorkspaceEnvValue(Readable.from([`${SECRET}\r\n`])), SECRET);
+  const maximumValue = 'x'.repeat(64 * 1024);
+  assert.equal(await readWorkspaceEnvValue(Readable.from([`${maximumValue}\n`])), maximumValue);
   await assert.rejects(readWorkspaceEnvValue(Readable.from([])), /stdin is empty/);
   await assert.rejects(readWorkspaceEnvValue(Readable.from(['has\0nul'])), /NUL byte/);
   await assert.rejects(
     readWorkspaceEnvValue(Readable.from(['x'.repeat(64 * 1024 + 1)])),
     /exceeds 65536 bytes/
+  );
+  await assert.rejects(
+    readWorkspaceEnvValue(Readable.from([Buffer.from([0x80])])),
+    /valid UTF-8/
   );
   const tty = Readable.from([SECRET]) as Readable & { isTTY?: boolean };
   tty.isTTY = true;
@@ -117,7 +131,10 @@ test('env set sends the secret only in the request body and reports creation wit
     });
     const output = io.messages.map((item) => item.message).join('\n');
     assert.match(output, /Set RTH_TOKEN in workspace ws alpha/);
+    assert.match(output, /Last set: 2026-09-03T11:59:00.000Z/);
+    assert.match(output, /Set by: user-1/);
     assert.doesNotMatch(output, new RegExp(SECRET));
+    assert.ok(calls.every((call) => call.init?.redirect === 'error'));
   } finally {
     restore();
   }
@@ -128,7 +145,13 @@ test('env set reports overwrite and JSON output contains metadata only', async (
     workspace: 'ws-a',
     stdin: Readable.from([SECRET]),
     async fetchImpl(_url, init) {
-      if (init?.method === 'GET') return response({ name: 'RTH_TOKEN' });
+      if (init?.method === 'GET') {
+        return response({
+          name: 'RTH_TOKEN',
+          envVar: 'RTH_TOKEN',
+          kind: 'environment'
+        });
+      }
       return response({
         name: 'RTH_TOKEN',
         envVar: 'RTH_TOKEN',
@@ -151,6 +174,29 @@ test('env set reports overwrite and JSON output contains metadata only', async (
       overwritten: true
     });
     assert.doesNotMatch(output, new RegExp(SECRET));
+  } finally {
+    restore();
+  }
+});
+
+test('env set refuses to overwrite a same-named non-environment secret', async () => {
+  const methods: Array<string | undefined> = [];
+  const { io, restore } = installDeps({
+    workspace: 'ws-a',
+    stdin: Readable.from([SECRET]),
+    async fetchImpl(_url, init) {
+      methods.push(init?.method);
+      return response({
+        name: 'RTH_TOKEN',
+        envVar: 'RTH_TOKEN',
+        maskedValue: 'rt********EL'
+      });
+    }
+  });
+  try {
+    await assert.rejects(runEnv(['set', 'RTH_TOKEN']), /already exists as a non-environment secret/);
+    assert.deepEqual(methods, ['GET']);
+    assert.equal(io.messages.length, 0);
   } finally {
     restore();
   }
@@ -230,6 +276,13 @@ test('workspace override scopes every request and cannot cross-read another work
   }
 });
 
+test('workspace flags containing only whitespace fail instead of using the active workspace', () => {
+  assert.throws(
+    () => parseWorkspaceEnvArgs(['list', '--workspace', '   ']),
+    /--workspace requires a value/
+  );
+});
+
 test('cloud workspace identity wins over a relaycast provider id for storage scope', async () => {
   const calls: string[] = [];
   const { restore } = installDeps({
@@ -250,6 +303,45 @@ test('cloud workspace identity wins over a relaycast provider id for storage sco
   }
 });
 
+test('token auth resolves a raw workspace alias to its canonical cloud id', async () => {
+  const calls: FetchCall[] = [];
+  const canonical = '11111111-1111-4111-8111-111111111111';
+  const { restore } = installDeps({
+    workspace: 'rw_raw_provider_id',
+    includeWorkspaceDescriptor: false,
+    async fetchImpl(url, init) {
+      calls.push({ url, init });
+      if (url.endsWith('/resolve')) return response({ cloudWorkspaceId: canonical });
+      return response({ ok: true, data: { items: [] } });
+    }
+  });
+  try {
+    await runEnv(['list']);
+    assert.deepEqual(calls.map((call) => call.url), [
+      `${CLOUD}/api/v1/workspaces/rw_raw_provider_id/resolve`,
+      `${CLOUD}/api/v1/workspaces/${canonical}/secrets`
+    ]);
+    assert.ok(calls.every((call) => call.init?.redirect === 'error'));
+  } finally {
+    restore();
+  }
+});
+
+test('workspace resolution fails closed when cloud returns no canonical id', async () => {
+  const { restore } = installDeps({
+    workspace: 'rw_unbound',
+    includeWorkspaceDescriptor: false,
+    async fetchImpl() {
+      return response({ cloudWorkspaceId: null });
+    }
+  });
+  try {
+    await assert.rejects(runEnv(['list']), /did not resolve to a canonical cloud workspace/);
+  } finally {
+    restore();
+  }
+});
+
 test('ambiguous workspace fails before any environment request', async () => {
   let fetched = false;
   const { restore } = installDeps({
@@ -261,6 +353,44 @@ test('ambiguous workspace fails before any environment request', async () => {
   try {
     await assert.rejects(runEnv(['list']), /workspace is ambiguous/);
     assert.equal(fetched, false);
+  } finally {
+    restore();
+  }
+});
+
+test('credentialed env requests reject insecure cloud URLs before authentication', async () => {
+  let fetched = false;
+  const { restore, authCalls } = installDeps({
+    workspace: 'ws-a',
+    cloudUrl: 'http://cloud.example.test',
+    async fetchImpl() {
+      fetched = true;
+      return response({ ok: true, data: { items: [] } });
+    }
+  });
+  try {
+    await assert.rejects(runEnv(['list']), /cloud URL must use HTTPS/);
+    assert.deepEqual(authCalls, []);
+    assert.equal(fetched, false);
+  } finally {
+    restore();
+  }
+});
+
+test('loopback HTTP remains available for local development', async () => {
+  const localCloud = 'http://127.0.0.1:8788';
+  const calls: string[] = [];
+  const { restore } = installDeps({
+    workspace: 'ws-local',
+    cloudUrl: localCloud,
+    async fetchImpl(url) {
+      calls.push(url);
+      return response({ ok: true, data: { items: [] } });
+    }
+  });
+  try {
+    await runEnv(['list']);
+    assert.deepEqual(calls, [`${localCloud}/api/v1/workspaces/ws-local/secrets`]);
   } finally {
     restore();
   }

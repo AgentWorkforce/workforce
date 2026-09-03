@@ -14,7 +14,9 @@ agentworkforce agent [--install-in-repo] [--no-launch-metadata] <persona>[@<tier
 agentworkforce list [flags]
 agentworkforce show <persona>
 agentworkforce sources <list|add|remove>
-agentworkforce env <set|list|unset> [key] [--workspace <name>] [--json]
+agentworkforce env set <KEY> [--workspace <name>] [--cloud-url <url>] [--json] [--no-prompt]
+agentworkforce env list [--workspace <name>] [--cloud-url <url>] [--json] [--no-prompt]
+agentworkforce env unset <KEY> [--workspace <name>] [--cloud-url <url>] [--json] [--no-prompt]
 agentworkforce harness check
 agentworkforce --version
 ```
