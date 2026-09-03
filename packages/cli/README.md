@@ -14,6 +14,7 @@ agentworkforce persona compile <path/to/persona.ts|persona.js>
 agentworkforce install [flags] <pkg|path>
 agentworkforce deploy <path/to/persona.json|persona.ts|persona.js> [flags]
 agentworkforce integrations [provider] [--all] [--json]
+agentworkforce env <set|list|unset> [key] [--workspace <name>] [--json]
 agentworkforce trigger <agent-name-or-id> [--workspace <id>] [--cloud-url <url>] [--json] [--no-prompt]
 agentworkforce sources <list|add|remove>
 agentworkforce harness check
@@ -37,6 +38,8 @@ agentworkforce --version
   an authored source module such as `persona.ts` or `persona.js`.
 - `integrations` — discover available integrations, known trigger events, and
   connection status for the active workspace.
+- `env` — manage runtime environment variables for the active workspace without
+  putting their values in persona inputs, argv, logs, or command output.
 - `trigger` — manually fire an active deployed persona for testing. The
   selector accepts agent id, compact agent id, deployed name, persona slug, or
   persona id, and posts to the same cloud trigger endpoint used by the dashboard.
@@ -83,6 +86,24 @@ requires `agentworkforce login`. `--all` also works logged out and lists the
 offline trigger catalog, rendering connection state as unknown. A provider
 argument prints the full trigger list, connection details, and a persona/agent
 snippet using the cloud provider id.
+
+## Workspace environment variables
+
+Use workspace environment variables for runtime-only values such as service
+tokens that must be available through `process.env` but must not be substituted
+into a persona's system prompt.
+
+```sh
+printf '%s' "$RTH_TOKEN" | agentworkforce env set RTH_TOKEN
+agentworkforce env list
+agentworkforce env unset RTH_TOKEN
+```
+
+`env set` accepts only the key on the command line and reads the value from
+non-interactive stdin. It reports whether the key was created or overwritten.
+`env list` returns only keys, last-set timestamps, and setter identities — never
+values or masked fragments. All three commands use the active workspace unless
+`--workspace <name>` is supplied; ambiguous workspace selection fails closed.
 
 ## Selectors
 

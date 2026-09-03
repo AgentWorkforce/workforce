@@ -272,6 +272,16 @@ Commands:
                       Discover workspace integrations, connection status, and
                       known trigger events. JSON output includes registration
                       health when the cloud status API provides it.
+  env set <KEY>       Set or overwrite a workspace environment variable from
+                      stdin. Values are never accepted on argv. Flags:
+                        --workspace <name>  override the active workspace
+                        --cloud-url <url>   override the workforce cloud URL
+                        --json              emit metadata only (never values)
+                        --no-prompt         fail instead of prompting for login
+  env list            List workspace environment variable names, last-set
+                      times, and setters. Values are never returned.
+  env unset <KEY>     Remove a workspace environment variable; fails if the
+                      key is not set. Accepts the same flags as env set.
   trigger <agent-name-or-id> [payload-json] [flags]
                       Manually fire an active deployed persona for testing.
                       The selector accepts agent id, compact agent id,
@@ -401,6 +411,8 @@ Examples:
   agentworkforce sources list
   agentworkforce sources add ../my-personas --position 1
   agentworkforce integrations --all
+  printf '%s' "$RTH_TOKEN" | agentworkforce env set RTH_TOKEN
+  agentworkforce env list
   agentworkforce harness check
   agentworkforce pick "review this PR for security issues"
   agentworkforce agent "$(agentworkforce pick "fix the flaky test in foo.test.ts")"
@@ -5168,6 +5180,16 @@ export async function main(): Promise<void> {
     const { runIntegrationsCommand } = await import('./integrations-command.js');
     await runIntegrationsCommand(rest);
     return;
+  }
+
+  if (subcommand === 'env') {
+    try {
+      const { runEnv } = await import('./env-command.js');
+      await runEnv(rest);
+      return;
+    } catch (err) {
+      die(`agentworkforce env failed: ${err instanceof Error ? err.message : String(err)}`, false);
+    }
   }
 
   if (subcommand === 'trigger') {
