@@ -7,6 +7,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- Add workspace-scoped `env set`, `env list`, and `env unset` commands. Secret
+  values are accepted only from stdin, output is metadata-only, and cloud
+  deployments receive the variables through their runtime environment rather
+  than persona prompt inputs.
+
 ## [4.1.51] - 2026-08-31
 
 ### Added

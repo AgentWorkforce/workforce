@@ -7,6 +7,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- Expose the CLI's workspace-scoped `env set`, `env list`, and `env unset`
+  commands through the top-level `agentworkforce` binary.
+
 ## [4.1.51] - 2026-08-31
 
 ### Added
