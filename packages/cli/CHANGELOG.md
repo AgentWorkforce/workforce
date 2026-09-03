@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [4.1.54] - 2026-09-03
+
 ### Added
 
 - Add workspace-scoped `env set`, `env list`, and `env unset` commands. Secret
