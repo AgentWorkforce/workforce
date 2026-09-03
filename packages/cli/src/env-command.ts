@@ -207,11 +207,18 @@ export async function runEnv(args: readonly string[]): Promise<void> {
   });
   // Cloud APIs are scoped by the canonical cloud workspace id. The relaycast
   // provider id exposed as `auth.workspace` may be numeric and is not the id
-  // used by Relayfile-backed runtime storage.
+  // used by Relayfile-backed runtime storage. Older workspace descriptors
+  // copy that provider id into cloudWorkspaceId when the cloud id is absent,
+  // so equal ids are a compatibility fallback rather than canonical proof.
+  const descriptorCloudWorkspaceId = auth.workspaceDescriptor?.cloudWorkspaceId?.trim();
+  const descriptorRelaycastWorkspaceId = auth.workspaceDescriptor?.relaycastWorkspaceId?.trim();
   const workspace = await resolveCanonicalWorkspaceId({
     cloudUrl,
     token: auth.token,
-    descriptorWorkspaceId: auth.workspaceDescriptor?.cloudWorkspaceId,
+    ...(descriptorCloudWorkspaceId
+      && descriptorCloudWorkspaceId !== descriptorRelaycastWorkspaceId
+      ? { descriptorWorkspaceId: descriptorCloudWorkspaceId }
+      : {}),
     requestedWorkspace: auth.workspace ?? options.workspace,
     fetchImpl: envCommandDeps.fetchImpl
   });

@@ -24,6 +24,7 @@ function response(body: unknown, status = 200): Response {
 function installDeps(input: {
   workspace?: string;
   cloudWorkspaceId?: string;
+  relaycastWorkspaceId?: string;
   includeWorkspaceDescriptor?: boolean;
   cloudUrl?: string;
   stdin?: Readable;
@@ -42,7 +43,14 @@ function installDeps(input: {
         token: 'workspace-bearer',
         ...(resolvedWorkspace ? { workspace: resolvedWorkspace } : {}),
         ...(input.includeWorkspaceDescriptor !== false && cloudWorkspaceId
-          ? { workspaceDescriptor: { cloudWorkspaceId } as never }
+          ? {
+            workspaceDescriptor: {
+              cloudWorkspaceId,
+              ...(input.relaycastWorkspaceId
+                ? { relaycastWorkspaceId: input.relaycastWorkspaceId }
+                : {})
+            } as never
+          }
           : {})
       };
     },
@@ -288,6 +296,7 @@ test('cloud workspace identity wins over a relaycast provider id for storage sco
   const { restore } = installDeps({
     workspace: '987654321',
     cloudWorkspaceId: '11111111-1111-4111-8111-111111111111',
+    relaycastWorkspaceId: '987654321',
     async fetchImpl(url) {
       calls.push(url);
       return response({ ok: true, data: { items: [] } });
@@ -297,6 +306,31 @@ test('cloud workspace identity wins over a relaycast provider id for storage sco
     await runEnv(['list']);
     assert.deepEqual(calls, [
       `${CLOUD}/api/v1/workspaces/11111111-1111-4111-8111-111111111111/secrets`
+    ]);
+  } finally {
+    restore();
+  }
+});
+
+test('descriptor compatibility fallback is resolved instead of trusted as a cloud id', async () => {
+  const calls: string[] = [];
+  const providerId = '987654321';
+  const canonical = '11111111-1111-4111-8111-111111111111';
+  const { restore } = installDeps({
+    workspace: providerId,
+    cloudWorkspaceId: providerId,
+    relaycastWorkspaceId: providerId,
+    async fetchImpl(url) {
+      calls.push(url);
+      if (url.endsWith('/resolve')) return response({ cloudWorkspaceId: canonical });
+      return response({ ok: true, data: { items: [] } });
+    }
+  });
+  try {
+    await runEnv(['list']);
+    assert.deepEqual(calls, [
+      `${CLOUD}/api/v1/workspaces/${providerId}/resolve`,
+      `${CLOUD}/api/v1/workspaces/${canonical}/secrets`
     ]);
   } finally {
     restore();
