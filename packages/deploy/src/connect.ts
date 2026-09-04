@@ -1,6 +1,10 @@
 import { platform } from 'node:os';
 import { spawn } from 'node:child_process';
-import type { IntegrationSource, PersonaSpec } from '@agentworkforce/persona-kit';
+import {
+  isImplicitIntegrationSource,
+  type IntegrationSource,
+  type PersonaSpec
+} from '@agentworkforce/persona-kit';
 import type { DeployIO, IntegrationConnectOutcome } from './types.js';
 
 /**
@@ -71,6 +75,15 @@ export interface IntegrationConnectResolver {
     supabaseMcpProjectRef?: string;
   }): Promise<boolean>;
   /**
+   * Inspect stored rows for a provider so preflight can distinguish an absent
+   * connection from one connected at a different source. Optional for custom
+   * resolvers that cannot enumerate their backing store.
+   */
+  listConnectionSources?(args: {
+    workspace: string;
+    provider: string;
+  }): Promise<IntegrationConnectionLocation[]>;
+  /**
    * Run the browser-based OAuth flow and resolve when the user finishes.
    *
    * `source` discriminates which table the cloud writes the new row into:
@@ -90,6 +103,11 @@ export interface IntegrationConnectResolver {
     allowWorkspaceFallback?: boolean;
     supabaseMcpProjectRef?: string;
   }): Promise<{ connectionId: string }>;
+}
+
+export interface IntegrationConnectionLocation {
+  source: IntegrationSource;
+  providerConfigKey?: string;
 }
 
 /**
@@ -213,6 +231,42 @@ const fallbackSource = workspaceFallbackSource(
         fallbackSource,
         expectedConfigKey
       );
+    },
+    async listConnectionSources({ workspace, provider }) {
+      const workspaceId = workspace || opts.workspaceId;
+      const token = await resolveWorkspaceToken(opts.workspaceToken);
+      const [userResult, workspaceResult] = await Promise.allSettled([
+        requestJson(
+          fetchImpl,
+          `${apiUrl}/api/v1/me/integrations`,
+          token,
+          {},
+          sleepImpl
+        ),
+        requestJson(
+          fetchImpl,
+          `${apiUrl}/api/v1/workspaces/${encodeURIComponent(workspaceId)}/integrations`,
+          token,
+          {},
+          sleepImpl
+        )
+      ]);
+      const locations = dedupeConnectionLocations([
+        ...(userResult.status === 'fulfilled'
+          ? connectionLocationsFromList(userResult.value, provider, { kind: 'deployer_user' })
+          : []),
+        ...(workspaceResult.status === 'fulfilled'
+          ? connectionLocationsFromList(workspaceResult.value, provider, { kind: 'workspace' })
+          : [])
+      ]);
+      // A CI workspace token may legitimately be unable to call the user-owned
+      // list. Keep any source rows the workspace list did prove. If the partial
+      // result is empty, fail the diagnostic instead of asserting that no
+      // connection exists when one owner could not be inspected.
+      if (locations.length > 0) return locations;
+      if (userResult.status === 'rejected') throw userResult.reason;
+      if (workspaceResult.status === 'rejected') throw workspaceResult.reason;
+      return [];
     },
     async connect({
       workspace,
@@ -797,26 +851,29 @@ export async function connectIntegrations(input: ConnectAllInput): Promise<Conne
     const canConnectWithoutPrompt = Boolean(
       supabaseMcpProjectRef && isSupabaseMcpProvider(provider)
     );
+    const connectionProblem = connected
+      ? undefined
+      : await describeConnectionProblem(input, provider, source, expectedConfigKey);
     if (input.noPrompt && !forceReconnect && !canConnectWithoutPrompt) {
       input.io.error(
-        `integrations.${provider}: not connected, and --no-prompt was passed. Connect it before deploying or run without --no-prompt.`
+        `integrations.${provider}: ${connectionProblem}, and --no-prompt was passed. It prevents opening a connection flow; reconcile the declared source and stored connection, or run without --no-prompt.`
       );
       outcomes.push({
         provider,
         status: 'failed',
-        message: 'not connected (--no-prompt was set)'
+        message: `${connectionProblem} (--no-prompt was set)`
       });
       return { outcomes };
     }
 
     if (input.noConnect && !forceReconnect) {
       input.io.error(
-        `integrations.${provider}: not connected, and prompts are disabled`
+        `integrations.${provider}: ${connectionProblem}, and prompts are disabled by --no-connect. Reconcile the declared source and stored connection.`
       );
       outcomes.push({
         provider,
         status: 'failed',
-        message: 'not connected (prompts are disabled)'
+        message: `${connectionProblem} (--no-connect was set)`
       });
       continue;
     }
@@ -829,18 +886,22 @@ export async function connectIntegrations(input: ConnectAllInput): Promise<Conne
       // the interactive not-connected path and `--reconnect <provider>` (which
       // reaches here when forceReconnect is set).
       const command = `agent-relay cloud connect ${provider}`;
+      const captureReason = forceReconnect && connected
+        ? 'credential recapture was requested'
+        : connectionProblem;
       input.io.error(
-        `integrations.${provider}: not connected. Run \`${command}\` to capture the credential, then re-deploy.`
+        `integrations.${provider}: ${captureReason}. Run \`${command}\` to capture the credential, then re-deploy.`
       );
       outcomes.push({
         provider,
         status: 'failed',
-        message: `not connected (run \`${command}\`)`
+        message: `${captureReason} (run \`${command}\`)`
       });
       continue;
     }
 
     if (!forceReconnect && !input.noPrompt) {
+      input.io.info(`integrations.${provider}: ${connectionProblem}`);
       const shouldConnect = await input.io.confirm(
         `Connect ${provider} now? (opens browser)`,
         { defaultValue: true }
@@ -973,6 +1034,87 @@ async function checkProviderConnected(
       input.io.warn(`failed to check connection status for ${provider}: ${message}`);
       return false;
     });
+}
+
+async function describeConnectionProblem(
+  input: ConnectAllInput,
+  provider: string,
+  requiredSource: IntegrationSource,
+  expectedConfigKey: string | undefined
+): Promise<string> {
+  const inspect = input.integrations.listConnectionSources;
+  if (!inspect) {
+    return `not connected for required source ${formatIntegrationSource(requiredSource)} (alternate sources could not be inspected)`;
+  }
+
+  let locations: IntegrationConnectionLocation[];
+  try {
+    locations = await inspect({ workspace: input.workspace, provider });
+  } catch (err) {
+    input.io.warn(
+      `integrations.${provider}: could not inspect connections at other sources: ${
+        err instanceof Error ? err.message : String(err)
+      }`
+    );
+    return `not connected for required source ${formatIntegrationSource(requiredSource)} (alternate sources could not be inspected)`;
+  }
+
+  if (locations.length === 0) {
+    return `no connection exists for provider "${provider}"`;
+  }
+
+  const configMatches = locations.filter((location) =>
+    !expectedConfigKey
+    || !location.providerConfigKey
+    || location.providerConfigKey === expectedConfigKey
+  );
+  if (configMatches.length === 0) {
+    const existingKeys = uniqueStrings(
+      locations.map((location) => location.providerConfigKey).filter(isString)
+    );
+    return `connections exist for provider "${provider}", but none use required provider config "${expectedConfigKey}"` +
+      (existingKeys.length > 0 ? `. Existing provider configs: ${existingKeys.join(', ')}` : '');
+  }
+
+  const sourceMatches = configMatches.some((location) =>
+    integrationSourcesEqual(location.source, requiredSource)
+  );
+  const existingSources = uniqueStrings(
+    configMatches.map((location) => formatIntegrationSource(location.source))
+  );
+  if (!sourceMatches) {
+    const authoredSources = uniqueStrings(
+      configMatches.map((location) => JSON.stringify(location.source))
+    );
+    return `connections exist for provider "${provider}", but not for required source ${formatIntegrationSource(requiredSource)}. ` +
+      `Existing sources: ${existingSources.join(', ')}. ` +
+      `Set \`integrations.${provider}.source\` to ${authoredSources.map((source) => `\`${source}\``).join(' or ')} if that owner is intended, ` +
+      `or connect ${provider} for source ${formatIntegrationSource(requiredSource)}`;
+  }
+
+  return `a connection exists for provider "${provider}" at required source ${formatIntegrationSource(requiredSource)}, but it is not ready or does not match the requested configuration`;
+}
+
+function integrationSourcesEqual(a: IntegrationSource, b: IntegrationSource): boolean {
+  return a.kind === b.kind && (
+    a.kind !== 'workspace_service_account'
+    || b.kind !== 'workspace_service_account'
+    || a.name === b.name
+  );
+}
+
+function formatIntegrationSource(source: IntegrationSource): string {
+  return source.kind === 'workspace_service_account'
+    ? `workspace_service_account(${JSON.stringify(source.name)})`
+    : source.kind;
+}
+
+function uniqueStrings(values: readonly string[]): string[] {
+  return [...new Set(values)];
+}
+
+function isString(value: string | undefined): value is string {
+  return value !== undefined;
 }
 
 /**
@@ -1299,11 +1441,7 @@ function listHasConnectedProvider(
   provider: string,
   opts: MatchOpts = {}
 ): boolean {
-  const candidates = Array.isArray(body)
-    ? body
-    : body && typeof body === 'object' && Array.isArray((body as { integrations?: unknown }).integrations)
-      ? (body as { integrations: unknown[] }).integrations
-      : [];
+  const candidates = integrationListCandidates(body);
   return candidates.some((item) => {
     if (!item || typeof item !== 'object' || Array.isArray(item)) return false;
     const record = item as Record<string, unknown>;
@@ -1323,6 +1461,72 @@ function listHasConnectedProvider(
       if (rowName !== opts.serviceAccountName) return false;
     }
     return isConnectedStatus(record);
+  });
+}
+
+function connectionLocationsFromList(
+  body: unknown,
+  provider: string,
+  fallbackSource: IntegrationSource
+): IntegrationConnectionLocation[] {
+  const locations: IntegrationConnectionLocation[] = [];
+  for (const item of integrationListCandidates(body)) {
+    if (!item || typeof item !== 'object' || Array.isArray(item)) continue;
+    const record = item as Record<string, unknown>;
+    if (readString(record, 'provider') !== provider) continue;
+    const source = readConnectionSource(record, fallbackSource);
+    const providerConfigKey = readProviderConfigKey(record);
+    locations.push({
+      source,
+      ...(providerConfigKey ? { providerConfigKey } : {})
+    });
+  }
+  return locations;
+}
+
+function integrationListCandidates(body: unknown): unknown[] {
+  return Array.isArray(body)
+    ? body
+    : body && typeof body === 'object' && Array.isArray((body as { integrations?: unknown }).integrations)
+      ? (body as { integrations: unknown[] }).integrations
+      : [];
+}
+
+function readConnectionSource(
+  record: Record<string, unknown>,
+  fallbackSource: IntegrationSource
+): IntegrationSource {
+  const raw = record.source ?? record.scope;
+  const kind = typeof raw === 'string'
+    ? raw
+    : raw && typeof raw === 'object' && !Array.isArray(raw)
+      ? readString(raw, 'kind')
+      : undefined;
+  if (kind === 'deployer_user' || kind === 'workspace') return { kind };
+  if (kind === 'workspace_service_account') {
+    const name =
+      (raw && typeof raw === 'object' && !Array.isArray(raw)
+        ? readString(raw, 'name')
+        : undefined)
+      ?? readString(record, 'serviceAccountName')
+      ?? readString(record, 'name');
+    return name ? { kind, name } : fallbackSource;
+  }
+  const serviceAccountName = readString(record, 'serviceAccountName');
+  return serviceAccountName
+    ? { kind: 'workspace_service_account', name: serviceAccountName }
+    : fallbackSource;
+}
+
+function dedupeConnectionLocations(
+  locations: readonly IntegrationConnectionLocation[]
+): IntegrationConnectionLocation[] {
+  const seen = new Set<string>();
+  return locations.filter((location) => {
+    const key = JSON.stringify(location);
+    if (seen.has(key)) return false;
+    seen.add(key);
+    return true;
   });
 }
 
@@ -1366,6 +1570,7 @@ function readConnectionId(status: unknown): string | undefined {
 function readProviderConfigKey(value: unknown): string | undefined {
   return readString(value, 'configKey')
     ?? readString(value, 'providerConfigKey')
+    ?? readString(value, 'provider_config_key')
     ?? readString(value, 'backendIntegrationId');
 }
 
@@ -1376,11 +1581,7 @@ function statusMatchesConnectionId(status: unknown, expectedConnectionId: string
 }
 
 function integrationAllowsWorkspaceFallback(value: unknown): boolean {
-  return Boolean(
-    value &&
-    typeof value === 'object' &&
-    (value as { __agentworkforceImplicitSource?: unknown }).__agentworkforceImplicitSource === true
-  );
+  return isImplicitIntegrationSource(value);
 }
 
 function isIntegrationListResponse(body: unknown): boolean {

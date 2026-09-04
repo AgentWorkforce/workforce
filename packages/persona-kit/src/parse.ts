@@ -49,6 +49,7 @@ import type {
  * stay short enough to render in list/table UIs without truncation.
  */
 const PERSONA_TAG_MAX_LEN = 64;
+const IMPLICIT_INTEGRATION_SOURCE = '__agentworkforceImplicitSource';
 
 export function isObject(value: unknown): value is Record<string, unknown> {
   return typeof value === 'object' && value !== null;
@@ -58,6 +59,23 @@ export function isPlainObject(value: unknown): value is Record<string, unknown> 
   if (!isObject(value) || Array.isArray(value)) return false;
   const proto = Object.getPrototypeOf(value);
   return proto === Object.prototype || proto === null;
+}
+
+/**
+ * Whether an integration is using the backwards-compatible implicit source.
+ *
+ * Persona-kit exposes the effective `deployer_user` source to in-memory
+ * consumers, but serializes an implicit source as an omission. That omission is
+ * the durable JSON representation: reparsing it restores both the effective
+ * default and this distinction without leaking private metadata into a persona
+ * artifact.
+ */
+export function isImplicitIntegrationSource(value: unknown): boolean {
+  return Boolean(
+    isObject(value) &&
+    !Array.isArray(value) &&
+    (value[IMPLICIT_INTEGRATION_SOURCE] === true || value.source === undefined)
+  );
 }
 
 /**
@@ -756,16 +774,28 @@ export function parseIntegrationConfig(
   ]) as PersonaIntegrationConfig;
 
   // Default-inject `deployer_user` when the persona omits `source` so
-  // pre-discriminator personas keep parsing unchanged. The cloud-side
-  // resolver can then trust `source` is always present on parsed specs.
+  // pre-discriminator personas keep parsing unchanged. Preserve the omission
+  // across JSON serialization, though: deploy uses it to distinguish legacy
+  // workspace-compatible defaults from an explicitly authored deployer-user
+  // source. A private enumerable marker would leak into persona.json; a private
+  // non-enumerable marker alone would disappear and lose the behavior.
+  const sourceWasImplicit = isImplicitIntegrationSource(value);
   out.source =
-    source === undefined
+    sourceWasImplicit
       ? { kind: 'deployer_user' }
       : parseIntegrationSource(source, `${context}.source`);
-  if (source === undefined) {
-    Object.defineProperty(out, '__agentworkforceImplicitSource', {
+  if (sourceWasImplicit) {
+    Object.defineProperty(out, IMPLICIT_INTEGRATION_SOURCE, {
       value: true,
       enumerable: false
+    });
+    Object.defineProperty(out, 'toJSON', {
+      enumerable: false,
+      value(this: PersonaIntegrationConfig) {
+        const serialized = { ...this };
+        delete serialized.source;
+        return serialized;
+      }
     });
   }
 
