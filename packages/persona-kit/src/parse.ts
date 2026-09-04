@@ -71,11 +71,10 @@ export function isPlainObject(value: unknown): value is Record<string, unknown> 
  * artifact.
  */
 export function isImplicitIntegrationSource(value: unknown): boolean {
-  return Boolean(
-    isObject(value) &&
-    !Array.isArray(value) &&
-    (value[IMPLICIT_INTEGRATION_SOURCE] === true || value.source === undefined)
-  );
+  if (!isObject(value) || Array.isArray(value)) return false;
+  const marker = Object.getOwnPropertyDescriptor(value, IMPLICIT_INTEGRATION_SOURCE);
+  return value.source === undefined
+    || (marker?.value === true && marker.enumerable === false);
 }
 
 /**
@@ -770,7 +769,8 @@ export function parseIntegrationConfig(
     'config',
     'optional',
     'enabledByInput',
-    'triggers'
+    'triggers',
+    IMPLICIT_INTEGRATION_SOURCE
   ]) as PersonaIntegrationConfig;
 
   // Default-inject `deployer_user` when the persona omits `source` so

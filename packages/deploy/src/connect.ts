@@ -24,6 +24,7 @@ import type { DeployIO, IntegrationConnectOutcome } from './types.js';
 const PROVIDER_ENV_PREFIX = 'WORKFORCE_INTEGRATION_';
 const SUPABASE_MCP_PROVIDERS = new Set(['supabase-mcp', 'supabase-mcp-relay']);
 const SUPABASE_MCP_PROJECT_REF_PATTERN = /^[a-z0-9]{20}$/u;
+const DEFAULT_DIAGNOSTIC_REQUEST_TIMEOUT_MS = 10_000;
 
 export function normalizeSupabaseMcpProjectRef(value: unknown): string | undefined {
   if (typeof value !== 'string') return undefined;
@@ -159,6 +160,8 @@ export function relayfileIntegrationResolver(opts: {
   io?: Pick<DeployIO, 'info' | 'warn'>;
   pollIntervalMs?: number;
   timeoutMs?: number;
+  /** Deadline for each best-effort diagnostic list request. Defaults to 10 seconds. */
+  requestTimeoutMs?: number;
   fetch?: typeof fetch;
   openUrl?: (url: string) => void | Promise<void>;
   sleep?: (ms: number) => Promise<void>;
@@ -236,19 +239,21 @@ const fallbackSource = workspaceFallbackSource(
       const workspaceId = workspace || opts.workspaceId;
       const token = await resolveWorkspaceToken(opts.workspaceToken);
       const [userResult, workspaceResult] = await Promise.allSettled([
-        requestJson(
+        requestJsonWithTimeout(
           fetchImpl,
           `${apiUrl}/api/v1/me/integrations`,
           token,
           {},
-          sleepImpl
+          sleepImpl,
+          opts.requestTimeoutMs ?? DEFAULT_DIAGNOSTIC_REQUEST_TIMEOUT_MS
         ),
-        requestJson(
+        requestJsonWithTimeout(
           fetchImpl,
           `${apiUrl}/api/v1/workspaces/${encodeURIComponent(workspaceId)}/integrations`,
           token,
           {},
-          sleepImpl
+          sleepImpl,
+          opts.requestTimeoutMs ?? DEFAULT_DIAGNOSTIC_REQUEST_TIMEOUT_MS
         )
       ]);
       const locations = dedupeConnectionLocations([
@@ -1298,6 +1303,42 @@ async function requestJson(
   return await res.json();
 }
 
+/**
+ * Bound a diagnostic request even when a custom fetch ignores abort signals.
+ * The abort still tears down compliant transports; the race guarantees the
+ * preflight itself settles either way.
+ */
+async function requestJsonWithTimeout(
+  fetchImpl: typeof fetch,
+  url: string,
+  token: string,
+  init: RequestInit,
+  retrySleep: ((ms: number) => Promise<void>) | undefined,
+  timeoutMs: number
+): Promise<unknown> {
+  const controller = new AbortController();
+  const timeoutError = cloudRequestError(
+    `cloud integration diagnostic request timed out after ${timeoutMs}ms`,
+    408
+  );
+  let timeout: ReturnType<typeof setTimeout> | undefined;
+  const timeoutPromise = new Promise<never>((_, reject) => {
+    timeout = setTimeout(() => {
+      reject(timeoutError);
+      controller.abort(timeoutError);
+    }, timeoutMs);
+  });
+
+  try {
+    return await Promise.race([
+      requestJson(fetchImpl, url, token, { ...init, signal: controller.signal }, retrySleep),
+      timeoutPromise
+    ]);
+  } finally {
+    if (timeout) clearTimeout(timeout);
+  }
+}
+
 export function isRetryableIntegrationGet(method: string | undefined): boolean {
   return method === undefined || method.toUpperCase() === 'GET';
 }
@@ -1447,8 +1488,8 @@ function listHasConnectedProvider(
     const record = item as Record<string, unknown>;
     if (record.provider !== provider) return false;
     if (opts.expectedConfigKey) {
-      const rowConfigKey = readString(record, 'providerConfigKey');
-      // If the row carries a providerConfigKey, enforce strict match.
+      const rowConfigKey = readProviderConfigKey(record);
+      // If the row carries a provider config key, enforce strict match.
       // If the field is missing entirely (older cloud that hasn't shipped
       // cloud#988), fall through to status-only matching — the cloud
       // server will still resolve the right config-key at dispatch time.

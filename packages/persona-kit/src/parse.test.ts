@@ -990,6 +990,30 @@ test('parseIntegrations round-trips all three valid IntegrationSource kinds', ()
   });
 });
 
+test('parseIntegrations never trusts an enumerable implicit-source marker', () => {
+  const markedExplicit = parseIntegrations({
+    github: {
+      source: { kind: 'workspace' },
+      __agentworkforceImplicitSource: true
+    }
+  }, 'integrations');
+
+  assert.deepEqual(markedExplicit?.github.source, { kind: 'workspace' });
+  assert.equal('__agentworkforceImplicitSource' in (markedExplicit?.github ?? {}), false);
+  assert.deepEqual(JSON.parse(JSON.stringify(markedExplicit)), {
+    github: { source: { kind: 'workspace' } }
+  });
+  assert.throws(
+    () => parseIntegrations({
+      github: {
+        source: { kind: 'org' },
+        __agentworkforceImplicitSource: true
+      }
+    }, 'integrations'),
+    /integrations\.github\.source\.kind must be one of/
+  );
+});
+
 test('parseIntegrations rejects an unknown source.kind with a precise field path', () => {
   assert.throws(
     () =>

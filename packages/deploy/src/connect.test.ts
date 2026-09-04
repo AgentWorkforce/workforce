@@ -403,6 +403,39 @@ test('relayfileIntegrationResolver can diagnose workspace sources with a CI work
   );
 });
 
+test('relayfileIntegrationResolver bounds source diagnostics and keeps the fulfilled owner', {
+  timeout: 1_000
+}, async () => {
+  let stalledSignal: AbortSignal | undefined;
+  const resolver = relayfileIntegrationResolver({
+    apiUrl: 'https://cloud.example.test',
+    workspaceId: 'ws-1',
+    workspaceToken: 'workspace-token',
+    requestTimeoutMs: 10,
+    fetch: async (url, init) => {
+      if (String(url).endsWith('/api/v1/me/integrations')) {
+        stalledSignal = init?.signal ?? undefined;
+        return await new Promise<Response>(() => {});
+      }
+      return okJson({
+        integrations: [{
+          provider: 'github',
+          provider_config_key: 'github-relay',
+          connection_id: 'conn-workspace',
+          scope: 'workspace'
+        }]
+      });
+    }
+  });
+
+  assert.ok(resolver.listConnectionSources);
+  assert.deepEqual(
+    await resolver.listConnectionSources({ workspace: 'ws-1', provider: 'github' }),
+    [{ source: { kind: 'workspace' }, providerConfigKey: 'github-relay' }]
+  );
+  assert.equal(stalledSignal?.aborted, true);
+});
+
 test('connectIntegrations keeps implicit workspace fallback after a compiled JSON round-trip', async () => {
   const parsed = parsePersonaSpec({
     id: 'legacy-github-agent',
@@ -659,6 +692,33 @@ test('relayfileIntegrationResolver isConnected falls back to deployer-user list 
     io.messages.some(
       (m) => m.level === 'warn' && /integrations\/<provider>\/status/.test(m.message)
     )
+  );
+});
+
+test('relayfileIntegrationResolver fallback list rejects a snake-case config-key mismatch', async () => {
+  const resolver = relayfileIntegrationResolver({
+    apiUrl: 'https://cloud.example.test',
+    workspaceId: 'ws-1',
+    workspaceToken: 'tok',
+    fetch: async (url) => {
+      if (String(url).includes('/integrations/github/status')) {
+        return new Response('not found', { status: 404 });
+      }
+      return okJson([{
+        provider: 'github',
+        provider_config_key: 'github-other',
+        status: 'ready'
+      }]);
+    }
+  });
+
+  assert.equal(
+    await resolver.isConnected({
+      workspace: 'ws-runtime',
+      provider: 'github',
+      expectedConfigKey: 'github-relay'
+    }),
+    false
   );
 });
 
