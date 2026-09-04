@@ -169,7 +169,7 @@ test('ensureCloudSubscriptionReady oauth leg throws "credentials are not connect
   const restoreDeps = configureCloudCredentialDepsForTest({
     readStoredAuth: async () => ({
       apiUrl: 'https://cloud.example.test',
-      accessToken: 'access',
+      accessToken: 'tok',
       refreshToken: 'refresh',
       accessTokenExpiresAt: '2999-01-01T00:00:00.000Z'
     }),
@@ -308,7 +308,7 @@ test('ensureCloudSubscriptionReady oauth leg resolves without connectProvider wh
   const restoreDeps = configureCloudCredentialDepsForTest({
     readStoredAuth: async () => ({
       apiUrl: 'https://cloud.example.test',
-      accessToken: 'access',
+      accessToken: 'tok',
       refreshToken: 'refresh',
       accessTokenExpiresAt: '2999-01-01T00:00:00.000Z'
     }),
@@ -363,7 +363,7 @@ test('ensureCloudSubscriptionReady oauth leg connects, polls until connected, th
   const restoreDeps = configureCloudCredentialDepsForTest({
     readStoredAuth: async () => ({
       apiUrl: 'https://cloud.example.test',
-      accessToken: 'access',
+      accessToken: 'tok',
       refreshToken: 'refresh',
       accessTokenExpiresAt: '2999-01-01T00:00:00.000Z'
     }),
@@ -423,7 +423,7 @@ test('ensureCloudSubscriptionReady oauth leg returns { provider } without creden
   const restoreDeps = configureCloudCredentialDepsForTest({
     readStoredAuth: async () => ({
       apiUrl: 'https://cloud.example.test',
-      accessToken: 'access',
+      accessToken: 'tok',
       refreshToken: 'refresh',
       accessTokenExpiresAt: '2999-01-01T00:00:00.000Z'
     }),

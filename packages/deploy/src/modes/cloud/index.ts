@@ -366,7 +366,7 @@ async function resolveHarnessSource(args: {
     // connected" from its own missing login.
     args.io.info(
       `cloud: the ${args.persona.harness} credential check is unavailable here ` +
-        '(no stored CLI login, or this cloud does not serve the route); ' +
+        '(the deploy credential cannot authoritatively list it, or this cloud does not serve the route); ' +
         'assuming oauth — cloud will reject the deploy if it is genuinely not connected.'
     );
     return 'oauth';
@@ -391,10 +391,11 @@ async function resolveHarnessSource(args: {
  *
  * Tri-state on purpose: `null` means WE COULD NOT CHECK — not "not connected".
  * The check is unavailable whenever `fetchCloudAgents` yields nothing: no
- * stored CLI login (every headless/CI deploy authenticates with a workspace
- * deploy token instead), or a cloud without the route (404/405). Collapsing
- * that into `false` made every `--no-prompt` deploy fail with "credentials are
- * not connected" even when they were connected — the same false negative the
+ * stored CLI login, a deploy credential different from that login, a deploy
+ * credential without permission to list user credentials (403), or a cloud
+ * without the route (404/405). Collapsing that into `false` made headless
+ * `--no-prompt` deploys fail with "credentials are not connected" even when
+ * they were connected — the same false negative the
  * `/users/me/provider_credentials` 404 caused before it, described below.
  *
  * Cloud surfaces this via `GET /api/v1/cloud-agents`, which returns one
@@ -409,26 +410,43 @@ async function resolveHarnessSource(args: {
  */
 async function isHarnessOauthConnected(args: {
   cloudUrl: string;
+  token: string;
   persona: PersonaSpec;
 }): Promise<boolean | null> {
-  const body = await fetchCloudAgents(args.cloudUrl);
+  const body = await fetchCloudAgents(args);
   if (!body) return null;
   return hasConnectedHarness(body, deriveModelProvider(args.persona));
 }
 
 /**
  * Fetch the `/api/v1/cloud-agents` list, or `null` when there is no usable
- * stored auth or the route doesn't exist on the target cloud (404/405).
+ * authoritative auth for this deploy or the route cannot serve it.
+ *
+ * The route is scoped to the authenticated `(userId, workspaceId)`, not the
+ * workspace in the deployment URL. The only refresh-capable client available
+ * here comes from `readStoredAuth()`, while CI deploys authenticate with the
+ * independent `WORKFORCE_WORKSPACE_TOKEN`. If those access tokens differ, a
+ * successful empty response describes the stored login's scope and says
+ * nothing about the deployment credential's workspace. Treat that as
+ * undeterminable instead of asserting that the target workspace is missing a
+ * credential.
  */
-async function fetchCloudAgents(cloudUrl: string): Promise<CloudAgentsListResponse | null> {
-  const auth = await readUsableCloudAuth(cloudUrl);
+async function fetchCloudAgents(args: {
+  cloudUrl: string;
+  token: string;
+}): Promise<CloudAgentsListResponse | null> {
+  const auth = await readUsableCloudAuth(args.cloudUrl);
   if (!auth) return null;
-  const client = cloudCredentialDeps.createCloudApiClient(auth, cloudUrl);
+  if (auth.accessToken !== args.token) return null;
+  const client = cloudCredentialDeps.createCloudApiClient(auth, args.cloudUrl);
   const res = await client.fetch('/api/v1/cloud-agents', {
     method: 'GET',
     headers: { 'user-agent': USER_AGENT }
   });
-  if (res.status === 404 || res.status === 405) return null;
+  // Workspace deployment tokens are intentionally not granted `cli:auth`, so
+  // cloud returns 403 for this user-credential listing. That is "cannot see",
+  // not evidence that the workspace has no connected credential.
+  if (res.status === 403 || res.status === 404 || res.status === 405) return null;
   if (res.status === 401) {
     throw new Error('cloud harness check failed: unauthorized. Run `agentworkforce login` and retry.');
   }
@@ -456,11 +474,12 @@ async function fetchCloudAgents(cloudUrl: string): Promise<CloudAgentsListRespon
  */
 async function resolveOauthCredentialSelections(args: {
   cloudUrl: string;
+  token: string;
   persona: PersonaSpec;
   io: ModeLaunchInput['io'];
 }): Promise<Record<string, string>> {
   const provider = deriveModelProvider(args.persona);
-  const body = await fetchCloudAgents(args.cloudUrl);
+  const body = await fetchCloudAgents(args);
   if (!body) {
     // The stamping lookup reads the SAME route as the probe, so when that route
     // is unavailable a headless oauth deploy cannot resolve a credential id
@@ -556,7 +575,7 @@ async function ensureHarnessOauth(args: {
     // headless deploy regardless of what the workspace actually has connected.
     args.io.info(
       `cloud: the ${args.persona.harness} credential check is unavailable here ` +
-        '(no stored CLI login, or this cloud does not serve the route); ' +
+        '(the deploy credential cannot authoritatively list it, or this cloud does not serve the route); ' +
         'proceeding — cloud will reject the deploy if it is genuinely not connected.'
     );
     return;
@@ -710,7 +729,7 @@ async function ensureSubscriptionOauth(args: {
     // headless deploy of a useSubscription persona on a check that cannot run.
     args.io.info(
       `subscription: the ${provider} credential check is unavailable here ` +
-        '(no stored CLI login, or this cloud does not serve the route); ' +
+        '(the deploy credential cannot authoritatively list it, or this cloud does not serve the route); ' +
         'proceeding — cloud will reject the deploy if it is genuinely not connected.'
     );
     return;
