@@ -591,6 +591,13 @@ async function ensureHarnessOauth(args: {
         : `cloud: ${args.persona.harness} OAuth credentials are not connected. Run without --no-prompt or choose --harness-source managed/byok.`
     );
   }
+  if (connected === null && reconnect) {
+    throw new Error(
+      `cloud: --reconnect ${deriveModelProvider(args.persona)} cannot verify completion because ` +
+        'this deploy credential cannot authoritatively list connected credentials. ' +
+        'Reconnect with the same stored cloud login as the deploy, or reconnect separately and rerun without --reconnect.'
+    );
+  }
   if (connected) {
     args.io.info(
       `cloud: reconnect requested; opening a fresh ${args.persona.harness} connection flow (replaces the stored credential)`
@@ -744,6 +751,13 @@ async function ensureSubscriptionOauth(args: {
         ? `cloud: --reconnect ${provider} opens a browser connect flow; re-run without --no-prompt.`
         : `persona "${args.persona.id}" sets useSubscription:true but ${provider} credentials are not connected. ` +
             'Run without --no-prompt to connect them, pass --harness-source byok with --byok-key, or remove useSubscription to use workforce-billed inference.'
+    );
+  }
+  if (connected === null && reconnect) {
+    throw new Error(
+      `cloud: --reconnect ${provider} cannot verify completion because this deploy credential ` +
+        'cannot authoritatively list connected credentials. Reconnect with the same stored cloud login ' +
+        'as the deploy, or reconnect separately and rerun without --reconnect.'
     );
   }
   if (connected) {

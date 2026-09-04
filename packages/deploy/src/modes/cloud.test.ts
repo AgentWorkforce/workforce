@@ -912,6 +912,39 @@ test('cloud --reconnect forces a fresh harness connect even when already connect
   assert.deepEqual(connected, ['openai']);
 });
 
+test('cloud --reconnect fails fast when the deploy credential cannot verify completion', async () => {
+  let connectCalled = false;
+  const restoreDeps = configureCloudCredentialDepsForTest({
+    readStoredAuth: async () => ({
+      apiUrl: 'https://cloud.example.test',
+      accessToken: 'stored-user-login',
+      refreshToken: 'refresh',
+      accessTokenExpiresAt: '2999-01-01T00:00:00.000Z'
+    }),
+    connectProvider: async () => {
+      connectCalled = true;
+      return { provider: 'openai', success: true };
+    },
+    createCloudApiClient() {
+      throw new Error('an unrelated stored login must not run the deploy probe');
+    }
+  });
+
+  await assert.rejects(
+    launch({
+      defaultManagedCredential: false,
+      env: { WORKFORCE_DEPLOY_CLOUD_URL: 'https://cloud.example.test' },
+      input: { harnessSource: 'oauth', reconnectProviders: ['openai'] },
+      fetch(url) {
+        throw new Error(`unexpected URL ${url}`);
+      }
+    }),
+    /--reconnect openai cannot verify completion.*deploy credential cannot authoritatively list/s
+  ).finally(restoreDeps);
+
+  assert.equal(connectCalled, false, 'must fail before starting a connection it can never verify');
+});
+
 test('cloud --reconnect with --no-prompt fails with actionable guidance', async () => {
   const restoreDeps = configureCloudCredentialDepsForTest({
     readStoredAuth: async () => ({

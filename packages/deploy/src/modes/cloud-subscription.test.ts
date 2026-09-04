@@ -356,6 +356,41 @@ test('ensureCloudSubscriptionReady oauth leg resolves without connectProvider wh
   }
 });
 
+test('ensureCloudSubscriptionReady reconnect fails fast when its deploy credential cannot verify completion', async () => {
+  let connectCalled = false;
+  const restoreDeps = configureCloudCredentialDepsForTest({
+    readStoredAuth: async () => ({
+      apiUrl: 'https://cloud.example.test',
+      accessToken: 'stored-user-login',
+      refreshToken: 'refresh',
+      accessTokenExpiresAt: '2999-01-01T00:00:00.000Z'
+    }),
+    connectProvider: async () => {
+      connectCalled = true;
+      return { provider: 'anthropic', success: true };
+    },
+    createCloudApiClient() {
+      throw new Error('an unrelated stored login must not run the deploy probe');
+    }
+  });
+
+  const io = createBufferedIO();
+  try {
+    await assert.rejects(
+      ensureCloudSubscriptionReady(subscriptionArgs(io, {
+        persona: persona({ harness: 'claude', model: 'claude-sonnet-4-6' }),
+        harnessSource: 'oauth',
+        noPrompt: false,
+        reconnectProviders: ['anthropic']
+      })),
+      /--reconnect anthropic cannot verify completion.*deploy credential cannot authoritatively list/s
+    );
+    assert.equal(connectCalled, false, 'must fail before starting a connection it can never verify');
+  } finally {
+    restoreDeps();
+  }
+});
+
 test('ensureCloudSubscriptionReady oauth leg connects, polls until connected, then returns selections', async () => {
   let connectCalled = false;
   let pollCount = 0;
