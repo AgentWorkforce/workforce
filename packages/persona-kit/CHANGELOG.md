@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [4.1.55] - 2026-09-04
+
+### Fixed
+
+- Preserve integration source intent through JSON (#334)
+
 ## [4.1.52] - 2026-09-01
 
 ### Fixed

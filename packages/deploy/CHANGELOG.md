@@ -7,6 +7,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [4.1.55] - 2026-09-04
+
+### Fixed
+
+- Scope harness credential probes to deploy auth (#335)
+- Preserve integration source intent through JSON (#334)
+
 ## [4.1.51] - 2026-08-31
 
 ### Added
