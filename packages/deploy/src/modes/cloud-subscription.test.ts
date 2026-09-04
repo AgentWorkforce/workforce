@@ -169,7 +169,7 @@ test('ensureCloudSubscriptionReady oauth leg throws "credentials are not connect
   const restoreDeps = configureCloudCredentialDepsForTest({
     readStoredAuth: async () => ({
       apiUrl: 'https://cloud.example.test',
-      accessToken: 'access',
+      accessToken: 'tok',
       refreshToken: 'refresh',
       accessTokenExpiresAt: '2999-01-01T00:00:00.000Z'
     }),
@@ -308,7 +308,7 @@ test('ensureCloudSubscriptionReady oauth leg resolves without connectProvider wh
   const restoreDeps = configureCloudCredentialDepsForTest({
     readStoredAuth: async () => ({
       apiUrl: 'https://cloud.example.test',
-      accessToken: 'access',
+      accessToken: 'tok',
       refreshToken: 'refresh',
       accessTokenExpiresAt: '2999-01-01T00:00:00.000Z'
     }),
@@ -356,6 +356,106 @@ test('ensureCloudSubscriptionReady oauth leg resolves without connectProvider wh
   }
 });
 
+test('ensureCloudSubscriptionReady reconnect fails fast when its deploy credential cannot verify completion', async () => {
+  let connectCalled = false;
+  const restoreDeps = configureCloudCredentialDepsForTest({
+    readStoredAuth: async () => ({
+      apiUrl: 'https://cloud.example.test',
+      accessToken: 'stored-user-login',
+      refreshToken: 'refresh',
+      accessTokenExpiresAt: '2999-01-01T00:00:00.000Z'
+    }),
+    connectProvider: async () => {
+      connectCalled = true;
+      return { provider: 'anthropic', success: true };
+    },
+    createCloudApiClient() {
+      throw new Error('an unrelated stored login must not run the deploy probe');
+    }
+  });
+
+  const io = createBufferedIO();
+  try {
+    await assert.rejects(
+      ensureCloudSubscriptionReady(subscriptionArgs(io, {
+        persona: persona({ harness: 'claude', model: 'claude-sonnet-4-6' }),
+        harnessSource: 'oauth',
+        noPrompt: false,
+        reconnectProviders: ['anthropic']
+      })),
+      /--reconnect anthropic cannot verify completion.*deploy credential cannot authoritatively list/s
+    );
+    assert.equal(connectCalled, false, 'must fail before starting a connection it can never verify');
+  } finally {
+    restoreDeps();
+  }
+});
+
+test('ensureCloudSubscriptionReady keeps polling through a matching stored-token refresh', async () => {
+  let storedAuth = {
+    apiUrl: 'https://cloud.example.test',
+    accessToken: 'tok',
+    refreshToken: 'refresh',
+    accessTokenExpiresAt: '2000-01-01T00:00:00.000Z'
+  };
+  let storedAuthReads = 0;
+  let refreshes = 0;
+  let connected = false;
+  const restoreDeps = configureCloudCredentialDepsForTest({
+    readStoredAuth: async () => {
+      storedAuthReads += 1;
+      return storedAuth;
+    },
+    refreshStoredAuth: async (auth) => {
+      refreshes += 1;
+      assert.equal(auth.accessToken, 'tok');
+      storedAuth = {
+        ...storedAuth,
+        accessToken: 'rotated-token',
+        accessTokenExpiresAt: '2999-01-01T00:00:00.000Z'
+      };
+      return storedAuth;
+    },
+    connectProvider: async () => {
+      connected = true;
+      return { provider: 'anthropic', success: true };
+    },
+    createCloudApiClient(auth) {
+      assert.equal(auth.accessToken, 'rotated-token');
+      return {
+        async fetch() {
+          return okJson({
+            agents: connected
+              ? [{ id: 'pc-anthropic-rotated', harness: 'claude', status: 'connected' }]
+              : []
+          });
+        }
+      };
+    }
+  });
+
+  const io = createBufferedIO();
+  io.scriptConfirmations([true]);
+  try {
+    const result = await withEnv({
+      WORKFORCE_DEPLOY_POLL_INTERVAL_MS: '1',
+      WORKFORCE_DEPLOY_POLL_TIMEOUT_MS: '5000'
+    }, () =>
+      ensureCloudSubscriptionReady(subscriptionArgs(io, {
+        persona: persona({ harness: 'claude', model: 'claude-sonnet-4-6' }),
+        harnessSource: 'oauth',
+        noPrompt: false
+      }))
+    );
+    assert.equal(connected, true);
+    assert.equal(refreshes, 1);
+    assert.equal(storedAuthReads, 1, 'polling reuses the identity-verified probe client');
+    assert.deepEqual(result.credentialSelections, { anthropic: 'pc-anthropic-rotated' });
+  } finally {
+    restoreDeps();
+  }
+});
+
 test('ensureCloudSubscriptionReady oauth leg connects, polls until connected, then returns selections', async () => {
   let connectCalled = false;
   let pollCount = 0;
@@ -363,7 +463,7 @@ test('ensureCloudSubscriptionReady oauth leg connects, polls until connected, th
   const restoreDeps = configureCloudCredentialDepsForTest({
     readStoredAuth: async () => ({
       apiUrl: 'https://cloud.example.test',
-      accessToken: 'access',
+      accessToken: 'tok',
       refreshToken: 'refresh',
       accessTokenExpiresAt: '2999-01-01T00:00:00.000Z'
     }),
@@ -423,7 +523,7 @@ test('ensureCloudSubscriptionReady oauth leg returns { provider } without creden
   const restoreDeps = configureCloudCredentialDepsForTest({
     readStoredAuth: async () => ({
       apiUrl: 'https://cloud.example.test',
-      accessToken: 'access',
+      accessToken: 'tok',
       refreshToken: 'refresh',
       accessTokenExpiresAt: '2999-01-01T00:00:00.000Z'
     }),
