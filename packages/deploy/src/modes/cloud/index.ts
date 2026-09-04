@@ -87,6 +87,10 @@ interface ExistingAgent {
 
 type CloudApiClientLike = Pick<CloudApiClient, 'fetch'>;
 
+interface CloudAgentsProbe {
+  getClient(): Promise<CloudApiClientLike | null>;
+}
+
 type CloudCredentialDeps = {
   readStoredAuth: typeof readStoredAuth;
   refreshStoredAuth: typeof refreshStoredAuth;
@@ -309,7 +313,11 @@ async function ensureHarnessReady(args: {
     args.io.info('cloud: persona declares no harness; skipping harness credential setup');
     return {};
   }
-  const source = await resolveHarnessSource(args);
+  const probeArgs = {
+    ...args,
+    cloudAgentsProbe: createCloudAgentsProbe(args)
+  };
+  const source = await resolveHarnessSource(probeArgs);
   const modelProvider = deriveModelProvider(args.persona);
   if (source === 'managed') {
     const credentialId = await saveProviderCredential({
@@ -337,8 +345,8 @@ async function ensureHarnessReady(args: {
     return { [modelProvider]: credentialId };
   }
 
-  await ensureHarnessOauth(args);
-  return resolveOauthCredentialSelections(args);
+  await ensureHarnessOauth(probeArgs);
+  return resolveOauthCredentialSelections(probeArgs);
 }
 
 async function resolveHarnessSource(args: {
@@ -350,6 +358,7 @@ async function resolveHarnessSource(args: {
   noPrompt: boolean;
   harnessSource?: HarnessSource;
   byokKey?: string;
+  cloudAgentsProbe: CloudAgentsProbe;
 }): Promise<CanonicalHarnessSource> {
   if (args.harnessSource) return normalizeHarnessSource(args.harnessSource);
   const fromEnv = process.env.WORKFORCE_DEPLOY_HARNESS_SOURCE?.trim();
@@ -412,6 +421,7 @@ async function isHarnessOauthConnected(args: {
   cloudUrl: string;
   token: string;
   persona: PersonaSpec;
+  cloudAgentsProbe: CloudAgentsProbe;
 }): Promise<boolean | null> {
   const body = await fetchCloudAgents(args);
   if (!body) return null;
@@ -423,22 +433,20 @@ async function isHarnessOauthConnected(args: {
  * authoritative auth for this deploy or the route cannot serve it.
  *
  * The route is scoped to the authenticated `(userId, workspaceId)`, not the
- * workspace in the deployment URL. The only refresh-capable client available
- * here comes from `readStoredAuth()`, while CI deploys authenticate with the
- * independent `WORKFORCE_WORKSPACE_TOKEN`. If those access tokens differ, a
- * successful empty response describes the stored login's scope and says
- * nothing about the deployment credential's workspace. Treat that as
- * undeterminable instead of asserting that the target workspace is missing a
- * credential.
+ * workspace in the deployment URL. The probe verifies that the stored login
+ * starts with the deploy token before allowing that refresh-capable session to
+ * answer. Its client is retained for the whole credential flow, so a refresh
+ * can rotate the token without making the already-verified identity look like
+ * an unrelated login. CI deploy tokens that never matched the stored login
+ * remain undeterminable.
  */
 async function fetchCloudAgents(args: {
   cloudUrl: string;
   token: string;
+  cloudAgentsProbe: CloudAgentsProbe;
 }): Promise<CloudAgentsListResponse | null> {
-  const auth = await readUsableCloudAuth(args.cloudUrl);
-  if (!auth) return null;
-  if (auth.accessToken !== args.token) return null;
-  const client = cloudCredentialDeps.createCloudApiClient(auth, args.cloudUrl);
+  const client = await args.cloudAgentsProbe.getClient();
+  if (!client) return null;
   const res = await client.fetch('/api/v1/cloud-agents', {
     method: 'GET',
     headers: { 'user-agent': USER_AGENT }
@@ -477,6 +485,7 @@ async function resolveOauthCredentialSelections(args: {
   token: string;
   persona: PersonaSpec;
   io: ModeLaunchInput['io'];
+  cloudAgentsProbe: CloudAgentsProbe;
 }): Promise<Record<string, string>> {
   const provider = deriveModelProvider(args.persona);
   const body = await fetchCloudAgents(args);
@@ -557,6 +566,7 @@ async function ensureHarnessOauth(args: {
   io: ModeLaunchInput['io'];
   noPrompt: boolean;
   reconnectProviders?: readonly string[];
+  cloudAgentsProbe: CloudAgentsProbe;
 }): Promise<void> {
   const reconnect = harnessReconnectRequested(args.reconnectProviders, args.persona);
   const connected = await isHarnessOauthConnected(args);
@@ -670,7 +680,11 @@ export async function ensureCloudSubscriptionReady(args: {
   byokKey?: string;
   reconnectProviders?: readonly string[];
 }): Promise<CloudSubscriptionReadyResult> {
-  const source = resolveSubscriptionHarnessSource(args);
+  const probeArgs = {
+    ...args,
+    cloudAgentsProbe: createCloudAgentsProbe(args)
+  };
+  const source = resolveSubscriptionHarnessSource(probeArgs);
   const provider = deriveModelProvider(args.persona);
 
   if (source === 'byok') {
@@ -690,8 +704,8 @@ export async function ensureCloudSubscriptionReady(args: {
     };
   }
 
-  await ensureSubscriptionOauth(args);
-  const credentialSelections = await resolveOauthCredentialSelections(args);
+  await ensureSubscriptionOauth(probeArgs);
+  const credentialSelections = await resolveOauthCredentialSelections(probeArgs);
   return Object.keys(credentialSelections).length > 0
     ? { provider, credentialSelections }
     : { provider };
@@ -720,6 +734,7 @@ async function ensureSubscriptionOauth(args: {
   io: ModeLaunchInput['io'];
   noPrompt: boolean;
   reconnectProviders?: readonly string[];
+  cloudAgentsProbe: CloudAgentsProbe;
 }): Promise<void> {
   const provider = deriveModelProvider(args.persona);
   const reconnect = harnessReconnectRequested(args.reconnectProviders, args.persona);
@@ -1293,9 +1308,38 @@ function normalizeCloudUrl(url: string): string {
   return trimmed.replace(/\/+$/, '');
 }
 
-async function readUsableCloudAuth(apiUrl: string): Promise<StoredAuth | null> {
+function createCloudAgentsProbe(args: {
+  cloudUrl: string;
+  token: string;
+}): CloudAgentsProbe {
+  let clientPromise: Promise<CloudApiClientLike | null> | undefined;
+  return {
+    getClient() {
+      clientPromise ??= resolveCloudAgentsClient(args);
+      return clientPromise;
+    }
+  };
+}
+
+async function resolveCloudAgentsClient(args: {
+  cloudUrl: string;
+  token: string;
+}): Promise<CloudApiClientLike | null> {
+  const auth = await readUsableCloudAuth(args.cloudUrl, args.token);
+  return auth
+    ? cloudCredentialDeps.createCloudApiClient(auth, args.cloudUrl)
+    : null;
+}
+
+async function readUsableCloudAuth(
+  apiUrl: string,
+  expectedAccessToken: string
+): Promise<StoredAuth | null> {
   let auth = await cloudCredentialDeps.readStoredAuth().catch(() => null);
   if (!auth) return null;
+  // Establish identity continuity before refresh rotates either token. Once
+  // matched, the caller retains the resulting client for the full probe flow.
+  if (auth.accessToken !== expectedAccessToken) return null;
   if (isAuthExpired(auth.accessTokenExpiresAt)) {
     auth = await cloudCredentialDeps.refreshStoredAuth(auth).catch((err) => {
       console.warn(`cloud: stored auth refresh failed: ${formatErrorMessage(err)}`);

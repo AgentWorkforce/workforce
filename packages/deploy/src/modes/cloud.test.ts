@@ -617,6 +617,70 @@ test('cloud harness OAuth probe treats a matching connected entry as ready (skip
   assert.ok(!calls.some((c) => c.url.includes('/cli/auth')));
 });
 
+test('cloud harness OAuth probe retains authority when its stored token refreshes', async () => {
+  let storedAuth = {
+    apiUrl: 'https://cloud.example.test',
+    accessToken: 'tok',
+    refreshToken: 'refresh',
+    accessTokenExpiresAt: '2000-01-01T00:00:00.000Z'
+  };
+  let storedAuthReads = 0;
+  let refreshes = 0;
+  const restoreDeps = configureCloudCredentialDepsForTest({
+    readStoredAuth: async () => {
+      storedAuthReads += 1;
+      return storedAuth;
+    },
+    refreshStoredAuth: async (auth) => {
+      refreshes += 1;
+      assert.equal(auth.accessToken, 'tok');
+      storedAuth = {
+        ...storedAuth,
+        accessToken: 'rotated-token',
+        accessTokenExpiresAt: '2999-01-01T00:00:00.000Z'
+      };
+      return storedAuth;
+    },
+    createCloudApiClient(auth) {
+      assert.equal(auth.accessToken, 'rotated-token');
+      return {
+        async fetch(pathname: string) {
+          assert.equal(pathname, '/api/v1/cloud-agents');
+          return okJson({
+            agents: [{ id: 'pc-anthropic-rotated', harness: 'claude', status: 'connected' }]
+          });
+        }
+      };
+    }
+  });
+
+  try {
+    const { handle } = await launch({
+      persona: persona({ harness: 'claude', model: 'claude-sonnet-4-6' }),
+      defaultManagedCredential: false,
+      env: {
+        WORKFORCE_DEPLOY_CLOUD_URL: 'https://cloud.example.test',
+        WORKFORCE_DEPLOY_HARNESS_SOURCE: 'oauth',
+        WORKFORCE_DEPLOY_NO_PROMPT: '1'
+      },
+      fetch(url, init) {
+        if (init?.method === 'GET' && url.endsWith('/deployments')) return okJson({ agents: [] });
+        if (url.endsWith('/deployments')) {
+          const body = JSON.parse(String(init?.body)) as Record<string, unknown>;
+          assert.deepEqual(body.credentialSelections, { anthropic: 'pc-anthropic-rotated' });
+          return okJson({ agentId: 'agent-refreshed-probe', deploymentId: 'dep-1', status: 'active' }, 201);
+        }
+        throw new Error(`unexpected URL ${url}`);
+      }
+    });
+    assert.equal(handle.id, 'agent-refreshed-probe');
+    assert.equal(refreshes, 1);
+    assert.equal(storedAuthReads, 1, 'the verified probe client is reused after token rotation');
+  } finally {
+    restoreDeps();
+  }
+});
+
 test('cloud harness source resolves a connected Claude setup-token without an operator override', async () => {
   const restoreDeps = configureCloudCredentialDepsForTest({
     readStoredAuth: async () => ({
