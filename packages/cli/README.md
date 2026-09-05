@@ -402,7 +402,9 @@ agentworkforce sources remove <dir|config-position>
 
 Two fixed project sources always lead the cascade:
 `<cwd>/.agentworkforce/workforce/personas/*.json`, then
-`<cwd>/.agentworkforce/workforce/agents/<name>/persona.json`.
+`<cwd>/.agentworkforce/workforce/agents/<name>/persona.json`. A third fixed
+source, `~/.agentworkforce/workforce/agents/<name>/persona.json`, carries
+personal agents and follows the personal personas dir wherever it ranks.
 
 After that, the CLI reads an ordered list of configurable persona directories
 from `~/.agentworkforce/workforce/config.json`. If no config exists, the list
@@ -500,12 +502,22 @@ wins):
 2. `<cwd>/.agentworkforce/workforce/agents/<name>/persona.json` — **cwd:agents**
 3. Configurable persona source dirs, in order. Default:
    `~/.agentworkforce/workforce/personas/*.json` — **user**
-4. Internal built-in system personas in `/personas/` — **library**
+4. `~/.agentworkforce/workforce/agents/<name>/persona.json` — **user:agents**,
+   the personal mirror of `cwd:agents`. It rides directly behind the personal
+   personas dir, so moving that dir in the cascade moves both. The tables
+   printed by `list` and `sources list` show it as **personal:agents**,
+   following `user` → `personal`; `user:agents` is the value `--json` emits.
+5. Internal built-in system personas in `/personas/` — **library**
 
 Local files are **partial overlays**: only the fields you set replace the
 inherited value. Everything else cascades through from below.
 
 ### Agents that ship their own handler
+
+The same directory layout works in a repo (`cwd:agents`) and in your personal
+config (`user:agents`), so an agent you want everywhere lives in
+`~/.agentworkforce/workforce/agents/<name>/` and a repo's own agents live in its
+working tree. A repo agent outranks a personal one of the same id.
 
 An agent with code of its own keeps persona, handler, tests, and README in one
 directory:
