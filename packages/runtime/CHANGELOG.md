@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [4.1.56] - 2026-09-08
+
+### Fixed
+
+- Surface typed harness provider failures (#336)
+
 ## [4.1.50] - 2026-08-24
 
 ### Released
