@@ -6,6 +6,7 @@ import { isWorkforceHandler } from './handler.js';
 import { type RawGatewayEnvelope } from './shim.js';
 import { envelopeToAgentEvent } from './to-agent-event.js';
 import { isCronTickEvent } from '@agent-relay/events';
+import { HarnessProviderError } from './harness-provider-error.js';
 import type {
   HarnessRunArgs,
   HarnessRunResult,
@@ -207,7 +208,8 @@ async function dispatch(
       attempt: event.attempt,
       durationMs: Date.now() - t0,
       error: err instanceof Error ? err.message : String(err),
-      stack: err instanceof Error ? err.stack : undefined
+      stack: err instanceof Error ? err.stack : undefined,
+      ...(err instanceof HarnessProviderError ? { providerFailure: err.providerFailure } : {})
     });
     await recorder.fail(err);
     // Surface the failure to the outer process so the deploy layer can

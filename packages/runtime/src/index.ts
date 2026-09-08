@@ -229,3 +229,4 @@ export type {
   TypedTriggerMap,
   WatchRule
 } from '@agentworkforce/persona-kit';
+export { classifyHarnessProviderFailure, HarnessProviderError, type HarnessProviderFailure } from './harness-provider-error.js';

@@ -30,6 +30,37 @@ const stubSandbox: SandboxContext = {
   }
 };
 
+test('ctx.harness.run surfaces provider usage limits before a caller can replace them with exit 1', async () => {
+  let calls = 0;
+  let reachedCallerFailure = false;
+  const logs: Array<{ message: string; attrs?: Record<string, unknown> }> = [];
+  const ctx = buildCtx({
+    persona: basePersona,
+    workspaceId: 'ws-test',
+    agent: { id: 'agent-test', deployedName: 'example', spawnedByAgentId: null },
+    deployment: { id: 'deployment-test', triggerKind: 'inbox', parentDeploymentId: null },
+    sandbox: stubSandbox,
+    log: (_level, message, attrs) => logs.push({ message, attrs }),
+    harnessRunner: async () => {
+      calls++;
+      return { output: "You've hit your limit · resets 3:40pm (UTC)", stderr: 'secret-fixture-value', exitCode: 1, durationMs: 1900 };
+    }
+  });
+  await assert.rejects(async () => {
+    const run = await ctx.harness.run({ prompt: 'Perform a task' });
+    reachedCallerFailure = true;
+    if (run.exitCode !== 0) throw new Error(`The harness exited with code ${run.exitCode}`);
+  }, (error: Error) => {
+    assert.match(error.message, /Claude account.*usage limit/);
+    assert.match(error.message, /3:40pm \(UTC\)/);
+    assert.doesNotMatch(error.message, /secret-fixture/);
+    return true;
+  });
+  assert.equal(calls, 1, 'provider failure must not replay task side effects');
+  assert.equal(reachedCallerFailure, false);
+  assert.ok(logs.some((entry) => entry.message === 'harness.provider_error'));
+});
+
 function ctxFor(
   persona: PersonaSpec,
   inputValues?: Record<string, string | number | boolean | null | undefined>,
