@@ -81,3 +81,16 @@ test('typed errors expose safe metadata and retain non-enumerable original diagn
   assert.deepEqual(error.providerFailure, failure);
   assert.doesNotMatch(JSON.stringify(error), /secret-fixture-value/);
 });
+
+
+test('ignores provider-like fixtures inside failed task output and non-error CLI records', () => {
+  const payload = { error: { type: 'rate_limit_error', message: 'example' } };
+  for (const output of [
+    `The test fixture is ${JSON.stringify(payload)}`,
+    JSON.stringify({ type: 'assistant', message: JSON.stringify(payload) }),
+    JSON.stringify({ type: 'tool_result', content: JSON.stringify(payload) }),
+    JSON.stringify({ type: 'result', is_error: false, result: JSON.stringify(payload) }),
+    JSON.stringify({ type: 'assistant', ...payload }),
+    JSON.stringify({ type: 'tool_result', content: "You've hit your limit" }),
+  ]) assert.equal(classify(output), null, output);
+});

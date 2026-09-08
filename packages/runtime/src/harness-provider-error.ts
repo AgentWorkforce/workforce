@@ -16,21 +16,29 @@ function validTimezone(value: string): boolean {
   }
 }
 
-function errorMessages(text: string): string[] {
+function diagnosticMessages(text: string): string[] {
   const messages: string[] = [];
   for (const line of text.split(/\r?\n/)) {
     try {
       const value = JSON.parse(line) as Record<string, unknown> | null;
-      if (!value || typeof value !== 'object') continue;
+      if (!value || typeof value !== 'object' || Array.isArray(value)) continue;
       // CLI error envelopes, not arbitrary assistant/tool text in a stream.
       if (value.type === 'error' && typeof value.message === 'string') messages.push(value.message);
+      // Provider API response envelopes are valid diagnostics, but a nested
+      // error inside assistant/tool output is still task content.
+      if ((value.type === undefined || value.type === 'error') && value.error && typeof value.error === 'object') {
+        const error = value.error as Record<string, unknown>;
+        if (typeof error.type === 'string' || typeof error.code === 'string') messages.push(JSON.stringify({ error }));
+      }
       if (value.type === 'result' && value.is_error === true && typeof value.result === 'string') messages.push(value.result);
       if (value.type === 'turn.failed' && value.error && typeof value.error === 'object') {
         const message = (value.error as { message?: unknown }).message;
         if (typeof message === 'string') messages.push(message);
       }
     } catch {
-      // Most CLIs print plain text diagnostics.
+      // Preserve plain diagnostics, excluding prose/code containing embedded JSON.
+      // API Error lines are the CLI's explicit provider diagnostic prefix.
+      if (/^\s*API Error:/i.test(line) || !/[{}]/.test(line)) messages.push(line);
     }
   }
   return messages;
@@ -51,7 +59,7 @@ export function classifyHarnessProviderFailure(run: Pick<HarnessRunResult, 'outp
     .filter((value): value is string => typeof value === 'string')
     .map((value) => value.slice(-16000).replace(/\x1b\[[0-?]*[ -/]*[@-~]/g, ''))
     .join('\n');
-  const text = [rawText, ...errorMessages(rawText)].join('\n');
+  const text = diagnosticMessages(rawText).join('\n');
 
   const claudeLimit = text.match(/^\s*You['’]ve hit your (?:usage )?limit\b([^\r\n]*)/im);
   if (claudeLimit) {
