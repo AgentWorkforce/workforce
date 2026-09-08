@@ -492,6 +492,12 @@ export interface WorkforceCtx {
   llm: LlmContext;
   /** Spawn the persona's harness inside the sandbox. */
   harness: {
+    /**
+     * Recognized provider errors (quota, rate limit, auth, context, timeout,
+     * availability) reject with HarnessProviderError before returning output.
+     * Other nonzero exits retain the HarnessRunResult contract. No automatic
+     * retry or credential/provider fallback is performed by this boundary.
+     */
     run(args: HarnessRunArgs): Promise<HarnessRunResult>;
   };
   /** Sandbox shell + filesystem. */
