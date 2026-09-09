@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdtempSync, mkdirSync, rmSync, writeFileSync } from 'node:fs';
+import { mkdtempSync, mkdirSync, rmSync, utimesSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
@@ -1032,5 +1032,207 @@ test('a missing agents/ directory is not an error', () => {
   withLayers(({ cwd, homeDir }) => {
     const loaded = loadLocalPersonas({ cwd, homeDir });
     assert.deepEqual(loaded.warnings, []);
+  });
+});
+
+// --- handler agents ---------------------------------------------------------
+// An agent driven by its `onEvent` entry has no interactive launch to
+// configure, so harness/model/systemPrompt are optional. Requiring them kept
+// exactly these agents out of the cascade the agents/ dir was added for.
+
+test('a handler persona loads without interactive fields', () => {
+  withAgentLayer(({ cwd, homeDir, agentsDir }) => {
+    const agentDir = join(agentsDir, 'digest');
+    mkdirSync(agentDir, { recursive: true });
+    writeJson(join(agentDir, 'persona.json'), {
+      id: 'digest',
+      intent: 'documentation',
+      description: 'Weekly digest handler.',
+      cloud: true,
+      onEvent: './agent.ts',
+      harnessSettings: { reasoning: 'medium', timeoutSeconds: 600 }
+    });
+    const loaded = loadLocalPersonas({ cwd, homeDir });
+    assert.deepEqual(loaded.warnings, []);
+    const spec = loaded.byId.get('digest');
+    assert.ok(spec);
+    assert.equal(spec.onEvent, './agent.ts');
+    assert.equal(spec.cloud, true);
+    assert.equal(spec.harness, undefined);
+    assert.equal(spec.model, undefined);
+    assert.equal(spec.systemPrompt, undefined);
+  });
+});
+
+test('a standalone persona with no handler still requires harness', () => {
+  withAgentLayer(({ cwd, homeDir, agentsDir }) => {
+    const agentDir = join(agentsDir, 'interactive');
+    mkdirSync(agentDir, { recursive: true });
+    writeJson(join(agentDir, 'persona.json'), {
+      id: 'interactive',
+      intent: 'documentation',
+      description: 'No handler, so an operator launches it.',
+      harnessSettings: { reasoning: 'medium', timeoutSeconds: 600 }
+    });
+    const loaded = loadLocalPersonas({ cwd, homeDir });
+    assert.equal(loaded.byId.has('interactive'), false);
+    assert.match(loaded.warnings[0] ?? '', /harness is required for standalone personas/);
+  });
+});
+
+test('an overlay tweaking env keeps the handler entry it inherits', () => {
+  withAgentLayer(({ cwd, homeDir, pwdDir, agentsDir }) => {
+    const agentDir = join(agentsDir, 'digest');
+    mkdirSync(agentDir, { recursive: true });
+    writeJson(join(agentDir, 'persona.json'), {
+      id: 'digest',
+      intent: 'documentation',
+      description: 'Weekly digest handler.',
+      cloud: true,
+      onEvent: './agent.ts',
+      harnessSettings: { reasoning: 'medium', timeoutSeconds: 600 }
+    });
+    writeJson(join(pwdDir, 'digest.json'), { id: 'digest', env: { TONE: 'terse' } });
+
+    const loaded = loadLocalPersonas({ cwd, homeDir });
+    assert.deepEqual(loaded.warnings, []);
+    const spec = loaded.byId.get('digest');
+    assert.equal(spec?.onEvent, './agent.ts');
+    assert.equal(spec?.cloud, true);
+    assert.equal(spec?.env?.TONE, 'terse');
+  });
+});
+
+test('onEvent may not escape the agent directory', () => {
+  withAgentLayer(({ cwd, homeDir, agentsDir }) => {
+    const agentDir = join(agentsDir, 'digest');
+    mkdirSync(agentDir, { recursive: true });
+    writeJson(join(agentDir, 'persona.json'), {
+      id: 'digest',
+      intent: 'documentation',
+      description: 'Escapes its directory.',
+      onEvent: '../../../elsewhere/agent.ts',
+      harnessSettings: { reasoning: 'medium', timeoutSeconds: 600 }
+    });
+    const loaded = loadLocalPersonas({ cwd, homeDir });
+    assert.equal(loaded.byId.has('digest'), false);
+    assert.match(loaded.warnings[0] ?? '', /onEvent must not contain "\.\." segments/);
+  });
+});
+
+test('a padded onEvent is normalized before it is stored', () => {
+  withAgentLayer(({ cwd, homeDir, agentsDir }) => {
+    const agentDir = join(agentsDir, 'digest');
+    mkdirSync(agentDir, { recursive: true });
+    writeJson(join(agentDir, 'persona.json'), {
+      id: 'digest',
+      intent: 'documentation',
+      description: 'Padded but legal handler path.',
+      onEvent: ' ./agent.ts',
+      harnessSettings: { reasoning: 'medium', timeoutSeconds: 600 }
+    });
+    const loaded = loadLocalPersonas({ cwd, homeDir });
+    assert.deepEqual(loaded.warnings, []);
+    // Stored untrimmed this resolves against a directory named " .".
+    assert.equal(loaded.byId.get('digest')?.onEvent, './agent.ts');
+  });
+});
+
+test('onEvent must point at a handler source file', () => {
+  withAgentLayer(({ cwd, homeDir, agentsDir }) => {
+    const agentDir = join(agentsDir, 'digest');
+    mkdirSync(agentDir, { recursive: true });
+    writeJson(join(agentDir, 'persona.json'), {
+      id: 'digest',
+      intent: 'documentation',
+      description: 'Points at prose, not a handler.',
+      onEvent: 'README.md',
+      harnessSettings: { reasoning: 'medium', timeoutSeconds: 600 }
+    });
+    const loaded = loadLocalPersonas({ cwd, homeDir });
+    // Without the extension rule this would read as a handler and skip the
+    // interactive fields it never declared.
+    assert.equal(loaded.byId.has('digest'), false);
+    assert.match(loaded.warnings[0] ?? '', /must point at a \.ts/);
+  });
+});
+
+test('a padded onEvent cannot smuggle a .. segment past the guard', () => {
+  withAgentLayer(({ cwd, homeDir, agentsDir }) => {
+    const agentDir = join(agentsDir, 'digest');
+    mkdirSync(agentDir, { recursive: true });
+    writeJson(join(agentDir, 'persona.json'), {
+      id: 'digest',
+      intent: 'documentation',
+      description: 'Escapes once trimmed.',
+      onEvent: ' ../outside/agent.ts ',
+      harnessSettings: { reasoning: 'medium', timeoutSeconds: 600 }
+    });
+    const loaded = loadLocalPersonas({ cwd, homeDir });
+    assert.equal(loaded.byId.has('digest'), false);
+    // Trimmed before validation, so the traversal guard sees the real path.
+    assert.match(loaded.warnings[0] ?? '', /onEvent must not contain "\.\." segments/);
+  });
+});
+
+test('a persona.json older than its authoring source warns but still loads', () => {
+  withAgentLayer(({ cwd, homeDir, agentsDir }) => {
+    const agentDir = join(agentsDir, 'proposal-agent');
+    mkdirSync(agentDir, { recursive: true });
+    writeJson(join(agentDir, 'persona.json'), {
+      id: 'proposal-agent',
+      extends: 'persona-maker',
+      env: { COMPILED: 'stale' }
+    });
+    writeFileSync(join(agentDir, 'persona.ts'), 'export default {}\n');
+    // Backdate the artifact rather than sleeping — same relation, no wall clock.
+    const past = new Date(Date.now() - 60_000);
+    utimesSync(join(agentDir, 'persona.json'), past, past);
+
+    const loaded = loadLocalPersonas({ cwd, homeDir });
+    assert.equal(loaded.warnings.length, 1);
+    assert.match(loaded.warnings[0] ?? '', /persona\.json is older than persona\.ts/);
+    assert.match(loaded.warnings[0] ?? '', /agentworkforce persona compile/);
+    // Still served: a forgotten compile must not read as a missing persona.
+    assert.equal(loaded.byId.get('proposal-agent')?.env?.COMPILED, 'stale');
+  });
+});
+
+test('a persona.json newer than its authoring source is silent', () => {
+  withAgentLayer(({ cwd, homeDir, agentsDir }) => {
+    const agentDir = join(agentsDir, 'proposal-agent');
+    mkdirSync(agentDir, { recursive: true });
+    writeFileSync(join(agentDir, 'persona.ts'), 'export default {}\n');
+    writeJson(join(agentDir, 'persona.json'), {
+      id: 'proposal-agent',
+      extends: 'persona-maker'
+    });
+    const past = new Date(Date.now() - 60_000);
+    utimesSync(join(agentDir, 'persona.ts'), past, past);
+
+    const loaded = loadLocalPersonas({ cwd, homeDir });
+    assert.deepEqual(loaded.warnings, []);
+    assert.ok(loaded.byId.has('proposal-agent'));
+  });
+});
+
+test('staleness is measured against the newest authoring file, not the first', () => {
+  withAgentLayer(({ cwd, homeDir, agentsDir }) => {
+    const agentDir = join(agentsDir, 'proposal-agent');
+    mkdirSync(agentDir, { recursive: true });
+    // An abandoned persona.ts predates the artifact; the live persona.js is
+    // newer. Measuring against the .ts alone would call this fresh.
+    writeFileSync(join(agentDir, 'persona.ts'), 'export default {}\n');
+    writeJson(join(agentDir, 'persona.json'), { id: 'proposal-agent', extends: 'persona-maker' });
+    writeFileSync(join(agentDir, 'persona.js'), 'export default {}\n');
+
+    const old = new Date(Date.now() - 120_000);
+    utimesSync(join(agentDir, 'persona.ts'), old, old);
+    const mid = new Date(Date.now() - 60_000);
+    utimesSync(join(agentDir, 'persona.json'), mid, mid);
+
+    const loaded = loadLocalPersonas({ cwd, homeDir });
+    assert.equal(loaded.warnings.length, 1);
+    assert.match(loaded.warnings[0] ?? '', /persona\.json is older than persona\.js/);
   });
 });
