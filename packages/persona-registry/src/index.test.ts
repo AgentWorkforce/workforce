@@ -5,7 +5,14 @@ import { join } from 'node:path';
 import test from 'node:test';
 
 import type { PersonaSpec } from '@agentworkforce/persona-kit';
-import { PersonaResolutionError, resolvePersonaReference, __mergeOverrideForTests } from './index.js';
+import {
+  PersonaResolutionError,
+  buildPersonaSourceDirectories,
+  findRepoRoot,
+  loadLocalPersonas,
+  resolvePersonaReference,
+  __mergeOverrideForTests
+} from './index.js';
 
 test('a later mount layer can re-enable inherited mount patterns', () => {
   const base: PersonaSpec = {
@@ -103,5 +110,80 @@ test('unknown names fail with a typed resolution error', () => {
   );
   } finally {
     rmSync(cwd, { recursive: true, force: true });
+  }
+});
+
+test("a repo's personas load from a subdirectory of it", () => {
+  const root = mkdtempSync(join(tmpdir(), 'persona-registry-repo-'));
+  const repo = join(root, 'repo');
+  const nested = join(repo, 'packages', 'deep');
+  mkdirSync(join(repo, '.git'), { recursive: true });
+  mkdirSync(nested, { recursive: true });
+  const personas = join(repo, '.agentworkforce', 'workforce', 'personas');
+  mkdirSync(personas, { recursive: true });
+  writeFileSync(
+    join(personas, 'scout.json'),
+    JSON.stringify({
+      id: 'repo-scout',
+      extends: 'persona-maker',
+      description: 'Defined at the repo root'
+    })
+  );
+
+  try {
+    // Commands are typically run from a package directory, not the repo root.
+    const fromNested = loadLocalPersonas({ cwd: nested, personaDirs: [] });
+    assert.equal(fromNested.byId.get('repo-scout')?.description, 'Defined at the repo root');
+    assert.equal(fromNested.sources.get('repo-scout'), 'repo');
+
+    // The repo root itself still reports the persona as its own cwd layer,
+    // with no duplicate repo entry.
+    const fromRoot = loadLocalPersonas({ cwd: repo, personaDirs: [] });
+    assert.equal(fromRoot.sources.get('repo-scout'), 'cwd');
+    const rootDirs = buildPersonaSourceDirectories({ cwd: repo, personaDirs: [] }).directories;
+    assert.equal(rootDirs.some((d) => String(d.source).startsWith('repo')), false);
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test('the cwd layer still outranks the repo root', () => {
+  const root = mkdtempSync(join(tmpdir(), 'persona-registry-rank-'));
+  const repo = join(root, 'repo');
+  const nested = join(repo, 'packages', 'deep');
+  mkdirSync(join(repo, '.git'), { recursive: true });
+  const repoPersonas = join(repo, '.agentworkforce', 'workforce', 'personas');
+  const nestedPersonas = join(nested, '.agentworkforce', 'workforce', 'personas');
+  mkdirSync(repoPersonas, { recursive: true });
+  mkdirSync(nestedPersonas, { recursive: true });
+  writeFileSync(
+    join(repoPersonas, 'scout.json'),
+    JSON.stringify({ id: 'scout', extends: 'persona-maker', description: 'repo root' })
+  );
+  writeFileSync(
+    join(nestedPersonas, 'scout.json'),
+    JSON.stringify({ id: 'scout', extends: 'persona-maker', description: 'package dir' })
+  );
+
+  try {
+    const loaded = loadLocalPersonas({ cwd: nested, personaDirs: [] });
+    assert.equal(loaded.byId.get('scout')?.description, 'package dir');
+    assert.equal(loaded.sources.get('scout'), 'cwd');
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test('the repo walk stops rather than escaping to the home directory', () => {
+  const root = mkdtempSync(join(tmpdir(), 'persona-registry-norepo-'));
+  const loose = join(root, 'not', 'a', 'repo');
+  mkdirSync(loose, { recursive: true });
+
+  try {
+    assert.equal(findRepoRoot(loose), undefined);
+    const dirs = buildPersonaSourceDirectories({ cwd: loose, personaDirs: [] }).directories;
+    assert.equal(dirs.some((d) => String(d.source).startsWith('repo')), false);
+  } finally {
+    rmSync(root, { recursive: true, force: true });
   }
 });
