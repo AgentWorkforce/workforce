@@ -292,3 +292,5 @@ export {
   type PersonaSkillsHandle,
   type RunSkillInstallsOptions
 } from './skill-runner.js';
+
+export { personaToSandboxParams, personaToSandboxContext, PersonaNotSandboxableError, type PersonaSandboxParams } from './persona-to-sandbox-params.js';

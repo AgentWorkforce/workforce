@@ -165,6 +165,14 @@ Commands:
                       Run a persona. Drops into an interactive harness session.
 
                       Flags:
+                        --mode local|sandbox
+                                            Local interactive session (default),
+                                            or a Cloud sandbox session.
+                        --byo-sandbox       Force BYO sandbox authentication.
+                        --sandbox-provider <p>
+                                            daytona|e2b (Cloud picks by default).
+                        --sandbox-id <id>   Replay a prior sandbox identity.
+                        --attach-mode <m>   view|drive (default: drive).
                         --install-in-repo   Disengage the sandbox mount and
                                             install skills into the repo's
                                             harness-conventional directory
@@ -313,7 +321,7 @@ Commands:
                       Deploy a persona as a managed agent. <persona-path> may
                       be prebuilt persona.json or authored persona.ts/js.
                       Modes:
-                        --mode dev          run the persona locally (default if
+                        --mode local          run the persona locally (default if
                                             no Daytona/workspace creds resolve)
                         --mode sandbox      run inside a Daytona sandbox
                                             (default when creds resolve)
@@ -336,7 +344,7 @@ Commands:
                       Run a persona on this machine, triggered by real
                       provider webhooks routed through the fleet/relaycast
                       infrastructure — no public IP, tunnel, or manual token
-                      wiring. Runs in \`--mode dev\`; local credential
+                      wiring. Runs in \`--mode local\`; local credential
                       mirroring is not supported, so this targets cron/timer-
                       only or webhook-shape-only personas. See
                       \`agentworkforce local-surface --help\` for flags.
@@ -3543,6 +3551,17 @@ async function runAgentSelector(
   perfMark('runAgentSelector: start');
   const target = parseSelector(selector);
   perfMark('runAgentSelector: persona resolved');
+  if (flags.mode === 'sandbox') {
+    if (flags.dryRun) {
+      const { personaToSandboxParams } = await import('@agentworkforce/persona-kit');
+      const params = personaToSandboxParams(target.spec, { workspace: '(dry-run)', inputs: inputValues });
+      process.stdout.write(JSON.stringify({ mode: 'sandbox', persona: target.spec.id, cli: params.cli, relayfilePaths: params.relayfilePaths, readonlyPaths: params.readonlyPaths }, null, 2) + '\n');
+      process.exit(0);
+    }
+    await runAgentSandbox(target.spec, flags);
+    process.exit(0);
+  }
+
   const selection = {
     ...buildSelection(target.spec, target.kind),
     ...(inputValues ? { inputValues } : {})
@@ -3848,6 +3867,7 @@ export async function resumeFastSession(fast: FastLaunch): Promise<never> {
       target,
       capture,
       flags: {
+        mode: 'local', byoSandbox: false, attachMode: 'drive',
         installInRepo: false,
         noLaunchMetadata: false,
         dryRun: false,
@@ -4892,6 +4912,9 @@ async function runInteractivePicker(): Promise<never> {
     process.exit(130);
   }
   await runAgentSelector(selected, {
+    mode: 'local',
+    byoSandbox: false,
+    attachMode: 'drive',
     installInRepo: false,
     noLaunchMetadata: false,
     dryRun: false,
@@ -5046,6 +5069,7 @@ async function runPick(args: readonly string[]): Promise<never> {
   await runAgentSelector(
     CREATE_SELECTOR,
     {
+      mode: 'local', byoSandbox: false, attachMode: 'drive',
       installInRepo: false,
       noLaunchMetadata: false,
       dryRun: false,
@@ -5253,6 +5277,11 @@ export async function main(): Promise<void> {
 }
 
 export interface AgentFlags {
+  mode: 'local' | 'sandbox';
+  byoSandbox: boolean;
+  sandboxProvider?: 'daytona' | 'e2b';
+  sandboxId?: string;
+  attachMode: 'view' | 'drive';
   installInRepo: boolean;
   noLaunchMetadata: boolean;
   dryRun: boolean;
@@ -5276,6 +5305,9 @@ export function parseAgentArgs(args: readonly string[]): {
   positional: string[];
 } {
   const flags: AgentFlags = {
+    mode: 'local',
+    byoSandbox: false,
+    attachMode: 'drive',
     installInRepo: false,
     noLaunchMetadata: false,
     dryRun: false,
@@ -5286,13 +5318,43 @@ export function parseAgentArgs(args: readonly string[]): {
   };
   const positional: string[] = [];
   let seenDoubleDash = false;
-  for (const arg of args) {
+  let sandboxFlagsUsed = false;
+  for (let i = 0; i < args.length; i += 1) {
+    const arg = args[i];
     if (seenDoubleDash) {
       positional.push(arg);
       continue;
     }
     if (arg === '--') {
       seenDoubleDash = true;
+      continue;
+    }
+    if (arg === '--byo-sandbox') {
+      flags.byoSandbox = true;
+      continue;
+    }
+    const name = arg.split('=', 1)[0];
+    if (['--mode', '--sandbox-provider', '--sandbox-id', '--attach-mode'].includes(name)) {
+      const value = arg.includes('=') ? arg.slice(name.length + 1) : args[++i];
+      if (!value || value.startsWith('--')) die(`${name}: requires a value.`, false);
+      switch (name) {
+        case '--mode':
+          if (value !== 'local' && value !== 'sandbox') {
+            die(`--mode: expected one of local|sandbox; got "${value}"${value === 'cloud' ? '. Use deploy --mode cloud for a hosted service.' : ''}`, false);
+          }
+          flags.mode = value;
+          break;
+        case '--sandbox-provider':
+          if (value !== 'daytona' && value !== 'e2b') die(`--sandbox-provider: expected one of daytona|e2b; got "${value}"`, false);
+          flags.sandboxProvider = value;
+          break;
+        case '--sandbox-id': flags.sandboxId = value; break;
+        case '--attach-mode':
+          if (value !== 'view' && value !== 'drive') die(`--attach-mode: expected one of view|drive; got "${value}"`, false);
+          flags.attachMode = value;
+          break;
+      }
+      sandboxFlagsUsed ||= name !== '--mode';
       continue;
     }
     if (arg === '--install-in-repo') {
@@ -5329,6 +5391,9 @@ export function parseAgentArgs(args: readonly string[]): {
     }
     positional.push(arg);
   }
+  if (flags.mode === 'local' && (sandboxFlagsUsed || flags.byoSandbox)) {
+    die('Sandbox flags require --mode sandbox.', false);
+  }
   return { flags, positional };
 }
 
@@ -5338,6 +5403,9 @@ export function parseCreateArgs(args: readonly string[]): {
   inputValues: Record<string, string>;
 } {
   const flags: CreateFlags = {
+    mode: 'local',
+    byoSandbox: false,
+    attachMode: 'drive',
     installInRepo: false,
     noLaunchMetadata: false,
     dryRun: false,
@@ -5366,6 +5434,9 @@ export function parseCreateArgs(args: readonly string[]): {
     if (arg === '--') {
       seenDoubleDash = true;
       continue;
+    }
+    if (arg === '--mode' || arg.startsWith('--mode=') || arg === '--byo-sandbox' || arg.startsWith('--sandbox-') || arg.startsWith('--attach-mode')) {
+      die('create: sandbox flags are only supported by agent --mode sandbox.', false);
     }
     if (arg === '--install-in-repo') {
       flags.installInRepo = true;
@@ -5421,3 +5492,64 @@ export function parseCreateArgs(args: readonly string[]): {
 
 // The CLI entry (self-run detection + fast-path dispatch) lives in cli.ts;
 // this module is imported by it and never self-runs.
+
+
+interface AgentSandboxProcess {
+  stdin: NodeJS.ReadableStream;
+  stdout: NodeJS.WritableStream;
+  stderr: NodeJS.WritableStream;
+  once(signal: 'SIGINT' | 'SIGTERM', listener: () => void): unknown;
+  removeListener(signal: 'SIGINT' | 'SIGTERM', listener: () => void): unknown;
+  exit(code: number): void;
+}
+interface AgentSandboxDependencies {
+  launchInteractiveSandbox?: typeof import('@agentworkforce/deploy').launchInteractiveSandbox;
+  processLike?: AgentSandboxProcess;
+  resolveWorkspace?: () => Promise<string | undefined>;
+}
+
+export async function runAgentSandbox(
+  persona: PersonaSpec,
+  flags: AgentFlags,
+  deps: AgentSandboxDependencies = {},
+): Promise<void> {
+  if (flags.mode !== 'sandbox') return;
+  const processLike = deps.processLike ?? process;
+  const deploy = await import('@agentworkforce/deploy');
+  let workspace: string | undefined;
+  try {
+    workspace = deps.resolveWorkspace ? await deps.resolveWorkspace() : (await deploy.resolveWorkspaceToken({
+      cloudUrl: deploy.resolveCloudUrl(), io: deploy.createTerminalIO(), noPrompt: true,
+    })).workspace;
+  } catch (err) {
+    throw new Error(`agent --mode sandbox requires an active workspace. Run agentworkforce login. ${err instanceof Error ? err.message : String(err)}`, { cause: err });
+  }
+  if (!workspace?.trim()) throw new Error('agent --mode sandbox requires an active workspace. Run agentworkforce login.');
+  const handle = await (deps.launchInteractiveSandbox ?? deploy.launchInteractiveSandbox)({
+    persona,
+    workspace,
+    authMode: flags.byoSandbox ? 'byo' : 'managed',
+    provider: flags.sandboxProvider,
+    sandboxId: flags.sandboxId,
+    attachMode: flags.attachMode,
+    stdio: { stdin: processLike.stdin, stdout: processLike.stdout, stderr: processLike.stderr },
+  });
+  let stopping: Promise<void> | undefined;
+  const stop = () => stopping ??= handle.stop();
+  let signalExit!: (code: number) => void;
+  const interrupted = new Promise<number>(resolve => { signalExit = resolve; });
+  const onInterrupt = () => { void stop().then(() => signalExit(130)); };
+  const onTerminate = () => { void stop().then(() => signalExit(143)); };
+  processLike.once('SIGINT', onInterrupt);
+  processLike.once('SIGTERM', onTerminate);
+  let code: number;
+  try {
+    code = await Promise.race([handle.finished, interrupted]);
+  } finally {
+    // Await deletion before process.exit: proxy close may settle finished first.
+    await stop();
+    processLike.removeListener('SIGINT', onInterrupt);
+    processLike.removeListener('SIGTERM', onTerminate);
+  }
+  processLike.exit(code);
+}

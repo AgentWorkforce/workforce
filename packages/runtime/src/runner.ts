@@ -59,7 +59,7 @@ export interface StartRunnerOptions {
   /**
    * Source of raw envelopes to dispatch. The default reads NDJSON from
    * stdin so a parent process can write `RawGatewayEnvelope` lines and
-   * read structured logs back on stdout — useful both in `--mode dev` and
+   * read structured logs back on stdout — useful both in `--mode local` and
    * inside a Daytona sandbox where stdin/stdout are the simplest contract.
    */
   envelopes?: AsyncIterable<RawGatewayEnvelope>;

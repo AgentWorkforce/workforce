@@ -9,7 +9,7 @@ Connect GitHub and Slack before deploying. Because `useSubscription` is enabled,
 ⚠️ **Memory is not wired.** `ctx.memory` is a stub in v1; see `docs/plans/deploy-v1-schema-cascade-spec.md` § Loud hole. Memory wiring lands in a follow-up workflow (not yet specced).
 
 ```bash
-workforce deploy ./examples/review-agent/persona.json --mode dev
+workforce deploy ./examples/review-agent/persona.json --mode local
 ```
 
 ## Events

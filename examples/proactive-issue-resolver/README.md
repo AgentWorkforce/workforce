@@ -5,7 +5,7 @@ Local agent that turns a GitHub issue into a spec, hands the spec to the
 SDK to generate + run a workflow that opens a PR via
 `@agent-relay/github-primitive`, and DMs the result to Slack.
 
-**Important runtime note:** workforce `--mode dev` does NOT subscribe to live
+**Important runtime note:** workforce `--mode local` does NOT subscribe to live
 GitHub events. The runtime reads NDJSON envelopes from stdin
 (`packages/runtime/src/runner.ts:184`); live event ingress is a `--mode cloud`
 feature that isn't wired up yet. So v1 is **manually-triggered per-issue** via
@@ -23,7 +23,7 @@ gates that go with it) lives in [`SPEC.md`](./SPEC.md).
 trigger-issue.sh owner repo N
   → gh api repos/owner/repo/issues/N            (fetch real issue)
   → wrap as github.issues.opened envelope       (NDJSON)
-  → pipe → agentworkforce deploy --mode dev     (runner consumes one envelope)
+  → pipe → agentworkforce deploy --mode local     (runner consumes one envelope)
   → handler claims issue (`gh issue edit --add-label ricky-claimed`)
   → handler comments :robot: on the issue
   → claude harness investigates repo + writes spec.md
@@ -86,7 +86,7 @@ What happens:
 
 1. `gh` fetches issue #123 and the repo metadata.
 2. The script wraps both in a `github.issues.opened` envelope and pipes it to
-   `agentworkforce deploy ... --mode dev`.
+   `agentworkforce deploy ... --mode local`.
 3. The handler adds the `ricky-claimed` label to issue #123 and acquires a
    deterministic Git ref lock before dispatch.
 4. Handler comments `:robot: Proactive agent picked up #123. Investigating…`.
@@ -101,7 +101,7 @@ What happens:
 REPO_ROOT=$(git rev-parse --show-toplevel)
 agentworkforce deploy \
   "$REPO_ROOT/examples/proactive-issue-resolver/persona.json" \
-  --mode dev --dry-run
+  --mode local --dry-run
 ```
 
 Should print `ok: proactive-issue-resolver (dry-run)`. The persona is checked
@@ -112,14 +112,14 @@ against this output today.
 - `agentworkforce` CLI v3.0.14 installed at `~/.local/share/mise/installs/node/22.22.1/bin/agentworkforce`.
 - `~/.agentworkforce/active.json` shows an active workspace.
 - `gh auth status` shows logged-in `khaliqgant` with `repo` scope.
-- `agentworkforce deploy ... --mode dev --dry-run` returns `ok`.
+- `agentworkforce deploy ... --mode local --dry-run` returns `ok`.
 - Handler signature matches `packages/runtime/src/types.ts:259`:
   `handler((ctx, event) => ...)`.
 - Envelope shape matches `RawGatewayEnvelope` in
   `packages/runtime/src/shim.ts:17`; type `github.issues.opened` splits to
   source=github, type=issues.opened, payload=resource.
-- `--mode dev` pipes parent stdin to runner stdin
-  (`packages/deploy/src/modes/dev.ts:57`), so single-envelope stdin pipe →
+- `--mode local` pipes parent stdin to runner stdin
+  (`packages/deploy/src/modes/local.ts:57`), so single-envelope stdin pipe →
   single dispatch → runner exits.
 - esbuild bundles `@agentworkforce/ricky` inline; `@agentworkforce/runtime`
   stays external (`packages/deploy/src/bundle.ts:62`).
