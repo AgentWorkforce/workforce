@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [4.1.57] - 2026-09-13
+
+### Fixed
+
+- Expose prepared persona execution ownership (#339)
+
 ## [4.1.50] - 2026-08-24
 
 ### Released
