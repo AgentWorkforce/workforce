@@ -47,7 +47,28 @@ export interface WorkforcePersonaSpawnResult {
   result: unknown;
 }
 
+/** Resources prepared for one launch; the handle is the executor's actual handle. */
+export interface WorkforcePersonaExecution {
+  readonly handle: ExecutionHandle;
+  /** Factory-owned parent of handle.cwd; remove after disposing the handle. */
+  readonly scratchDir: string;
+}
+
 export interface WorkforcePersonaSpawnOptions {
+  /**
+   * Awaited once per prepared launch, before delegating to the broker. Use this
+   * to retain the actual resources and bank ownership before a worker can start.
+   * Throwing/rejecting prevents delegation and the factory cleans up. Delegation
+   * failure also triggers factory cleanup; discard the retained receipt then.
+   * After success the host owns cleanup: first release the launched worker and
+   * confirm it stopped, then await handle.dispose() and remove scratchDir. The
+   * callback must not dispose resources while preparation/delegation is pending.
+   * Without this callback, successful resources retain their existing lifetime.
+   */
+  onExecutionPrepared?: (
+    name: string,
+    execution: WorkforcePersonaExecution
+  ) => void | Promise<void>;
   /** Default project cwd. Request-local `cwd` wins. */
   cwd?: string;
   /** Registry source configuration shared with `agentworkforce agent`. */
@@ -121,7 +142,10 @@ export function workforcePersonaSpawnCapability(
     const existing = inFlight.get(key);
     if (existing) return existing;
 
-    const launch = launchResolvedPersona({ input, cwd, resolved, ctx, active });
+    const launch = launchResolvedPersona({
+      input, cwd, resolved, ctx, active,
+      onExecutionPrepared: options.onExecutionPrepared
+    });
     inFlight.set(key, launch);
     try {
       return await launch;
@@ -157,6 +181,7 @@ async function launchResolvedPersona(input: {
   resolved: ResolvedPersonaReference;
   ctx: FleetActionContext;
   active: Map<string, PreparedPersonaExecution>;
+  onExecutionPrepared?: WorkforcePersonaSpawnOptions['onExecutionPrepared'];
 }): Promise<WorkforcePersonaSpawnResult> {
   const { resolved, ctx } = input;
   const scratchDir = await mkdtemp(join(tmpdir(), 'agentworkforce-relay-persona-'));
@@ -186,6 +211,8 @@ async function launchResolvedPersona(input: {
       cwd: input.cwd,
       mount: { mountDir, includeGit: true, autoSync: true }
     });
+
+    await input.onExecutionPrepared?.(input.input.name, { handle: execution, scratchDir });
 
     const args = plan.initialPrompt ? [...plan.args, plan.initialPrompt] : [...plan.args];
     const result = await ctx.spawnAgent({
@@ -233,8 +260,11 @@ async function launchResolvedPersona(input: {
       result
     };
   } catch (error) {
-    await execution?.dispose();
-    await rm(scratchDir, { recursive: true, force: true });
+    try {
+      await execution?.dispose();
+    } finally {
+      await rm(scratchDir, { recursive: true, force: true });
+    }
     throw error;
   }
 }

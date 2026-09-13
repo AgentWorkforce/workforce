@@ -14,6 +14,7 @@ export {
   defineWorkforcePersonaSpawnNode,
   workforcePersonaSpawnCapability,
   type DefineWorkforcePersonaSpawnNodeOptions,
+  type WorkforcePersonaExecution,
   type WorkforcePersonaSpawnInput,
   type WorkforcePersonaSpawnOptions,
   type WorkforcePersonaSpawnResult
