@@ -9,8 +9,8 @@ import { __setDeployForTest, defineWorkforcePersonaNode, type RunEventInput, typ
 
 /**
  * Real (non-mocked) regression coverage for the bug shadow-workforce-reviewer
- * caught in PR review: `dev.ts`'s default `process.stdin.pipe(child.stdin)`
- * passthrough is active for every `deploy({mode:'dev'})` call, including
+ * caught in PR review: `local.ts`'s default `process.stdin.pipe(child.stdin)`
+ * passthrough is active for every `deploy({mode:'local'})` call, including
  * ours. The fleet-node host process (`relay node up`) is meant to be
  * always-on/daemonized — the moment ITS OWN stdin ends (the normal case for
  * anything non-interactive), that passthrough would end the persona child's
@@ -20,7 +20,7 @@ import { __setDeployForTest, defineWorkforcePersonaNode, type RunEventInput, typ
  * envelope after the first host-stdin EOF.
  *
  * This spawns a REAL persona child process through the REAL `deploy()` →
- * `devLauncher` → `child_process.spawn()` pipeline (only the outer
+ * `localLauncher` → `child_process.spawn()` pipeline (only the outer
  * `deploy()` call is wrapped, transparently, to capture the real
  * `ModeLaunchHandle` for teardown — every envelope still travels through the
  * real `write()` → real `child.stdin.write()` path). It proves
@@ -137,7 +137,7 @@ test(
 
       // Simulate the fleet-node host process's own stdin reaching EOF — the
       // normal case for a non-interactive/daemonized `relay node up`. This is
-      // the exact event `dev.ts`'s (now-skipped, because bridged:true) legacy
+      // the exact event `local.ts`'s (now-skipped, because bridged:true) legacy
       // passthrough listens for to end the child's stdin.
       process.stdin.emit('end');
 
@@ -164,10 +164,10 @@ test(
 );
 
 // Regression guard for the underlying bug report, at the lower level: with
-// `bridged` unset (the pre-existing CLI/legacy contract), dev.ts's stdin
+// `bridged` unset (the pre-existing CLI/legacy contract), local.ts's stdin
 // passthrough IS attached, so `write()` must still work for a NORMAL
 // (non-EOF'd) parent stdin — this isn't a behavior change for existing
-// `workforce deploy --mode dev` users piping envelopes via real stdin.
+// `workforce deploy --mode local` users piping envelopes via real stdin.
 test(
   'defineWorkforcePersonaNode always passes bridged:true so the legacy stdin passthrough never attaches for the bridge',
   async () => {
@@ -176,7 +176,7 @@ test(
       seen.push({ bridged: opts.bridged });
       return {
         deploymentId: 'demo',
-        mode: 'dev',
+        mode: 'local',
         workspace: 'ws',
         bundleDir: '/tmp',
         connectedIntegrations: [],

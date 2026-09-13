@@ -18,7 +18,7 @@ function output(): Writable {
 test('pickRuntime maps numeric choices to deploy modes', async () => {
   assert.equal(await pickRuntime({ input: input('1\n'), output: output() }), 'cloud');
   assert.equal(await pickRuntime({ input: input('2\n'), output: output() }), 'sandbox');
-  assert.equal(await pickRuntime({ input: input('3\n'), output: output() }), 'dev');
+  assert.equal(await pickRuntime({ input: input('3\n'), output: output() }), 'local');
 });
 
 test('pickRuntime defaults to cloud and returns docs for build-your-own', async () => {

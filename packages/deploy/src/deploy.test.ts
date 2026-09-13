@@ -511,7 +511,7 @@ test('deploy --dry-run rejects useSubscription when cloud mode is not selected',
   const io = createBufferedIO();
   try {
     await assert.rejects(
-      deploy({ personaPath, mode: 'dev', dryRun: true, io }),
+      deploy({ personaPath, mode: 'local', dryRun: true, io }),
       /requires --mode cloud/
     );
     assert.ok(!io.messages.find((m) => m.message.startsWith('workspace:')));
@@ -685,7 +685,7 @@ test('deploy fails clearly when integration is not connected and --no-connect is
   try {
     await assert.rejects(
       deploy(
-        { personaPath, mode: 'dev', noConnect: true, io },
+        { personaPath, mode: 'local', noConnect: true, io },
         { workspaceAuth, integrations }
       ),
       /failed to connect/
@@ -726,12 +726,12 @@ test('deploy connects each missing persona integration before launch', async () 
 
   try {
     const result = await deploy(
-      { personaPath, mode: 'dev', io },
+      { personaPath, mode: 'local', io },
       {
         workspaceAuth,
         integrations,
         bundle: successfulBundleStager(),
-        modes: { dev: successfulDevLauncher(() => { launched = true; }) }
+        modes: { local: successfulDevLauncher(() => { launched = true; }) }
       }
     );
 
@@ -769,7 +769,7 @@ test('deploy forwards the Supabase project ref into the OAuth connect flow', asy
     await deploy(
       {
         personaPath,
-        mode: 'dev',
+        mode: 'local',
         io,
         supabaseMcpProjectRef: 'BVZZCAFZOYSEZUMRDVIF'
       },
@@ -777,7 +777,7 @@ test('deploy forwards the Supabase project ref into the OAuth connect flow', asy
         workspaceAuth,
         integrations,
         bundle: successfulBundleStager(),
-        modes: { dev: successfulDevLauncher() }
+        modes: { local: successfulDevLauncher() }
       }
     );
 
@@ -902,7 +902,7 @@ test('deploy activates optional integrations from supplied persona inputs', asyn
       return successfulBundleStager().stage(input);
     }
   };
-  const devLauncher: ModeLauncher = {
+  const localLauncher: ModeLauncher = {
     async launch(input: ModeLaunchInput) {
       launchedTriggerKeys = Object.keys(input.agent.triggers ?? {});
       return {
@@ -920,7 +920,7 @@ test('deploy activates optional integrations from supplied persona inputs', asyn
       const result = await deploy(
         {
           personaPath,
-          mode: 'dev',
+          mode: 'local',
           io,
           inputs: { SLACK_CHANNEL: 'C1' }
         },
@@ -928,7 +928,7 @@ test('deploy activates optional integrations from supplied persona inputs', asyn
           workspaceAuth,
           integrations,
           bundle,
-          modes: { dev: devLauncher }
+          modes: { local: localLauncher }
         }
       );
 
@@ -1003,7 +1003,7 @@ test('deploy collects picker-backed input before pruning an optional integration
       return successfulBundleStager().stage(input);
     }
   };
-  const devLauncher: ModeLauncher = {
+  const localLauncher: ModeLauncher = {
     async launch(input: ModeLaunchInput) {
       launchedTriggerKeys = Object.keys(input.agent.triggers ?? {});
       launchedInputs = input.inputs;
@@ -1021,13 +1021,13 @@ test('deploy collects picker-backed input before pruning an optional integration
   try {
     await withProcessEnv({ SLACK_CHANNEL: undefined, TELEGRAM_CHAT: undefined }, async () => {
       const result = await deploy(
-        { personaPath, mode: 'dev', io },
+        { personaPath, mode: 'local', io },
         {
           workspaceAuth,
           integrations,
           integrationOptions,
           bundle,
-          modes: { dev: devLauncher }
+          modes: { local: localLauncher }
         }
       );
 
@@ -1145,7 +1145,7 @@ test('deploy refuses an agent whose optional integration inputs leave no active 
   try {
     await withProcessEnv({ SLACK_CHANNEL: undefined, TELEGRAM_CHAT: undefined }, async () =>
       assert.rejects(
-        deploy({ personaPath, mode: 'dev', io: createBufferedIO() }),
+        deploy({ personaPath, mode: 'local', io: createBufferedIO() }),
         /no active listeners after optional integrations were applied/
       )
     );
@@ -1154,7 +1154,7 @@ test('deploy refuses an agent whose optional integration inputs leave no active 
   }
 });
 
-test('deploy dev mode injects runtime credentials for a detected writeback trigger without provider-token leakage', async () => {
+test('deploy local mode injects runtime credentials for a detected writeback trigger without provider-token leakage', async () => {
   const providerTokenSentinel = 'WORKFORCE_PROVIDER_TOKEN_SHOULD_NOT_LEAK';
   const integrations = {
     github: {}
@@ -1208,7 +1208,7 @@ test('deploy dev mode injects runtime credentials for a detected writeback trigg
     const result = await deploy(
       {
         personaPath,
-        mode: 'dev',
+        mode: 'local',
         noPrompt: true,
         cloudUrl: 'https://cloud.example.test',
         io
@@ -1221,7 +1221,7 @@ test('deploy dev mode injects runtime credentials for a detected writeback trigg
         },
         bundle: successfulBundleStager(),
         modes: {
-          dev: {
+          local: {
             async launch(input) {
               launched = true;
               launchedEnv = input.env;
@@ -1262,7 +1262,7 @@ test('deploy dev mode injects runtime credentials for a detected writeback trigg
   }
 });
 
-test('deploy dev mode preserves no-trigger null-token runtime credentials', async () => {
+test('deploy local mode preserves no-trigger null-token runtime credentials', async () => {
   const { personaPath, cleanup } = await withTempPersona(
     basePersonaJson({ integrations: { github: {} } })
   );
@@ -1302,7 +1302,7 @@ test('deploy dev mode preserves no-trigger null-token runtime credentials', asyn
     await deploy(
       {
         personaPath,
-        mode: 'dev',
+        mode: 'local',
         noPrompt: true,
         cloudUrl: 'https://cloud.example.test',
         io
@@ -1315,7 +1315,7 @@ test('deploy dev mode preserves no-trigger null-token runtime credentials', asyn
         },
         bundle: successfulBundleStager(),
         modes: {
-          dev: {
+          local: {
             async launch(input) {
               launchedEnv = input.env;
               return {
@@ -1341,7 +1341,7 @@ test('deploy dev mode preserves no-trigger null-token runtime credentials', asyn
   }
 });
 
-test('deploy dev mode preserves env-only provider token fallback without runtime credential masking', async () => {
+test('deploy local mode preserves env-only provider token fallback without runtime credential masking', async () => {
   const providerTokenSentinel = 'WORKFORCE_ENV_ONLY_PROVIDER_TOKEN';
   const { personaPath, cleanup } = await withTempPersona(
     basePersonaJson({
@@ -1372,7 +1372,7 @@ test('deploy dev mode preserves env-only provider token fallback without runtime
     await deploy(
       {
         personaPath,
-        mode: 'dev',
+        mode: 'local',
         noPrompt: true,
         cloudUrl: 'https://cloud.example.test',
         io
@@ -1385,7 +1385,7 @@ test('deploy dev mode preserves env-only provider token fallback without runtime
         },
         bundle: successfulBundleStager(),
         modes: {
-          dev: {
+          local: {
             async launch(input) {
               launched = true;
               launchedEnv = input.env;
@@ -1418,7 +1418,7 @@ test('deploy dev mode preserves env-only provider token fallback without runtime
   }
 });
 
-test('deploy dev mode runtime credential eligibility preserves legacy workspace fallback semantics', async () => {
+test('deploy local mode runtime credential eligibility preserves legacy workspace fallback semantics', async () => {
   const { personaPath, cleanup } = await withTempPersona(
     basePersonaJson({
       integrations: {
@@ -1456,7 +1456,7 @@ test('deploy dev mode runtime credential eligibility preserves legacy workspace 
     await deploy(
       {
         personaPath,
-        mode: 'dev',
+        mode: 'local',
         noPrompt: true,
         cloudUrl: 'https://cloud.example.test',
         io
@@ -1469,7 +1469,7 @@ test('deploy dev mode runtime credential eligibility preserves legacy workspace 
         },
         bundle: successfulBundleStager(),
         modes: {
-          dev: {
+          local: {
             async launch(input) {
               launchedEnv = input.env;
               return {
@@ -1502,7 +1502,7 @@ test('deploy dev mode runtime credential eligibility preserves legacy workspace 
   }
 });
 
-test('deploy dev mode runtime credential eligibility preserves expected provider config key semantics', async () => {
+test('deploy local mode runtime credential eligibility preserves expected provider config key semantics', async () => {
   const providerTokenSentinel = 'WORKFORCE_ENV_CONFIG_MISMATCH_TOKEN';
   const { personaPath, cleanup } = await withTempPersona(
     basePersonaJson({
@@ -1536,7 +1536,7 @@ test('deploy dev mode runtime credential eligibility preserves expected provider
     await deploy(
       {
         personaPath,
-        mode: 'dev',
+        mode: 'local',
         noPrompt: true,
         cloudUrl: 'https://cloud.example.test',
         io
@@ -1555,7 +1555,7 @@ test('deploy dev mode runtime credential eligibility preserves expected provider
         },
         bundle: successfulBundleStager(),
         modes: {
-          dev: {
+          local: {
             async launch(input) {
               launchedEnv = input.env;
               launchedProcessProviderToken = process.env.WORKFORCE_INTEGRATION_GITHUB_TOKEN;
@@ -1586,7 +1586,7 @@ test('deploy dev mode runtime credential eligibility preserves expected provider
   }
 });
 
-test('deploy dev mode ignores catalog config keys for CLI-captured daytona runtime credentials', async () => {
+test('deploy local mode ignores catalog config keys for CLI-captured daytona runtime credentials', async () => {
   const { personaPath, cleanup } = await withTempPersona(
     basePersonaJson({
       integrations: {
@@ -1639,7 +1639,7 @@ test('deploy dev mode ignores catalog config keys for CLI-captured daytona runti
     await deploy(
       {
         personaPath,
-        mode: 'dev',
+        mode: 'local',
         noPrompt: true,
         cloudUrl: 'https://cloud.example.test',
         io
@@ -1659,7 +1659,7 @@ test('deploy dev mode ignores catalog config keys for CLI-captured daytona runti
         },
         bundle: successfulBundleStager(),
         modes: {
-          dev: {
+          local: {
             async launch(input) {
               launchedEnv = input.env;
               return {
@@ -1691,7 +1691,7 @@ test('deploy dev mode ignores catalog config keys for CLI-captured daytona runti
   }
 });
 
-test('deploy dev mode rejects malformed runtime credential tokens before launch', async () => {
+test('deploy local mode rejects malformed runtime credential tokens before launch', async () => {
   const { personaPath, cleanup } = await withTempPersona(
     basePersonaJson({
       integrations: {
@@ -1724,7 +1724,7 @@ test('deploy dev mode rejects malformed runtime credential tokens before launch'
       deploy(
         {
           personaPath,
-          mode: 'dev',
+          mode: 'local',
           noPrompt: true,
           cloudUrl: 'https://cloud.example.test',
           io
@@ -1736,7 +1736,7 @@ test('deploy dev mode rejects malformed runtime credential tokens before launch'
             }
           },
           bundle: successfulBundleStager(),
-          modes: { dev: successfulDevLauncher(() => { launched = true; }) }
+          modes: { local: successfulDevLauncher(() => { launched = true; }) }
         }
       ),
       /runtime-credentials returned a token without expected relay_pa_ prefix/
@@ -1748,7 +1748,7 @@ test('deploy dev mode rejects malformed runtime credential tokens before launch'
   }
 });
 
-test('deploy dev mode rejects mismatched relayfile workspace ids before launch', async () => {
+test('deploy local mode rejects mismatched relayfile workspace ids before launch', async () => {
   const { personaPath, cleanup } = await withTempPersona(
     basePersonaJson({
       integrations: {
@@ -1781,7 +1781,7 @@ test('deploy dev mode rejects mismatched relayfile workspace ids before launch',
       deploy(
         {
           personaPath,
-          mode: 'dev',
+          mode: 'local',
           noPrompt: true,
           cloudUrl: 'https://cloud.example.test',
           io
@@ -1797,7 +1797,7 @@ test('deploy dev mode rejects mismatched relayfile workspace ids before launch',
             }
           },
           bundle: successfulBundleStager(),
-          modes: { dev: successfulDevLauncher(() => { launched = true; }) }
+          modes: { local: successfulDevLauncher(() => { launched = true; }) }
         }
       ),
       /runtime-credentials returned relayfile workspace rf-stale, expected rf-canonical/
@@ -1809,7 +1809,7 @@ test('deploy dev mode rejects mismatched relayfile workspace ids before launch',
   }
 });
 
-test('deploy dev mode rejects runtime credential tokens without mount paths before launch', async () => {
+test('deploy local mode rejects runtime credential tokens without mount paths before launch', async () => {
   const { personaPath, cleanup } = await withTempPersona(
     basePersonaJson({
       integrations: {
@@ -1842,7 +1842,7 @@ test('deploy dev mode rejects runtime credential tokens without mount paths befo
       deploy(
         {
           personaPath,
-          mode: 'dev',
+          mode: 'local',
           noPrompt: true,
           cloudUrl: 'https://cloud.example.test',
           io
@@ -1854,7 +1854,7 @@ test('deploy dev mode rejects runtime credential tokens without mount paths befo
             }
           },
           bundle: successfulBundleStager(),
-          modes: { dev: successfulDevLauncher(() => { launched = true; }) }
+          modes: { local: successfulDevLauncher(() => { launched = true; }) }
         }
       ),
       /runtime-credentials returned a token without relayfile mount paths/
@@ -1866,7 +1866,7 @@ test('deploy dev mode rejects runtime credential tokens without mount paths befo
   }
 });
 
-test('deploy dev mode fails closed before runtime credentials when workspace token is missing', async () => {
+test('deploy local mode fails closed before runtime credentials when workspace token is missing', async () => {
   const { personaPath, cleanup } = await withTempPersona(
     basePersonaJson({
       integrations: {
@@ -1886,7 +1886,7 @@ test('deploy dev mode fails closed before runtime credentials when workspace tok
       deploy(
         {
           personaPath,
-          mode: 'dev',
+          mode: 'local',
           noPrompt: true,
           cloudUrl: 'https://cloud.example.test',
           io: createBufferedIO()
@@ -1901,7 +1901,7 @@ test('deploy dev mode fails closed before runtime credentials when workspace tok
             }
           },
           bundle: successfulBundleStager(),
-          modes: { dev: successfulDevLauncher() }
+          modes: { local: successfulDevLauncher() }
         }
       ),
       /workspace token is required for deploy/
@@ -1913,7 +1913,7 @@ test('deploy dev mode fails closed before runtime credentials when workspace tok
   }
 });
 
-test('deploy dev mode still fails fast for genuinely unconnected workspace integrations with --no-prompt', async () => {
+test('deploy local mode still fails fast for genuinely unconnected workspace integrations with --no-prompt', async () => {
   const { personaPath, cleanup } = await withTempPersona(
     basePersonaJson({
       integrations: {
@@ -1939,7 +1939,7 @@ test('deploy dev mode still fails fast for genuinely unconnected workspace integ
       deploy(
         {
           personaPath,
-          mode: 'dev',
+          mode: 'local',
           noPrompt: true,
           cloudUrl: 'https://cloud.example.test',
           io
@@ -1951,7 +1951,7 @@ test('deploy dev mode still fails fast for genuinely unconnected workspace integ
             }
           },
           bundle: successfulBundleStager(),
-          modes: { dev: successfulDevLauncher() }
+          modes: { local: successfulDevLauncher() }
         }
       ),
       /deploy aborted: 1 integration\(s\) failed to connect: github/
@@ -1991,12 +1991,12 @@ test('deploy aborts cleanly when one missing integration connect fails', async (
   try {
     await assert.rejects(
       deploy(
-        { personaPath, mode: 'dev', io },
+        { personaPath, mode: 'local', io },
         {
           workspaceAuth,
           integrations,
           bundle: successfulBundleStager(),
-          modes: { dev: successfulDevLauncher(() => { launched = true; }) }
+          modes: { local: successfulDevLauncher(() => { launched = true; }) }
         }
       ),
       /deploy aborted: 1 integration\(s\) failed to connect: notion/
@@ -2039,7 +2039,7 @@ test('deploy treats --no-prompt as fail-fast for missing integration connects', 
   try {
     await assert.rejects(
       deploy(
-        { personaPath, mode: 'dev', noPrompt: true, io },
+        { personaPath, mode: 'local', noPrompt: true, io },
         { workspaceAuth, integrations }
       ),
       /deploy aborted: 1 integration\(s\) failed to connect: github/
@@ -2157,7 +2157,7 @@ test('deploy stages a bundle and hands off to the resolved launcher', async () =
   };
 
   let launched = 0;
-  const devLauncher: ModeLauncher = {
+  const localLauncher: ModeLauncher = {
     async launch(input) {
       launched += 1;
       assert.equal(input.persona.id, 'demo');
@@ -2187,15 +2187,15 @@ test('deploy stages a bundle and hands off to the resolved launcher', async () =
 
   try {
     const result = await deploy(
-      { personaPath, mode: 'dev', io },
-      { workspaceAuth, integrations, bundle: bundleStager, modes: { dev: devLauncher } }
+      { personaPath, mode: 'local', io },
+      { workspaceAuth, integrations, bundle: bundleStager, modes: { local: localLauncher } }
     );
     assert.equal(launched, 1);
-    assert.equal(result.mode, 'dev');
+    assert.equal(result.mode, 'local');
     assert.equal(result.workspace, 'ws-test');
     assert.ok(result.bundleDir.startsWith(dir));
     assert.equal(stagedTo, result.bundleDir);
-    assert.ok(io.messages.find((m) => m.message.includes('launched: dev/pid-1')));
+    assert.ok(io.messages.find((m) => m.message.includes('launched: local/pid-1')));
   } finally {
     await cleanup();
   }
@@ -2207,7 +2207,7 @@ test('deploy --bundle-out emits to the supplied dir and skips launch', async () 
   const io = createBufferedIO();
 
   let launched = false;
-  const devLauncher: ModeLauncher = {
+  const localLauncher: ModeLauncher = {
     async launch() {
       launched = true;
       throw new Error('launch should not run with --bundle-out');
@@ -2238,7 +2238,7 @@ test('deploy --bundle-out emits to the supplied dir and skips launch', async () 
 
   try {
     const result = await deploy(
-      { personaPath, mode: 'dev', io, bundleOut: outDir },
+      { personaPath, mode: 'local', io, bundleOut: outDir },
       {
         workspaceAuth: {
           async resolveWorkspace() {
@@ -2254,7 +2254,7 @@ test('deploy --bundle-out emits to the supplied dir and skips launch', async () 
           }
         },
         bundle: bundleStager,
-        modes: { dev: devLauncher }
+        modes: { local: localLauncher }
       }
     );
     assert.equal(launched, false);
@@ -2412,10 +2412,10 @@ test('deploy: default auth resolver honors env credentials without a workspaceAu
   await withWorkspaceEnv({ workspace: 'env-ws', token: 'env-tok' }, async () => {
     let launched = false;
     const result = await deploy(
-      { personaPath, mode: 'dev', noConnect: true, io: createBufferedIO() },
+      { personaPath, mode: 'local', noConnect: true, io: createBufferedIO() },
       {
         bundle: successfulBundleStager(),
-        modes: { dev: successfulDevLauncher(() => { launched = true; }) }
+        modes: { local: successfulDevLauncher(() => { launched = true; }) }
       }
     );
     assert.equal(result.workspace, 'env-ws');
@@ -2438,8 +2438,8 @@ test('deploy: clear error when nothing resolves and noPrompt is set', async () =
       await withAgentRelayHome(async () => {
       await assert.rejects(
         deploy(
-          { personaPath, mode: 'dev', noConnect: true, noPrompt: true, io: createBufferedIO() },
-          { bundle: successfulBundleStager(), modes: { dev: successfulDevLauncher() } }
+          { personaPath, mode: 'local', noConnect: true, noPrompt: true, io: createBufferedIO() },
+          { bundle: successfulBundleStager(), modes: { local: successfulDevLauncher() } }
         ),
         /No active Agent Relay workspace found/
       );
@@ -2604,4 +2604,32 @@ test('cloud deploy advertises the trigger URL in both addressing forms', async (
   } finally {
     await cleanup();
   }
+});
+
+test('deploy accepts legacy dev mode with one deprecation warning', async () => {
+  const { personaPath, cleanup } = await withTempPersona(basePersonaJson());
+  const io = createBufferedIO();
+  try {
+    const result = await deploy({ personaPath, mode: 'dev', dryRun: true, io });
+    assert.equal(result.mode, 'local');
+    const warnings = io.messages.filter(m => m.level === 'warn' && m.message.includes('deprecated'));
+    assert.equal(warnings.length, 1); assert.match(warnings[0].message, /--mode local/);
+  } finally { await cleanup(); }
+});
+
+test('deploy honors deprecated modes.dev resolver', async () => {
+  const { personaPath, cleanup } = await withTempPersona(basePersonaJson());
+  const io = createBufferedIO();
+  let launches = 0;
+  try {
+    const result = await deploy({ personaPath, mode: 'local', io }, {
+      workspaceAuth: { resolveWorkspace: async () => ({ workspace: 'ws', token: 'token' }) },
+      bundle: successfulBundleStager(),
+      modes: { dev: { launch: async () => {
+        launches++; return { id: 'legacy', done: Promise.resolve({ code: 0 }), stop: async () => {} };
+      } } },
+    });
+    assert.equal(result.mode, 'local'); assert.equal(launches, 1);
+    assert.equal(io.messages.filter(m => m.level === 'warn' && m.message.includes('resolvers.modes.dev')).length, 1);
+  } finally { await cleanup(); }
 });

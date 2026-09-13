@@ -46,7 +46,7 @@ export interface WorkforcePersonaNodeConnection {
 }
 
 export interface DefineWorkforcePersonaNodeOptions {
-  /** Path to the persona JSON/source file to run in `--mode dev`. */
+  /** Path to the persona JSON/source file to run in `--mode local`. */
   personaPath: string;
   /** Relaycast channel the local-surface webhook consumer posts events into. */
   channel: string;
@@ -87,7 +87,7 @@ const RUN_EVENT_ACTION = 'run-event';
  * `relay node up --config <file>`.
  *
  * On the first matched message, lazily launches the persona via the existing
- * `deploy()` orchestrator in `--mode dev --detach`, keeping the child process
+ * `deploy()` orchestrator in `--mode local --detach`, keeping the child process
  * alive across subsequent messages. Each message is mapped back into a
  * `RawGatewayEnvelope` (mirroring cloud's real gateway construction — see
  * `buildEnvelope`/`buildPayload` in
@@ -147,7 +147,7 @@ export function defineWorkforcePersonaNode(options: DefineWorkforcePersonaNodeOp
 function writeEnvelope(runner: ModeLaunchHandle | undefined, envelope: RawGatewayEnvelope): void {
   if (!runner || typeof runner.write !== 'function') {
     throw new Error(
-      'local-surface: persona runner has no writable stdin — expected `--mode dev` (the only mode `defineWorkforcePersonaNode` supports)'
+      'local-surface: persona runner has no writable stdin — expected `--mode local` (the only mode `defineWorkforcePersonaNode` supports)'
     );
   }
   runner.write(`${JSON.stringify(envelope)}\n`);
@@ -162,7 +162,7 @@ async function launchPersonaRunner(input: {
   const result = await deployImpl(
     {
       personaPath,
-      mode: 'dev',
+      mode: 'local',
       detach: true,
       // The fleet-node host process (`relay node up`) is meant to be
       // always-on/daemonized; the moment ITS OWN stdin ends — the normal

@@ -5,7 +5,7 @@ import {
   type DeployResolvers
 } from './deploy.js';
 import { preflightPersona } from './preflight.js';
-import { devLauncher } from './modes/dev.js';
+import { localLauncher } from './modes/local.js';
 import { sandboxLauncher } from './modes/sandbox.js';
 import { cloudLauncher } from './modes/cloud/index.js';
 import type {
@@ -84,7 +84,9 @@ export {
   extractAgentSpec,
   type ExtractedAgent
 } from './extract-agent.js';
-export { devLauncher } from './modes/dev.js';
+export { localLauncher } from './modes/local.js';
+/** @deprecated Use localLauncher. */
+export { localLauncher as devLauncher } from './modes/local.js';
 export { sandboxLauncher, resolveSandboxAuth, type SandboxAuth } from './modes/sandbox.js';
 export { cloudLauncher } from './modes/cloud/index.js';
 
@@ -94,6 +96,7 @@ export type {
   BundleStager,
   DeployIO,
   DeployMode,
+  LegacyDeployMode,
   DeployOptions,
   DeployPreflight,
   DeployResult,
@@ -145,7 +148,9 @@ function wrapInputResolvers(
   return {
     ...resolvers,
     modes: {
-      dev: wrapLauncher(resolvers.modes?.dev ?? devLauncher, inputs, cloudUrl),
+      ...(resolvers.modes?.dev && !resolvers.modes.local
+        ? { dev: wrapLauncher(resolvers.modes.dev, inputs, cloudUrl) }
+        : { local: wrapLauncher(resolvers.modes?.local ?? localLauncher, inputs, cloudUrl) }),
       sandbox: wrapLauncher(resolvers.modes?.sandbox ?? sandboxLauncher, inputs, cloudUrl),
       cloud: wrapLauncher(resolvers.modes?.cloud ?? cloudLauncher, inputs, cloudUrl)
     }
@@ -182,3 +187,5 @@ function toInputEnv(inputs: Record<string, string>): Record<string, string> {
     Object.entries(inputs).map(([key, value]) => [`${INPUT_ENV_PREFIX}${key}`, value])
   );
 }
+
+export { launchInteractiveSandbox, type InteractiveSandboxInput, type InteractiveSandboxHandle } from './modes/sandbox-interactive.js';

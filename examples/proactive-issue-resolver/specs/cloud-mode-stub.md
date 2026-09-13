@@ -55,7 +55,7 @@ The change must:
   `ricky.generateCloudWorkflow`, which returns the `runtime-not-wired` stub
   response; that surfaces as a `:x:` Slack hard-fail with the cloud error
   payload in the failure detail. No PR is opened.
-- `agentworkforce deploy ... --mode dev --dry-run` still returns `ok`.
+- `agentworkforce deploy ... --mode local --dry-run` still returns `ok`.
 
 ## Out of scope
 
