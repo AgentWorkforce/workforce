@@ -44,6 +44,8 @@ once per prepared launch, including coalesced requests, before asking the broker
 to spawn. `execution.handle` is the actual `ExecutionHandle` returned by the
 persona executor; `execution.scratchDir` is its factory-owned parent directory.
 Hosts can retain this receipt and persist ownership before delegation begins.
+TypeScript hosts can type the stored receipt with
+`import type { WorkforcePersonaExecution } from '@agentworkforce/local-surface'`.
 
 If the callback throws or rejects, no spawn is requested. If preparation or
 broker delegation fails, the factory disposes its prepared resources and removes
