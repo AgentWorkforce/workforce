@@ -1,5 +1,5 @@
 import assert from 'node:assert/strict';
-import { mkdtemp, rm, stat, writeFile } from 'node:fs/promises';
+import { mkdtemp, readFile, rm, stat, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
 import test from 'node:test';
@@ -255,3 +255,167 @@ async function removeScratchDirs(scratchDirs: Iterable<string>): Promise<void> {
     [...scratchDirs].map((scratchDir) => rm(scratchDir, { recursive: true, force: true }))
   );
 }
+
+test('awaits ownership of the actual handle before delegation and leaves success cleanup to the host', async () => {
+  let prepared: import('./persona-spawn.js').WorkforcePersonaExecution | undefined;
+  let disposed = 0;
+  let spawnCalls = 0;
+  let preparedCalls = 0;
+  let allowDelegation!: () => void;
+  let signalPrepared!: () => void;
+  const preparedEntered = new Promise<void>((resolve) => { signalPrepared = resolve; });
+  const custodyBanked = new Promise<void>((resolve) => { allowDelegation = resolve; });
+  const handle = { cwd: '/tmp/persona-runtime', dispose: async () => { disposed += 1; } };
+  __setPersonaSpawnImplementationsForTest({
+    resolvePersona: () => resolved,
+    buildPlan: () => plan,
+    checkFleetCompatibility: () => undefined,
+    executePlan: async () => handle
+  });
+  const node = defineWorkforcePersonaSpawnNode({
+    nodeName: 'persona-node',
+    async onExecutionPrepared(name, execution) {
+      assert.equal(name, 'owned-reviewer');
+      assert.equal(execution.handle, handle);
+      assert.ok((await stat(execution.scratchDir)).isDirectory());
+      prepared = execution;
+      preparedCalls += 1;
+      signalPrepared();
+      await custodyBanked;
+    }
+  });
+  const ctx = {
+    node: { name: 'persona-node', capabilities: ['spawn:persona'] },
+    relay: { sendMessage: async () => undefined },
+    spawnAgent: async (input) => {
+      spawnCalls += 1;
+      assert.equal(disposed, 0);
+      assert.deepEqual(input.agent.channels, ['owned-a', 'owned-b']);
+      return { ready: true };
+    }
+  } satisfies FleetActionContext;
+  const input = { name: 'owned-reviewer', persona: 'reviewer', channels: ['owned-a', 'owned-b'] };
+  let launches: Promise<unknown>[] = [];
+  try {
+    launches = [invokeNodeHandler(node, 'spawn:persona', input, ctx)];
+    await preparedEntered;
+    launches.push(invokeNodeHandler(node, 'spawn:persona', input, ctx));
+    assert.equal(spawnCalls, 0, 'delegation must wait for durable ownership');
+    allowDelegation();
+    await Promise.all(launches);
+    assert.equal(preparedCalls, 1, 'coalesced launch must publish only one handle');
+    assert.equal(spawnCalls, 1);
+    assert.equal(disposed, 0, 'factory must not dispose a running worker mount');
+    assert.ok(prepared);
+    // The host has now completed its worker-release contract. Use the exact
+    // retained executor handle, never a separately constructed cleanup handle.
+    await prepared.handle.dispose();
+    await rm(prepared.scratchDir, { recursive: true, force: true });
+    assert.equal(disposed, 1);
+    await assert.rejects(stat(prepared.scratchDir), { code: 'ENOENT' });
+  } finally {
+    allowDelegation();
+    await Promise.allSettled(launches);
+    __setPersonaSpawnImplementationsForTest();
+    if (prepared) await rm(prepared.scratchDir, { recursive: true, force: true });
+  }
+});
+
+for (const failure of ['ownership', 'delegation', 'dispose'] as const) {
+  test(`cleans the prepared resources after ${failure} failure`, async () => {
+    let prepared: import('./persona-spawn.js').WorkforcePersonaExecution | undefined;
+    let disposed = 0;
+    let spawnCalls = 0;
+    const launchError = new Error('launch rejected');
+    const disposeError = new Error('dispose rejected');
+    const handle = {
+      cwd: '/tmp/persona-runtime',
+      async dispose() {
+        disposed += 1;
+        if (failure === 'dispose') throw disposeError;
+      }
+    };
+    __setPersonaSpawnImplementationsForTest({
+      resolvePersona: () => resolved,
+      buildPlan: () => plan,
+      checkFleetCompatibility: () => undefined,
+      executePlan: async () => handle
+    });
+    const node = defineWorkforcePersonaSpawnNode({
+      nodeName: 'persona-node',
+      async onExecutionPrepared(name, execution) {
+        assert.equal(name, 'owned-reviewer');
+        assert.equal(execution.handle, handle);
+        prepared = execution;
+        if (failure !== 'delegation') throw launchError;
+      }
+    });
+    const ctx = {
+      node: { name: 'persona-node', capabilities: ['spawn:persona'] },
+      relay: { sendMessage: async () => undefined },
+      spawnAgent: async () => {
+        spawnCalls += 1;
+        assert.ok(prepared);
+        assert.equal(disposed, 0);
+        throw launchError;
+      }
+    } satisfies FleetActionContext;
+    try {
+      await assert.rejects(
+        invokeNodeHandler(node, 'spawn:persona', { name: 'owned-reviewer', persona: 'reviewer' }, ctx),
+        failure === 'dispose' ? disposeError : launchError
+      );
+      assert.equal(spawnCalls, failure === 'delegation' ? 1 : 0);
+      assert.equal(disposed, 1);
+      assert.ok(prepared);
+      await assert.rejects(stat(prepared.scratchDir), { code: 'ENOENT' });
+    } finally {
+      __setPersonaSpawnImplementationsForTest();
+      if (prepared) await rm(prepared.scratchDir, { recursive: true, force: true });
+    }
+  });
+}
+
+
+test('host disposes the real executor mount retained after a successful spawn', async () => {
+  const project = await mkdtemp(join(tmpdir(), 'persona-spawn-owned-project-'));
+  await writeFile(join(project, 'input.txt'), 'owned project contents');
+  let prepared: import('./persona-spawn.js').WorkforcePersonaExecution | undefined;
+  __setPersonaSpawnImplementationsForTest({
+    resolvePersona: () => resolved,
+    buildPlan: () => plan,
+    checkFleetCompatibility: () => undefined
+  });
+  const node = defineWorkforcePersonaSpawnNode({
+    nodeName: 'persona-node',
+    cwd: project,
+    onExecutionPrepared(_name, execution) { prepared = execution; }
+  });
+  const ctx = {
+    node: { name: 'persona-node', capabilities: ['spawn:persona'] },
+    relay: { sendMessage: async () => undefined },
+    spawnAgent: async (input) => {
+      assert.ok(prepared);
+      assert.equal(input.agent.cwd, prepared.handle.cwd);
+      assert.equal(await readFile(join(prepared.handle.cwd, 'input.txt'), 'utf8'), 'owned project contents');
+      return { ready: true };
+    }
+  } satisfies FleetActionContext;
+  try {
+    await invokeNodeHandler(node, 'spawn:persona', { name: 'owned-real-mount', persona: 'reviewer' }, ctx);
+    assert.ok(prepared);
+    assert.ok((await stat(prepared.handle.cwd)).isDirectory());
+    await prepared.handle.dispose();
+    await rm(prepared.scratchDir, { recursive: true, force: true });
+    await assert.rejects(stat(prepared.handle.cwd), { code: 'ENOENT' });
+    await assert.rejects(stat(prepared.scratchDir), { code: 'ENOENT' });
+    assert.equal(await readFile(join(project, 'input.txt'), 'utf8'), 'owned project contents');
+  } finally {
+    __setPersonaSpawnImplementationsForTest();
+    if (prepared) {
+      await prepared.handle.dispose();
+      await rm(prepared.scratchDir, { recursive: true, force: true });
+    }
+    await rm(project, { recursive: true, force: true });
+  }
+});

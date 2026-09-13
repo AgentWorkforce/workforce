@@ -35,3 +35,23 @@ flushes once more during teardown.
 `defineWorkforcePersonaNode` remains the long-lived channel `onMessage` surface.
 It composes `@agentworkforce/deploy` for a persona that consumes Relay message
 events rather than launching an interactive worker per request.
+
+### Prepared execution ownership
+
+Both `defineWorkforcePersonaSpawnNode` and `workforcePersonaSpawnCapability`
+accept `onExecutionPrepared(name, execution)`. The factory awaits this callback
+once per prepared launch, including coalesced requests, before asking the broker
+to spawn. `execution.handle` is the actual `ExecutionHandle` returned by the
+persona executor; `execution.scratchDir` is its factory-owned parent directory.
+Hosts can retain this receipt and persist ownership before delegation begins.
+
+If the callback throws or rejects, no spawn is requested. If preparation or
+broker delegation fails, the factory disposes its prepared resources and removes
+the scratch directory; discard any retained receipt for that failed launch.
+
+After a successful spawn, the host owns the remaining lifetime. Release the
+specific launched worker through the broker and verify that it has stopped before
+calling `await execution.handle.dispose()`, then remove `execution.scratchDir`.
+Disposal stops mount synchronization and restores generated files. Do not dispose
+inside the preparation callback or while delegation is pending. The callback is
+optional; omitting it preserves the existing successful-execution lifetime.
