@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [4.1.58] - 2026-09-15
+
+### Fixed
+
+- Actionable guidance on stale-workspace 404s (#340)
+
 ## [4.1.55] - 2026-09-04
 
 ### Fixed
