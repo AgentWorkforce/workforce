@@ -158,6 +158,8 @@ async function resolveWorkspaceDescriptor(args: {
     return resolveActiveWorkspace({
       apiUrl: args.apiUrl,
       interactive: false
+    }).catch((error) => {
+      throw workspaceNotFoundError(error, undefined);
     });
   }
 
@@ -171,10 +173,35 @@ async function resolveWorkspaceDescriptor(args: {
   );
   if (!response.ok) {
     const text = await response.text().catch(() => '');
-    throw new Error(`workspace resolve failed for ${workspace}: ${response.status} ${text}`.trim());
+    throw workspaceNotFoundError(
+      new Error(`workspace resolve failed for ${workspace}: ${response.status} ${text}`.trim()),
+      workspace,
+      response.status
+    );
   }
   const payload = await response.json().catch(() => null);
   return normalizeWorkspaceDescriptor(payload, session.auth.apiUrl || args.apiUrl);
+}
+
+/**
+ * The active-workspace pointer stored locally (`agent-relay workspace switch`)
+ * can go stale if the workspace was deleted or expired server-side; the raw
+ * 404 from @agent-relay/cloud gives no hint that the *fix* is to re-pick a
+ * workspace rather than retry. Detect that case and append actionable guidance.
+ */
+function workspaceNotFoundError(error: unknown, workspace: string | undefined, status?: number): Error {
+  const message = error instanceof Error ? error.message : String(error);
+  const is404 = status === 404 || /:\s*404\b/.test(message) || /workspace not found/i.test(message);
+  if (!is404) {
+    return error instanceof Error ? error : new Error(message);
+  }
+  const target = workspace ? `workspace "${workspace}"` : 'the active workspace';
+  return new Error(
+    `${message}\n\n` +
+      `${target} was not found server-side (deleted, expired, or never provisioned) — the local workspace pointer is stale. ` +
+      'Run `agent-relay workspace list` to see valid workspaces, then `agent-relay workspace switch <name>` to pick one, ' +
+      'or `agentworkforce deploy --mode cloud` to provision a new one.'
+  );
 }
 
 function normalizeWorkspaceDescriptor(payload: unknown, apiUrl: string): ActiveWorkspaceDescriptor {
