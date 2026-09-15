@@ -195,10 +195,11 @@ function workspaceNotFoundError(error: unknown, workspace: string | undefined, s
   if (!is404) {
     return error instanceof Error ? error : new Error(message);
   }
-  const target = workspace ? `workspace "${workspace}"` : 'the active workspace';
+  const diagnosis = workspace
+    ? `workspace "${workspace}" was not found server-side (deleted, expired, revoked, or never provisioned).`
+    : 'the active workspace was not found server-side (deleted, expired, or never provisioned) — the local workspace pointer is stale.';
   return new Error(
-    `${message}\n\n` +
-      `${target} was not found server-side (deleted, expired, or never provisioned) — the local workspace pointer is stale. ` +
+    `${message}\n\n${diagnosis} ` +
       'Run `agent-relay workspace list` to see valid workspaces, then `agent-relay workspace switch <name>` to pick one, ' +
       'or `agentworkforce deploy --mode cloud` to provision a new one.'
   );
