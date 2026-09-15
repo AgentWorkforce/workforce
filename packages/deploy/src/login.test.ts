@@ -141,6 +141,27 @@ test('resolveWorkspaceToken fails clearly when workspace resolve returns non-JSO
   });
 });
 
+test('resolveWorkspaceToken surfaces stale-workspace guidance on 404', async () => {
+  await withCloudSessionEnv(async () => {
+    const restoreFetch = withTrappedFetch(async () =>
+      new Response('Workspace not found', { status: 404 })
+    );
+    try {
+      await assert.rejects(
+        resolveWorkspaceToken({
+          workspace: 'rw_stale',
+          cloudUrl: 'https://cloud.example.test',
+          io: createBufferedIO(),
+          noPrompt: true
+        }),
+        /agent-relay workspace list.*agent-relay workspace switch/s
+      );
+    } finally {
+      restoreFetch();
+    }
+  });
+});
+
 test('resolveWorkspaceToken without a cloud session fails with login guidance', () => {
   const home = mkdtempSync(path.join(os.tmpdir(), 'wf-no-cloud-session-'));
   const env: NodeJS.ProcessEnv = {
