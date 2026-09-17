@@ -358,6 +358,34 @@ test('formatDeploymentsTable collapses and bounds multiline error details', () =
   assert.match(out, /\.\.\./);
 });
 
+test('formatDeploymentsTable snippets past an elision marker instead of repeating boilerplate', () => {
+  // cloud's deployment-run-failure-class.ts stores unrecognized long failures
+  // as `<boilerplate>...[N chars omitted]...<real cause>` so the real cause
+  // survives its own 10_000-char truncation. Naively slicing from position 0
+  // here would show only the boilerplate every time and never reach it.
+  const boilerplate = '[smithy-diag] node=v25.6.0 '.repeat(20);
+  const realCause = 'unexpected teardown error: mount flush wedged past the deadline';
+  const longError = `${boilerplate}...[9153 chars omitted]...${realCause}`;
+  const out = formatDeploymentsTable([
+    {
+      agentId: 'agent-elided-error',
+      personaId: 'elided-error',
+      personaSlug: 'elided-error',
+      deployedName: 'elided-error',
+      status: 'active',
+      createdAt: '2026-09-17T00:00:00.000Z',
+      lastUsedAt: null,
+      lastRunStatus: 'failed',
+      lastError: longError,
+      scheduleIds: [],
+      deployedByUserId: 'user-1'
+    }
+  ]);
+
+  assert.match(out, /elided-error: unexpected teardown error: mount flush wedged past the deadline/);
+  assert.doesNotMatch(out, /smithy-diag/);
+});
+
 test('parseDeploymentLogsArgs accepts selector and log flags', () => {
   assert.deepEqual(
     parseDeploymentLogsArgs([
