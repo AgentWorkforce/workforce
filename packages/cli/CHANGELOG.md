@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [4.1.59] - 2026-09-17
+
+### Fixed
+
+- Show the real cause in the deployments-list error snippet, not the boilerplate head (#341)
+
 ## [4.1.56] - 2026-09-08
 
 ### Fixed
