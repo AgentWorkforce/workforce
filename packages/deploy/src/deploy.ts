@@ -34,7 +34,7 @@ import {
   resolveWorkspaceToken,
   type WorkspaceAuth
 } from './login.js';
-import { devLauncher } from './modes/dev.js';
+import { localLauncher } from './modes/local.js';
 import { sandboxLauncher } from './modes/sandbox.js';
 import {
   cloudLauncher,
@@ -73,7 +73,7 @@ export interface DeployResolvers {
    */
   integrationOptions?: IntegrationOptionsResolver;
   bundle?: BundleStager;
-  modes?: Partial<Record<DeployMode, ModeLauncher>>;
+  modes?: Partial<Record<DeployMode, ModeLauncher>> & { /** @deprecated Use local. */ dev?: ModeLauncher };
   /** Deterministic override for transient integration GET retry delays. */
   networkRetrySleep?: (ms: number) => Promise<void>;
 }
@@ -94,19 +94,19 @@ export interface CloudAuthRecoveryResolver {
  *   - Otherwise `--mode sandbox` is the default when Daytona creds resolve
  *     (BYO env or workforce-managed both count as "resolved" here; the
  *     sandbox launcher itself decides which auth path to use).
- *   - Otherwise fall back to `--mode dev`.
+ *   - Otherwise fall back to `--mode local`.
  *
  * The orchestrator doesn't probe the cloud endpoint here — `--mode cloud`
  * stays opt-in until the M4 endpoint is live.
  */
 export function pickMode(opts: DeployOptions): DeployMode {
-  if (opts.mode) return opts.mode;
+  if (opts.mode) return opts.mode === 'dev' ? 'local' : opts.mode;
   // Daytona credential probe: BYO env var, or assume workforce-managed via
   // the active workspace (the sandbox launcher gates on its own auth).
   if (process.env.DAYTONA_API_KEY || process.env.WORKFORCE_WORKSPACE_TOKEN) {
     return 'sandbox';
   }
-  return 'dev';
+  return 'local';
 }
 
 /**
@@ -130,11 +130,20 @@ export function pickMode(opts: DeployOptions): DeployMode {
 export async function deploy(opts: DeployOptions, resolvers: DeployResolvers = {}): Promise<DeployResult> {
   const io = opts.io ?? createTerminalIO();
   const warnings: string[] = [];
+  if (opts.mode === 'dev') {
+    io.warn('--mode dev is deprecated; use --mode local (alias removed in the next minor)');
+    opts = { ...opts, mode: 'local' };
+  }
+  if (resolvers.modes?.dev && !resolvers.modes.local) {
+    io.warn('resolvers.modes.dev is deprecated; use resolvers.modes.local (alias removed in the next minor)');
+    resolvers = { ...resolvers, modes: { ...resolvers.modes, local: resolvers.modes.dev } };
+  }
+
 
   io.info(`workforce deploy → ${opts.personaPath}`);
 
   const preflight = await preflightPersona(opts.personaPath);
-  const mode: DeployMode = opts.mode ?? pickMode(opts);
+  const mode = pickMode(opts);
   warnings.push(...preflight.warnings);
   for (const w of preflight.warnings) io.warn(w);
   const canCollectPickerInputs =
@@ -562,8 +571,8 @@ function resolveLauncher(mode: DeployMode, resolvers: DeployResolvers): ModeLaun
   const supplied = resolvers.modes?.[mode];
   if (supplied) return supplied;
   switch (mode) {
-    case 'dev':
-      return devLauncher;
+    case 'local':
+      return localLauncher;
     case 'sandbox':
       return sandboxLauncher;
     case 'cloud':
@@ -744,7 +753,7 @@ function shouldRequestRuntimeCredentials(args: {
   byoSandbox: boolean;
 }): boolean {
   if (args.mode === 'cloud') return false;
-  if (args.mode === 'dev') return true;
+  if (args.mode === 'local') return true;
   return args.byoSandbox || hasByoSandboxEnv();
 }
 

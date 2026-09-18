@@ -1,3 +1,5 @@
+> Naming update: deploy mode `dev` is now `local`; `dev` remains a deprecated alias for one minor release. This historical plan retains its original terminology.
+
 # Ricky workflow spec — `workforce deploy` v1 cross-repo work
 
 **Status:** ready for Ricky to generate + run a workflow.

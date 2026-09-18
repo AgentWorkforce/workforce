@@ -1,13 +1,14 @@
 import type { AgentSpec, PersonaSpec } from '@agentworkforce/persona-kit';
 import type { CompiledAgentV1 } from '@agentworkforce/runtime';
 
-export type DeployMode = 'dev' | 'sandbox' | 'cloud';
+export type DeployMode = 'local' | 'sandbox' | 'cloud';
+export type LegacyDeployMode = 'dev';
 
 export interface DeployOptions {
   /** Path to the persona JSON file or authored persona source module. Required. */
   personaPath: string;
-  /** Run mode. Defaults to `sandbox` if Daytona creds resolve, else `dev`. */
-  mode?: DeployMode;
+  /** Run mode. Defaults to `sandbox` if Daytona creds resolve, else `local`. */
+  mode?: DeployMode | LegacyDeployMode;
   /** Workforce workspace to deploy into. Defaults to the active workspace. */
   workspace?: string;
   /** Skip the integration-connect prompts; fail if any declared integration is missing. */
@@ -23,7 +24,7 @@ export interface DeployOptions {
   /**
    * The caller drives the runner's envelope stdin itself via the returned
    * `ModeLaunchHandle.write()`, instead of the runner's stdin passing
-   * through this process's own stdin (`dev` mode only; ignored otherwise).
+   * through this process's own stdin (`local` mode only; ignored otherwise).
    * Set this when calling `deploy()` from a long-lived host process (e.g. a
    * fleet-node bridge) whose own stdin lifecycle must not end the runner's.
    */
@@ -86,7 +87,7 @@ export interface DeployResult {
   connectedIntegrations: string[];
   /** Schedules registered with the runtime. */
   schedules: string[];
-  /** Run-mode-specific handle. `dev` returns a child process handle; `sandbox` a Daytona sandbox id; `cloud` a server-side deployment id. */
+  /** Run-mode-specific handle. `local` returns a child process handle; `sandbox` a Daytona sandbox id; `cloud` a server-side deployment id. */
   runHandle?: unknown;
   /** Non-fatal warnings collected during deploy. */
   warnings: string[];
@@ -119,7 +120,7 @@ export interface BundleResult {
 
 /**
  * Contract each run-mode launcher implements. The defaults live next
- * to this file: `modes/dev.ts` (local child_process), `modes/sandbox.ts`
+ * to this file: `modes/local.ts` (local child_process), `modes/sandbox.ts`
  * (Daytona), and `modes/cloud/index.ts` (workforce-cloud hosted, opt-in once
  * the cloud deployments endpoint ships). Callers swap individual modes
  * via `DeployResolvers.modes` — useful for tests and custom runtimes.
@@ -143,7 +144,7 @@ export interface ModeLaunchInput {
   detach?: boolean;
   /**
    * The caller drives the runner's envelope stdin itself via the returned
-   * `ModeLaunchHandle.write()`. `dev` mode only — see `DeployOptions.bridged`;
+   * `ModeLaunchHandle.write()`. `local` mode only — see `DeployOptions.bridged`;
    * other modes ignore.
    */
   bridged?: boolean;
@@ -191,7 +192,7 @@ export interface ModeLaunchHandle {
   done: Promise<{ code: number }>;
   /**
    * Write a raw line directly to the runner's envelope stdin, bypassing the
-   * `process.stdin` passthrough. Only `dev` mode implements this today — it
+   * `process.stdin` passthrough. Only `local` mode implements this today — it
    * lets a long-lived host process (e.g. a fleet-node bridge) that owns the
    * `deploy()` call feed one `RawGatewayEnvelope` per message without a real
    * piped parent stdin. Absent when the mode has no addressable stdin.

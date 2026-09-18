@@ -256,7 +256,7 @@ export async function runLogout(args: readonly string[]): Promise<void> {
 const DEPLOY_USAGE = `usage: agentworkforce deploy <persona-path> [flags]
 
 Flags:
-  --mode dev|sandbox|cloud    Pick a run mode (prompts in an interactive terminal)
+  --mode local|sandbox|cloud    Pick a run mode (prompts in an interactive terminal)
   --workspace <name>           Workforce workspace; defaults to the active workspace
   --no-connect                 Skip integration-connect prompts; fail if any are missing
   --reconnect <provider>       Force a fresh connect flow even if already connected,
@@ -328,12 +328,15 @@ export function parseDeployArgs(args: readonly string[]): DeployOptions {
     if (a === '-h' || a === '--help') {
       process.stdout.write(DEPLOY_USAGE);
       process.exit(0);
-    } else if (a === '--mode') {
-      const v = args[++i];
-      if (v !== 'dev' && v !== 'sandbox' && v !== 'cloud') {
-        die(`--mode: expected one of dev|sandbox|cloud; got "${v ?? ''}"`);
+    } else if (a === '--mode' || a.startsWith('--mode=')) {
+      const v = a === '--mode' ? args[++i] : a.slice('--mode='.length);
+      if (v !== 'local' && v !== 'dev' && v !== 'sandbox' && v !== 'cloud') {
+        die(`--mode: expected one of local|sandbox|cloud; got "${v ?? ''}"`);
       }
-      mode = v;
+      if (v === 'dev') {
+        process.stderr.write('agentworkforce: --mode dev is deprecated; use --mode local (alias removed in the next minor)\n');
+      }
+      mode = v === 'dev' ? 'local' : v;
     } else if (a === '--workspace') {
       workspace = expectValue('--workspace', args[++i]);
     } else if (a === '--no-connect') {

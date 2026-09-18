@@ -125,7 +125,7 @@ test('deploy inputs validate against persona spec and forward to mode env', asyn
     await deploy(
       {
         personaPath,
-        mode: 'dev',
+        mode: 'local',
         io,
         inputs: { TOPIC: 'Deploy v1', REGION: 'us-east-1' }
       },
@@ -133,7 +133,7 @@ test('deploy inputs validate against persona spec and forward to mode env', asyn
         workspaceAuth: testWorkspaceAuth(),
         integrations: connectedIntegrations(),
         bundle: testBundleStager(),
-        modes: { dev: launcher }
+        modes: { local: launcher }
       }
     );
 
@@ -161,7 +161,7 @@ test('deploy inputs reach the dev launcher child process env', async () => {
     const result = await deploy(
       {
         personaPath,
-        mode: 'dev',
+        mode: 'local',
         io: createBufferedIO(),
         inputs: { TOPIC: 'Deploy v1', REGION: 'eu-west-1' }
       },
@@ -191,7 +191,7 @@ test('deploy inputs reject undeclared keys with declared input list', async () =
     await assert.rejects(
       deploy({
         personaPath,
-        mode: 'dev',
+        mode: 'local',
         io: createBufferedIO(),
         inputs: { UNKNOWN: 'x' }
       }),
@@ -208,7 +208,7 @@ test('deploy inputs reject non-string values with clean error', async () => {
     await assert.rejects(
       deploy({
         personaPath,
-        mode: 'dev',
+        mode: 'local',
         io: createBufferedIO(),
         inputs: { TOPIC: 42 } as unknown as Record<string, string>
       }),

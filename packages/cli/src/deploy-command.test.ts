@@ -510,3 +510,15 @@ test('runLogin canonicalizes origin.agentrelay.cloud apiUrl before resolving the
     restoreDeps();
   }
 });
+
+test('deploy mode local and deprecated dev alias', () => {
+  assert.equal(parseDeployArgs(['p.json', '--mode', 'local']).mode, 'local');
+  assert.equal(parseDeployArgs(['p.json', '--mode=local']).mode, 'local');
+  const trap = trapExit();
+  try {
+    assert.equal(parseDeployArgs(['p.json', '--mode', 'dev']).mode, 'local');
+    assert.match(trap.stderr, /--mode dev is deprecated; use --mode local/);
+    assert.throws(() => parseDeployArgs(['p.json', '--mode', 'foo']), /__exit_trap__/);
+    assert.match(trap.stderr, /local\|sandbox\|cloud/);
+  } finally { trap.restore(); }
+});

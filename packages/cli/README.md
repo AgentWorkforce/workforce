@@ -1244,3 +1244,23 @@ If a persona uses MCP, use `claude` or `codex` tiers.
 - **Local file silently missing from the list** — Scroll up for a
   `warning: [layer] file.json: …` line. Common causes: invalid JSON, `id`
   missing, or `extends` pointing at something that isn't in a lower layer.
+
+### Interactive sandbox sessions
+
+`agentworkforce agent <persona> --mode local` is the default interactive launch.
+`agentworkforce agent <persona> --mode sandbox` selects a Cloud sandbox session.
+Use `--sandbox-provider daytona|e2b`, `--sandbox-id <id>` to replay an identity,
+`--attach-mode view|drive` (default `drive`), and `--byo-sandbox` for BYO auth.
+Run `agentworkforce login` first to select an active workspace. Ctrl-C stops the
+session and waits for sandbox cleanup. `agent --mode cloud` is invalid; use
+`agentworkforce deploy <persona> --mode cloud` for a hosted service.
+
+Interactive sandbox launch requires the Relay SDK `/fleet` and `/attach`
+contracts. They are not yet exported by the published Relay SDK checked during
+this implementation; until that dependency ships, the command reports the
+missing SDK contract. Read-only mount enforcement also requires Cloud support.
+
+For hosted services, use `deploy --mode local|sandbox|cloud`. The previous
+`deploy --mode dev` spelling still works and warns; it will be removed in the
+next minor release. Existing `devLauncher` and `resolvers.modes.dev` library
+callers have the same deprecation window.

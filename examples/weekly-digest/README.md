@@ -47,7 +47,7 @@ workforce deploy ./examples/weekly-digest/persona.json \
 
 # Run locally as a long-lived process; pipe an envelope on stdin to fire
 # the handler immediately. The runner exits when stdin closes.
-workforce deploy ./examples/weekly-digest/persona.json --mode dev
+workforce deploy ./examples/weekly-digest/persona.json --mode local
 ```
 
 ## Firing the handler manually

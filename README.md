@@ -29,7 +29,7 @@ Typed personas can be deployed directly, or compiled first when you need a
 portable JSON artifact:
 
 ```bash
-agentworkforce deploy ./examples/review-agent/persona.ts --mode dev --dry-run
+agentworkforce deploy ./examples/review-agent/persona.ts --mode local --dry-run
 agentworkforce persona compile ./examples/review-agent/persona.ts
 ```
 
@@ -47,10 +47,10 @@ export DAYTONA_API_KEY=...
 workforce deploy ./examples/weekly-digest/persona.json --sandbox --byo-sandbox
 ```
 
-For local iteration, run it in dev mode:
+For local iteration, run it in local mode:
 
 ```bash
-BRAVE_API_KEY=... workforce deploy ./examples/weekly-digest/persona.json --dev
+BRAVE_API_KEY=... workforce deploy ./examples/weekly-digest/persona.json --mode local
 ```
 
 The example searches Brave on a weekly cron schedule, clusters findings, and
@@ -421,3 +421,23 @@ console.log(selection.personaId, selection.tier);
 
 For lower-level primitives, see
 [`packages/workload-router/README.md`](./packages/workload-router/README.md).
+
+### Interactive sandbox sessions
+
+`agentworkforce agent <persona> --mode local` is the default interactive launch.
+`agentworkforce agent <persona> --mode sandbox` selects a Cloud sandbox session.
+Use `--sandbox-provider daytona|e2b`, `--sandbox-id <id>` to replay an identity,
+`--attach-mode view|drive` (default `drive`), and `--byo-sandbox` for BYO auth.
+Run `agentworkforce login` first to select an active workspace. Ctrl-C stops the
+session and waits for sandbox cleanup. `agent --mode cloud` is invalid; use
+`agentworkforce deploy <persona> --mode cloud` for a hosted service.
+
+Interactive sandbox launch requires the Relay SDK `/fleet` and `/attach`
+contracts. They are not yet exported by the published Relay SDK checked during
+this implementation; until that dependency ships, the command reports the
+missing SDK contract. Read-only mount enforcement also requires Cloud support.
+
+For hosted services, use `deploy --mode local|sandbox|cloud`. The previous
+`deploy --mode dev` spelling still works and warns; it will be removed in the
+next minor release. Existing `devLauncher` and `resolvers.modes.dev` library
+callers have the same deprecation window.

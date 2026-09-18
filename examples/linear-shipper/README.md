@@ -7,7 +7,7 @@ This deployable persona follows the paraglide pattern: a Linear issue triggers a
 Connect Linear and GitHub before deploying.
 
 ```bash
-workforce deploy ./examples/linear-shipper/persona.json --mode dev
+workforce deploy ./examples/linear-shipper/persona.json --mode local
 ```
 
 Set the target repository through the persona inputs: `GITHUB_OWNER`, `GITHUB_REPO`, and `REPO_URL`.
