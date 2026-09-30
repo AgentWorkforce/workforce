@@ -1,6 +1,6 @@
 import type { Harness, HarnessSkillTarget } from './types.js';
 
-export const HARNESS_VALUES = ['opencode', 'codex', 'claude', 'grok'] as const;
+export const HARNESS_VALUES = ['opencode', 'codex', 'claude', 'grok', 'cursor'] as const;
 /**
  * The closed persona-tag vocabulary. The cloud deploy endpoint validates
  * `tags` against exactly this set and rejects anything else with
@@ -98,5 +98,6 @@ export const HARNESS_SKILL_TARGETS: Record<Harness, HarnessSkillTarget> = {
   claude: { asFlag: 'claude', dir: '.claude/skills' },
   codex: { asFlag: 'codex', dir: '.agents/skills' },
   opencode: { asFlag: 'opencode', dir: '.skills' },
-  grok: { asFlag: 'grok', dir: '.grok/skills' }
+  grok: { asFlag: 'grok', dir: '.grok/skills' },
+  cursor: { asFlag: 'cursor', dir: '.cursor/rules' }
 };
