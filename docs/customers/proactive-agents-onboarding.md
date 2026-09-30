@@ -20,7 +20,7 @@ Then sign in once:
 agentworkforce login
 ```
 
-The login command opens a browser, completes PKCE auth, lets you choose a workspace, and stores the workspace-scoped deploy token in keychain-backed storage.
+The login command opens a browser, signs you in to Agent Relay cloud, lets you choose a workspace, and prints its cloud workspace id. Later `deploy`, `deployments list` and `destroy` commands reuse that session automatically, so you do not need to set `WORKFORCE_WORKSPACE_ID` or `WORKFORCE_WORKSPACE_TOKEN`. If you do set them (for CI), the id must be the cloud workspace id (UUID), not the `rw_…` relaycast id, and the token must be a cloud access token, not the `rk_live_…` key from `workspaces.json` — see the CLI README's "Login and workspace ids" section.
 
 ## Configure The Persona
 

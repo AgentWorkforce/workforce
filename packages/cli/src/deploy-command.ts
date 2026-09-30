@@ -217,6 +217,14 @@ export async function runLogin(args: readonly string[]): Promise<void> {
     const workspaceName = descriptor.name ?? descriptor.slug ?? match?.slug ?? match?.name ?? chosen;
     await deployCommandDeps.setWorkspaceKey(workspaceName, descriptor.key);
     process.stdout.write(`\nlogged in: ${workspaceName}\n`);
+    if (descriptor.cloudWorkspaceId) {
+      process.stdout.write(`cloud workspace id: ${descriptor.cloudWorkspaceId}\n`);
+    } else {
+      process.stderr.write(
+        `warn: workspace ${descriptor.relaycastWorkspaceId} has no linked cloud workspace; ` +
+          'deploy, deployments list and destroy will fail until it is linked. Contact support with this id.\n'
+      );
+    }
     process.exit(0);
   } catch (err) {
     process.stderr.write(
@@ -546,6 +554,7 @@ type LoginWorkspace = {
 type LoginWorkspaceDescriptor = {
   key: string;
   relaycastWorkspaceId: string;
+  cloudWorkspaceId?: string;
   name?: string;
   slug?: string;
 };
@@ -593,9 +602,11 @@ async function resolveWorkspaceForLogin(
   if (!key || !relaycastWorkspaceId) {
     throw new Error('workspace resolve returned an incomplete descriptor');
   }
+  const cloudWorkspaceId = readString(record, 'cloudWorkspaceId');
   return {
     key,
     relaycastWorkspaceId,
+    ...(cloudWorkspaceId ? { cloudWorkspaceId } : {}),
     ...(readString(record, 'name') ? { name: readString(record, 'name') } : {}),
     ...(readString(record, 'slug') ? { slug: readString(record, 'slug') } : {})
   };

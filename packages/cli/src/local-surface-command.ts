@@ -255,7 +255,15 @@ async function runLocalSurfaceWithOptions(opts: LocalSurfaceOptions): Promise<vo
     personaSlug: preflight.persona.id
   });
 
-  const enrollment = await resolveOrRedeemEnrollment({ workspace, opts, cloudUrl });
+  // Fleet node enrollments are keyed by the relaycast workspace id; `workspace`
+  // is the cloud workspace id used for cloud API paths.
+  const relaycastWorkspaceId = auth.relaycastWorkspaceId?.trim()
+    || await resolveRelaycastWorkspaceId({ cloudUrl, token, workspace });
+  const enrollment = await resolveOrRedeemEnrollment({
+    workspace: relaycastWorkspaceId,
+    opts,
+    cloudUrl
+  });
   deps.log(`local-surface: fleet node "${enrollment.nodeName}" (${enrollment.relaycastUrl})`);
 
   const localSurface = await callLocalSurfaceApi({ cloudUrl, token, workspace, personaId: personaUuid });
@@ -397,6 +405,37 @@ async function resolveOrRedeemEnrollment(input: {
   const record: FleetNodeEnrollmentRecord = { ...enrolled, enrolledAt: deps.now().toISOString() };
   deps.upsertFleetNodeEnrollment(record);
   return record;
+}
+
+/**
+ * Env-override auth (WORKFORCE_WORKSPACE_ID + WORKFORCE_WORKSPACE_TOKEN) only
+ * carries the cloud workspace id, so ask the cloud for the matching relaycast
+ * id. Falls back to `workspace` when it cannot be resolved (e.g. the env id
+ * already is the relaycast id, or an older cloud).
+ */
+async function resolveRelaycastWorkspaceId(input: {
+  cloudUrl: string;
+  token: string;
+  workspace: string;
+}): Promise<string> {
+  const url = `${input.cloudUrl.replace(/\/+$/, '')}/api/v1/workspaces/${encodeURIComponent(input.workspace)}/resolve`;
+  try {
+    const response = await deps.fetch(url, {
+      method: 'GET',
+      headers: {
+        authorization: `Bearer ${input.token}`,
+        'user-agent': 'workforce-local-surface'
+      }
+    });
+    if (!response.ok) return input.workspace;
+    const body = (await response.json().catch(() => null)) as { relaycastWorkspaceId?: unknown } | null;
+    const relaycastWorkspaceId = body?.relaycastWorkspaceId;
+    return typeof relaycastWorkspaceId === 'string' && relaycastWorkspaceId.trim()
+      ? relaycastWorkspaceId.trim()
+      : input.workspace;
+  } catch {
+    return input.workspace;
+  }
 }
 
 async function callLocalSurfaceApi(input: {
