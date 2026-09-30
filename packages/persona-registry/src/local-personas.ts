@@ -21,7 +21,8 @@ import {
   type PersonaTag,
   type SidecarMdMode,
   parseHarnessSettings,
-  parseInputs
+  parseInputs,
+  parseOnEvent
 } from '@agentworkforce/persona-kit';
 import { listBuiltInPersonas, personaCatalog } from '@agentworkforce/workload-router';
 
@@ -64,6 +65,14 @@ export interface LocalPersonaOverride {
   permissions?: PersonaPermissions;
   /** Replaces the inherited systemPrompt when set. */
   systemPrompt?: string;
+  /**
+   * Handler entry, relative to this file's directory. Its presence marks the
+   * persona as a cloud agent: the handler drives the run, so the interactive
+   * fields an operator-launched persona must declare are optional here.
+   */
+  onEvent?: string;
+  /** Deployable as a managed cloud agent. */
+  cloud?: boolean;
   /** Replaces the inherited harness when set. */
   harness?: Harness;
   /** Replaces the inherited model when set. */
@@ -420,18 +429,38 @@ function readNestedLayerEntries(
   for (const name of names) {
     const sourceDir = join(dir, name);
     const path = join(sourceDir, NESTED_PERSONA_FILENAME);
-    if (isFile(path)) {
-      entries.push({ label: `${name}/${NESTED_PERSONA_FILENAME}`, path, sourceDir });
+    // Compare against the NEWEST authoring file, not the first one that
+    // exists: a directory that still carries an old persona.ts after moving to
+    // persona.js would otherwise be measured against the file nobody edits.
+    const authoredCandidate = NESTED_PERSONA_SOURCE_FILENAMES.map((file) => ({
+      file: join(sourceDir, file),
+      mtimeMs: fileMtimeMs(join(sourceDir, file))
+    }))
+      .filter((candidate): candidate is { file: string; mtimeMs: number } => candidate.mtimeMs !== undefined)
+      .sort((a, b) => b.mtimeMs - a.mtimeMs)[0];
+    const authored = authoredCandidate?.file;
+    const compiledAt = fileMtimeMs(path);
+
+    if (compiledAt === undefined) {
+      if (authored) {
+        warnings.push(
+          `[${layer.source}] ${name}: ${basename(authored)} has no compiled ${NESTED_PERSONA_FILENAME}; run \`agentworkforce persona compile ${authored}\` to make it loadable.`
+        );
+      }
       continue;
     }
-    const authored = NESTED_PERSONA_SOURCE_FILENAMES.find((file) =>
-      isFile(join(sourceDir, file))
-    );
-    if (authored) {
+
+    // A stale artifact is the quieter failure: the persona still loads, so
+    // nothing looks wrong while the edits sitting in the authoring file are
+    // simply absent. Say so, and keep serving the compiled spec — dropping it
+    // would turn a forgotten compile into a missing persona.
+    const authoredAt = authoredCandidate?.mtimeMs;
+    if (authored !== undefined && authoredAt !== undefined && authoredAt > compiledAt) {
       warnings.push(
-        `[${layer.source}] ${name}: ${authored} has no compiled ${NESTED_PERSONA_FILENAME}; run \`agentworkforce persona compile ${join(sourceDir, authored)}\` to make it loadable.`
+        `[${layer.source}] ${name}: ${NESTED_PERSONA_FILENAME} is older than ${basename(authored)}, so this persona is loading without the latest edits; re-run \`agentworkforce persona compile ${authored}\`.`
       );
     }
+    entries.push({ label: `${name}/${NESTED_PERSONA_FILENAME}`, path, sourceDir });
   }
   return entries;
 }
@@ -588,6 +617,24 @@ function parseOverride(value: unknown, context: string): LocalPersonaOverride {
       `${context}.defaultTier is no longer supported (tiers have been removed)`
     );
   }
+  // Normalize first, then delegate to persona-kit, which owns both the
+  // containment guard and the handler-extension check. Order matters in both
+  // directions: validating the raw string and storing a trimmed copy lets
+  // " ../x/agent.ts " clear the `..` check as the segment " .." and escape
+  // once trimmed, while validating without trimming stores " ./agent.ts",
+  // which passes every check and then resolves to a directory named " ."
+  // at deploy. Trimming up front makes the validated and stored value one
+  // and the same.
+  const onEventValue =
+    raw.onEvent === undefined
+      ? undefined
+      : parseOnEvent(
+          typeof raw.onEvent === 'string' ? raw.onEvent.trim() : raw.onEvent,
+          `${context}.onEvent`
+        );
+  if (raw.cloud !== undefined && typeof raw.cloud !== 'boolean') {
+    throw new Error(`${context}.cloud must be a boolean if provided`);
+  }
   if (raw.harness !== undefined) {
     if (typeof raw.harness !== 'string' || !HARNESS_VALUES.includes(raw.harness as Harness)) {
       throw new Error(`${context}.harness must be one of: ${HARNESS_VALUES.join(', ')}`);
@@ -631,6 +678,8 @@ function parseOverride(value: unknown, context: string): LocalPersonaOverride {
     mount: raw.mount as LocalPersonaOverride['mount'],
     permissions: raw.permissions as LocalPersonaOverride['permissions'],
     systemPrompt: raw.systemPrompt as string | undefined,
+    ...(onEventValue !== undefined ? { onEvent: onEventValue } : {}),
+    ...(raw.cloud !== undefined ? { cloud: raw.cloud as boolean } : {}),
     ...(raw.harness !== undefined ? { harness: raw.harness as Harness } : {}),
     ...(raw.model !== undefined ? { model: raw.model as string } : {}),
     ...(raw.harnessSettings !== undefined
@@ -819,12 +868,23 @@ function standaloneSpecFromOverride(
   cwd = process.cwd()
 ): PersonaSpec {
   const context = `standalone persona "${override.id}"`;
-  const harness = requireStandaloneField(override.harness, `${context}.harness`);
-  if (!HARNESS_VALUES.includes(harness)) {
+  // A handler agent is driven by its `onEvent` entry, not by an operator at a
+  // prompt, so the fields configuring an interactive launch are optional here.
+  // Requiring them made agents that ship a handler invisible to the cascade:
+  // the `agents/` directory added for exactly those agents could not load
+  // them, and the error read as though the persona were malformed.
+  const isHandler = typeof override.onEvent === 'string' && override.onEvent.trim() !== '';
+
+  const harness = isHandler
+    ? override.harness
+    : requireStandaloneField(override.harness, `${context}.harness`);
+  if (harness !== undefined && !HARNESS_VALUES.includes(harness)) {
     throw new Error(`${context}.harness must be one of: ${HARNESS_VALUES.join(', ')}`);
   }
-  const model = requireStandaloneField(override.model, `${context}.model`);
-  if (typeof model !== 'string' || !model.trim()) {
+  const model = isHandler
+    ? override.model
+    : requireStandaloneField(override.model, `${context}.model`);
+  if (model !== undefined && (typeof model !== 'string' || !model.trim())) {
     throw new Error(`${context}.model must be a non-empty string`);
   }
   const fallbackSystemPrompt = override.claudeMdContent ?? override.agentsMdContent;
@@ -832,9 +892,12 @@ function standaloneSpecFromOverride(
     typeof override.systemPrompt === 'string' && override.systemPrompt.trim()
       ? override.systemPrompt
       : fallbackSystemPrompt;
-  if (typeof systemPrompt !== 'string' || !systemPrompt.trim()) {
+  if (!isHandler && (typeof systemPrompt !== 'string' || !systemPrompt.trim())) {
     throw new Error(`${context}.systemPrompt must be a non-empty string`);
   }
+  // `harnessSettings` stays required even for a handler: `PersonaSpec` types it
+  // non-optional, and `reasoning`/`timeoutSeconds` have no defensible default to
+  // invent on the persona's behalf. Every shipped handler example declares it.
   const settingsRaw = override.harnessSettings;
   if (!settingsRaw || !isPlainObject(settingsRaw)) {
     throw new Error(`${context}.harnessSettings must be an object`);
@@ -887,9 +950,11 @@ function standaloneSpecFromOverride(
       cwd
     ),
     ...(inputs ? { inputs } : {}),
-    harness,
-    model,
-    systemPrompt,
+    ...(override.onEvent !== undefined ? { onEvent: override.onEvent } : {}),
+    ...(override.cloud !== undefined ? { cloud: override.cloud } : {}),
+    ...(harness !== undefined ? { harness } : {}),
+    ...(model !== undefined ? { model } : {}),
+    ...(systemPrompt !== undefined ? { systemPrompt } : {}),
     harnessSettings,
     ...(env ? { env } : {}),
     ...(mcpServers ? { mcpServers } : {}),
@@ -1012,6 +1077,16 @@ function isFile(path: string): boolean {
   }
 }
 
+/** Modification time of a regular file, or undefined if it is not one. */
+function fileMtimeMs(path: string): number | undefined {
+  try {
+    const st = statSync(path);
+    return st.isFile() ? st.mtimeMs : undefined;
+  } catch {
+    return undefined;
+  }
+}
+
 /**
  * Resolve relative local skill sources (`./skills/foo.md`) declared by an
  * override against the directory of the JSON file that declared them, the
@@ -1110,6 +1185,10 @@ function mergeOverride(
   const harness = override.harness ?? base.harness;
   const model = override.model ?? base.model;
   const systemPrompt = override.systemPrompt ?? base.systemPrompt;
+  // An overlay that only tweaks env must not strip the handler entry that
+  // makes the base a deployable agent.
+  const onEvent = override.onEvent ?? base.onEvent;
+  const cloud = override.cloud ?? base.cloud;
   const harnessSettings: HarnessSettings = parseHarnessSettings({
     ...base.harnessSettings,
     ...(override.harnessSettings ?? {})
@@ -1188,9 +1267,11 @@ function mergeOverride(
     description: override.description ?? base.description,
     skills,
     ...(inputs ? { inputs } : {}),
-    harness,
-    model,
-    systemPrompt,
+    ...(onEvent !== undefined ? { onEvent } : {}),
+    ...(cloud !== undefined ? { cloud } : {}),
+    ...(harness !== undefined ? { harness } : {}),
+    ...(model !== undefined ? { model } : {}),
+    ...(systemPrompt !== undefined ? { systemPrompt } : {}),
     harnessSettings,
     ...(env ? { env } : {}),
     ...(mcpServers ? { mcpServers } : {}),
