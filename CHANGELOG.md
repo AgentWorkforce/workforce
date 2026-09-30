@@ -8,6 +8,23 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- `deploy`, `deployments list`, `destroy`, `runs`, `trigger` and `local-surface`
+  now address cloud APIs with the cloud workspace id instead of the relaycast
+  workspace id, which cloud rejected with `403 Forbidden` after
+  `agentworkforce login`. When the cloud returns no cloud workspace id for a
+  workspace, the CLI now stops with an actionable error instead of silently
+  falling back to the relaycast id.
+- `WORKFORCE_WORKSPACE_TOKEN` set to a relaycast workspace key (`rk_…` from
+  `workspaces.json`) is rejected up front with guidance instead of failing
+  later with `401`.
+
+### Added
+
+- `agentworkforce login` prints the cloud workspace id, and warns when the
+  chosen workspace has none.
+
 ## [4.1.51] - 2026-08-31
 
 ### Added

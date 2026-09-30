@@ -74,6 +74,47 @@ corepack pnpm -r build
 corepack pnpm --filter agentworkforce link --global
 ```
 
+## Login and workspace ids
+
+```sh
+agentworkforce login
+```
+
+`login` signs you in to Agent Relay cloud, lets you pick a workspace, and
+prints its **cloud workspace id** (a UUID). After that, `deploy`,
+`deployments list`, `destroy`, `runs`, `trigger`, `env` and `integrations` use
+the login session automatically — no environment variables are needed.
+
+A workspace has two different ids, and they are not interchangeable:
+
+| Id | Looks like | Used for |
+|----|------------|----------|
+| Cloud workspace id | `0b6c2d4e-…` (UUID) | Workforce cloud APIs (`/api/v1/workspaces/<id>/…`): deployments, integrations, env, runtime credentials |
+| Relaycast workspace id | `rw_…` | Relaycast messaging and fleet nodes only |
+
+Using the relaycast id against cloud APIs returns `403 Forbidden`. If the cloud
+cannot resolve a cloud workspace id for your workspace, the CLI stops with an
+error naming the relaycast id instead of guessing — re-run
+`agentworkforce login`, or pass `--workspace <cloud-workspace-id>`.
+
+### Non-interactive / CI override
+
+`WORKFORCE_WORKSPACE_ID` + `WORKFORCE_WORKSPACE_TOKEN` override the login
+session when **both** are set (`--workspace` may stand in for the id):
+
+- `WORKFORCE_WORKSPACE_ID` — the **cloud workspace id** printed by
+  `agentworkforce login` (not the `rw_…` relaycast id).
+- `WORKFORCE_WORKSPACE_TOKEN` — a **cloud API bearer token**, e.g. the
+  `accessToken` from `~/.agentworkforce/relay/cloud-auth.json` after
+  `agentworkforce login`. This access token expires; re-run
+  `agentworkforce login` to refresh it.
+
+Do **not** use the workspace `key` (`rk_live_…`) from
+`~/.agentworkforce/relay/workspaces.json` as `WORKFORCE_WORKSPACE_TOKEN`: that
+is a relaycast key, cloud APIs reject it with `401`, and the CLI refuses it up
+front. On your own machine, prefer unsetting both variables and relying on
+`agentworkforce login`.
+
 ## Discover integrations and triggers
 
 ```sh

@@ -24,7 +24,17 @@ export interface WorkspaceAuth {
 
 export interface WorkspaceAuthToken {
   token: string;
+  /**
+   * Workspace id for workforce cloud API paths
+   * (`/api/v1/workspaces/<workspace>/...`). When resolved from the cloud
+   * session this is the canonical cloud workspace id, never the relaycast id.
+   */
   workspace?: string;
+  /**
+   * Relaycast workspace id, for relaycast/fleet lookups only (e.g. fleet node
+   * enrollments keyed by `relayWorkspaceId`). Never use it in cloud API paths.
+   */
+  relaycastWorkspaceId?: string;
   relayfileWorkspaceId?: string;
   workspaceDescriptor?: ActiveWorkspaceDescriptor;
   authSource?: 'env' | 'cloud-session';
@@ -107,6 +117,7 @@ export function resolveWorkspaceTokenFromEnv(workspace: string): WorkspaceAuthTo
       `no workspace token resolved for ${workspace}: run \`agent-relay login\` or set WORKFORCE_WORKSPACE_TOKEN`
     );
   }
+  assertCloudBearerToken(token);
   return { token };
 }
 
@@ -122,6 +133,7 @@ export async function resolveWorkspaceToken(args: {
   const requestedWorkspace = (args.workspace ?? '').trim();
 
   if (envToken && (requestedWorkspace || envWorkspace)) {
+    assertCloudBearerToken(envToken);
     return {
       token: envToken,
       workspace: requestedWorkspace || envWorkspace,
@@ -140,13 +152,80 @@ export async function resolveWorkspaceToken(args: {
     apiUrl: session.auth.apiUrl || cloudUrl
   });
 
+  // Cloud API routes (`/api/v1/workspaces/<id>/deployments`, integrations,
+  // runtime-credentials, ...) are scoped by the cloud workspace id. Sending
+  // the relaycast id there is rejected with 403 Forbidden.
+  const cloudWorkspaceId = requireCloudWorkspaceId(descriptor, requestedWorkspace || envWorkspace);
+
   return {
     token: session.auth.accessToken,
-    workspace: descriptor.relaycastWorkspaceId,
+    workspace: cloudWorkspaceId,
+    relaycastWorkspaceId: descriptor.relaycastWorkspaceId,
     relayfileWorkspaceId: descriptor.relayfileWorkspaceId,
     workspaceDescriptor: descriptor,
     authSource: "cloud-session"
   };
+}
+
+const RELAYCAST_WORKSPACE_KEY_PATTERN = /^rk_[a-z]+_/;
+
+/**
+ * WORKFORCE_WORKSPACE_TOKEN must be a cloud API bearer (the `accessToken` of
+ * the `agentworkforce login` / `agent-relay login` session). The relaycast
+ * workspace key stored in workspaces.json (`rk_live_...`) is not accepted by
+ * cloud APIs and only produces a 401 later, so reject it up front.
+ */
+function assertCloudBearerToken(token: string): void {
+  if (!RELAYCAST_WORKSPACE_KEY_PATTERN.test(token)) return;
+  throw new Error(
+    'WORKFORCE_WORKSPACE_TOKEN is a relaycast workspace key (rk_...), which workforce cloud APIs reject. ' +
+      'Unset WORKFORCE_WORKSPACE_TOKEN and WORKFORCE_WORKSPACE_ID to use your `agentworkforce login` session, ' +
+      'or set WORKFORCE_WORKSPACE_TOKEN to a cloud access token (e.g. the `accessToken` in ' +
+      '~/.agentworkforce/relay/cloud-auth.json) and WORKFORCE_WORKSPACE_ID to the cloud workspace id.'
+  );
+}
+
+const RELAY_WORKSPACE_ID_PATTERN = /^rw_[A-Za-z0-9]+$/;
+
+/**
+ * Return the descriptor's cloud workspace id, or fail with an actionable
+ * error. The cloud resolve endpoint returns `cloudWorkspaceId: null` when a
+ * relay workspace has no cloud workspace binding, and older descriptor
+ * normalizers (including @agent-relay/cloud's) then fall back to the
+ * relaycast/relay workspace id. Treat that fallback as missing rather than
+ * silently calling cloud APIs with an id they reject.
+ */
+function requireCloudWorkspaceId(
+  descriptor: ActiveWorkspaceDescriptor,
+  requestedWorkspace: string
+): string {
+  const cloudWorkspaceId = descriptor.cloudWorkspaceId?.trim() ?? '';
+  const relayIds = new Set(
+    [
+      descriptor.relaycastWorkspaceId,
+      descriptor.relayfileWorkspaceId,
+      descriptor.relayauthWorkspaceId
+    ]
+      .map((id) => id?.trim())
+      .filter((id): id is string => Boolean(id))
+  );
+  if (
+    cloudWorkspaceId
+    && !relayIds.has(cloudWorkspaceId)
+    && !RELAY_WORKSPACE_ID_PATTERN.test(cloudWorkspaceId)
+  ) {
+    return cloudWorkspaceId;
+  }
+  const label = requestedWorkspace
+    ? `workspace "${requestedWorkspace}"`
+    : `the active workspace${descriptor.name ? ` "${descriptor.name}"` : ''}`;
+  throw new Error(
+    `${label} resolved to relaycast workspace ${descriptor.relaycastWorkspaceId} but the cloud did not return ` +
+      'its Agent Workforce cloud workspace id, which cloud APIs (deployments, integrations, env) require. ' +
+      'Run `agentworkforce login` and pick the workspace again (it prints the cloud workspace id), or pass ' +
+      '`--workspace <cloud-workspace-id>`. If this persists, the relay workspace is not linked to a cloud ' +
+      'workspace — contact support with the relaycast workspace id above.'
+  );
 }
 
 async function resolveWorkspaceDescriptor(args: {
@@ -224,7 +303,9 @@ function normalizeWorkspaceDescriptor(payload: unknown, apiUrl: string): ActiveW
   }
   return {
     key,
-    cloudWorkspaceId: readString(record, 'cloudWorkspaceId') ?? relaycastWorkspaceId,
+    // No fallback to the relaycast id: an absent cloudWorkspaceId is surfaced
+    // by requireCloudWorkspaceId() with an actionable error.
+    cloudWorkspaceId: readString(record, 'cloudWorkspaceId') ?? '',
     relaycastWorkspaceId,
     ...(readString(record, 'relaycastApiKey')
       ? { relaycastApiKey: readString(record, 'relaycastApiKey') }

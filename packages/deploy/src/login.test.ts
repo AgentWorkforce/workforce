@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdtempSync, rmSync } from 'node:fs';
+import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { spawnSync } from 'node:child_process';
@@ -159,6 +159,166 @@ test('resolveWorkspaceToken surfaces stale-workspace guidance on 404', async () 
     } finally {
       restoreFetch();
     }
+  });
+});
+
+const CLOUD_WORKSPACE_ID = '0b6c2d4e-1f3a-4b5c-8d7e-9f0a1b2c3d4e';
+
+function resolveDescriptor(overrides: Record<string, unknown> = {}): Record<string, unknown> {
+  return {
+    relaycastApiKey: 'rk_live_descriptorkey',
+    workspaceId: 'rw_1234abcd',
+    cloudWorkspaceId: CLOUD_WORKSPACE_ID,
+    relaycastWorkspaceId: 'rw_1234abcd',
+    relayfileWorkspaceId: 'rf_1234abcd',
+    relayauthWorkspaceId: 'ra_1234abcd',
+    name: 'Acme',
+    urls: {
+      relaycastUrl: 'https://relaycast.example.test',
+      relayfileUrl: 'https://relayfile.example.test',
+      relayauthUrl: 'https://relayauth.example.test'
+    },
+    ...overrides
+  };
+}
+
+function withResolveFetch(descriptor: Record<string, unknown>, requests: string[]): () => void {
+  return withTrappedFetch(async (input) => {
+    const url = input instanceof Request ? input.url : String(input);
+    requests.push(url);
+    if (/\/api\/v1\/workspaces\/[^/]+\/resolve$/.test(new URL(url).pathname)) {
+      return Response.json(descriptor);
+    }
+    return new Response('unexpected request', { status: 500 });
+  });
+}
+
+async function withActiveWorkspaceStore<T>(key: string, fn: () => Promise<T>): Promise<T> {
+  const home = mkdtempSync(path.join(os.tmpdir(), 'wf-active-workspace-'));
+  const previous = process.env.AGENT_RELAY_HOME;
+  mkdirSync(home, { recursive: true });
+  writeFileSync(
+    path.join(home, 'workspaces.json'),
+    JSON.stringify({ active: 'acme', workspaces: { acme: { key } } })
+  );
+  process.env.AGENT_RELAY_HOME = home;
+  try {
+    return await fn();
+  } finally {
+    if (previous === undefined) delete process.env.AGENT_RELAY_HOME;
+    else process.env.AGENT_RELAY_HOME = previous;
+    rmSync(home, { recursive: true, force: true });
+  }
+}
+
+test('resolveWorkspaceToken returns the cloud workspace id (not the relaycast id) for an explicit workspace', async () => {
+  await withCloudSessionEnv(async () => {
+    const requests: string[] = [];
+    const restoreFetch = withResolveFetch(resolveDescriptor(), requests);
+    try {
+      const auth = await resolveWorkspaceToken({
+        workspace: 'acme',
+        cloudUrl: 'https://cloud.example.test',
+        io: createBufferedIO(),
+        noPrompt: true
+      });
+      assert.equal(auth.workspace, CLOUD_WORKSPACE_ID);
+      assert.equal(auth.relaycastWorkspaceId, 'rw_1234abcd');
+      assert.equal(auth.relayfileWorkspaceId, 'rf_1234abcd');
+      assert.equal(auth.token, 'cloud-access');
+      assert.equal(auth.authSource, 'cloud-session');
+      assert.ok(requests.some((url) => url.endsWith('/api/v1/workspaces/acme/resolve')));
+    } finally {
+      restoreFetch();
+    }
+  });
+});
+
+test('resolveWorkspaceToken returns the cloud workspace id for the active workspace', async () => {
+  await withCloudSessionEnv(() => withActiveWorkspaceStore('rk_live_activekey', async () => {
+    const requests: string[] = [];
+    const restoreFetch = withResolveFetch(resolveDescriptor(), requests);
+    try {
+      const auth = await resolveWorkspaceToken({
+        cloudUrl: 'https://cloud.example.test',
+        io: createBufferedIO(),
+        noPrompt: true
+      });
+      assert.equal(auth.workspace, CLOUD_WORKSPACE_ID);
+      assert.equal(auth.relaycastWorkspaceId, 'rw_1234abcd');
+      assert.equal(auth.token, 'cloud-access');
+    } finally {
+      restoreFetch();
+    }
+  }));
+});
+
+test('resolveWorkspaceToken fails loudly when resolve omits the cloud workspace id', async () => {
+  await withCloudSessionEnv(async () => {
+    const restoreFetch = withResolveFetch(resolveDescriptor({ cloudWorkspaceId: null }), []);
+    try {
+      await assert.rejects(
+        resolveWorkspaceToken({
+          workspace: 'acme',
+          cloudUrl: 'https://cloud.example.test',
+          io: createBufferedIO(),
+          noPrompt: true
+        }),
+        (error: Error) => {
+          assert.match(error.message, /workspace "acme" resolved to relaycast workspace rw_1234abcd/);
+          assert.match(error.message, /cloud workspace id/);
+          assert.match(error.message, /agentworkforce login/);
+          assert.match(error.message, /--workspace <cloud-workspace-id>/);
+          return true;
+        }
+      );
+    } finally {
+      restoreFetch();
+    }
+  });
+});
+
+test('resolveWorkspaceToken rejects an active descriptor whose cloud id fell back to the relay id', async () => {
+  // @agent-relay/cloud's normalizer falls back to `workspaceId` (the relay
+  // workspace id) when the cloud returns `cloudWorkspaceId: null`.
+  await withCloudSessionEnv(() => withActiveWorkspaceStore('rk_live_activekey', async () => {
+    const restoreFetch = withResolveFetch(
+      resolveDescriptor({ cloudWorkspaceId: null, workspaceId: 'rw_9999ffff' }),
+      []
+    );
+    try {
+      await assert.rejects(
+        resolveWorkspaceToken({
+          cloudUrl: 'https://cloud.example.test',
+          io: createBufferedIO(),
+          noPrompt: true
+        }),
+        /the active workspace "Acme" resolved to relaycast workspace rw_1234abcd.*cloud workspace id/s
+      );
+    } finally {
+      restoreFetch();
+    }
+  }));
+});
+
+test('resolveWorkspaceToken rejects a relaycast workspace key in WORKFORCE_WORKSPACE_TOKEN', async () => {
+  await withWorkspaceEnv({
+    workspaceId: CLOUD_WORKSPACE_ID,
+    workspaceToken: 'rk_live_notacloudtoken'
+  }, async () => {
+    await assert.rejects(
+      resolveWorkspaceToken({
+        cloudUrl: 'https://cloud.example.test',
+        io: createBufferedIO(),
+        noPrompt: true
+      }),
+      (error: Error) => {
+        assert.match(error.message, /relaycast workspace key/);
+        assert.match(error.message, /cloud-auth\.json/);
+        assert.doesNotMatch(error.message, /rk_live_notacloudtoken/);
+        return true;
+      }
+    );
   });
 });
 

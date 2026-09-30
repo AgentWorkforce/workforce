@@ -255,7 +255,13 @@ async function runLocalSurfaceWithOptions(opts: LocalSurfaceOptions): Promise<vo
     personaSlug: preflight.persona.id
   });
 
-  const enrollment = await resolveOrRedeemEnrollment({ workspace, opts, cloudUrl });
+  // Fleet node enrollments are keyed by the relaycast workspace id; `workspace`
+  // is the cloud workspace id used for cloud API paths.
+  const enrollment = await resolveOrRedeemEnrollment({
+    workspace: auth.relaycastWorkspaceId?.trim() || workspace,
+    opts,
+    cloudUrl
+  });
   deps.log(`local-surface: fleet node "${enrollment.nodeName}" (${enrollment.relaycastUrl})`);
 
   const localSurface = await callLocalSurfaceApi({ cloudUrl, token, workspace, personaId: personaUuid });

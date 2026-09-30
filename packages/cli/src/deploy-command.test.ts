@@ -118,6 +118,7 @@ test('runLogin uses cloud SDK auth, picks a workspace, and pins the canonical re
             return new Response(JSON.stringify({
               key: 'rk_live_acme',
               workspaceId: 'rw_1234abcd',
+              cloudWorkspaceId: '0b6c2d4e-1f3a-4b5c-8d7e-9f0a1b2c3d4e',
               relaycastWorkspaceId: 'rw_1234abcd',
               relayfileWorkspaceId: 'rf_acme',
               relayauthWorkspaceId: 'ra_acme',
@@ -150,6 +151,8 @@ test('runLogin uses cloud SDK auth, picks a workspace, and pins the canonical re
     ]);
     assert.deepEqual(pinned, [{ name: 'Acme', key: 'rk_live_acme' }]);
     assert.match(trap.stdout, /logged in: Acme/);
+    assert.match(trap.stdout, /cloud workspace id: 0b6c2d4e-1f3a-4b5c-8d7e-9f0a1b2c3d4e/);
+    assert.doesNotMatch(trap.stderr, /no linked cloud workspace/);
   } finally {
     trap.restore();
     restoreDeps();
@@ -215,6 +218,9 @@ test('runLogin with --workspace skips the workspaces list and pins the resolved 
       key: 'rk_live_direct'
     }]);
     assert.match(trap.stdout, /logged in: 50587328-441d-4acb-b8f3-dbe1b3c5de99/);
+    // The resolve payload above has no cloudWorkspaceId: warn instead of
+    // letting later cloud calls fail with an opaque 403.
+    assert.match(trap.stderr, /workspace rw_5678abcd has no linked cloud workspace/);
   } finally {
     trap.restore();
     restoreDeps();
