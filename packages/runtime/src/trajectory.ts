@@ -16,6 +16,8 @@ import type {
   WorkforceEvent
 } from './types.js';
 
+type TrajectoryStartOptions = NonNullable<Parameters<TrajectoryClient['start']>[1]>;
+
 /** Stable display label for an event's origin (provider slug, or `cron`). */
 function eventSourceLabel(event: WorkforceEvent): string {
   return isCronTickEvent(event) ? 'cron' : event.resource.provider;
@@ -169,11 +171,15 @@ class ActiveTrajectoryRecorder implements TrajectoryRecorder {
         await stale?.abandon('superseded by a new run');
       }
       const { title, description } = describeEvent(event);
-      this.session = await this.client.start(title, {
+      // Every supported agent-trajectories release stamps `options.workflowId`
+      // at runtime, but the 0.5.5–0.6.x type declarations omit the field, so
+      // build the options outside the call to skip the excess-property check.
+      const startOptions: TrajectoryStartOptions & { workflowId: string } = {
         ...(description ? { description } : {}),
         workflowId: workflowIdFor(event),
         tags: [`persona:${this.personaId}`, `workspace:${event.workspace}`, `source:${eventSourceLabel(event)}`]
-      });
+      };
+      this.session = await this.client.start(title, startOptions);
       await this.session.chapter(`handle ${eventLabel(event)}`);
     } catch (err) {
       this.session = null;

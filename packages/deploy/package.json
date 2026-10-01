@@ -32,7 +32,7 @@
     "lint": "tsc -p tsconfig.json --noEmit"
   },
   "dependencies": {
-    "@agent-relay/cloud": "^10.1.0",
+    "@agent-relay/cloud": "^12.2.2",
     "@agentworkforce/persona-kit": "workspace:*",
     "@agentworkforce/runtime": "workspace:*",
     "@daytona/sdk": "^0.205.0",

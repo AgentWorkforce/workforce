@@ -10,7 +10,7 @@
     "package.json"
   ],
   "dependencies": {
-    "@agent-relay/cloud": "^10.1.0",
+    "@agent-relay/cloud": "^12.2.2",
     "@agentworkforce/deploy": "workspace:*",
     "@agentworkforce/events": "workspace:*",
     "@agentworkforce/local-surface": "workspace:*",
