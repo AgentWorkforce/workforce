@@ -301,9 +301,26 @@ function assertFleetCompatibility(): void {
   checkFleetSdkCompatibility({
     dynamicSpawnDelegation: (fleetSdk as unknown as { FLEET_DYNAMIC_SPAWN_DELEGATION?: unknown })
       .FLEET_DYNAMIC_SPAWN_DELEGATION,
-    version: readInstalledFleetVersion()
+    version: installedFleetVersion()
   });
 }
+
+/**
+ * Memoize a Fleet version reader so the manifest lookup (sync fs I/O) runs at
+ * most once per process; an unreadable result (`undefined`) is cached too.
+ * @internal Exported for tests; not part of the stable API.
+ */
+export function createCachedFleetVersionReader(
+  read: () => string | undefined
+): () => string | undefined {
+  let cached: { version: string | undefined } | undefined;
+  return () => {
+    cached ??= { version: read() };
+    return cached.version;
+  };
+}
+
+const installedFleetVersion = createCachedFleetVersionReader(readInstalledFleetVersion);
 
 function readInstalledFleetVersion(): string | undefined {
   try {

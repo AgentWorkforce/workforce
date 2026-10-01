@@ -11,6 +11,7 @@ import type { ResolvedPersonaReference } from '@agentworkforce/persona-registry'
 import {
   __setPersonaSpawnImplementationsForTest,
   checkFleetSdkCompatibility,
+  createCachedFleetVersionReader,
   defineWorkforcePersonaSpawnNode,
   MIN_FLEET_MAJOR
 } from './persona-spawn.js';
@@ -454,4 +455,24 @@ test('fleet compatibility guard accepts the installed Fleet SDK', async () => {
     invokeNodeHandler(node, 'spawn:persona', {}, ctx),
     (error: Error) => !/requires @agent-relay\/fleet/.test(error.message) && /name/.test(error.message)
   );
+});
+
+test('fleet version lookup is memoized, including an unreadable result', () => {
+  let reads = 0;
+  const readVersion = createCachedFleetVersionReader(() => {
+    reads += 1;
+    return '12.4.1';
+  });
+  assert.equal(readVersion(), '12.4.1');
+  assert.equal(readVersion(), '12.4.1');
+  assert.equal(reads, 1);
+
+  let missingReads = 0;
+  const readMissing = createCachedFleetVersionReader(() => {
+    missingReads += 1;
+    return undefined;
+  });
+  assert.equal(readMissing(), undefined);
+  assert.equal(readMissing(), undefined);
+  assert.equal(missingReads, 1);
 });
