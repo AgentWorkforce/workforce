@@ -26,7 +26,7 @@ its skills, MCP servers, sidecars, harness, model, and harness settings. A
 request `task` is delivered separately as the concrete assignment. Concurrent
 requests for the same node, project, persona, and agent name share one launch, and the
 Relay broker verifies node registration plus the harness `worker_ready`
-handshake before the action succeeds. This path requires Agent Relay 11.5 or
+handshake before the action succeeds. This path requires Agent Relay 12 or
 newer. The isolated mount auto-syncs agent changes back to the project and
 flushes once more during teardown.
 
