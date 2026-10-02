@@ -83,6 +83,40 @@ test('records a run and emits a contract-shaped artifact', async () => {
   });
 });
 
+test('stamps the run workflowId onto the raw trajectory', async () => {
+  await withRoot(async (root) => {
+    const recorder = createTrajectoryRecorder({
+      personaId: 'demo',
+      agentName: 'demo',
+      workspaceId: 'ws-1',
+      trajectoryRoot: root,
+      log: silentLog,
+      autoCompact: false
+    });
+
+    await recorder.begin(cronEvent);
+    await recorder.context.done('did the thing', 0.9);
+
+    const contract = await readOnlyContract(root, 'demo');
+    // The storage layout differs across agent-trajectories releases, so find
+    // the raw trajectory by id rather than by path.
+    const dataDir = path.join(root, 'demo');
+    const candidates = (await readdir(dataDir, { recursive: true })).filter(
+      (f) => f.endsWith('.json') && !f.startsWith('compacted')
+    );
+    const raws: Array<{ id?: string; workflowId?: string }> = [];
+    for (const file of candidates) {
+      const parsed = JSON.parse(await readFile(path.join(dataDir, file), 'utf8')) as {
+        id?: string;
+        workflowId?: string;
+      };
+      if (parsed.id === contract.id) raws.push(parsed);
+    }
+    assert.ok(raws.length > 0, `no raw trajectory for ${contract.id} in ${candidates.join(', ')}`);
+    for (const raw of raws) assert.equal(raw.workflowId, 'run_evt-1_1');
+  });
+});
+
 test('auto-finalizes on complete() when the handler did not call done()', async () => {
   await withRoot(async (root) => {
     const recorder = createTrajectoryRecorder({

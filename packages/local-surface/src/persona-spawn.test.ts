@@ -10,7 +10,10 @@ import type { ResolvedPersonaReference } from '@agentworkforce/persona-registry'
 
 import {
   __setPersonaSpawnImplementationsForTest,
-  defineWorkforcePersonaSpawnNode
+  checkFleetSdkCompatibility,
+  createCachedFleetVersionReader,
+  defineWorkforcePersonaSpawnNode,
+  MIN_FLEET_MAJOR
 } from './persona-spawn.js';
 
 const resolved: ResolvedPersonaReference = {
@@ -418,4 +421,58 @@ test('host disposes the real executor mount retained after a successful spawn', 
     }
     await rm(project, { recursive: true, force: true });
   }
+});
+
+test('fleet compatibility guard requires Fleet 12 or newer', () => {
+  assert.equal(MIN_FLEET_MAJOR, 12);
+  assert.doesNotThrow(() => checkFleetSdkCompatibility({ dynamicSpawnDelegation: true, version: '12.2.2' }));
+  assert.doesNotThrow(() => checkFleetSdkCompatibility({ dynamicSpawnDelegation: true, version: '13.0.0' }));
+  // Version unreadable (e.g. bundled): fall back to the capability flag.
+  assert.doesNotThrow(() => checkFleetSdkCompatibility({ dynamicSpawnDelegation: true, version: undefined }));
+  assert.throws(
+    () => checkFleetSdkCompatibility({ dynamicSpawnDelegation: true, version: '11.11.0' }),
+    /requires @agent-relay\/fleet 12 or newer.*found 11\.11\.0/
+  );
+  assert.throws(
+    () => checkFleetSdkCompatibility({ dynamicSpawnDelegation: undefined, version: undefined }),
+    /requires @agent-relay\/fleet 12 or newer/
+  );
+});
+
+test('fleet compatibility guard accepts the installed Fleet SDK', async () => {
+  __setPersonaSpawnImplementationsForTest();
+  const node = defineWorkforcePersonaSpawnNode({ nodeName: 'persona-node', cwd: '/tmp/project' });
+  const ctx = {
+    node: { name: 'persona-node', capabilities: ['spawn:persona'] },
+    relay: { sendMessage: async () => undefined },
+    spawnAgent: async () => {
+      throw new Error('spawnAgent must not be reached');
+    }
+  } satisfies FleetActionContext;
+  // The real guard runs first; with the installed v12 SDK it must not be the
+  // reason the action fails (input validation rejects the empty payload).
+  await assert.rejects(
+    invokeNodeHandler(node, 'spawn:persona', {}, ctx),
+    (error: Error) => !/requires @agent-relay\/fleet/.test(error.message) && /name/.test(error.message)
+  );
+});
+
+test('fleet version lookup is memoized, including an unreadable result', () => {
+  let reads = 0;
+  const readVersion = createCachedFleetVersionReader(() => {
+    reads += 1;
+    return '12.4.1';
+  });
+  assert.equal(readVersion(), '12.4.1');
+  assert.equal(readVersion(), '12.4.1');
+  assert.equal(reads, 1);
+
+  let missingReads = 0;
+  const readMissing = createCachedFleetVersionReader(() => {
+    missingReads += 1;
+    return undefined;
+  });
+  assert.equal(readMissing(), undefined);
+  assert.equal(readMissing(), undefined);
+  assert.equal(missingReads, 1);
 });

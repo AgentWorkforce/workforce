@@ -8,6 +8,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+
+- `@agentworkforce/mcp-workforce` now uses zod 4 with
+  `@modelcontextprotocol/sdk` `^1.31.0`. The floor is `zod` `^4.4.3`, so
+  consumers can pin 4.4.3 (zod 4.5+ grows `zod/v4/core` substantially).
+- `@agentworkforce/deploy`, `@agentworkforce/cli`, `@agentworkforce/runtime`
+  and `@agentworkforce/local-surface` moved to the zod-4 `@agent-relay/*`
+  lines (`@agent-relay/cloud` and `@agent-relay/fleet` `^12.2.2`,
+  `@agent-relay/events` `^7.1.1`), so installs no longer pull zod 3 through them.
+- `@agentworkforce/local-surface` `spawn:persona` now requires
+  `@agent-relay/fleet` 12 or newer (README and runtime guard updated).
+- `@agentworkforce/runtime` accepts `agent-trajectories` `^0.5.3 || ^0.6.0 || ^0.7.0`,
+  so consumers can dedupe onto the zod-4 trajectories release once it ships.
+
 ## [4.1.60] - 2026-09-30
 
 ### Fixed

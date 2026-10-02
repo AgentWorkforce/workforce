@@ -1,6 +1,8 @@
+import { existsSync, readFileSync } from 'node:fs';
 import { mkdtemp, rm } from 'node:fs/promises';
+import { createRequire } from 'node:module';
 import { tmpdir } from 'node:os';
-import { join, resolve as resolvePath } from 'node:path';
+import { dirname, join, resolve as resolvePath } from 'node:path';
 
 import * as fleetSdk from '@agent-relay/fleet';
 import {
@@ -269,14 +271,74 @@ async function launchResolvedPersona(input: {
   }
 }
 
+/** Oldest `@agent-relay/fleet` major this package is built and tested against. */
+export const MIN_FLEET_MAJOR = 12;
+
+const FLEET_COMPATIBILITY_ERROR = `spawn:persona requires @agent-relay/fleet ${MIN_FLEET_MAJOR} or newer; older Fleet versions are not supported by @agentworkforce/local-surface`;
+
+/**
+ * Validate the loaded Fleet SDK. `version` is the installed package version
+ * when it can be read; when it cannot (e.g. a bundled build without the
+ * package manifest) only the capability flag is checked.
+ * @internal Exported for tests; not part of the stable API.
+ */
+export function checkFleetSdkCompatibility(sdk: {
+  dynamicSpawnDelegation: unknown;
+  version: string | undefined;
+}): void {
+  if (sdk.dynamicSpawnDelegation !== true) {
+    throw new Error(FLEET_COMPATIBILITY_ERROR);
+  }
+  if (sdk.version !== undefined) {
+    const major = Number.parseInt(sdk.version, 10);
+    if (!Number.isFinite(major) || major < MIN_FLEET_MAJOR) {
+      throw new Error(`${FLEET_COMPATIBILITY_ERROR} (found ${sdk.version})`);
+    }
+  }
+}
+
 function assertFleetCompatibility(): void {
-  const supported = (
-    fleetSdk as unknown as { FLEET_DYNAMIC_SPAWN_DELEGATION?: unknown }
-  ).FLEET_DYNAMIC_SPAWN_DELEGATION;
-  if (supported !== true) {
-    throw new Error(
-      'spawn:persona requires @agent-relay/fleet 11.5 or newer; older Fleet versions cannot delegate a persona action to its resolved harness'
-    );
+  checkFleetSdkCompatibility({
+    dynamicSpawnDelegation: (fleetSdk as unknown as { FLEET_DYNAMIC_SPAWN_DELEGATION?: unknown })
+      .FLEET_DYNAMIC_SPAWN_DELEGATION,
+    version: installedFleetVersion()
+  });
+}
+
+/**
+ * Memoize a Fleet version reader so the manifest lookup (sync fs I/O) runs at
+ * most once per process; an unreadable result (`undefined`) is cached too.
+ * @internal Exported for tests; not part of the stable API.
+ */
+export function createCachedFleetVersionReader(
+  read: () => string | undefined
+): () => string | undefined {
+  let cached: { version: string | undefined } | undefined;
+  return () => {
+    cached ??= { version: read() };
+    return cached.version;
+  };
+}
+
+const installedFleetVersion = createCachedFleetVersionReader(readInstalledFleetVersion);
+
+function readInstalledFleetVersion(): string | undefined {
+  try {
+    let dir = dirname(createRequire(import.meta.url).resolve('@agent-relay/fleet'));
+    for (;;) {
+      const manifest = join(dir, 'package.json');
+      if (existsSync(manifest)) {
+        const parsed = JSON.parse(readFileSync(manifest, 'utf8')) as { name?: unknown; version?: unknown };
+        if (parsed.name === '@agent-relay/fleet') {
+          return typeof parsed.version === 'string' ? parsed.version : undefined;
+        }
+      }
+      const parent = dirname(dir);
+      if (parent === dir) return undefined;
+      dir = parent;
+    }
+  } catch {
+    return undefined;
   }
 }
 
