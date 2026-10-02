@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [4.2.0] - 2026-10-02
+
+### Dependencies
+
+- Move to zod 4 and zod-4 @agent-relay lines (#4080)
+
 ## [4.1.60] - 2026-09-30
 
 ### Fixed
