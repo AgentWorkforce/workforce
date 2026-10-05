@@ -28,6 +28,28 @@ test('handles Codex error envelopes and does not label another harness as Claude
   assert.match(classify("You've hit your limit", 'opencode')!.message, /AI account/);
 });
 
+test('classifies Grok Build 402 balance exhaustion with a safe actionable message', () => {
+  const output = [
+    'Internal error: {',
+    '  "message": "API error (status 402 Payment Required): Grok Build usage balance exhausted",',
+    '  "http_status": 402,',
+    '  "private_detail": "secret-fixture-value"',
+    '}',
+  ].join('\n');
+  const failure = classify(output, 'grok');
+  assert.equal(failure?.kind, 'usage_limit');
+  assert.equal(failure?.provider, 'xai');
+  assert.match(failure!.message, /Grok account.*no available usage balance/);
+  assert.match(failure!.message, /add Grok Build credits/);
+  assert.doesNotMatch(failure!.message, /secret-fixture|http_status/);
+});
+
+test('does not classify Grok payment text for another harness or a different 402', () => {
+  const exhausted = 'API error (status 402 Payment Required): Grok Build usage balance exhausted';
+  assert.equal(classify(exhausted, 'claude'), null);
+  assert.equal(classify('API error (status 402 Payment Required): billing profile unavailable', 'grok'), null);
+});
+
 test('classifies known provider diagnostics from stderr using safe messages', () => {
   const cases: Array<[string, HarnessProviderFailure['kind']]> = [
     ['API Error: 429 request throttled', 'rate_limit'],

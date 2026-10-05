@@ -4,7 +4,7 @@ export interface HarnessProviderFailure {
   kind: 'usage_limit' | 'rate_limit' | 'authentication' | 'context_limit' | 'provider_unavailable' | 'timeout';
   message: string;
   resetHint?: string;
-  provider?: 'anthropic' | 'openai';
+  provider?: 'anthropic' | 'openai' | 'xai';
 }
 
 function validTimezone(value: string): boolean {
@@ -52,8 +52,20 @@ function diagnosticMessages(text: string): string[] {
 export function classifyHarnessProviderFailure(run: Pick<HarnessRunResult, 'output' | 'stderr' | 'exitCode'>, harness?: string): HarnessProviderFailure | null {
   // OS kills and successful output retain their existing caller contract.
   if (!Number.isFinite(run.exitCode) || run.exitCode === 0 || run.exitCode === 137 || run.exitCode === 143) return null;
-  const provider = harness === 'claude' ? 'anthropic' : harness === 'codex' ? 'openai' : undefined;
-  const account = provider === 'anthropic' ? 'Claude' : provider === 'openai' ? 'OpenAI' : 'AI';
+  const provider = harness === 'claude'
+    ? 'anthropic'
+    : harness === 'codex'
+      ? 'openai'
+      : harness === 'grok'
+        ? 'xai'
+        : undefined;
+  const account = provider === 'anthropic'
+    ? 'Claude'
+    : provider === 'openai'
+      ? 'OpenAI'
+      : provider === 'xai'
+        ? 'Grok'
+        : 'AI';
   const result = run as { output?: unknown; stderr?: unknown } | null;
   const rawText = [result?.output, result?.stderr]
     .filter((value): value is string => typeof value === 'string')
@@ -78,6 +90,21 @@ export function classifyHarnessProviderFailure(run: Pick<HarnessRunResult, 'outp
         'Wait for the limit to reset, or ask the account owner to restore available usage before retrying the task.',
       ].join(' '),
       ...(resetHint ? { resetHint } : {}),
+    };
+  }
+
+  // Grok Build emits this fixed provider diagnostic inside its multiline
+  // "Internal error" envelope. Match both the 402 status and the exact
+  // balance-exhausted reason so an unrelated payment error or task-authored
+  // prose cannot be promoted into customer-facing provider metadata.
+  if (
+    provider === 'xai' &&
+    /\bAPI error \(status 402 Payment Required\): Grok Build usage balance exhausted\b/i.test(text)
+  ) {
+    return {
+      provider,
+      kind: 'usage_limit',
+      message: 'The Grok account selected for this run has no available usage balance. Ask the account owner to add Grok Build credits before retrying the task.',
     };
   }
 
