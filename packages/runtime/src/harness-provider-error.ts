@@ -4,7 +4,7 @@ export interface HarnessProviderFailure {
   kind: 'usage_limit' | 'rate_limit' | 'authentication' | 'context_limit' | 'provider_unavailable' | 'timeout';
   message: string;
   resetHint?: string;
-  provider?: 'anthropic' | 'openai';
+  provider?: 'anthropic' | 'openai' | 'xai';
 }
 
 function validTimezone(value: string): boolean {
@@ -44,6 +44,48 @@ function diagnosticMessages(text: string): string[] {
   return messages;
 }
 
+function internalErrorEnvelopes(text: string): Array<Record<string, unknown>> {
+  const envelopes: Array<Record<string, unknown>> = [];
+  const marker = /^\s*Internal error:\s*/gim;
+  for (const match of text.matchAll(marker)) {
+    let cursor = (match.index ?? 0) + match[0].length;
+    if (text[cursor] !== '{') continue;
+
+    const start = cursor;
+    let depth = 0;
+    let inString = false;
+    let escaped = false;
+    for (; cursor < text.length; cursor += 1) {
+      const char = text[cursor];
+      if (inString) {
+        if (escaped) escaped = false;
+        else if (char === '\\') escaped = true;
+        else if (char === '"') inString = false;
+        continue;
+      }
+      if (char === '"') {
+        inString = true;
+        continue;
+      }
+      if (char === '{') depth += 1;
+      else if (char === '}') {
+        depth -= 1;
+        if (depth !== 0) continue;
+        try {
+          const value = JSON.parse(text.slice(start, cursor + 1)) as unknown;
+          if (value && typeof value === 'object' && !Array.isArray(value)) {
+            envelopes.push(value as Record<string, unknown>);
+          }
+        } catch {
+          // A malformed CLI envelope is not authoritative provider metadata.
+        }
+        break;
+      }
+    }
+  }
+  return envelopes;
+}
+
 /**
  * Classify failed model CLI runs, never arbitrary successful agent output.
  * Customer messages are fixed templates, not excerpts of stdout/stderr:
@@ -52,8 +94,20 @@ function diagnosticMessages(text: string): string[] {
 export function classifyHarnessProviderFailure(run: Pick<HarnessRunResult, 'output' | 'stderr' | 'exitCode'>, harness?: string): HarnessProviderFailure | null {
   // OS kills and successful output retain their existing caller contract.
   if (!Number.isFinite(run.exitCode) || run.exitCode === 0 || run.exitCode === 137 || run.exitCode === 143) return null;
-  const provider = harness === 'claude' ? 'anthropic' : harness === 'codex' ? 'openai' : undefined;
-  const account = provider === 'anthropic' ? 'Claude' : provider === 'openai' ? 'OpenAI' : 'AI';
+  const provider = harness === 'claude'
+    ? 'anthropic'
+    : harness === 'codex'
+      ? 'openai'
+      : harness === 'grok'
+        ? 'xai'
+        : undefined;
+  const account = provider === 'anthropic'
+    ? 'Claude'
+    : provider === 'openai'
+      ? 'OpenAI'
+      : provider === 'xai'
+        ? 'Grok'
+        : 'AI';
   const result = run as { output?: unknown; stderr?: unknown } | null;
   const rawText = [result?.output, result?.stderr]
     .filter((value): value is string => typeof value === 'string')
@@ -78,6 +132,26 @@ export function classifyHarnessProviderFailure(run: Pick<HarnessRunResult, 'outp
         'Wait for the limit to reset, or ask the account owner to restore available usage before retrying the task.',
       ].join(' '),
       ...(resetHint ? { resetHint } : {}),
+    };
+  }
+
+  // Grok Build emits this fixed provider diagnostic on stderr inside its
+  // multiline "Internal error" envelope. Require that process-owned channel,
+  // plus the 402 status and exact reason, so task-authored stdout cannot be
+  // promoted into customer-facing provider metadata.
+  const trustedGrokDiagnostics = typeof result?.stderr === 'string'
+    ? result.stderr.slice(-16000).replace(/\x1b\[[0-?]*[ -/]*[@-~]/g, '')
+    : '';
+  const grokUsageBalanceExhausted = provider === 'xai' && internalErrorEnvelopes(trustedGrokDiagnostics).some(
+    (envelope) =>
+      envelope.http_status === 402 &&
+      envelope.message === 'API error (status 402 Payment Required): Grok Build usage balance exhausted',
+  );
+  if (grokUsageBalanceExhausted) {
+    return {
+      provider,
+      kind: 'usage_limit',
+      message: 'The Grok account selected for this run has no available usage balance. Ask the account owner to add Grok Build credits before retrying the task.',
     };
   }
 
