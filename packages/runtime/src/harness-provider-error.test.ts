@@ -42,8 +42,12 @@ test('classifies Grok Build 402 balance exhaustion with a safe actionable messag
     '}',
   ].join('\n');
   const compactOutput = `Internal error: ${JSON.stringify(envelope)}`;
-  for (const output of [prettyOutput, compactOutput]) {
-    const failure = classify(output, 'grok');
+  for (const stderr of [prettyOutput, compactOutput]) {
+    const failure = classifyHarnessProviderFailure({
+      output: 'unfinished task output',
+      stderr,
+      exitCode: 1,
+    }, 'grok');
     assert.equal(failure?.kind, 'usage_limit');
     assert.equal(failure?.provider, 'xai');
     assert.match(failure!.message, /Grok account.*no available usage balance/);
@@ -57,6 +61,7 @@ test('requires the Grok provider envelope instead of matching task-authored text
   assert.equal(classify(exhausted, 'claude'), null);
   assert.equal(classify(exhausted, 'grok'), null);
   assert.equal(classify(`The task output quoted: ${exhausted}`, 'grok'), null);
+  assert.equal(classify(`Internal error: ${JSON.stringify({ message: exhausted, http_status: 402 })}`, 'grok'), null);
   assert.equal(classify(`Internal error: ${JSON.stringify({ message: exhausted, http_status: 400 })}`, 'grok'), null);
   assert.equal(classify(`Internal error: ${JSON.stringify({ message: 'billing profile unavailable', http_status: 402 })}`, 'grok'), null);
 });

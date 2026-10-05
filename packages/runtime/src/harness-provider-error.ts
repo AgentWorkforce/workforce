@@ -135,11 +135,14 @@ export function classifyHarnessProviderFailure(run: Pick<HarnessRunResult, 'outp
     };
   }
 
-  // Grok Build emits this fixed provider diagnostic inside its multiline
-  // "Internal error" envelope. Match both the 402 status and the exact
-  // balance-exhausted reason so an unrelated payment error or task-authored
-  // prose cannot be promoted into customer-facing provider metadata.
-  const grokUsageBalanceExhausted = provider === 'xai' && internalErrorEnvelopes(rawText).some(
+  // Grok Build emits this fixed provider diagnostic on stderr inside its
+  // multiline "Internal error" envelope. Require that process-owned channel,
+  // plus the 402 status and exact reason, so task-authored stdout cannot be
+  // promoted into customer-facing provider metadata.
+  const trustedGrokDiagnostics = typeof result?.stderr === 'string'
+    ? result.stderr.slice(-16000).replace(/\x1b\[[0-?]*[ -/]*[@-~]/g, '')
+    : '';
+  const grokUsageBalanceExhausted = provider === 'xai' && internalErrorEnvelopes(trustedGrokDiagnostics).some(
     (envelope) =>
       envelope.http_status === 402 &&
       envelope.message === 'API error (status 402 Payment Required): Grok Build usage balance exhausted',
