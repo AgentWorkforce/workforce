@@ -44,6 +44,48 @@ function diagnosticMessages(text: string): string[] {
   return messages;
 }
 
+function internalErrorEnvelopes(text: string): Array<Record<string, unknown>> {
+  const envelopes: Array<Record<string, unknown>> = [];
+  const marker = /^\s*Internal error:\s*/gim;
+  for (const match of text.matchAll(marker)) {
+    let cursor = (match.index ?? 0) + match[0].length;
+    if (text[cursor] !== '{') continue;
+
+    const start = cursor;
+    let depth = 0;
+    let inString = false;
+    let escaped = false;
+    for (; cursor < text.length; cursor += 1) {
+      const char = text[cursor];
+      if (inString) {
+        if (escaped) escaped = false;
+        else if (char === '\\') escaped = true;
+        else if (char === '"') inString = false;
+        continue;
+      }
+      if (char === '"') {
+        inString = true;
+        continue;
+      }
+      if (char === '{') depth += 1;
+      else if (char === '}') {
+        depth -= 1;
+        if (depth !== 0) continue;
+        try {
+          const value = JSON.parse(text.slice(start, cursor + 1)) as unknown;
+          if (value && typeof value === 'object' && !Array.isArray(value)) {
+            envelopes.push(value as Record<string, unknown>);
+          }
+        } catch {
+          // A malformed CLI envelope is not authoritative provider metadata.
+        }
+        break;
+      }
+    }
+  }
+  return envelopes;
+}
+
 /**
  * Classify failed model CLI runs, never arbitrary successful agent output.
  * Customer messages are fixed templates, not excerpts of stdout/stderr:
@@ -97,10 +139,12 @@ export function classifyHarnessProviderFailure(run: Pick<HarnessRunResult, 'outp
   // "Internal error" envelope. Match both the 402 status and the exact
   // balance-exhausted reason so an unrelated payment error or task-authored
   // prose cannot be promoted into customer-facing provider metadata.
-  if (
-    provider === 'xai' &&
-    /\bAPI error \(status 402 Payment Required\): Grok Build usage balance exhausted\b/i.test(text)
-  ) {
+  const grokUsageBalanceExhausted = provider === 'xai' && internalErrorEnvelopes(rawText).some(
+    (envelope) =>
+      envelope.http_status === 402 &&
+      envelope.message === 'API error (status 402 Payment Required): Grok Build usage balance exhausted',
+  );
+  if (grokUsageBalanceExhausted) {
     return {
       provider,
       kind: 'usage_limit',

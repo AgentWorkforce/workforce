@@ -44,10 +44,13 @@ test('classifies Grok Build 402 balance exhaustion with a safe actionable messag
   assert.doesNotMatch(failure!.message, /secret-fixture|http_status/);
 });
 
-test('does not classify Grok payment text for another harness or a different 402', () => {
+test('requires the Grok provider envelope instead of matching task-authored text', () => {
   const exhausted = 'API error (status 402 Payment Required): Grok Build usage balance exhausted';
   assert.equal(classify(exhausted, 'claude'), null);
-  assert.equal(classify('API error (status 402 Payment Required): billing profile unavailable', 'grok'), null);
+  assert.equal(classify(exhausted, 'grok'), null);
+  assert.equal(classify(`The task output quoted: ${exhausted}`, 'grok'), null);
+  assert.equal(classify(`Internal error: ${JSON.stringify({ message: exhausted, http_status: 400 })}`, 'grok'), null);
+  assert.equal(classify(`Internal error: ${JSON.stringify({ message: 'billing profile unavailable', http_status: 402 })}`, 'grok'), null);
 });
 
 test('classifies known provider diagnostics from stderr using safe messages', () => {
