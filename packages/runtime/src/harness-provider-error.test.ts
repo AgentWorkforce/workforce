@@ -29,19 +29,27 @@ test('handles Codex error envelopes and does not label another harness as Claude
 });
 
 test('classifies Grok Build 402 balance exhaustion with a safe actionable message', () => {
-  const output = [
+  const envelope = {
+    message: 'API error (status 402 Payment Required): Grok Build usage balance exhausted',
+    http_status: 402,
+    private_detail: 'secret-fixture-value',
+  };
+  const prettyOutput = [
     'Internal error: {',
-    '  "message": "API error (status 402 Payment Required): Grok Build usage balance exhausted",',
+    `  "message": "${envelope.message}",`,
     '  "http_status": 402,',
     '  "private_detail": "secret-fixture-value"',
     '}',
   ].join('\n');
-  const failure = classify(output, 'grok');
-  assert.equal(failure?.kind, 'usage_limit');
-  assert.equal(failure?.provider, 'xai');
-  assert.match(failure!.message, /Grok account.*no available usage balance/);
-  assert.match(failure!.message, /add Grok Build credits/);
-  assert.doesNotMatch(failure!.message, /secret-fixture|http_status/);
+  const compactOutput = `Internal error: ${JSON.stringify(envelope)}`;
+  for (const output of [prettyOutput, compactOutput]) {
+    const failure = classify(output, 'grok');
+    assert.equal(failure?.kind, 'usage_limit');
+    assert.equal(failure?.provider, 'xai');
+    assert.match(failure!.message, /Grok account.*no available usage balance/);
+    assert.match(failure!.message, /add Grok Build credits/);
+    assert.doesNotMatch(failure!.message, /secret-fixture|http_status/);
+  }
 });
 
 test('requires the Grok provider envelope instead of matching task-authored text', () => {
