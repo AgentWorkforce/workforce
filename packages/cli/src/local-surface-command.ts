@@ -22,7 +22,7 @@ export const LOCAL_SURFACE_USAGE = `usage: agentworkforce local-surface <persona
 
 Run a proactive persona on this machine, triggered by real provider webhooks
 routed through the fleet/relaycast infrastructure — no public IP, tunnel, or
-manual token wiring required. The persona runs in \`--mode dev\`; local
+manual token wiring required. The persona runs in \`--mode local\`; local
 credential mirroring is NOT supported (workforce#local-surface-plan), so this
 is safe for cron/timer-only or webhook-shape-only personas that don't need a
 per-connection integration credential resolved locally.

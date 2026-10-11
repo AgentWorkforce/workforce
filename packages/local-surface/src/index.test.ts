@@ -131,7 +131,7 @@ test('run-event handler lazily launches the persona once and writes each event t
   let capturedToken: string | undefined;
   __setDeployForTest(async (opts, resolvers) => {
     deployCalls += 1;
-    assert.equal(opts.mode, 'dev');
+    assert.equal(opts.mode, 'local');
     assert.equal(opts.detach, true);
     assert.equal(opts.workspace, 'ws_1');
     const resolved = await resolvers?.workspaceAuth?.resolveWorkspace({ io: undefined as never });

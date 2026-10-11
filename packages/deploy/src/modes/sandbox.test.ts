@@ -266,3 +266,20 @@ test('resolveSandboxClient with forceByo and no BYO env throws a clear error', (
     }
   );
 });
+
+test('sandboxLauncher mapper migration preserves the mint label and env bytes', async () => {
+  const calls = await launchWithProxySandbox(input().persona);
+  const body = calls[0].body as { label: string; env: Record<string, string> };
+  assert.equal(body.label, 'wf-demo');
+  assert.equal(JSON.stringify(body.env), JSON.stringify({
+    WORKFORCE_AGENT_CONTEXT: JSON.stringify({ id: 'demo', deployedName: 'demo', spawnedByAgentId: null }),
+    WORKFORCE_DEPLOYMENT_CONTEXT: JSON.stringify({ id: 'demo', triggerKind: 'clock', parentDeploymentId: null }),
+    WORKFORCE_WORKSPACE_ID: 'ws-demo',
+    WORKFORCE_PERSONA_ID: 'demo',
+  }));
+});
+
+test('sandboxLauncher preserves Node handler support without an interactive harness', async () => {
+  const calls = await launchWithProxySandbox({ ...input().persona, harness: undefined, sandbox: false });
+  assert.equal((calls[0].body as { label: string }).label, 'wf-demo');
+});

@@ -1,0 +1,5 @@
+{
+  "no-harness": "Persona \"demo\" cannot run in an interactive sandbox: no harness is configured.",
+  "sandbox-disabled": "Persona \"demo\" cannot run in an interactive sandbox: sandbox is disabled.",
+  "unsupported-harness": "Persona \"demo\" cannot run in an interactive sandbox: the harness is not supported in a sandbox."
+}

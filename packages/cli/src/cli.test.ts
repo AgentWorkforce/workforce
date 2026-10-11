@@ -893,7 +893,7 @@ export default defineAgent({
 
   try {
     const { stderr, stdout, exitCode } = await runCliCapturingStderr(
-      ['deploy', personaPath, '--mode', 'dev', '--dry-run'],
+      ['deploy', personaPath, '--mode', 'local', '--dry-run'],
       { AGENT_WORKFORCE_HOME: workforceHome }
     );
     assert.equal(exitCode, 0);
@@ -1812,4 +1812,36 @@ test('acquireSkillCacheLock: steals a lock held by a dead pid', async () => {
   } finally {
     rmSync(dir, { recursive: true, force: true });
   }
+});
+
+test('agent sandbox parser defaults and full argument forwarding', () => {
+  const defaults = parseAgentArgs(['p']).flags;
+  assert.equal(defaults.mode, 'local'); assert.equal(defaults.attachMode, 'drive');
+  assert.equal(defaults.byoSandbox, false);
+  const { flags, positional } = parseAgentArgs(['--mode', 'sandbox', '--sandbox-provider', 'e2b', '--sandbox-id', 'sb_1', '--attach-mode', 'view', '--byo-sandbox', 'p']);
+  assert.equal(flags.mode, 'sandbox'); assert.equal(flags.sandboxProvider, 'e2b');
+  assert.equal(flags.sandboxId, 'sb_1'); assert.equal(flags.attachMode, 'view'); assert.equal(flags.byoSandbox, true);
+  assert.deepEqual(positional, ['p']);
+  assert.equal(parseAgentArgs(['--mode=sandbox', 'p']).flags.mode, 'sandbox');
+});
+for (const [args, expected] of [
+  [['--mode', 'cloud'], /local\|sandbox.*deploy --mode cloud/],
+  [['--sandbox-provider', 'foo'], /daytona\|e2b/],
+  [['--attach-mode', 'foo'], /view\|drive/],
+  [['--sandbox-id', 'x'], /require --mode sandbox/],
+  [['--attach-mode', 'drive'], /require --mode sandbox/],
+  [['--byo-sandbox'], /require --mode sandbox/],
+  [['--mode'], /requires a value/],
+  [['--sandbox-id='], /requires a value/],
+] as [string[], RegExp][]) {
+  test(`agent sandbox parser rejects ${args.join(' ')}`, () => {
+    const trap = trapExit();
+    try { assert.throws(() => parseAgentArgs(args), /__exit_trap__/); assert.match(trap.stderr, expected); }
+    finally { trap.restore(); }
+  });
+}
+test('create rejects sandbox mode before creating a target directory', () => {
+  const trap = trapExit();
+  try { assert.throws(() => parseCreateArgs(['--mode=sandbox']), /__exit_trap__/); assert.match(trap.stderr, /only supported by agent/); }
+  finally { trap.restore(); }
 });

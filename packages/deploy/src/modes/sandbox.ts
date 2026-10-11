@@ -1,3 +1,5 @@
+import { personaToSandboxParams, personaToSandboxContext } from '@agentworkforce/persona-kit';
+import { createIdempotentStop, destroyOnFailure, formatSandboxError, resolveSandboxAuthMode } from './sandbox-shared.js';
 import type {
   ModeLaunchInput,
   ModeLaunchHandle,
@@ -42,13 +44,21 @@ export const sandboxLauncher: ModeLauncher = {
   async launch(input: ModeLaunchInput): Promise<ModeLaunchHandle> {
     const client = resolveSandboxClient(input, input.byoSandbox ? { forceByo: true } : {});
     const integrations = input.persona.integrations;
+    const context = { workspace: input.workspace, inputs: input.inputs };
+    // This launcher executes a Node handler, not an interactive harness. Keep
+    // existing no-harness / sandbox:false handlers deployable; interactive
+    // eligibility is enforced only by personaToSandboxParams.
+    const params = input.persona.harness && input.persona.sandbox !== false
+      ? personaToSandboxParams(input.persona, context)
+      : personaToSandboxContext(input.persona, context);
+    const { WORKFORCE_WORKSPACE_ID, WORKFORCE_PERSONA_ID } = params.env;
     const handle = await client.mint({
-      label: `wf-${input.persona.id}`,
+      label: params.label,
       env: {
         ...(input.env ?? {}),
         ...runtimeContextEnv(input.persona, input.env, input.agent),
-        WORKFORCE_WORKSPACE_ID: input.workspace,
-        WORKFORCE_PERSONA_ID: input.persona.id
+        WORKFORCE_WORKSPACE_ID,
+        WORKFORCE_PERSONA_ID
       },
       ...(integrations && Object.keys(integrations).length > 0 ? { integrations } : {})
     });
@@ -59,21 +69,14 @@ export const sandboxLauncher: ModeLauncher = {
       // If upload fails the sandbox is unrecoverable for this deploy.
       // Tear it down so we don't leak Daytona resources or charge for
       // an idle workforce-managed sandbox.
-      await client.destroy(handle).catch(() => undefined);
-      throw err;
+      return destroyOnFailure(() => client.destroy(handle), err);
     }
 
     let stopping = false;
-    const stop = async (): Promise<void> => {
-      if (stopping) return;
+    const cleanup = createIdempotentStop(() => client.destroy(handle), input.io);
+    const stop = (): Promise<void> => {
       stopping = true;
-      try {
-        await client.destroy(handle);
-      } catch (err) {
-        input.io.warn(
-          `sandbox: cleanup failed: ${err instanceof Error ? err.message : String(err)}`
-        );
-      }
+      return cleanup();
     };
 
     const done = (async () => {
@@ -87,7 +90,7 @@ export const sandboxLauncher: ModeLauncher = {
       } catch (err) {
         if (!stopping) {
           input.io.error(
-            `sandbox: runner exec failed: ${err instanceof Error ? err.message : String(err)}`
+            `sandbox: runner exec failed: ${formatSandboxError(err)}`
           );
         }
         return { code: 1 };
@@ -120,14 +123,7 @@ export function resolveSandboxClient(
   const apiKey = process.env.DAYTONA_API_KEY?.trim();
   const jwtToken = process.env.DAYTONA_JWT_TOKEN?.trim();
   const organizationId = process.env.DAYTONA_ORGANIZATION_ID?.trim();
-  const byoAvailable = Boolean(apiKey || jwtToken);
-
-  if (overrides.forceByo || byoAvailable) {
-    if (!byoAvailable) {
-      throw new Error(
-        'sandbox launcher: --byo-sandbox requested but no Daytona credentials are in env. Set DAYTONA_API_KEY (or DAYTONA_JWT_TOKEN + DAYTONA_ORGANIZATION_ID).'
-      );
-    }
+  if (resolveSandboxAuthMode(input, overrides) === 'byo') {
     return createByoSandboxClient({
       ...(apiKey ? { apiKey } : {}),
       ...(jwtToken ? { jwtToken } : {}),
@@ -136,16 +132,11 @@ export function resolveSandboxClient(
   }
 
   const workspaceToken = input.workspaceToken?.trim() || process.env.WORKFORCE_WORKSPACE_TOKEN?.trim();
-  if (!workspaceToken) {
-    throw new Error(
-      'sandbox launcher: no Daytona credentials and no workforce workspace token. Either export DAYTONA_API_KEY, or run `workforce login` (sets WORKFORCE_WORKSPACE_TOKEN) so we can mint a workforce-managed sandbox.'
-    );
-  }
   const cloudUrl = (input.cloudUrl?.trim() || process.env.WORKFORCE_CLOUD_URL?.trim() || DEFAULT_CLOUD_URL).replace(/\/$/, '');
   return createProxySandboxClient({
     cloudUrl,
     workspaceId: input.workspace,
-    workspaceToken,
+    workspaceToken: workspaceToken!,
     personaId: input.persona.id
   });
 }

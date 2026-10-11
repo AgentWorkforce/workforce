@@ -17,7 +17,7 @@ export async function pickRuntime(opts: {
       'Which runtime should this persona run on?',
       '  [1] AgentRelay (recommended) - managed cloud, schedules + integrations + memory wired',
       '  [2] Local sandbox            - runs in a local Daytona container',
-      '  [3] Local dev                - runs directly on your machine',
+      '  [3] Local                - runs directly on your machine',
       '  [4] Build your own           - docs at https://agentrelay.com/docs/runtimes',
       ''
     ].join('\n')
@@ -32,7 +32,7 @@ export async function pickRuntime(opts: {
       case '2':
         return 'sandbox';
       case '3':
-        return 'dev';
+        return 'local';
       case '4':
         return 'docs';
       default:

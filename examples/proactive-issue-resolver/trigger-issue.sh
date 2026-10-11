@@ -2,7 +2,7 @@
 # trigger-issue.sh — manually drive the proactive-issue-resolver persona
 # against a single, named GitHub issue.
 #
-# `agentworkforce deploy --mode dev` reads NDJSON envelopes from stdin. This
+# `agentworkforce deploy --mode local` reads NDJSON envelopes from stdin. This
 # script fetches a real issue via `gh`, wraps it in a `github.issues.opened`
 # envelope, and pipes it to one deploy invocation. The runner processes the
 # one envelope, then exits when stdin closes — so the script is short-lived,
@@ -98,4 +98,4 @@ ENVELOPE=$(jq -n \
    }')
 
 echo "→ piping envelope into agentworkforce deploy (cwd=$(pwd))"
-printf '%s\n' "$ENVELOPE" | agentworkforce deploy "$PERSONA" --mode dev
+printf '%s\n' "$ENVELOPE" | agentworkforce deploy "$PERSONA" --mode local
