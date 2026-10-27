@@ -217,6 +217,14 @@ export async function runLogin(args: readonly string[]): Promise<void> {
     const workspaceName = descriptor.name ?? descriptor.slug ?? match?.slug ?? match?.name ?? chosen;
     await deployCommandDeps.setWorkspaceKey(workspaceName, descriptor.key);
     process.stdout.write(`\nlogged in: ${workspaceName}\n`);
+    if (descriptor.cloudWorkspaceId) {
+      process.stdout.write(`cloud workspace id: ${descriptor.cloudWorkspaceId}\n`);
+    } else {
+      process.stderr.write(
+        `warn: workspace ${descriptor.relaycastWorkspaceId} has no linked cloud workspace; ` +
+          'deploy, deployments list and destroy will fail until it is linked. Contact support with this id.\n'
+      );
+    }
     process.exit(0);
   } catch (err) {
     process.stderr.write(
@@ -262,6 +270,8 @@ Flags:
   --reconnect <provider>       Force a fresh connect flow even if already connected,
                                for an integration or the harness LLM credential
                                (e.g. openai/codex, anthropic/claude). Repeatable.
+  --supabase-project-ref <ref> Select the 20-character Supabase project used by
+                               the project-scoped, read-only MCP connection
   --byo-sandbox                Force BYO Daytona auth even when logged in
   --detach                     Background the runner instead of streaming logs
   --bundle-out <dir>           Emit the bundle to <dir> and exit (no launch)
@@ -317,6 +327,7 @@ export function parseDeployArgs(args: readonly string[]): DeployOptions {
   let harnessSource: DeployOptions['harnessSource'];
   let byokKey: string | undefined;
   let onExists: DeployOptions['onExists'];
+  let supabaseMcpProjectRef: string | undefined;
   const inputs: Record<string, string> = {};
   const reconnectProviders: string[] = [];
 
@@ -339,6 +350,17 @@ export function parseDeployArgs(args: readonly string[]): DeployOptions {
       reconnectProviders.push(...parseProviderList(expectValue('--reconnect', args[++i])));
     } else if (a.startsWith('--reconnect=')) {
       reconnectProviders.push(...parseProviderList(expectInlineValue('--reconnect', a.slice('--reconnect='.length))));
+    } else if (a === '--supabase-project-ref') {
+      supabaseMcpProjectRef = expectSupabaseMcpProjectRef(
+        expectValue('--supabase-project-ref', args[++i]),
+      );
+    } else if (a.startsWith('--supabase-project-ref=')) {
+      supabaseMcpProjectRef = expectSupabaseMcpProjectRef(
+        expectInlineValue(
+          '--supabase-project-ref',
+          a.slice('--supabase-project-ref='.length),
+        ),
+      );
     } else if (a === '--byo-sandbox') {
       byoSandbox = true;
     } else if (a === '--detach') {
@@ -395,11 +417,22 @@ export function parseDeployArgs(args: readonly string[]): DeployOptions {
     ...(cloudUrl ? { cloudUrl } : {}),
     ...(noPrompt ? { noPrompt: true } : {}),
     ...(reconnectProviders.length > 0 ? { reconnectProviders: [...new Set(reconnectProviders)] } : {}),
+    ...(supabaseMcpProjectRef ? { supabaseMcpProjectRef } : {}),
     ...(harnessSource ? { harnessSource } : {}),
     ...(byokKey ? { byokKey } : {}),
     ...(onExists ? { onExists } : {}),
     ...(Object.keys(inputs).length > 0 ? { inputs } : {})
   };
+}
+
+function expectSupabaseMcpProjectRef(value: string): string {
+  const projectRef = value.trim().toLowerCase();
+  if (!/^[a-z0-9]{20}$/u.test(projectRef)) {
+    die(
+      '--supabase-project-ref: expected exactly 20 lowercase letters or digits',
+    );
+  }
+  return projectRef;
 }
 
 function parseProviderList(value: string): string[] {
@@ -521,6 +554,7 @@ type LoginWorkspace = {
 type LoginWorkspaceDescriptor = {
   key: string;
   relaycastWorkspaceId: string;
+  cloudWorkspaceId?: string;
   name?: string;
   slug?: string;
 };
@@ -568,9 +602,11 @@ async function resolveWorkspaceForLogin(
   if (!key || !relaycastWorkspaceId) {
     throw new Error('workspace resolve returned an incomplete descriptor');
   }
+  const cloudWorkspaceId = readString(record, 'cloudWorkspaceId');
   return {
     key,
     relaycastWorkspaceId,
+    ...(cloudWorkspaceId ? { cloudWorkspaceId } : {}),
     ...(readString(record, 'name') ? { name: readString(record, 'name') } : {}),
     ...(readString(record, 'slug') ? { slug: readString(record, 'slug') } : {})
   };

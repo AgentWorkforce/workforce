@@ -178,6 +178,63 @@ Every provider an agent triggers on must also appear in `persona.integrations`
 GitHub event, Linear issue, Slack mention, Notion update, or Jira event arrives.
 See [`examples/review-agent`](./examples/review-agent/) for a complete example.
 
+### Manual payloads and reaction-approved actions
+
+Cloud delivers an authenticated manual trigger as a `cron.tick`, just like a
+schedule. Use the runtime discriminator to preserve the difference and surface
+accepted-but-malformed trigger bodies instead of silently treating them as
+clock ticks:
+
+```ts
+import { readAppTriggerIntent } from '@agentworkforce/runtime';
+
+const intent = await readAppTriggerIntent(event);
+if (intent.kind === 'malformed-app-trigger') {
+  throw new Error(`Invalid app trigger: ${intent.reason}`);
+}
+if (intent.kind === 'app-trigger') {
+  await handleManualPayload(intent.payload);
+} else {
+  await handleSchedule();
+}
+```
+
+For an action the user approves by reacting to a Slack card,
+`@agentworkforce/delivery` owns the provider mechanics: normalized reaction
+parsing, bounded hidden action identifiers, metadata-redaction recovery, and
+exact actor/emoji/message binding. The agent still owns the domain action:
+
+```ts
+import {
+  buildSlackApprovalCard,
+  matchSlackApprovalReaction,
+  readSlackReaction
+} from '@agentworkforce/delivery';
+
+const card = buildSlackApprovalCard({
+  namespace: 'inbox.archive',
+  approverId: ownerSlackId,
+  actionIds: threadIds,
+  text: 'React :white_check_mark: to archive these conversations.',
+  validateActionId: isValidThreadId
+});
+// Post card.text + card.metadata + card.blocks through the authenticated Slack
+// integration and retain the returned message timestamp.
+
+const reaction = readSlackReaction((await event.expand('full')).data);
+if (reaction) {
+  // Fetch exactly reaction.channel + reaction.messageTs with
+  // include_all_metadata: true before matching.
+  const approval = matchSlackApprovalReaction(reaction, reactedMessage, {
+    namespace: 'inbox.archive',
+    approverId: ownerSlackId,
+    appId: slackAppId,
+    validateActionId: isValidThreadId
+  });
+  if (approval) await archiveThreads(approval.actionIds);
+}
+```
+
 ## Run modes
 
 `workforce deploy <persona-path>` defaults to the best available runner mode.
@@ -250,6 +307,25 @@ agentworkforce sources <list|add|remove>
 agentworkforce harness check
 agentworkforce --version
 ```
+
+`agentworkforce --version` prints the installed version on stdout and, when a
+newer release is published, writes the upgrade command to stderr:
+
+```text
+$ agentworkforce --version
+4.1.45
+Update available: 4.1.45 → 4.2.0
+Run `npm install -g agentworkforce@latest` to update.
+```
+
+The check reads the `latest` dist-tag from the npm registry (or
+`AGENTWORKFORCE_REGISTRY` / npm's configured registry) and stays silent when it
+cannot reach one, so the version itself always prints. It is bounded by
+`AGENTWORKFORCE_UPDATE_CHECK_TIMEOUT_MS` (1s by default), which is also the
+most it can add to a run against an unresponsive registry. Set
+`AGENTWORKFORCE_NO_UPDATE_CHECK=1` (or `NO_UPDATE_NOTIFIER=1`) to skip it
+entirely. A CLI installed as a project dependency is told to update itself
+without `-g`.
 
 Local personas resolve from project-local files, configured source directories,
 the personal persona directory, and the small built-in catalog. Higher layers

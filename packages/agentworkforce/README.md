@@ -14,8 +14,18 @@ agentworkforce agent [--install-in-repo] [--no-launch-metadata] <persona>[@<tier
 agentworkforce list [flags]
 agentworkforce show <persona>
 agentworkforce sources <list|add|remove>
+agentworkforce env set <KEY> [--workspace <name>] [--cloud-url <url>] [--json] [--no-prompt]
+agentworkforce env list [--workspace <name>] [--cloud-url <url>] [--json] [--no-prompt]
+agentworkforce env unset <KEY> [--workspace <name>] [--cloud-url <url>] [--json] [--no-prompt]
 agentworkforce harness check
 agentworkforce --version
+```
+
+Workspace secrets are set from stdin so their values never enter argv:
+
+```sh
+printf '%s' "$RTH_TOKEN" | agentworkforce env set RTH_TOKEN
+agentworkforce env list
 ```
 
 This package is a thin wrapper around [`@agentworkforce/cli`](https://www.npmjs.com/package/@agentworkforce/cli).

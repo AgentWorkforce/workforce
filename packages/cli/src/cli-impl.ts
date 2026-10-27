@@ -107,6 +107,7 @@ import { createLogger } from './logger.js';
 import {
   buildPersonaSourceDirectories,
   defaultCwdPersonaDir,
+  NESTED_PERSONA_FILENAME,
   formatPersonaSourceLabel,
   loadLocalPersonas,
   loadPersonaSourceConfig,
@@ -272,10 +273,29 @@ Commands:
                       Discover workspace integrations, connection status, and
                       known trigger events. JSON output includes registration
                       health when the cloud status API provides it.
-  trigger <agent-name-or-id> [flags]
+  env set <KEY>       Set or overwrite a workspace environment variable from
+                      stdin. Values are never accepted on argv. Flags:
+                        --workspace <name>  override the active workspace
+                        --cloud-url <url>   override the workforce cloud URL
+                        --json              emit metadata only (never values)
+                        --no-prompt         fail instead of prompting for login
+  env list            List workspace environment variable names, last-set
+                      times, and setters. Values are never returned.
+  env unset <KEY>     Remove a workspace environment variable; fails if the
+                      key is not set. Accepts the same flags as env set.
+  trigger <agent-name-or-id> [payload-json] [flags]
                       Manually fire an active deployed persona for testing.
                       The selector accepts agent id, compact agent id,
-                      deployed name, persona slug, or persona id. Flags:
+                      deployed name, persona slug, or persona id. A payload is
+                      optional; without one the agent gets a contentless fire,
+                      which is what a schedule looks like. Flags:
+                        --payload <json>    JSON object sent as the event
+                                            payload
+                        --payload-file <p>  Read the payload from a file, or
+                                            "-" for stdin
+                        --idempotency-key <key>
+                                            Retrying with the same key returns
+                                            the original run
                         --workspace <name>  Workforce workspace; defaults to
                                             the active workspace
                         --cloud-url <url>   Override the cloud base URL
@@ -368,7 +388,10 @@ Commands:
 
 Options:
   -h, --help          Show this help text.
-  -v, --version       Print the agentworkforce version.
+  -v, --version       Print the agentworkforce version, and note on stderr
+                      when a newer one is published along with the command
+                      that installs it. Skip the check with
+                      AGENTWORKFORCE_NO_UPDATE_CHECK=1.
 
 Local personas cascade: <cwd>/.agentworkforce/workforce/personas/*.json → configured persona dirs → repo library.
 Each layer only needs to specify fields it overrides; everything else inherits
@@ -389,6 +412,8 @@ Examples:
   agentworkforce sources list
   agentworkforce sources add ../my-personas --position 1
   agentworkforce integrations --all
+  printf '%s' "$RTH_TOKEN" | agentworkforce env set RTH_TOKEN
+  agentworkforce env list
   agentworkforce harness check
   agentworkforce pick "review this PR for security issues"
   agentworkforce agent "$(agentworkforce pick "fix the flaky test in foo.test.ts")"
@@ -1765,7 +1790,16 @@ function buildFastLaunchPlan(input: {
     // Persona ids live in file contents and same-id layers merge across
     // dirs, so every persona JSON in every layer is a resolution input.
     for (const name of entries) {
-      if (name.endsWith('.json')) digests.push(statDigestOf(join(dir.dir, name)));
+      if (dir.nested) {
+        // One persona per subdirectory. A missing file digests to nulls, so
+        // this one entry witnesses both the compile that first writes
+        // persona.json and later edits to it. Digesting the subdirectory too
+        // would invalidate the plan every time an unrelated sibling — the
+        // handler, the README, agent-card.json — is added or rewritten.
+        digests.push(statDigestOf(join(dir.dir, name, NESTED_PERSONA_FILENAME)));
+      } else if (name.endsWith('.json')) {
+        digests.push(statDigestOf(join(dir.dir, name)));
+      }
     }
   }
   // Dotfiles shape the mount patterns. Persona ids are kebab-case, so the
@@ -5083,7 +5117,13 @@ export async function main(): Promise<void> {
 
   if (subcommand === '-v' || subcommand === '--version') {
     process.stdout.write(`${CLI_VERSION}\n`);
-    process.exit(0);
+    // Best-effort, stderr-only, and never fatal: the version itself is already
+    // on stdout before the registry is asked anything.
+    const { writeUpdateNotice } = await import('./update-check.js');
+    await writeUpdateNotice(CLI_VERSION);
+    // Return rather than process.exit(0), which can terminate before a pending
+    // write to a piped stdout/stderr flushes.
+    return;
   }
 
   if (subcommand === 'list') {
@@ -5173,6 +5213,16 @@ export async function main(): Promise<void> {
     const { runIntegrationsCommand } = await import('./integrations-command.js');
     await runIntegrationsCommand(rest);
     return;
+  }
+
+  if (subcommand === 'env') {
+    try {
+      const { runEnv } = await import('./env-command.js');
+      await runEnv(rest);
+      return;
+    } catch (err) {
+      die(`agentworkforce env failed: ${err instanceof Error ? err.message : String(err)}`, false);
+    }
   }
 
   if (subcommand === 'trigger') {

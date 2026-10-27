@@ -937,6 +937,16 @@ test('parseIntegrations default-injects source=deployer_user when the persona om
     true
   );
   assert.equal(Object.keys(i?.github ?? {}).includes('__agentworkforceImplicitSource'), false);
+
+  const serialized = JSON.stringify(i);
+  assert.equal(serialized, '{"github":{}}');
+  assert.equal(serialized.includes('__agentworkforceImplicitSource'), false);
+  const reparsed = parseIntegrations(JSON.parse(serialized), 'integrations');
+  assert.deepEqual(reparsed?.github.source, { kind: 'deployer_user' });
+  assert.equal(
+    (reparsed?.github as { __agentworkforceImplicitSource?: unknown }).__agentworkforceImplicitSource,
+    true
+  );
 });
 
 test('parseIntegrations round-trips all three valid IntegrationSource kinds', () => {
@@ -968,6 +978,40 @@ test('parseIntegrations round-trips all three valid IntegrationSource kinds', ()
     kind: 'workspace_service_account',
     name: 'release-bot'
   });
+  assert.deepEqual(JSON.parse(JSON.stringify(i)), {
+    github: {
+      source: {
+        kind: 'deployer_user',
+        futureResolutionPolicy: { fallback: 'workspace' }
+      }
+    },
+    slack: { source: { kind: 'workspace' } },
+    linear: { source: { kind: 'workspace_service_account', name: 'release-bot' } }
+  });
+});
+
+test('parseIntegrations never trusts an enumerable implicit-source marker', () => {
+  const markedExplicit = parseIntegrations({
+    github: {
+      source: { kind: 'workspace' },
+      __agentworkforceImplicitSource: true
+    }
+  }, 'integrations');
+
+  assert.deepEqual(markedExplicit?.github.source, { kind: 'workspace' });
+  assert.equal('__agentworkforceImplicitSource' in (markedExplicit?.github ?? {}), false);
+  assert.deepEqual(JSON.parse(JSON.stringify(markedExplicit)), {
+    github: { source: { kind: 'workspace' } }
+  });
+  assert.throws(
+    () => parseIntegrations({
+      github: {
+        source: { kind: 'org' },
+        __agentworkforceImplicitSource: true
+      }
+    }, 'integrations'),
+    /integrations\.github\.source\.kind must be one of/
+  );
 });
 
 test('parseIntegrations rejects an unknown source.kind with a precise field path', () => {

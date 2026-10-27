@@ -118,6 +118,7 @@ test('runLogin uses cloud SDK auth, picks a workspace, and pins the canonical re
             return new Response(JSON.stringify({
               key: 'rk_live_acme',
               workspaceId: 'rw_1234abcd',
+              cloudWorkspaceId: '0b6c2d4e-1f3a-4b5c-8d7e-9f0a1b2c3d4e',
               relaycastWorkspaceId: 'rw_1234abcd',
               relayfileWorkspaceId: 'rf_acme',
               relayauthWorkspaceId: 'ra_acme',
@@ -150,6 +151,8 @@ test('runLogin uses cloud SDK auth, picks a workspace, and pins the canonical re
     ]);
     assert.deepEqual(pinned, [{ name: 'Acme', key: 'rk_live_acme' }]);
     assert.match(trap.stdout, /logged in: Acme/);
+    assert.match(trap.stdout, /cloud workspace id: 0b6c2d4e-1f3a-4b5c-8d7e-9f0a1b2c3d4e/);
+    assert.doesNotMatch(trap.stderr, /no linked cloud workspace/);
   } finally {
     trap.restore();
     restoreDeps();
@@ -215,6 +218,9 @@ test('runLogin with --workspace skips the workspaces list and pins the resolved 
       key: 'rk_live_direct'
     }]);
     assert.match(trap.stdout, /logged in: 50587328-441d-4acb-b8f3-dbe1b3c5de99/);
+    // The resolve payload above has no cloudWorkspaceId: warn instead of
+    // letting later cloud calls fail with an opaque 403.
+    assert.match(trap.stderr, /workspace rw_5678abcd has no linked cloud workspace/);
   } finally {
     trap.restore();
     restoreDeps();
@@ -402,6 +408,36 @@ test('parseDeployArgs: --reconnect is repeatable and comma-aware', () => {
   ]);
 
   assert.deepEqual(parsed.reconnectProviders, ['slack', 'github', 'linear']);
+});
+
+test('parseDeployArgs: --supabase-project-ref normalizes and forwards the project', () => {
+  const parsed = parseDeployArgs([
+    './persona.json',
+    '--supabase-project-ref',
+    'BVZZCAFZOYSEZUMRDVIF',
+  ]);
+
+  assert.equal(parsed.supabaseMcpProjectRef, 'bvzzcafzoysezumrdvif');
+});
+
+test('parseDeployArgs: malformed --supabase-project-ref exits with a clean error', () => {
+  const trap = trapExit();
+  try {
+    assert.throws(
+      () => parseDeployArgs([
+        './persona.json',
+        '--supabase-project-ref=not-a-project',
+      ]),
+      /__exit_trap__:1/
+    );
+    assert.deepEqual(trap.exits, [1]);
+    assert.match(
+      trap.stderr,
+      /--supabase-project-ref: expected exactly 20 lowercase letters or digits/,
+    );
+  } finally {
+    trap.restore();
+  }
 });
 
 test('parseDeployArgs: --harness-source managed is accepted', () => {

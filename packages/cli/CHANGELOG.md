@@ -7,6 +7,79 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [4.2.0] - 2026-10-02
+
+### Dependencies
+
+- Move to zod 4 and zod-4 @agent-relay lines (#4080)
+
+## [4.1.60] - 2026-09-30
+
+### Fixed
+
+- Use the cloud workspace id for cloud API calls (#342)
+
+## [4.1.59] - 2026-09-17
+
+### Fixed
+
+- Show the real cause in the deployments-list error snippet, not the boilerplate head (#341)
+
+## [4.1.56] - 2026-09-08
+
+### Fixed
+
+- Digest only the compiled persona in a nested agent dir (#318)
+
+## [4.1.54] - 2026-09-03
+
+### Added
+
+- Add workspace-scoped `env set`, `env list`, and `env unset` commands. Secret
+  values are accepted only from stdin, output is metadata-only, and cloud
+  deployments receive the variables through their runtime environment rather
+  than persona prompt inputs.
+
+## [4.1.51] - 2026-08-31
+
+### Added
+
+- Add `--supabase-project-ref <ref>` for non-interactive, project-scoped
+  Supabase MCP deploys; interactive deploys prompt for the same value.
+
+- `--version` now checks the npm registry for a newer published release and,
+  when the installed build is behind, writes `Update available: <current> →
+  <latest>` and the install command to stderr. stdout stays exactly the version
+  string. The check is best-effort (1s timeout, silent on any failure), honours
+  `AGENTWORKFORCE_REGISTRY` / `npm_config_registry`, and is skipped with
+  `AGENTWORKFORCE_NO_UPDATE_CHECK=1` or `NO_UPDATE_NOTIFIER=1`. A CLI resolved
+  from the working tree's own `node_modules` — including an ancestor's — is
+  told to update without `-g`.
+
+## [4.1.50] - 2026-08-24
+
+### Fixed
+
+- Ship every persona-authoring kit in the CLI install tree (#327)
+
+## [4.1.46] - 2026-08-19
+
+### Added
+
+- **Load agents/<name>/persona.json as a cascade layer**
+
+## [4.1.43] - 2026-08-16
+
+### Added
+
+- **Let `trigger` carry a payload** (#312)
+
+## [4.1.41] - 2026-08-14
+
+### Released
+
+- v4.1.41
+
 ## [4.1.39] - 2026-08-11
 
 ### Added

@@ -62,10 +62,23 @@ jobs:
     name: Publish persona packs
     runs-on: ubuntu-latest
     steps:
+      # `github.ref_name` is the branch this run pushes its release commit to.
+      # On a tag dispatch it would be the tag name, and the push would create a
+      # branch named after the tag while npm already has the new versions.
+      - name: Require a branch dispatch
+        if: ${{ github.ref_type != 'branch' }}
+        run: |
+          echo "::error title=Dispatch from a branch::This workflow publishes and then pushes a release commit to '${{ github.ref_name }}', which is a ${{ github.ref_type }}. Re-run it from a branch."
+          exit 1
+
       - name: Checkout
         uses: actions/checkout@v6
         with:
           fetch-depth: 0
+          # `workflow_dispatch` pins `github.sha` at dispatch time; a queued run
+          # would otherwise bump from a stale commit. See the same note in
+          # publish.yml.
+          ref: ${{ github.ref_name }}
 
       - name: Setup pnpm
         uses: pnpm/action-setup@v5
@@ -219,19 +232,57 @@ jobs:
             echo "==> Publishing $TARBALL $COMMON_FLAGS"
             npm publish "$TARBALL" $COMMON_FLAGS
 
+            # Staged, not committed: the run makes ONE release commit after the
+            # loop. A commit per persona cannot be reconciled onto a branch that
+            # moved mid-run, and tagging here would strand tags whenever the
+            # push is rejected — see publish.yml and scripts/push-release-commit.sh.
             if [ "$INPUT_DRY_RUN" != "true" ] && [ "$INPUT_VERSION" != "none" ]; then
               git add "$DIR/package.json"
-              if ! git diff --cached --quiet; then
-                git commit -m "chore(release): $NAME@$VERSION"
-              fi
-              SLUG="$(echo "${NAME#@}" | tr '/' '-')"
-              git tag -a "${SLUG}-v${VERSION}" -m "$NAME@$VERSION"
             fi
 
             echo "$NAME@$VERSION published (dry_run=$INPUT_DRY_RUN)" >> "$GITHUB_STEP_SUMMARY"
             echo "::endgroup::"
           done < /tmp/persona-publish-targets.tsv
 
-      - name: Push commits + tags
+      # The packs are on npm by the time this runs, so the push reconciles onto
+      # whatever landed on the branch mid-run rather than failing and leaving
+      # the registry ahead of git.
+      - name: Commit + push release
         if: ${{ github.event.inputs.dry_run != 'true' && github.event.inputs.version != 'none' }}
-        run: git push origin HEAD --follow-tags
+        env:
+          BRANCH: ${{ github.ref_name }}
+        run: |
+          set -euo pipefail
+          if git diff --cached --quiet; then
+            echo "No version changes to commit."
+            exit 0
+          fi
+
+          MSG="chore(release):"
+          while IFS=$'\t' read -r NAME DIR VERSION; do
+            MSG="$MSG $NAME@$VERSION"
+          done < /tmp/persona-publish-targets.tsv
+          git commit -m "$MSG"
+
+          scripts/push-release-commit.sh
+
+      - name: Tag + push tags
+        if: ${{ github.event.inputs.dry_run != 'true' && github.event.inputs.version != 'none' }}
+        run: |
+          set -euo pipefail
+          CREATED=""
+          while IFS=$'\t' read -r NAME DIR VERSION; do
+            SLUG="$(echo "${NAME#@}" | tr '/' '-')"
+            TAG="${SLUG}-v${VERSION}"
+            if git rev-parse -q --verify "refs/tags/$TAG" >/dev/null; then
+              echo "::warning::tag $TAG already exists - leaving it as is"
+              continue
+            fi
+            git tag -a "$TAG" -m "$NAME@$VERSION"
+            CREATED="$CREATED refs/tags/$TAG"
+          done < /tmp/persona-publish-targets.tsv
+          if [ -n "$CREATED" ]; then
+            set -f
+            git push origin $CREATED
+            set +f
+          fi

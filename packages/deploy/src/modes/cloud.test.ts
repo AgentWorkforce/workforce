@@ -432,6 +432,28 @@ test('cloud harness legacy plan env alias maps to managed provider credentials',
 });
 
 test('cloud harness prompt default chooses managed provider credentials', async () => {
+  // The probe must actually RUN for this test to mean anything: it asserts what
+  // happens when the probe reports nothing connected. Stub the stored login
+  // rather than leaning on the developer's own — without this the test passes
+  // on a machine that happens to be logged in and takes a different path in CI,
+  // where there is no stored auth and the probe is simply unavailable.
+  const restoreDeps = configureCloudCredentialDepsForTest({
+    readStoredAuth: async () => ({
+      apiUrl: 'https://cloud.example.test',
+      accessToken: 'tok',
+      refreshToken: 'refresh',
+      accessTokenExpiresAt: '2999-01-01T00:00:00.000Z'
+    }),
+    createCloudApiClient() {
+      return {
+        async fetch(pathname: string) {
+          assert.equal(pathname, '/api/v1/cloud-agents');
+          return okJson({ agents: [] });
+        }
+      };
+    }
+  });
+
   const prompted = await launch({
     defaultManagedCredential: false,
     env: {
@@ -439,7 +461,6 @@ test('cloud harness prompt default chooses managed provider credentials', async 
       WORKFORCE_DEPLOY_HARNESS_SOURCE: undefined
     },
     fetch(url, init) {
-      if (init?.method === 'GET' && url.endsWith('/cloud-agents')) return okJson({ agents: [] });
       if (url.endsWith('/provider-credentials/managed?provider=openai')) {
         assert.equal(init?.method, 'POST');
         return okJson({ providerCredentialId: 'cred-managed-prompt' });
@@ -452,7 +473,7 @@ test('cloud harness prompt default chooses managed provider credentials', async 
       }
       throw new Error(`unexpected URL ${url}`);
     }
-  });
+  }).finally(restoreDeps);
 
   assert.equal(prompted.handle.id, 'agent-managed-prompt');
 });
@@ -509,7 +530,7 @@ test('cloud harness OAuth probe hits /api/v1/cloud-agents and honors no-prompt f
   const restoreDeps = configureCloudCredentialDepsForTest({
     readStoredAuth: async () => ({
       apiUrl: 'https://cloud.example.test',
-      accessToken: 'access',
+      accessToken: 'tok',
       refreshToken: 'refresh',
       accessTokenExpiresAt: '2999-01-01T00:00:00.000Z'
     }),
@@ -549,7 +570,7 @@ test('cloud harness OAuth probe treats a matching connected entry as ready (skip
   const restoreDeps = configureCloudCredentialDepsForTest({
     readStoredAuth: async () => ({
       apiUrl: 'https://cloud.example.test',
-      accessToken: 'access',
+      accessToken: 'tok',
       refreshToken: 'refresh',
       accessTokenExpiresAt: '2999-01-01T00:00:00.000Z'
     }),
@@ -596,6 +617,128 @@ test('cloud harness OAuth probe treats a matching connected entry as ready (skip
   assert.ok(!calls.some((c) => c.url.includes('/cli/auth')));
 });
 
+test('cloud harness OAuth probe retains authority when its stored token refreshes', async () => {
+  let storedAuth = {
+    apiUrl: 'https://cloud.example.test',
+    accessToken: 'tok',
+    refreshToken: 'refresh',
+    accessTokenExpiresAt: '2000-01-01T00:00:00.000Z'
+  };
+  let storedAuthReads = 0;
+  let refreshes = 0;
+  const restoreDeps = configureCloudCredentialDepsForTest({
+    readStoredAuth: async () => {
+      storedAuthReads += 1;
+      return storedAuth;
+    },
+    refreshStoredAuth: async (auth) => {
+      refreshes += 1;
+      assert.equal(auth.accessToken, 'tok');
+      storedAuth = {
+        ...storedAuth,
+        accessToken: 'rotated-token',
+        accessTokenExpiresAt: '2999-01-01T00:00:00.000Z'
+      };
+      return storedAuth;
+    },
+    createCloudApiClient(auth) {
+      assert.equal(auth.accessToken, 'rotated-token');
+      return {
+        async fetch(pathname: string) {
+          assert.equal(pathname, '/api/v1/cloud-agents');
+          return okJson({
+            agents: [{ id: 'pc-anthropic-rotated', harness: 'claude', status: 'connected' }]
+          });
+        }
+      };
+    }
+  });
+
+  try {
+    const { handle } = await launch({
+      persona: persona({ harness: 'claude', model: 'claude-sonnet-4-6' }),
+      defaultManagedCredential: false,
+      env: {
+        WORKFORCE_DEPLOY_CLOUD_URL: 'https://cloud.example.test',
+        WORKFORCE_DEPLOY_HARNESS_SOURCE: 'oauth',
+        WORKFORCE_DEPLOY_NO_PROMPT: '1'
+      },
+      fetch(url, init) {
+        if (init?.method === 'GET' && url.endsWith('/deployments')) return okJson({ agents: [] });
+        if (url.endsWith('/deployments')) {
+          const body = JSON.parse(String(init?.body)) as Record<string, unknown>;
+          assert.deepEqual(body.credentialSelections, { anthropic: 'pc-anthropic-rotated' });
+          return okJson({ agentId: 'agent-refreshed-probe', deploymentId: 'dep-1', status: 'active' }, 201);
+        }
+        throw new Error(`unexpected URL ${url}`);
+      }
+    });
+    assert.equal(handle.id, 'agent-refreshed-probe');
+    assert.equal(refreshes, 1);
+    assert.equal(storedAuthReads, 1, 'the verified probe client is reused after token rotation');
+  } finally {
+    restoreDeps();
+  }
+});
+
+test('cloud harness source resolves a connected Claude setup-token without an operator override', async () => {
+  const restoreDeps = configureCloudCredentialDepsForTest({
+    readStoredAuth: async () => ({
+      apiUrl: 'https://cloud.example.test',
+      accessToken: 'tok',
+      refreshToken: 'refresh',
+      accessTokenExpiresAt: '2999-01-01T00:00:00.000Z'
+    }),
+    createCloudApiClient() {
+      return {
+        async fetch(pathname: string) {
+          assert.equal(pathname, '/api/v1/cloud-agents');
+          return okJson({
+            agents: [
+              {
+                id: 'pc-claude-setup-token',
+                harness: 'claude',
+                modelProvider: 'anthropic',
+                authType: 'oauth_token',
+                status: 'connected',
+                isActive: true,
+                credentialExpiresAt: null,
+                lastError: null
+              }
+            ]
+          });
+        }
+      };
+    }
+  });
+
+  const { handle } = await launch({
+    persona: persona({ harness: 'claude', model: 'claude-sonnet-4-6' }),
+    defaultManagedCredential: false,
+    env: {
+      WORKFORCE_DEPLOY_CLOUD_URL: 'https://cloud.example.test',
+      WORKFORCE_DEPLOY_HARNESS_SOURCE: undefined,
+      WORKFORCE_DEPLOY_NO_PROMPT: '1'
+    },
+    fetch(url, init) {
+      if (init?.method === 'GET' && url.endsWith('/deployments')) return okJson({ agents: [] });
+      if (url.endsWith('/deployments')) {
+        const body = JSON.parse(String(init?.body)) as Record<string, unknown>;
+        assert.deepEqual(body.credentialSelections, {
+          anthropic: 'pc-claude-setup-token'
+        });
+        return okJson(
+          { agentId: 'agent-claude-setup-token', deploymentId: 'dep-1', status: 'active' },
+          201
+        );
+      }
+      throw new Error(`unexpected URL ${url}`);
+    }
+  }).finally(restoreDeps);
+
+  assert.equal(handle.id, 'agent-claude-setup-token');
+});
+
 test('cloud harness OAuth probe maps a grok persona to the connected xai credential', async () => {
   // Regression: a grok persona declares `model: "grok-build"`, but the
   // connected credential `relay cloud connect xai` stores is keyed
@@ -608,7 +751,7 @@ test('cloud harness OAuth probe maps a grok persona to the connected xai credent
   const restoreDeps = configureCloudCredentialDepsForTest({
     readStoredAuth: async () => ({
       apiUrl: 'https://cloud.example.test',
-      accessToken: 'access',
+      accessToken: 'tok',
       refreshToken: 'refresh',
       accessTokenExpiresAt: '2999-01-01T00:00:00.000Z'
     }),
@@ -661,7 +804,7 @@ test('cloud harness OAuth probe ignores entries with the wrong harness', async (
   const restoreDeps = configureCloudCredentialDepsForTest({
     readStoredAuth: async () => ({
       apiUrl: 'https://cloud.example.test',
-      accessToken: 'access',
+      accessToken: 'tok',
       refreshToken: 'refresh',
       accessTokenExpiresAt: '2999-01-01T00:00:00.000Z'
     }),
@@ -704,7 +847,7 @@ test('cloud harness OAuth starts auth and polls /cloud-agents until the harness 
   const restoreDeps = configureCloudCredentialDepsForTest({
     readStoredAuth: async () => ({
       apiUrl: 'https://cloud.example.test',
-      accessToken: 'access',
+      accessToken: 'tok',
       refreshToken: 'refresh',
       accessTokenExpiresAt: '2999-01-01T00:00:00.000Z'
     }),
@@ -776,7 +919,7 @@ test('cloud --reconnect forces a fresh harness connect even when already connect
   const restoreDeps = configureCloudCredentialDepsForTest({
     readStoredAuth: async () => ({
       apiUrl: 'https://cloud.example.test',
-      accessToken: 'access',
+      accessToken: 'tok',
       refreshToken: 'refresh',
       accessTokenExpiresAt: '2999-01-01T00:00:00.000Z'
     }),
@@ -833,11 +976,44 @@ test('cloud --reconnect forces a fresh harness connect even when already connect
   assert.deepEqual(connected, ['openai']);
 });
 
+test('cloud --reconnect fails fast when the deploy credential cannot verify completion', async () => {
+  let connectCalled = false;
+  const restoreDeps = configureCloudCredentialDepsForTest({
+    readStoredAuth: async () => ({
+      apiUrl: 'https://cloud.example.test',
+      accessToken: 'stored-user-login',
+      refreshToken: 'refresh',
+      accessTokenExpiresAt: '2999-01-01T00:00:00.000Z'
+    }),
+    connectProvider: async () => {
+      connectCalled = true;
+      return { provider: 'openai', success: true };
+    },
+    createCloudApiClient() {
+      throw new Error('an unrelated stored login must not run the deploy probe');
+    }
+  });
+
+  await assert.rejects(
+    launch({
+      defaultManagedCredential: false,
+      env: { WORKFORCE_DEPLOY_CLOUD_URL: 'https://cloud.example.test' },
+      input: { harnessSource: 'oauth', reconnectProviders: ['openai'] },
+      fetch(url) {
+        throw new Error(`unexpected URL ${url}`);
+      }
+    }),
+    /--reconnect openai cannot verify completion.*deploy credential cannot authoritatively list/s
+  ).finally(restoreDeps);
+
+  assert.equal(connectCalled, false, 'must fail before starting a connection it can never verify');
+});
+
 test('cloud --reconnect with --no-prompt fails with actionable guidance', async () => {
   const restoreDeps = configureCloudCredentialDepsForTest({
     readStoredAuth: async () => ({
       apiUrl: 'https://cloud.example.test',
-      accessToken: 'access',
+      accessToken: 'tok',
       refreshToken: 'refresh',
       accessTokenExpiresAt: '2999-01-01T00:00:00.000Z'
     }),
@@ -1490,7 +1666,7 @@ test('cloud oauth deploy stamps anthropic credentialSelections from the connecte
   const restoreDeps = configureCloudCredentialDepsForTest({
     readStoredAuth: async () => ({
       apiUrl: 'https://cloud.example.test',
-      accessToken: 'access',
+      accessToken: 'tok',
       refreshToken: 'refresh',
       accessTokenExpiresAt: '2999-01-01T00:00:00.000Z'
     }),
@@ -1545,7 +1721,7 @@ test('cloud oauth deploy does NOT stamp openai selections and prints the harness
   const restoreDeps = configureCloudCredentialDepsForTest({
     readStoredAuth: async () => ({
       apiUrl: 'https://cloud.example.test',
-      accessToken: 'access',
+      accessToken: 'tok',
       refreshToken: 'refresh',
       accessTokenExpiresAt: '2999-01-01T00:00:00.000Z'
     }),
@@ -1598,7 +1774,7 @@ test('cloud oauth deploy falls back to unstamped when the connected row has no i
   const restoreDeps = configureCloudCredentialDepsForTest({
     readStoredAuth: async () => ({
       apiUrl: 'https://cloud.example.test',
-      accessToken: 'access',
+      accessToken: 'tok',
       refreshToken: 'refresh',
       accessTokenExpiresAt: '2999-01-01T00:00:00.000Z'
     }),
@@ -1651,7 +1827,7 @@ test('cloud oauth deploy stamps the ACTIVE anthropic row over a newer inactive o
   const restoreDeps = configureCloudCredentialDepsForTest({
     readStoredAuth: async () => ({
       apiUrl: 'https://cloud.example.test',
-      accessToken: 'access',
+      accessToken: 'tok',
       refreshToken: 'refresh',
       accessTokenExpiresAt: '2999-01-01T00:00:00.000Z'
     }),
@@ -1701,7 +1877,7 @@ test('cloud oauth deploy cross-stamps a connected anthropic credential for an op
   const restoreDeps = configureCloudCredentialDepsForTest({
     readStoredAuth: async () => ({
       apiUrl: 'https://cloud.example.test',
-      accessToken: 'access',
+      accessToken: 'tok',
       refreshToken: 'refresh',
       accessTokenExpiresAt: '2999-01-01T00:00:00.000Z'
     }),
@@ -1747,4 +1923,172 @@ test('cloud oauth deploy cross-stamps a connected anthropic credential for an op
   } finally {
     restoreDeps();
   }
+});
+
+test('a headless deploy proceeds when the harness probe cannot run at all', async () => {
+  // Regression for the false negative that blocked EVERY CI deploy: the probe
+  // reads /api/v1/cloud-agents, which needs the user's stored CLI login
+  // (session or cli:auth scope). A headless deploy authenticates with a
+  // workspace deploy token and has no stored login, so the probe cannot run —
+  // and "cannot check" was being collapsed into "not connected", failing with
+  // `credentials are not connected` no matter what the workspace actually had.
+  const restoreDeps = configureCloudCredentialDepsForTest({
+    readStoredAuth: async () => null,
+    createCloudApiClient() {
+      throw new Error('the probe must not be attempted without stored auth');
+    }
+  });
+
+  const { handle, io } = await launch({
+    env: {
+      WORKFORCE_DEPLOY_CLOUD_URL: 'https://cloud.example.test',
+      WORKFORCE_DEPLOY_NO_PROMPT: '1',
+      WORKFORCE_DEPLOY_HARNESS_SOURCE: undefined
+    },
+    fetch(url, init) {
+      if (init?.method === 'GET' && url.endsWith('/deployments')) return okJson({ agents: [] });
+      if (url.endsWith('/deployments')) {
+        return okJson({ agentId: 'agent-headless', deploymentId: 'dep-1', status: 'active' }, 201);
+      }
+      throw new Error(`unexpected URL ${url}`);
+    }
+  }).finally(restoreDeps);
+
+  assert.equal(handle.id, 'agent-headless');
+  assert.ok(
+    io.messages.some((m) => /credential check is unavailable here/.test(m.message)),
+    'the deploy says why it could not check, instead of asserting "not connected"'
+  );
+  // The stamping lookup reads the same unavailable route, so this deployment
+  // carries no ctx.llm selection. That is survivable for a ctx.harness.run
+  // persona and fatal for a ctx.llm one, so it must WARN, not read like the
+  // ordinary "checked, found nothing" info line.
+  assert.ok(
+    io.messages.some(
+      (m) => m.level === 'warn' && /NO ctx\.llm credential selection/.test(m.message)
+    ),
+    'an unstamped deployment is surfaced as a warning'
+  );
+});
+
+test('a workspace deploy token does not trust a stored user login credential listing', async () => {
+  // Regression: the deployment uses WORKFORCE_WORKSPACE_TOKEN (`tok`), while
+  // fetchCloudAgents used an unrelated stored user login. Cloud scopes the
+  // successful response to that login's (user, current workspace), so an empty
+  // list was not evidence about the deployment workspace and must be null, not
+  // false. Do not even issue the misleading request with the other identity.
+  let storedLoginRequests = 0;
+  const restoreDeps = configureCloudCredentialDepsForTest({
+    readStoredAuth: async () => ({
+      apiUrl: 'https://cloud.example.test',
+      accessToken: 'stored-user-login',
+      refreshToken: 'refresh',
+      accessTokenExpiresAt: '2999-01-01T00:00:00.000Z'
+    }),
+    createCloudApiClient() {
+      return {
+        async fetch() {
+          storedLoginRequests += 1;
+          return okJson({ agents: [] });
+        }
+      };
+    }
+  });
+
+  const { handle, io } = await launch({
+    env: {
+      WORKFORCE_DEPLOY_CLOUD_URL: 'https://cloud.example.test',
+      WORKFORCE_DEPLOY_HARNESS_SOURCE: undefined,
+      WORKFORCE_DEPLOY_NO_PROMPT: '1'
+    },
+    fetch(url, init) {
+      if (init?.method === 'GET' && url.endsWith('/deployments')) return okJson({ agents: [] });
+      if (url.endsWith('/deployments')) {
+        return okJson({ agentId: 'agent-ci-token', deploymentId: 'dep-1', status: 'active' }, 201);
+      }
+      throw new Error(`unexpected URL ${url}`);
+    }
+  }).finally(restoreDeps);
+
+  assert.equal(handle.id, 'agent-ci-token');
+  assert.equal(storedLoginRequests, 0);
+  assert.ok(
+    io.messages.some((entry) => /credential check is unavailable here/.test(entry.message)),
+    'the CLI reports an indeterminate probe instead of declaring the credential missing'
+  );
+});
+
+test('a deployment credential forbidden from listing user credentials is undeterminable', async () => {
+  let probeCalls = 0;
+  const restoreDeps = configureCloudCredentialDepsForTest({
+    readStoredAuth: async () => ({
+      apiUrl: 'https://cloud.example.test',
+      accessToken: 'tok',
+      refreshToken: 'refresh',
+      accessTokenExpiresAt: '2999-01-01T00:00:00.000Z'
+    }),
+    createCloudApiClient() {
+      return {
+        async fetch() {
+          probeCalls += 1;
+          return okJson({ error: 'Forbidden' }, 403);
+        }
+      };
+    }
+  });
+
+  const { handle } = await launch({
+    env: {
+      WORKFORCE_DEPLOY_CLOUD_URL: 'https://cloud.example.test',
+      WORKFORCE_DEPLOY_HARNESS_SOURCE: undefined,
+      WORKFORCE_DEPLOY_NO_PROMPT: '1'
+    },
+    fetch(url, init) {
+      if (init?.method === 'GET' && url.endsWith('/deployments')) return okJson({ agents: [] });
+      if (url.endsWith('/deployments')) {
+        return okJson({ agentId: 'agent-ci-forbidden', deploymentId: 'dep-1', status: 'active' }, 201);
+      }
+      throw new Error(`unexpected URL ${url}`);
+    }
+  }).finally(restoreDeps);
+
+  assert.equal(handle.id, 'agent-ci-forbidden');
+  assert.ok(probeCalls >= 1, 'the deployment credential reached the cloud route');
+});
+
+test('a probe that CAN run and reports nothing connected still fails closed', async () => {
+  // The complement of the test above: "cannot check" must not become a blanket
+  // bypass. When the stored login IS the credential used for this deploy, the
+  // probe is authoritative and an empty list is a real negative that must still
+  // stop a --no-prompt deploy.
+  const restoreDeps = configureCloudCredentialDepsForTest({
+    readStoredAuth: async () => ({
+      apiUrl: 'https://cloud.example.test',
+      accessToken: 'tok',
+      refreshToken: 'refresh',
+      accessTokenExpiresAt: '2999-01-01T00:00:00.000Z'
+    }),
+    createCloudApiClient() {
+      return {
+        async fetch() {
+          return okJson({ agents: [] });
+        }
+      };
+    }
+  });
+
+  await assert.rejects(
+    launch({
+      env: {
+        WORKFORCE_DEPLOY_CLOUD_URL: 'https://cloud.example.test',
+        WORKFORCE_DEPLOY_NO_PROMPT: '1',
+        WORKFORCE_DEPLOY_HARNESS_SOURCE: undefined
+      },
+      fetch(url, init) {
+        if (init?.method === 'GET' && url.endsWith('/deployments')) return okJson({ agents: [] });
+        throw new Error(`unexpected URL ${url}`);
+      }
+    }).finally(restoreDeps),
+    /credentials are not connected/
+  );
 });

@@ -25,9 +25,12 @@ export WEEKLY_DIGEST_TOPICS="agentworkforce,relayfile,proactive-agents"
 export WEEKLY_DIGEST_REPO="YourOrg/weekly-digest"
 export BRAVE_API_KEY="brave_..."
 
-# Workspace (only needed when actually launching, not for --dry-run):
-export WORKFORCE_WORKSPACE_ID="ws_demo"
-export WORKFORCE_WORKSPACE_TOKEN="ws_token_..."
+# Workspace auth (only needed when actually launching, not for --dry-run).
+# Locally, just run `agentworkforce login`. For CI, set both:
+#   WORKFORCE_WORKSPACE_ID    = cloud workspace id (UUID printed by login), not the rw_… id
+#   WORKFORCE_WORKSPACE_TOKEN = cloud access token, not the rk_live_… workspaces.json key
+# export WORKFORCE_WORKSPACE_ID="<cloud-workspace-uuid>"
+# export WORKFORCE_WORKSPACE_TOKEN="<cloud-access-token>"
 
 # Relayfile mount root the handler writes into. The workforce runtime
 # sets this automatically when it spawns the handler. Only set it

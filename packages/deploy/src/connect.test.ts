@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import type { PersonaSpec } from '@agentworkforce/persona-kit';
+import { parsePersonaSpec, type PersonaSpec } from '@agentworkforce/persona-kit';
 import {
   collectPickerInputs,
   connectIntegrations,
@@ -42,6 +42,36 @@ test('relayfileIntegrationResolver isConnected reads workspace provider status b
   assert.equal(await resolver.isConnected({ workspace: 'ws-runtime', provider: 'github' }), true);
   assert.deepEqual(urls, [
     'https://cloud.example.test/api/v1/workspaces/ws-runtime/integrations/github/status?scope=deployer_user'
+  ]);
+});
+
+test('relayfileIntegrationResolver makes Supabase status checks project-aware', async () => {
+  const urls: string[] = [];
+  const resolver = relayfileIntegrationResolver({
+    apiUrl: 'https://cloud.example.test',
+    workspaceId: 'ws-1',
+    workspaceToken: 'tok',
+    fetch: async (url) => {
+      urls.push(String(url));
+      return okJson({
+        provider: 'supabase-mcp',
+        configKey: 'supabase-mcp-relay',
+        ready: false,
+        connectionMatched: false
+      });
+    }
+  });
+
+  assert.equal(
+    await resolver.isConnected({
+      workspace: 'ws-runtime',
+      provider: 'supabase-mcp',
+      supabaseMcpProjectRef: 'BVZZCAFZOYSEZUMRDVIF'
+    }),
+    false
+  );
+  assert.deepEqual(urls, [
+    'https://cloud.example.test/api/v1/workspaces/ws-runtime/integrations/supabase-mcp/status?supabaseMcpProjectRef=bvzzcafzoysezumrdvif&scope=deployer_user'
   ]);
 });
 
@@ -285,6 +315,299 @@ test('relayfileIntegrationResolver isConnected does not widen explicit deployer_
     'https://cloud.example.test/api/v1/workspaces/ws-runtime/integrations/slack/status?scope=deployer_user'
   ]);
 });
+
+test('relayfileIntegrationResolver lists stored connection sources without conflating owners', async () => {
+  const urls: string[] = [];
+  const resolver = relayfileIntegrationResolver({
+    apiUrl: 'https://cloud.example.test',
+    workspaceId: 'ws-1',
+    workspaceToken: 'tok',
+    fetch: async (url) => {
+      urls.push(String(url));
+      if (String(url).endsWith('/api/v1/me/integrations')) {
+        return okJson({
+          integrations: [
+            {
+              provider: 'github',
+              providerConfigKey: 'github-user',
+              connectionId: 'conn-user'
+            }
+          ]
+        });
+      }
+      return okJson({
+        integrations: [
+          {
+            provider: 'github',
+            providerConfigKey: 'github-relay',
+            connectionId: 'conn-workspace',
+            scope: 'workspace'
+          },
+          {
+            provider: 'github',
+            providerConfigKey: 'github-relay',
+            connectionId: 'conn-service',
+            scope: 'workspace_service_account',
+            serviceAccountName: 'release-bot'
+          },
+          { provider: 'slack', connectionId: 'conn-other' }
+        ]
+      });
+    }
+  });
+
+  assert.ok(resolver.listConnectionSources);
+  assert.deepEqual(
+    await resolver.listConnectionSources({ workspace: 'ws-runtime', provider: 'github' }),
+    [
+      { source: { kind: 'deployer_user' }, providerConfigKey: 'github-user' },
+      { source: { kind: 'workspace' }, providerConfigKey: 'github-relay' },
+      {
+        source: { kind: 'workspace_service_account', name: 'release-bot' },
+        providerConfigKey: 'github-relay'
+      }
+    ]
+  );
+  assert.deepEqual(urls, [
+    'https://cloud.example.test/api/v1/me/integrations',
+    'https://cloud.example.test/api/v1/workspaces/ws-runtime/integrations'
+  ]);
+});
+
+test('relayfileIntegrationResolver can diagnose workspace sources with a CI workspace token', async () => {
+  const resolver = relayfileIntegrationResolver({
+    apiUrl: 'https://cloud.example.test',
+    workspaceId: 'ws-1',
+    workspaceToken: 'workspace-token',
+    fetch: async (url) => {
+      if (String(url).endsWith('/api/v1/me/integrations')) {
+        return okJson({ error: 'workspace tokens have no user' }, 401);
+      }
+      return okJson({
+        integrations: [
+          {
+            provider: 'github',
+            provider_config_key: 'github-relay',
+            connectionId: 'conn-workspace',
+            scope: 'workspace'
+          }
+        ]
+      });
+    }
+  });
+
+  assert.ok(resolver.listConnectionSources);
+  assert.deepEqual(
+    await resolver.listConnectionSources({ workspace: 'ws-1', provider: 'github' }),
+    [{ source: { kind: 'workspace' }, providerConfigKey: 'github-relay' }]
+  );
+});
+
+test('relayfileIntegrationResolver bounds source diagnostics and keeps the fulfilled owner', {
+  timeout: 1_000
+}, async () => {
+  let stalledSignal: AbortSignal | undefined;
+  const resolver = relayfileIntegrationResolver({
+    apiUrl: 'https://cloud.example.test',
+    workspaceId: 'ws-1',
+    workspaceToken: 'workspace-token',
+    requestTimeoutMs: 10,
+    fetch: async (url, init) => {
+      if (String(url).endsWith('/api/v1/me/integrations')) {
+        stalledSignal = init?.signal ?? undefined;
+        return await new Promise<Response>(() => {});
+      }
+      return okJson({
+        integrations: [{
+          provider: 'github',
+          provider_config_key: 'github-relay',
+          connection_id: 'conn-workspace',
+          scope: 'workspace'
+        }]
+      });
+    }
+  });
+
+  assert.ok(resolver.listConnectionSources);
+  assert.deepEqual(
+    await resolver.listConnectionSources({ workspace: 'ws-1', provider: 'github' }),
+    [{ source: { kind: 'workspace' }, providerConfigKey: 'github-relay' }]
+  );
+  assert.equal(stalledSignal?.aborted, true);
+});
+
+test('connectIntegrations keeps implicit workspace fallback after a compiled JSON round-trip', async () => {
+  const parsed = parsePersonaSpec({
+    id: 'legacy-github-agent',
+    intent: 'documentation',
+    tags: ['documentation'],
+    description: 'legacy default integration source',
+    harness: 'claude',
+    model: 'claude-haiku-4-5',
+    systemPrompt: 'Review changes.',
+    harnessSettings: { reasoning: 'low', timeoutSeconds: 300 },
+    integrations: { github: {} }
+  }, 'documentation');
+  const compiledJson = JSON.stringify(parsed);
+  assert.equal(compiledJson.includes('__agentworkforceImplicitSource'), false);
+  assert.equal(compiledJson.includes('"source"'), false);
+  const reparsed = parsePersonaSpec(JSON.parse(compiledJson), 'documentation');
+  let checked = false;
+
+  const result = await connectIntegrations({
+    persona: reparsed,
+    workspace: 'ws-1',
+    noConnect: false,
+    noPrompt: true,
+    io: createBufferedIO(),
+    integrations: {
+      async isConnected(args) {
+        checked = true;
+        assert.deepEqual(args.source, { kind: 'deployer_user' });
+        assert.equal(args.allowWorkspaceFallback, true);
+        return args.allowWorkspaceFallback === true;
+      },
+      async connect() {
+        throw new Error('workspace fallback should satisfy preflight');
+      }
+    }
+  });
+
+  assert.equal(checked, true);
+  assert.deepEqual(result.outcomes, [{ provider: 'github', status: 'already-connected' }]);
+});
+
+test('connectIntegrations explains a source mismatch under --no-prompt', async () => {
+  const io = createBufferedIO();
+  const integrations = relayfileIntegrationResolver({
+    apiUrl: 'https://cloud.example.test',
+    workspaceId: 'ws-1',
+    workspaceToken: 'workspace-token',
+    fetch: async (url) => {
+      const requestUrl = String(url);
+      if (requestUrl.includes('/integrations/github/status')) {
+        return okJson({ provider: 'github', configKey: 'github-relay', status: 'pending' });
+      }
+      if (requestUrl.endsWith('/api/v1/me/integrations')) {
+        return okJson({ error: 'workspace tokens have no user' }, 401);
+      }
+      return okJson({
+        integrations: [
+          {
+            provider: 'github',
+            provider_config_key: 'github-relay',
+            connection_id: 'conn-workspace',
+            installation_id: 'install-1',
+            adapter: 'nango',
+            scope: 'workspace'
+          }
+        ]
+      });
+    }
+  });
+  const result = await connectIntegrations({
+    persona: {
+      id: 'github-agent',
+      intent: 'documentation',
+      description: 'explicit user source',
+      tags: ['documentation'],
+      integrations: { github: { source: { kind: 'deployer_user' } } }
+    } as never,
+    workspace: 'ws-1',
+    noConnect: false,
+    noPrompt: true,
+    io,
+    integrations,
+    providerConfigKeys: {
+      async resolve() {
+        return 'github-relay';
+      }
+    }
+  });
+
+  const message = io.messages.find((entry) => entry.level === 'error')?.message ?? '';
+  assert.match(message, /required source deployer_user/);
+  assert.match(message, /Existing sources: workspace/);
+  assert.match(message, /integrations\.github\.source.*\{"kind":"workspace"\}/);
+  assert.match(message, /connect github for source deployer_user/);
+  assert.doesNotMatch(message, /github: not connected/);
+  assert.match(result.outcomes[0]?.message ?? '', /required source deployer_user/);
+});
+
+test('connectIntegrations explains a provider-config mismatch under --no-prompt', async () => {
+  const io = createBufferedIO();
+  const result = await connectIntegrations({
+    persona: {
+      id: 'github-agent',
+      intent: 'documentation',
+      description: 'explicit user source',
+      tags: ['documentation'],
+      integrations: { github: { source: { kind: 'deployer_user' } } }
+    } as never,
+    workspace: 'ws-1',
+    noConnect: false,
+    noPrompt: true,
+    io,
+    integrations: {
+      async isConnected() {
+        return false;
+      },
+      async listConnectionSources() {
+        return [{
+          source: { kind: 'deployer_user' },
+          providerConfigKey: 'github-existing'
+        }];
+      },
+      async connect() {
+        throw new Error('no-prompt must not connect');
+      }
+    },
+    providerConfigKeys: {
+      async resolve() {
+        return 'github-required';
+      }
+    }
+  });
+
+  const message = io.messages.find((entry) => entry.level === 'error')?.message ?? '';
+  assert.match(message, /required provider config "github-required"/);
+  assert.match(message, /Existing provider configs: github-existing/);
+  assert.doesNotMatch(message, /Existing sources:/);
+  assert.match(result.outcomes[0]?.message ?? '', /required provider config/);
+});
+
+test('connectIntegrations reports a genuinely absent provider connection under --no-prompt', async () => {
+  const io = createBufferedIO();
+  const result = await connectIntegrations({
+    persona: {
+      id: 'github-agent',
+      intent: 'documentation',
+      description: 'explicit user source',
+      tags: ['documentation'],
+      integrations: { github: { source: { kind: 'deployer_user' } } }
+    } as never,
+    workspace: 'ws-1',
+    noConnect: false,
+    noPrompt: true,
+    io,
+    integrations: {
+      async isConnected() {
+        return false;
+      },
+      async listConnectionSources() {
+        return [];
+      },
+      async connect() {
+        throw new Error('no-prompt must not connect');
+      }
+    }
+  });
+
+  const message = io.messages.find((entry) => entry.level === 'error')?.message ?? '';
+  assert.match(message, /no connection exists for provider "github"/);
+  assert.doesNotMatch(message, /Existing sources:/);
+  assert.match(result.outcomes[0]?.message ?? '', /no connection exists/);
+});
 test('relayfileIntegrationResolver isConnected rejects status="error"', async () => {
   // A failed initial sync or errored writeback means the persona cannot
   // rely on the integration at dispatch time. Re-prompt OAuth so the user
@@ -370,6 +693,63 @@ test('relayfileIntegrationResolver isConnected falls back to deployer-user list 
       (m) => m.level === 'warn' && /integrations\/<provider>\/status/.test(m.message)
     )
   );
+});
+
+test('relayfileIntegrationResolver fallback list rejects a snake-case config-key mismatch', async () => {
+  const resolver = relayfileIntegrationResolver({
+    apiUrl: 'https://cloud.example.test',
+    workspaceId: 'ws-1',
+    workspaceToken: 'tok',
+    fetch: async (url) => {
+      if (String(url).includes('/integrations/github/status')) {
+        return new Response('not found', { status: 404 });
+      }
+      return okJson([{
+        provider: 'github',
+        provider_config_key: 'github-other',
+        status: 'ready'
+      }]);
+    }
+  });
+
+  assert.equal(
+    await resolver.isConnected({
+      workspace: 'ws-runtime',
+      provider: 'github',
+      expectedConfigKey: 'github-relay'
+    }),
+    false
+  );
+});
+
+test('relayfileIntegrationResolver fails closed when project-aware Supabase status is unavailable', async () => {
+  const io = createBufferedIO();
+  const urls: string[] = [];
+  const resolver = relayfileIntegrationResolver({
+    apiUrl: 'https://cloud.example.test',
+    workspaceId: 'ws-1',
+    workspaceToken: 'tok',
+    io,
+    fetch: async (url) => {
+      urls.push(String(url));
+      return new Response('not found', { status: 404 });
+    }
+  });
+
+  assert.equal(
+    await resolver.isConnected({
+      workspace: 'ws-runtime',
+      provider: 'supabase-mcp',
+      supabaseMcpProjectRef: 'bvzzcafzoysezumrdvif'
+    }),
+    false
+  );
+  assert.deepEqual(urls, [
+    'https://cloud.example.test/api/v1/workspaces/ws-runtime/integrations/supabase-mcp/status?supabaseMcpProjectRef=bvzzcafzoysezumrdvif&scope=deployer_user'
+  ]);
+  assert.ok(io.messages.some((message) =>
+    message.level === 'warn' && /project-aware Supabase MCP status/.test(message.message)
+  ));
 });
 
 test('relayfileIntegrationResolver isConnected falls back to workspace list matching for workspace source when status 404s', async () => {
@@ -568,6 +948,176 @@ test('relayfileIntegrationResolver connect opens a session and polls until conne
   assert.ok(urls.every((url) => url.includes('/workspaces/ws-runtime/')));
   assert.equal(polls, 3);
   assert.ok(io.messages.some((message) => message.message.includes('notion connected')));
+});
+
+test('relayfileIntegrationResolver sends a normalized Supabase project ref', async () => {
+  const resolver = relayfileIntegrationResolver({
+    apiUrl: 'https://cloud.example.test',
+    workspaceId: 'ws-1',
+    workspaceToken: 'tok',
+    pollIntervalMs: 0,
+    timeoutMs: 100,
+    openUrl: () => undefined,
+    sleep: async () => undefined,
+    fetch: async (input, init) => {
+      const url = input.toString();
+      if (url.endsWith('/integrations/connect-session')) {
+        assert.deepEqual(JSON.parse(String(init?.body)), {
+          allowedIntegrations: ['supabase-mcp'],
+          scope: { kind: 'deployer_user' },
+          supabaseMcpProjectRef: 'bvzzcafzoysezumrdvif',
+        });
+        return okJson({
+          connectLink: 'https://connect.example.test/supabase',
+          connectionId: 'conn-supabase',
+        });
+      }
+      if (url.includes('/integrations/supabase-mcp/status')) {
+        return okJson({
+          ready: true,
+          state: 'ready',
+          currentConnectionId: 'conn-supabase',
+        });
+      }
+      throw new Error(`unexpected URL ${url}`);
+    },
+  });
+
+  assert.deepEqual(
+    await resolver.connect({
+      workspace: 'ws-runtime',
+      provider: 'supabase-mcp',
+      supabaseMcpProjectRef: 'BVZZCAFZOYSEZUMRDVIF',
+    }),
+    { connectionId: 'conn-supabase' },
+  );
+});
+
+test('relayfileIntegrationResolver refuses Supabase OAuth without a project ref', async () => {
+  let fetched = false;
+  const resolver = relayfileIntegrationResolver({
+    apiUrl: 'https://cloud.example.test',
+    workspaceId: 'ws-1',
+    workspaceToken: 'tok',
+    fetch: async () => {
+      fetched = true;
+      return okJson({});
+    },
+  });
+
+  await assert.rejects(
+    resolver.connect({ workspace: 'ws-runtime', provider: 'supabase-mcp' }),
+    /requires a valid 20-character project ref/,
+  );
+  assert.equal(fetched, false);
+});
+
+test('connectIntegrations prompts for the Supabase project ref before OAuth', async () => {
+  const io = createBufferedIO();
+  io.scriptConfirmations([true]);
+  io.scriptAnswers(['BVZZCAFZOYSEZUMRDVIF']);
+  let connectArgs: Record<string, unknown> | undefined;
+
+  const result = await connectIntegrations({
+    persona: {
+      id: 'supabase-watchdog',
+      intent: 'monitor',
+      description: 'test persona',
+      tags: ['implementation'],
+      integrations: { 'supabase-mcp': {} },
+    } as never,
+    workspace: 'ws-1',
+    noConnect: false,
+    io,
+    integrations: {
+      async isConnected() {
+        return false;
+      },
+      async connect(args) {
+        connectArgs = args;
+        return { connectionId: 'conn-supabase' };
+      },
+    },
+  });
+
+  assert.equal(connectArgs?.supabaseMcpProjectRef, 'bvzzcafzoysezumrdvif');
+  assert.deepEqual(result.outcomes, [
+    { provider: 'supabase-mcp', status: 'connected-now' },
+  ]);
+});
+
+test('connectIntegrations checks the requested Supabase project before reusing OAuth', async () => {
+  const io = createBufferedIO();
+  io.scriptConfirmations([true]);
+  io.scriptAnswers(['BVZZCAFZOYSEZUMRDVIF']);
+  let statusProjectRef: string | undefined;
+  let connectProjectRef: string | undefined;
+
+  const result = await connectIntegrations({
+    persona: {
+      id: 'supabase-watchdog',
+      intent: 'monitor',
+      description: 'test persona',
+      tags: ['implementation'],
+      integrations: { 'supabase-mcp': {} },
+    } as never,
+    workspace: 'ws-1',
+    noConnect: false,
+    io,
+    integrations: {
+      async isConnected(args) {
+        statusProjectRef = args.supabaseMcpProjectRef;
+        // Cloud reports project A as unmatched when project B is requested.
+        return false;
+      },
+      async connect(args) {
+        connectProjectRef = args.supabaseMcpProjectRef;
+        return { connectionId: 'conn-project-b' };
+      },
+    },
+  });
+
+  assert.equal(statusProjectRef, 'bvzzcafzoysezumrdvif');
+  assert.equal(connectProjectRef, 'bvzzcafzoysezumrdvif');
+  assert.deepEqual(result.outcomes, [
+    { provider: 'supabase-mcp', status: 'connected-now' },
+  ]);
+});
+
+test('connectIntegrations allows project-scoped Supabase OAuth under --no-prompt', async () => {
+  const io = createBufferedIO();
+  let connectCalled = false;
+
+  const result = await connectIntegrations({
+    persona: {
+      id: 'supabase-watchdog',
+      intent: 'monitor',
+      description: 'test persona',
+      tags: ['implementation'],
+      integrations: { 'supabase-mcp': {} },
+    } as never,
+    workspace: 'ws-1',
+    noConnect: false,
+    noPrompt: true,
+    supabaseMcpProjectRef: 'bvzzcafzoysezumrdvif',
+    io,
+    integrations: {
+      async isConnected(args) {
+        assert.equal(args.supabaseMcpProjectRef, 'bvzzcafzoysezumrdvif');
+        return false;
+      },
+      async connect(args) {
+        connectCalled = true;
+        assert.equal(args.supabaseMcpProjectRef, 'bvzzcafzoysezumrdvif');
+        return { connectionId: 'conn-project-b' };
+      },
+    },
+  });
+
+  assert.equal(connectCalled, true);
+  assert.deepEqual(result.outcomes, [
+    { provider: 'supabase-mcp', status: 'connected-now' },
+  ]);
 });
 
 test('relayfileIntegrationResolver never retries a failed POST connect session', async () => {

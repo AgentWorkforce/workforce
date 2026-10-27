@@ -21,7 +21,8 @@ import {
   type PersonaTag,
   type SidecarMdMode,
   parseHarnessSettings,
-  parseInputs
+  parseInputs,
+  parseOnEvent
 } from '@agentworkforce/persona-kit';
 import { listBuiltInPersonas, personaCatalog } from '@agentworkforce/workload-router';
 
@@ -64,6 +65,14 @@ export interface LocalPersonaOverride {
   permissions?: PersonaPermissions;
   /** Replaces the inherited systemPrompt when set. */
   systemPrompt?: string;
+  /**
+   * Handler entry, relative to this file's directory. Its presence marks the
+   * persona as a cloud agent: the handler drives the run, so the interactive
+   * fields an operator-launched persona must declare are optional here.
+   */
+  onEvent?: string;
+  /** Deployable as a managed cloud agent. */
+  cloud?: boolean;
   /** Replaces the inherited harness when set. */
   harness?: Harness;
   /** Replaces the inherited model when set. */
@@ -100,6 +109,12 @@ export type PersonaSource = string;
  *                  the working-tree dir; both installed library packs and
  *                  hand-authored team overrides live here. Kept as-is
  *                  because it's a precise pointer to a real directory.
+ *   - `cwd:agents` → same — `<cwd>/.agentworkforce/workforce/agents/<name>/persona.json`,
+ *                  agents that keep their persona next to their handler.
+ *                  Also a precise pointer, so also kept as-is.
+ *   - `user:agents` → `personal:agents` — the `agents/` sibling of the personal
+ *                  personas dir; personal agents-with-handlers, available in
+ *                  any repo. Renamed to follow `user` → `personal`.
  *   - `dir:N`    → `dir:N`    — extra configurable persona dirs (passed
  *                  through unchanged so position is still legible).
  *
@@ -109,6 +124,7 @@ export type PersonaSource = string;
 export function formatPersonaSourceLabel(source: PersonaSource): string {
   if (source === 'library') return 'built-in';
   if (source === 'user') return 'personal';
+  if (source === 'user:agents') return 'personal:agents';
   return source;
 }
 
@@ -118,12 +134,24 @@ interface SourceLayer {
   dir: string;
   /** When set, this priority layer loads only the explicitly selected file. */
   file?: string;
+  /**
+   * One persona per subdirectory (`<dir>/<name>/persona.json`) instead of one
+   * per file. See {@link PersonaSourceDirectory.nested}.
+   */
+  nested?: boolean;
 }
 
 export interface PersonaSourceDirectory {
   source: PersonaSource;
   dir: string;
   configurable: boolean;
+  /**
+   * The directory holds one persona per subdirectory — `<dir>/<name>/persona.json`
+   * — rather than one persona per top-level `.json`. Each persona resolves its
+   * relative skill and sidecar paths against its own subdirectory, so an agent
+   * that ships alongside its handler keeps pointing at its neighboring files.
+   */
+  nested?: boolean;
 }
 
 export interface PersonaSourceConfig {
@@ -186,6 +214,36 @@ export function defaultPersonaConfigPath(workforceHomeDir = defaultWorkforceHome
 export function defaultCwdPersonaDir(cwd: string): string {
   return join(cwd, '.agentworkforce', 'workforce', 'personas');
 }
+
+/**
+ * Working-tree directory holding one agent per subdirectory. An agent that
+ * ships its own handler keeps persona, handler, tests, and README together in
+ * `<cwd>/.agentworkforce/workforce/agents/<name>/`, so its persona is
+ * `<name>/persona.json` rather than a loose file under `personas/`.
+ */
+export function defaultCwdAgentDir(cwd: string): string {
+  return join(cwd, '.agentworkforce', 'workforce', 'agents');
+}
+
+/**
+ * Personal counterpart to {@link defaultCwdAgentDir}: agents-with-handlers a
+ * user keeps across every repo. Derived from wherever their personal personas
+ * live so the pair travels together, including under
+ * `AGENT_WORKFORCE_CONFIG_DIR` and test overrides.
+ */
+export function userAgentDirFor(userPersonaDir: string): string {
+  return join(dirname(userPersonaDir), 'agents');
+}
+
+/** Persona filename read from each subdirectory of a nested source dir. */
+export const NESTED_PERSONA_FILENAME = 'persona.json';
+
+/**
+ * Authoring source compiled into {@link NESTED_PERSONA_FILENAME}. Present
+ * without its compiled sibling, it means the agent was never compiled — the
+ * loader is synchronous and cannot bundle TypeScript, so it warns instead.
+ */
+const NESTED_PERSONA_SOURCE_FILENAMES = ['persona.ts', 'persona.js', 'persona.mjs'];
 
 export function expandHomePath(input: string): string {
   if (input === '~') return homedir();
@@ -336,13 +394,131 @@ export function buildPersonaSourceDirectories(
       dir: defaultCwdPersonaDir(cwd),
       configurable: false
     },
-    ...config.personaDirs.map((dir, idx) => ({
-      source: sourceForPersonaDir(dir, idx, config.userPersonaDir),
-      dir,
-      configurable: true
-    }))
+    // Ranked below `personas/` so a loose override there can still overlay an
+    // agent that ships its own persona.
+    {
+      source: 'cwd:agents',
+      dir: defaultCwdAgentDir(cwd),
+      configurable: false,
+      nested: true
+    },
+    ...config.personaDirs.flatMap((dir, idx) => {
+      const entry: PersonaSourceDirectory = {
+        source: sourceForPersonaDir(dir, idx, config.userPersonaDir),
+        dir,
+        configurable: true
+      };
+      // The personal agents dir rides directly behind the personal personas
+      // dir, the same way cwd:agents rides behind cwd, so the pair keeps its
+      // relative rank wherever the user has moved it in the cascade.
+      return dir === config.userPersonaDir
+        ? [entry, userAgentSourceDir(config.userPersonaDir)]
+        : [entry];
+    }),
+    // A user who dropped their personal personas dir from the cascade still
+    // gets their personal agents, ranked last among file layers.
+    ...(config.personaDirs.includes(config.userPersonaDir)
+      ? []
+      : [userAgentSourceDir(config.userPersonaDir)])
   ];
   return { directories, config };
+}
+
+function userAgentSourceDir(userPersonaDir: string): PersonaSourceDirectory {
+  return {
+    source: 'user:agents',
+    dir: userAgentDirFor(userPersonaDir),
+    configurable: false,
+    nested: true
+  };
+}
+
+/** One persona file to read, with the directory its relative paths resolve against. */
+interface LayerEntry {
+  /** Path relative to the layer dir, used in warnings. */
+  label: string;
+  path: string;
+  sourceDir: string;
+}
+
+/**
+ * List the persona files a nested layer contributes: `<dir>/<name>/persona.json`
+ * for every subdirectory that has one. A subdirectory carrying only the
+ * authoring source is reported rather than skipped silently — that is an agent
+ * whose `persona.json` was never compiled, which otherwise looks identical to
+ * one that does not exist.
+ */
+function readNestedLayerEntries(
+  dir: string,
+  layer: SourceLayer,
+  warnings: string[]
+): LayerEntry[] {
+  let names: string[];
+  try {
+    names = readdirSync(dir);
+  } catch (err) {
+    warnings.push(`[${layer.source}] could not read ${dir}: ${(err as Error).message}`);
+    return [];
+  }
+
+  const entries: LayerEntry[] = [];
+  for (const name of names) {
+    const sourceDir = join(dir, name);
+    const path = join(sourceDir, NESTED_PERSONA_FILENAME);
+    // Compare against the NEWEST authoring file, not the first one that
+    // exists: a directory that still carries an old persona.ts after moving to
+    // persona.js would otherwise be measured against the file nobody edits.
+    const authoredCandidate = NESTED_PERSONA_SOURCE_FILENAMES.map((file) => ({
+      file: join(sourceDir, file),
+      mtimeMs: fileMtimeMs(join(sourceDir, file))
+    }))
+      .filter((candidate): candidate is { file: string; mtimeMs: number } => candidate.mtimeMs !== undefined)
+      .sort((a, b) => b.mtimeMs - a.mtimeMs)[0];
+    const authored = authoredCandidate?.file;
+    const compiledAt = fileMtimeMs(path);
+
+    if (compiledAt === undefined) {
+      if (authored) {
+        warnings.push(
+          `[${layer.source}] ${name}: ${basename(authored)} has no compiled ${NESTED_PERSONA_FILENAME}; run \`agentworkforce persona compile ${authored}\` to make it loadable.`
+        );
+      }
+      continue;
+    }
+
+    // A stale artifact is the quieter failure: the persona still loads, so
+    // nothing looks wrong while the edits sitting in the authoring file are
+    // simply absent. Say so, and keep serving the compiled spec — dropping it
+    // would turn a forgotten compile into a missing persona.
+    const authoredAt = authoredCandidate?.mtimeMs;
+    if (authored !== undefined && authoredAt !== undefined && authoredAt > compiledAt) {
+      warnings.push(
+        `[${layer.source}] ${name}: ${NESTED_PERSONA_FILENAME} is older than ${basename(authored)}, so this persona is loading without the latest edits; re-run \`agentworkforce persona compile ${authored}\`.`
+      );
+    }
+    entries.push({ label: `${name}/${NESTED_PERSONA_FILENAME}`, path, sourceDir });
+  }
+  return entries;
+}
+
+function readLayerEntries(
+  dir: string,
+  layer: SourceLayer,
+  warnings: string[]
+): LayerEntry[] {
+  if (layer.file) {
+    const file = basename(layer.file);
+    return [{ label: file, path: join(dir, file), sourceDir: dir }];
+  }
+  if (layer.nested) return readNestedLayerEntries(dir, layer, warnings);
+  try {
+    return readdirSync(dir)
+      .filter((n) => n.endsWith('.json'))
+      .map((file) => ({ label: file, path: join(dir, file), sourceDir: dir }));
+  } catch (err) {
+    warnings.push(`[${layer.source}] could not read ${dir}: ${(err as Error).message}`);
+    return [];
+  }
 }
 
 function readLayerDir(
@@ -354,30 +530,19 @@ function readLayerDir(
   const out = new Map<string, LocalPersonaOverride>();
   if (!existsSync(dir)) return out;
 
-  let entries: string[];
-  try {
-    entries = layer.file
-      ? [basename(layer.file)]
-      : readdirSync(dir).filter((n) => n.endsWith('.json'));
-  } catch (err) {
-    warnings.push(`[${layer.source}] could not read ${dir}: ${(err as Error).message}`);
-    return out;
-  }
-
-  for (const file of entries) {
-    const path = join(dir, file);
+  for (const entry of readLayerEntries(dir, layer, warnings)) {
     try {
-      const raw = readFileSync(path, 'utf8');
-      const parsed = parseOverride(JSON.parse(raw), `[${layer.source}] ${file}`);
-      parsed.__sourceDir = dir;
+      const raw = readFileSync(entry.path, 'utf8');
+      const parsed = parseOverride(JSON.parse(raw), `[${layer.source}] ${entry.label}`);
+      parsed.__sourceDir = entry.sourceDir;
       if (out.has(parsed.id)) {
-        warnings.push(`[${layer.source}] ${file}: duplicate id "${parsed.id}" within layer; skipping.`);
+        warnings.push(`[${layer.source}] ${entry.label}: duplicate id "${parsed.id}" within layer; skipping.`);
         continue;
       }
       out.set(parsed.id, parsed);
-      filePaths.set(`${layer.key}:${parsed.id}`, path);
+      filePaths.set(`${layer.key}:${parsed.id}`, entry.path);
     } catch (err) {
-      warnings.push(`[${layer.source}] ${file}: ${(err as Error).message}`);
+      warnings.push(`[${layer.source}] ${entry.label}: ${(err as Error).message}`);
     }
   }
   return out;
@@ -488,6 +653,24 @@ function parseOverride(value: unknown, context: string): LocalPersonaOverride {
       `${context}.defaultTier is no longer supported (tiers have been removed)`
     );
   }
+  // Normalize first, then delegate to persona-kit, which owns both the
+  // containment guard and the handler-extension check. Order matters in both
+  // directions: validating the raw string and storing a trimmed copy lets
+  // " ../x/agent.ts " clear the `..` check as the segment " .." and escape
+  // once trimmed, while validating without trimming stores " ./agent.ts",
+  // which passes every check and then resolves to a directory named " ."
+  // at deploy. Trimming up front makes the validated and stored value one
+  // and the same.
+  const onEventValue =
+    raw.onEvent === undefined
+      ? undefined
+      : parseOnEvent(
+          typeof raw.onEvent === 'string' ? raw.onEvent.trim() : raw.onEvent,
+          `${context}.onEvent`
+        );
+  if (raw.cloud !== undefined && typeof raw.cloud !== 'boolean') {
+    throw new Error(`${context}.cloud must be a boolean if provided`);
+  }
   if (raw.harness !== undefined) {
     if (typeof raw.harness !== 'string' || !HARNESS_VALUES.includes(raw.harness as Harness)) {
       throw new Error(`${context}.harness must be one of: ${HARNESS_VALUES.join(', ')}`);
@@ -531,6 +714,8 @@ function parseOverride(value: unknown, context: string): LocalPersonaOverride {
     mount: raw.mount as LocalPersonaOverride['mount'],
     permissions: raw.permissions as LocalPersonaOverride['permissions'],
     systemPrompt: raw.systemPrompt as string | undefined,
+    ...(onEventValue !== undefined ? { onEvent: onEventValue } : {}),
+    ...(raw.cloud !== undefined ? { cloud: raw.cloud as boolean } : {}),
     ...(raw.harness !== undefined ? { harness: raw.harness as Harness } : {}),
     ...(raw.model !== undefined ? { model: raw.model as string } : {}),
     ...(raw.harnessSettings !== undefined
@@ -719,12 +904,23 @@ function standaloneSpecFromOverride(
   cwd = process.cwd()
 ): PersonaSpec {
   const context = `standalone persona "${override.id}"`;
-  const harness = requireStandaloneField(override.harness, `${context}.harness`);
-  if (!HARNESS_VALUES.includes(harness)) {
+  // A handler agent is driven by its `onEvent` entry, not by an operator at a
+  // prompt, so the fields configuring an interactive launch are optional here.
+  // Requiring them made agents that ship a handler invisible to the cascade:
+  // the `agents/` directory added for exactly those agents could not load
+  // them, and the error read as though the persona were malformed.
+  const isHandler = typeof override.onEvent === 'string' && override.onEvent.trim() !== '';
+
+  const harness = isHandler
+    ? override.harness
+    : requireStandaloneField(override.harness, `${context}.harness`);
+  if (harness !== undefined && !HARNESS_VALUES.includes(harness)) {
     throw new Error(`${context}.harness must be one of: ${HARNESS_VALUES.join(', ')}`);
   }
-  const model = requireStandaloneField(override.model, `${context}.model`);
-  if (typeof model !== 'string' || !model.trim()) {
+  const model = isHandler
+    ? override.model
+    : requireStandaloneField(override.model, `${context}.model`);
+  if (model !== undefined && (typeof model !== 'string' || !model.trim())) {
     throw new Error(`${context}.model must be a non-empty string`);
   }
   const fallbackSystemPrompt = override.claudeMdContent ?? override.agentsMdContent;
@@ -732,9 +928,12 @@ function standaloneSpecFromOverride(
     typeof override.systemPrompt === 'string' && override.systemPrompt.trim()
       ? override.systemPrompt
       : fallbackSystemPrompt;
-  if (typeof systemPrompt !== 'string' || !systemPrompt.trim()) {
+  if (!isHandler && (typeof systemPrompt !== 'string' || !systemPrompt.trim())) {
     throw new Error(`${context}.systemPrompt must be a non-empty string`);
   }
+  // `harnessSettings` stays required even for a handler: `PersonaSpec` types it
+  // non-optional, and `reasoning`/`timeoutSeconds` have no defensible default to
+  // invent on the persona's behalf. Every shipped handler example declares it.
   const settingsRaw = override.harnessSettings;
   if (!settingsRaw || !isPlainObject(settingsRaw)) {
     throw new Error(`${context}.harnessSettings must be an object`);
@@ -787,9 +986,11 @@ function standaloneSpecFromOverride(
       cwd
     ),
     ...(inputs ? { inputs } : {}),
-    harness,
-    model,
-    systemPrompt,
+    ...(override.onEvent !== undefined ? { onEvent: override.onEvent } : {}),
+    ...(override.cloud !== undefined ? { cloud: override.cloud } : {}),
+    ...(harness !== undefined ? { harness } : {}),
+    ...(model !== undefined ? { model } : {}),
+    ...(systemPrompt !== undefined ? { systemPrompt } : {}),
     harnessSettings,
     ...(env ? { env } : {}),
     ...(mcpServers ? { mcpServers } : {}),
@@ -912,6 +1113,16 @@ function isFile(path: string): boolean {
   }
 }
 
+/** Modification time of a regular file, or undefined if it is not one. */
+function fileMtimeMs(path: string): number | undefined {
+  try {
+    const st = statSync(path);
+    return st.isFile() ? st.mtimeMs : undefined;
+  } catch {
+    return undefined;
+  }
+}
+
 /**
  * Resolve relative local skill sources (`./skills/foo.md`) declared by an
  * override against the directory of the JSON file that declared them, the
@@ -1010,6 +1221,10 @@ function mergeOverride(
   const harness = override.harness ?? base.harness;
   const model = override.model ?? base.model;
   const systemPrompt = override.systemPrompt ?? base.systemPrompt;
+  // An overlay that only tweaks env must not strip the handler entry that
+  // makes the base a deployable agent.
+  const onEvent = override.onEvent ?? base.onEvent;
+  const cloud = override.cloud ?? base.cloud;
   const harnessSettings: HarnessSettings = parseHarnessSettings({
     ...base.harnessSettings,
     ...(override.harnessSettings ?? {})
@@ -1088,9 +1303,11 @@ function mergeOverride(
     description: override.description ?? base.description,
     skills,
     ...(inputs ? { inputs } : {}),
-    harness,
-    model,
-    systemPrompt,
+    ...(onEvent !== undefined ? { onEvent } : {}),
+    ...(cloud !== undefined ? { cloud } : {}),
+    ...(harness !== undefined ? { harness } : {}),
+    ...(model !== undefined ? { model } : {}),
+    ...(systemPrompt !== undefined ? { systemPrompt } : {}),
     harnessSettings,
     ...(env ? { env } : {}),
     ...(mcpServers ? { mcpServers } : {}),
@@ -1175,7 +1392,8 @@ export function loadLocalPersonas(options: LoadOptions = {}): LoadedLocalPersona
     key: `${idx}:${sourceDir.source}:${sourceDir.file ?? sourceDir.dir}`,
     source: sourceDir.source,
     dir: sourceDir.dir,
-    ...(sourceDir.file ? { file: sourceDir.file } : {})
+    ...(sourceDir.file ? { file: sourceDir.file } : {}),
+    ...(sourceDir.nested ? { nested: true } : {})
   }));
 
   const overrides = new Map<string, Map<string, LocalPersonaOverride>>();

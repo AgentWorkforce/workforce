@@ -14,6 +14,9 @@ agentworkforce persona compile <path/to/persona.ts|persona.js>
 agentworkforce install [flags] <pkg|path>
 agentworkforce deploy <path/to/persona.json|persona.ts|persona.js> [flags]
 agentworkforce integrations [provider] [--all] [--json]
+agentworkforce env set <KEY> [--workspace <name>] [--cloud-url <url>] [--json] [--no-prompt]
+agentworkforce env list [--workspace <name>] [--cloud-url <url>] [--json] [--no-prompt]
+agentworkforce env unset <KEY> [--workspace <name>] [--cloud-url <url>] [--json] [--no-prompt]
 agentworkforce trigger <agent-name-or-id> [--workspace <id>] [--cloud-url <url>] [--json] [--no-prompt]
 agentworkforce sources <list|add|remove>
 agentworkforce harness check
@@ -37,6 +40,8 @@ agentworkforce --version
   an authored source module such as `persona.ts` or `persona.js`.
 - `integrations` — discover available integrations, known trigger events, and
   connection status for the active workspace.
+- `env` — manage runtime environment variables for the active workspace without
+  putting their values in persona inputs, argv, logs, or command output.
 - `trigger` — manually fire an active deployed persona for testing. The
   selector accepts agent id, compact agent id, deployed name, persona slug, or
   persona id, and posts to the same cloud trigger endpoint used by the dashboard.
@@ -69,6 +74,47 @@ corepack pnpm -r build
 corepack pnpm --filter agentworkforce link --global
 ```
 
+## Login and workspace ids
+
+```sh
+agentworkforce login
+```
+
+`login` signs you in to Agent Relay cloud, lets you pick a workspace, and
+prints its **cloud workspace id** (a UUID). After that, `deploy`,
+`deployments list`, `destroy`, `runs`, `trigger`, `env` and `integrations` use
+the login session automatically — no environment variables are needed.
+
+A workspace has two different ids, and they are not interchangeable:
+
+| Id | Looks like | Used for |
+|----|------------|----------|
+| Cloud workspace id | `0b6c2d4e-…` (UUID) | Workforce cloud APIs (`/api/v1/workspaces/<id>/…`): deployments, integrations, env, runtime credentials |
+| Relaycast workspace id | `rw_…` | Relaycast messaging and fleet nodes only |
+
+Using the relaycast id against cloud APIs returns `403 Forbidden`. If the cloud
+cannot resolve a cloud workspace id for your workspace, the CLI stops with an
+error naming the relaycast id instead of guessing — re-run
+`agentworkforce login`, or pass `--workspace <cloud-workspace-id>`.
+
+### Non-interactive / CI override
+
+`WORKFORCE_WORKSPACE_ID` + `WORKFORCE_WORKSPACE_TOKEN` override the login
+session when **both** are set (`--workspace` may stand in for the id):
+
+- `WORKFORCE_WORKSPACE_ID` — the **cloud workspace id** printed by
+  `agentworkforce login` (not the `rw_…` relaycast id).
+- `WORKFORCE_WORKSPACE_TOKEN` — a **cloud API bearer token**, e.g. the
+  `accessToken` from `~/.agentworkforce/relay/cloud-auth.json` after
+  `agentworkforce login`. This access token expires; re-run
+  `agentworkforce login` to refresh it.
+
+Do **not** use the workspace `key` (`rk_live_…`) from
+`~/.agentworkforce/relay/workspaces.json` as `WORKFORCE_WORKSPACE_TOKEN`: that
+is a relaycast key, cloud APIs reject it with `401`, and the CLI refuses it up
+front. On your own machine, prefer unsetting both variables and relying on
+`agentworkforce login`.
+
 ## Discover integrations and triggers
 
 ```sh
@@ -84,6 +130,24 @@ offline trigger catalog, rendering connection state as unknown. A provider
 argument prints the full trigger list, connection details, and a persona/agent
 snippet using the cloud provider id.
 
+## Workspace environment variables
+
+Use workspace environment variables for runtime-only values such as service
+tokens that must be available through `process.env` but must not be substituted
+into a persona's system prompt.
+
+```sh
+printf '%s' "$RTH_TOKEN" | agentworkforce env set RTH_TOKEN
+agentworkforce env list
+agentworkforce env unset RTH_TOKEN
+```
+
+`env set` accepts only the key on the command line and reads the value from
+non-interactive stdin. It reports whether the key was created or overwritten.
+`env list` returns only keys, last-set timestamps, and setter identities — never
+values or masked fragments. All three commands use the active workspace unless
+`--workspace <name>` is supplied; ambiguous workspace selection fails closed.
+
 ## Selectors
 
 ```
@@ -92,9 +156,10 @@ agentworkforce agent <persona>[@<tier>]
 
 - `<persona>` — matches, in order:
   1. A **cwd-local** id (files in `<cwd>/.agentworkforce/workforce/personas/*.json`)
-  2. A configured persona source dir, in order. The default is
+  2. A **cwd agent** id (`<cwd>/.agentworkforce/workforce/agents/<name>/persona.json`)
+  3. A configured persona source dir, in order. The default is
      `~/.agentworkforce/workforce/personas/*.json`.
-  3. An internal **library** persona — by intent first, then by id. The built-in
+  4. An internal **library** persona — by intent first, then by id. The built-in
      library is system-only; optional personas such as `code-reviewer` come from
      installed persona packs.
 - `<tier>` — `best` | `best-value` | `minimum`. Defaults to `best-value`.
@@ -376,8 +441,11 @@ agentworkforce sources add <dir> [--position <n>]
 agentworkforce sources remove <dir|config-position>
 ```
 
-The fixed project source is always first:
-`<cwd>/.agentworkforce/workforce/personas/*.json`.
+Two fixed project sources always lead the cascade:
+`<cwd>/.agentworkforce/workforce/personas/*.json`, then
+`<cwd>/.agentworkforce/workforce/agents/<name>/persona.json`. A third fixed
+source, `~/.agentworkforce/workforce/agents/<name>/persona.json`, carries
+personal agents and follows the personal personas dir wherever it ranks.
 
 After that, the CLI reads an ordered list of configurable persona directories
 from `~/.agentworkforce/workforce/config.json`. If no config exists, the list
@@ -404,13 +472,13 @@ the override without editing JSON by hand.
 
 `sources add` appends by default. `--position <n>` inserts at the 1-based
 position among configurable directories, so `--position 1` gives that directory
-the highest priority after the fixed cwd source. `sources remove` accepts either
-that configurable position or an exact path.
+the highest priority after the fixed `cwd` and `cwd:agents` sources. `sources
+remove` accepts either that configurable position or an exact path.
 
 Examples:
 
 ```sh
-# Show the full source cascade, including fixed cwd and library entries
+# Show the full source cascade, including fixed cwd/cwd:agents and library entries
 agentworkforce sources list
 
 # Install personas from another checkout, below the default user persona dir
@@ -472,12 +540,54 @@ Local persona files layer on top of the library. Resolution precedence (highest
 wins):
 
 1. `<cwd>/.agentworkforce/workforce/personas/*.json` — **cwd**
-2. Configurable persona source dirs, in order. Default:
+2. `<cwd>/.agentworkforce/workforce/agents/<name>/persona.json` — **cwd:agents**
+3. Configurable persona source dirs, in order. Default:
    `~/.agentworkforce/workforce/personas/*.json` — **user**
-3. Internal built-in system personas in `/personas/` — **library**
+4. `~/.agentworkforce/workforce/agents/<name>/persona.json` — **user:agents**,
+   the personal mirror of `cwd:agents`. It rides directly behind the personal
+   personas dir, so moving that dir in the cascade moves both. The tables
+   printed by `list` and `sources list` show it as **personal:agents**,
+   following `user` → `personal`; `user:agents` is the value `--json` emits.
+5. Internal built-in system personas in `/personas/` — **library**
 
 Local files are **partial overlays**: only the fields you set replace the
 inherited value. Everything else cascades through from below.
+
+### Agents that ship their own handler
+
+The same directory layout works in a repo (`cwd:agents`) and in your personal
+config (`user:agents`), so an agent you want everywhere lives in
+`~/.agentworkforce/workforce/agents/<name>/` and a repo's own agents live in its
+working tree. A repo agent outranks a personal one of the same id.
+
+An agent with code of its own keeps persona, handler, tests, and README in one
+directory:
+
+```
+.agentworkforce/workforce/
+  skills/sales-voice.md
+  agents/proposal-agent/
+    persona.ts        # authored source
+    persona.json      # compiled — this is what the cascade reads
+    agent.ts          # handler
+```
+
+The persona resolves its relative `skills`, `claudeMd`, and `agentsMd` paths
+against its **own** directory, so `../../skills/sales-voice.md` points where the
+handler's imports do. Copying that file up into `personas/` would break those
+paths — the directory is a cascade layer instead.
+
+`persona.json` is generated, so keep it gitignored and compile it:
+
+```
+agentworkforce persona compile .agentworkforce/workforce/agents/proposal-agent/persona.ts
+```
+
+An agent directory holding a `persona.ts` with no compiled `persona.json` is
+reported as a warning rather than skipped in silence.
+
+A file in `personas/` with the same id still wins, so a project can overlay an
+agent's persona without editing the agent's directory.
 
 Set `AGENT_WORKFORCE_HOME` to move the `~/.agentworkforce/workforce` config
 root. The legacy `AGENT_WORKFORCE_CONFIG_DIR` env var is still honored as a

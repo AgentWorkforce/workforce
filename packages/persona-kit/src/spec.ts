@@ -89,6 +89,7 @@ export {
   INPUT_NAME_RE,
   INTEGRATION_SOURCE_NAME_RE,
   isHarness,
+  isImplicitIntegrationSource,
   isIntent,
   isObject,
   isSidecarMode,

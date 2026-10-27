@@ -4,6 +4,18 @@ All notable changes to `@agentworkforce/review-kit` will be documented in this f
 
 ## [Unreleased]
 
+## [4.1.50] - 2026-08-24
+
+### Released
+
+- v4.1.50
+
+## [4.1.41] - 2026-08-14
+
+### Released
+
+- v4.1.41
+
 ## [4.1.32] - 2026-07-17
 
 ### Fixed

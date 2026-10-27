@@ -13,7 +13,8 @@ import {
   assertReadableFile,
   extractDefaultExport,
   packageNodePaths,
-  preserveLocalImportMetaUrlPlugin
+  preserveLocalImportMetaUrlPlugin,
+  withUnresolvedImportHint
 } from './persona-source.js';
 
 /**
@@ -107,6 +108,8 @@ export async function extractAgentSpec(onEventPath: string): Promise<ExtractedAg
       resolveExtensions: RESOLVE_EXTENSIONS,
       plugins: [runtimeStubPlugin(), preserveLocalImportMetaUrlPlugin()],
       nodePaths: packageNodePaths(onEventPath)
+    }).catch((err) => {
+      throw withUnresolvedImportHint(err, onEventPath);
     });
 
     const mod = await import(pathToFileURL(compiledPath).href);

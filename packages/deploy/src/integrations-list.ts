@@ -52,6 +52,8 @@ export interface ListIntegrationsOptions {
   resolveWorkspaceToken?: typeof resolveWorkspaceToken;
   provider?: string;
   includeTriggers?: boolean;
+  /** Maximum time for any single Cloud catalog/status request. */
+  requestTimeoutMs?: number;
 }
 
 export class IntegrationsListError extends Error {
@@ -386,26 +388,54 @@ async function requestJson(
   pathname: string,
   init: RequestInit = {}
 ): Promise<unknown> {
-  const response = options.client
-    ? await options.client.fetch(pathname, init)
-    : await (options.fetch ?? fetch)(`${cloudUrl}${pathname}`, {
-        ...init,
-        headers: {
-          accept: 'application/json',
-          'content-type': 'application/json',
-          ...(auth.token ? { authorization: `Bearer ${auth.token}` } : {}),
-          ...(init.headers ?? {})
-        }
-      });
-  if (!response.ok) {
-    const body = await response.text().catch(() => '');
-    const excerpt = body.length > 400 ? `${body.slice(0, 400)}...` : body;
-    throw new IntegrationsListError(
-      `integration catalog/status request failed: ${response.status} ${pathname}${excerpt ? ` ${excerpt}` : ''}`,
-      { status: response.status, endpoint: pathname, body: excerpt }
-    );
+  const timeoutMs = options.requestTimeoutMs ?? 10_000;
+  const controller = new AbortController();
+  const upstreamSignal = init.signal;
+  const abortFromUpstream = () => controller.abort(upstreamSignal?.reason);
+  if (upstreamSignal?.aborted) abortFromUpstream();
+  else upstreamSignal?.addEventListener('abort', abortFromUpstream, { once: true });
+
+  let timeout: ReturnType<typeof setTimeout> | undefined;
+  const timeoutError = new IntegrationsListError(
+    `integration catalog/status request timed out after ${timeoutMs}ms: ${pathname}`,
+    { status: 408, endpoint: pathname, body: '' }
+  );
+  const timeoutPromise = new Promise<never>((_, reject) => {
+    timeout = setTimeout(() => {
+      reject(timeoutError);
+      controller.abort(timeoutError);
+    }, timeoutMs);
+  });
+
+  try {
+    const request = (async (): Promise<unknown> => {
+      const response = options.client
+        ? await options.client.fetch(pathname, { ...init, signal: controller.signal })
+        : await (options.fetch ?? fetch)(`${cloudUrl}${pathname}`, {
+            ...init,
+            signal: controller.signal,
+            headers: {
+              accept: 'application/json',
+              'content-type': 'application/json',
+              ...(auth.token ? { authorization: `Bearer ${auth.token}` } : {}),
+              ...(init.headers ?? {})
+            }
+          });
+      if (!response.ok) {
+        const body = await response.text().catch(() => '');
+        const excerpt = body.length > 400 ? `${body.slice(0, 400)}...` : body;
+        throw new IntegrationsListError(
+          `integration catalog/status request failed: ${response.status} ${pathname}${excerpt ? ` ${excerpt}` : ''}`,
+          { status: response.status, endpoint: pathname, body: excerpt }
+        );
+      }
+      return await response.json();
+    })();
+    return await Promise.race([request, timeoutPromise]);
+  } finally {
+    if (timeout) clearTimeout(timeout);
+    upstreamSignal?.removeEventListener('abort', abortFromUpstream);
   }
-  return await response.json();
 }
 
 function adapterSlugForCloudProvider(provider: string): string {

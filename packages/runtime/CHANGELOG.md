@@ -7,6 +7,46 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [4.2.1] - 2026-10-05
+
+### Fixed
+
+- Classify Grok Build usage-balance exhaustion as a typed, customer-safe
+  `usage_limit` provider failure so scheduled deliveries stop retrying and tell
+  operators to restore Grok credits.
+
+## [4.2.0] - 2026-10-02
+
+### Dependencies
+
+- Move to zod 4 and zod-4 @agent-relay lines (#4080)
+
+## [4.1.56] - 2026-09-08
+
+### Fixed
+
+- Surface typed harness provider failures (#336)
+
+## [4.1.50] - 2026-08-24
+
+### Released
+
+- v4.1.50
+
+## [4.1.47] - 2026-08-21
+
+### Added
+
+- Add `readAppTriggerIntent()` so agents can distinguish scheduled ticks,
+  authenticated app-trigger payloads, and malformed accepted trigger bodies
+  without reimplementing gateway-wrapper parsing.
+
+## [4.1.41] - 2026-08-14
+
+### Changed
+
+- Runtime: carry an app-triggered payload through the cron.tick event (#310)
+
 ## [4.1.37] - 2026-07-25
 
 ### Added

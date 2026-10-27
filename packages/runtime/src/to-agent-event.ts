@@ -42,7 +42,7 @@ export function envelopeToAgentEvent(env: RawGatewayEnvelope): AgentEvent | null
   const summary = isPlainObject(env.summary) ? (env.summary as EventSummary) : undefined;
 
   if (env.type === 'cron.tick' || env.type.startsWith('cron.')) {
-    return createCronTickEvent({
+    const cron = createCronTickEvent({
       workspace: env.workspace,
       // The SDK's cron event carries the expression as `schedule`; the human
       // schedule name (cloud's `env.name`) becomes the synthetic resource id.
@@ -54,6 +54,52 @@ export function envelopeToAgentEvent(env: RawGatewayEnvelope): AgentEvent | null
       digest,
       summary
     });
+
+    // A clock tick carries no payload, and `createCronTickEvent` has no slot
+    // for one — its resource is the synthetic `/_cron/<schedule>` identity.
+    //
+    // But cloud reuses the `cron.tick` envelope for an APP-TRIGGERED run: a
+    // customer's product POSTs a JSON body to
+    // `/deployments/<agent>/trigger`, and cloud carries it in the envelope's
+    // `resource` (see its `buildEnvelope`). Returning the bare cron event
+    // therefore dropped that payload on the floor — the envelope had it, the
+    // handler never saw it, and the run looked indistinguishable from a
+    // scheduled tick. Observed end-to-end: an app trigger whose persisted
+    // envelope held `{source:"app.trigger",payload:{…}}` reached the handler
+    // as a contentless tick.
+    //
+    // Wire it through the same way the relaycast branch does — `loadFull`, so
+    // `await event.expand('full')` yields the payload — while keeping the cron
+    // event's own identity (`isCronTickEvent`, `schedule`, `scheduledFor`, and
+    // the `/_cron/…` resource) exactly as before.
+    //
+    // Gated on the `app.trigger` marker specifically, NOT on "the envelope has
+    // an object resource". A scheduled tick can legitimately carry a canonical
+    // resource (`{path, kind, id, provider}`) — the legacy decoder builds one
+    // and the canonical cron fixture uses it — and treating that as a payload
+    // would make `expand('full')` start resolving for ordinary schedule
+    // firings, which today reject. Handlers that read expansion success as
+    // "this run carried input" would then see every clock tick as
+    // payload-bearing. Only cloud's app-trigger wrapper is a payload.
+    if (!isAppTriggerResource(env.resource)) return cron;
+
+    return createAgentEvent(
+      {
+        workspace: env.workspace,
+        type: 'cron.tick',
+        id: env.id,
+        attempt,
+        occurredAt,
+        digest,
+        summary,
+        // Reuse the SDK-derived values rather than recomputing the schedule id,
+        // so this stays correct if that derivation changes.
+        schedule: cron.schedule,
+        scheduledFor: cron.scheduledFor,
+        resource: cron.resource
+      },
+      fullLoader(cron.resource.path, env.resource, digest)
+    );
   }
 
   if (env.type === 'startup') {
@@ -110,9 +156,7 @@ export function envelopeToAgentEvent(env: RawGatewayEnvelope): AgentEvent | null
         messageId,
         ...(threadId ? { threadId } : {})
       },
-      isPlainObject(env.resource)
-        ? { loadFull: async () => ({ level: 'full' as const, path, data: env.resource as Record<string, unknown>, digest }) }
-        : undefined
+      fullLoader(path, env.resource, digest)
     );
   }
 
@@ -152,7 +196,7 @@ export function envelopeToAgentEvent(env: RawGatewayEnvelope): AgentEvent | null
       digest
     },
     isPlainObject(payload)
-      ? { loadFull: async () => ({ level: 'full' as const, path, data: payload, digest }) }
+      ? fullLoader(path, payload, digest)
       : undefined
   );
 }
@@ -170,6 +214,36 @@ function deriveKind(type: string): string {
 
 function isPlainObject(value: unknown): value is Record<string, unknown> {
   return typeof value === 'object' && value !== null && !Array.isArray(value);
+}
+
+/**
+ * Cloud's marker for a run started by a customer's app POSTing to
+ * `/deployments/<agent>/trigger`, as opposed to a clock tick. It stamps
+ * `{ source: 'app.trigger', payload: … }` onto the envelope's resource.
+ *
+ * Deliberately narrow: a scheduled tick may carry a canonical resource
+ * (`{path, kind, id, provider}`), which is NOT a payload and must keep
+ * behaving as a payload-less tick.
+ */
+function isAppTriggerResource(value: unknown): value is Record<string, unknown> {
+  return isPlainObject(value) && value.source === 'app.trigger';
+}
+
+/**
+ * Build the `expand('full')` loader shared by every branch that has a raw
+ * cloud payload to hand back. Returns undefined when there is nothing to
+ * expand, so the caller can spread it straight into `createAgentEvent`'s
+ * options and expansion keeps rejecting as before.
+ */
+function fullLoader(
+  path: string,
+  data: unknown,
+  digest: string | undefined
+): { loadFull: () => Promise<{ level: 'full'; path: string; data: Record<string, unknown>; digest?: string }> } | undefined {
+  if (!isPlainObject(data)) return undefined;
+  return {
+    loadFull: async () => ({ level: 'full' as const, path, data, digest })
+  };
 }
 
 /** Return `value` when it is a non-empty string, else `undefined`. */

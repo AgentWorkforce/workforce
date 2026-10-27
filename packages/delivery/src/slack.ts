@@ -19,6 +19,17 @@ export interface SlackInboundMessage {
   subtype?: string;
 }
 
+export interface SlackReaction {
+  /** Whether Slack added or removed the reaction. */
+  action: 'added' | 'removed';
+  channel: string;
+  messageTs: string;
+  actorId: string;
+  /** Normalized Slack emoji name without surrounding colons. */
+  emoji: string;
+  eventTs?: string;
+}
+
 function slackAsRecord(value: unknown): Record<string, unknown> | null {
   return value && typeof value === 'object' && !Array.isArray(value)
     ? (value as Record<string, unknown>)
@@ -89,6 +100,64 @@ export function readSlackMessage(payload: unknown): SlackInboundMessage | null {
       Boolean(slackStr(unwrapped.bot_id) ?? slackStr(raw.bot_id)),
     subtype: slackStr(unwrapped.subtype) ?? slackStr(raw.subtype)
   };
+}
+
+/**
+ * Parse a Slack reaction envelope into the exact message, actor, and emoji
+ * needed by deterministic approval handlers.
+ *
+ * Cloud, Relayfile, and direct Slack fixtures have historically added
+ * `data`, `event`, or `raw_event` wrappers. This parser accepts those known
+ * shapes, but still requires an actor plus a message channel/timestamp and
+ * rejects reactions to non-message items.
+ */
+export function readSlackReaction(payload: unknown): SlackReaction | null {
+  const root = slackAsRecord(payload);
+  if (!root) return null;
+  const data = slackAsRecord(root.data) ?? root;
+  const event = slackAsRecord(data.event) ?? data;
+  const raw = slackAsRecord(event.raw_event) ?? slackAsRecord(data.raw_event) ?? event;
+  const candidates = [raw, event, data, root];
+  const eventType = firstSlackString(candidates, 'type')
+    ?? firstSlackString(candidates, 'event_type');
+  const action = slackReactionAction(eventType);
+  // Approval handlers must never infer an addition from an untyped event: a
+  // reaction_removed payload otherwise has the same actor/item/emoji fields.
+  if (!action) return null;
+  const item = firstSlackRecord(candidates, 'item');
+  const itemType = slackStr(item?.type) ?? firstSlackString(candidates, 'item_type');
+  if (itemType !== 'message') return null;
+
+  const channel = slackStr(item?.channel) ?? firstSlackString(candidates, 'channel');
+  // Do not fall back to a generic top-level `ts`: on raw reaction events that
+  // can be the reaction event time rather than the reacted message. An item ts
+  // or explicitly named message_ts is required for exact-message binding.
+  const messageTs = slackStr(item?.ts) ?? firstSlackString(candidates, 'message_ts');
+  const actorId = firstSlackStringOfKeys(candidates, ['user', 'user_id']);
+  const reaction = firstSlackString(candidates, 'reaction');
+  if (!channel || !messageTs || !actorId || !reaction) return null;
+
+  const emoji = reaction.trim().replaceAll(':', '');
+  if (!emoji) return null;
+  const eventTs = firstSlackString(candidates, 'event_ts');
+  return {
+    action,
+    channel: bareSlackChannelId(channel),
+    messageTs,
+    actorId,
+    emoji,
+    ...(eventTs ? { eventTs } : {})
+  };
+}
+
+function slackReactionAction(value: string | undefined): SlackReaction['action'] | null {
+  if (value === 'reaction_added' || value === 'reaction.added' || value === 'slack.reaction.added') {
+    return 'added';
+  }
+  if (value === 'reaction_removed' || value === 'reaction.removed' || value === 'slack.reaction.removed') {
+    return 'removed';
+  }
+  return null;
 }
 
 /**
@@ -330,6 +399,41 @@ export function requireSlackReceipt<T extends { channel: string; ts: string }>(r
 function isSlackUserIndexRow(value: unknown): value is SlackUserIndexRow & { id: string } {
   if (!isRecord(value)) return false;
   return typeof value.id === 'string' && value.id.length > 0;
+}
+
+function firstSlackString(
+  records: ReadonlyArray<Record<string, unknown>>,
+  key: string
+): string | undefined {
+  for (const record of records) {
+    const value = slackStr(record[key]);
+    if (value) return value;
+  }
+  return undefined;
+}
+
+function firstSlackStringOfKeys(
+  records: ReadonlyArray<Record<string, unknown>>,
+  keys: readonly string[]
+): string | undefined {
+  for (const record of records) {
+    for (const key of keys) {
+      const value = slackStr(record[key]);
+      if (value) return value;
+    }
+  }
+  return undefined;
+}
+
+function firstSlackRecord(
+  records: ReadonlyArray<Record<string, unknown>>,
+  key: string
+): Record<string, unknown> | null {
+  for (const record of records) {
+    const value = slackAsRecord(record[key]);
+    if (value) return value;
+  }
+  return null;
 }
 
 function isSlackbot(id: unknown, handle: unknown): boolean {

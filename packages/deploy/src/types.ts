@@ -14,6 +14,8 @@ export interface DeployOptions {
   noConnect?: boolean;
   /** Force a fresh OAuth/connect flow for specific providers, even if status is ready. */
   reconnectProviders?: string[];
+  /** Supabase project selected for a project-scoped, read-only MCP OAuth connection. */
+  supabaseMcpProjectRef?: string;
   /** Force BYO Daytona even when workforce-managed sandbox issuance is available. */
   byoSandbox?: boolean;
   /** Background the runner instead of streaming logs in the foreground. */

@@ -7,6 +7,26 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [4.1.51] - 2026-08-31
+
+### Changed
+
+- Peer dependency moved from the deprecated `@daytonaio/sdk` to `@daytona/sdk`
+  (same API, no breaking changes upstream) and widened to `>=0.185.0`.
+  Consumers install `@daytona/sdk` instead.
+
+## [4.1.50] - 2026-08-24
+
+### Released
+
+- v4.1.50
+
+## [4.1.41] - 2026-08-14
+
+### Released
+
+- v4.1.41
+
 ## [4.1.18] - 2026-07-15
 
 ### Added

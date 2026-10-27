@@ -1,5 +1,5 @@
 import { readFile } from 'node:fs/promises';
-import { Daytona, type Sandbox as DaytonaSandbox } from '@daytonaio/sdk';
+import { Daytona, type Sandbox as DaytonaSandbox } from '@daytona/sdk';
 import type { PersonaSpec } from '@agentworkforce/persona-kit';
 import type { BundleResult } from '../types.js';
 
