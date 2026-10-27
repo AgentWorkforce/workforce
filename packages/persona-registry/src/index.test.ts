@@ -286,6 +286,7 @@ test('a repo agents dir already listed in personaDirs keeps its configured rank'
   mkdirSync(nested, { recursive: true });
   mkdirSync(company, { recursive: true });
   mkdirSync(join(agents, 'proposal-agent'), { recursive: true });
+  mkdirSync(join(agents, 'repo-only'), { recursive: true });
   mkdirSync(userPersonaDir, { recursive: true });
   writeFileSync(
     join(company, 'proposal-agent.json'),
@@ -294,6 +295,10 @@ test('a repo agents dir already listed in personaDirs keeps its configured rank'
   writeFileSync(
     join(agents, 'proposal-agent', 'persona.json'),
     JSON.stringify({ id: 'proposal-agent', extends: 'persona-maker', description: 'repo agent' })
+  );
+  writeFileSync(
+    join(agents, 'repo-only', 'persona.json'),
+    JSON.stringify({ id: 'repo-only', extends: 'persona-maker', description: 'only in the repo' })
   );
 
   const options = {
@@ -306,11 +311,14 @@ test('a repo agents dir already listed in personaDirs keeps its configured rank'
     const loaded = loadLocalPersonas(options);
     assert.equal(loaded.byId.get('proposal-agent')?.description, 'company override');
     assert.equal(loaded.sources.get('proposal-agent'), 'dir:1');
+    assert.equal(loaded.byId.get('repo-only')?.description, 'only in the repo');
+    assert.equal(loaded.sources.get('repo-only'), 'dir:2');
     const dirs = buildPersonaSourceDirectories(options).directories;
     assert.equal(dirs.some((d) => d.source === 'repo:agents'), false);
     const agentEntries = dirs.filter((d) => resolve(d.dir) === resolve(agents));
     assert.equal(agentEntries.length, 1);
     assert.equal(agentEntries[0]?.source, 'dir:2');
+    assert.equal(agentEntries[0]?.nested, true);
   } finally {
     rmSync(root, { recursive: true, force: true });
   }

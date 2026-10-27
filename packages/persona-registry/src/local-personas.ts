@@ -441,6 +441,9 @@ function repoSourceDirectories(
   if (existsSync(agents) && !configured.has(resolvePath(agents))) {
     dirs.push({ source: 'repo:agents', dir: agents, configurable: false, nested: true });
   }
+  // When `agents` is already configured, the caller marks that entry nested.
+  // A flat configured read would only see top-level JSON and drop every
+  // `<name>/persona.json`.
   return dirs;
 }
 
@@ -449,6 +452,11 @@ export function buildPersonaSourceDirectories(
 ): { directories: PersonaSourceDirectory[]; config: PersonaSourceConfig } {
   const cwd = options.cwd ?? process.cwd();
   const config = loadPersonaSourceConfig(options);
+  const repoRoot = findRepoRoot(cwd);
+  const repoAgentDir =
+    repoRoot && resolvePath(repoRoot) !== resolvePath(cwd)
+      ? resolvePath(defaultCwdAgentDir(repoRoot))
+      : undefined;
   const directories: PersonaSourceDirectory[] = [
     {
       source: 'cwd',
@@ -468,7 +476,13 @@ export function buildPersonaSourceDirectories(
       const entry: PersonaSourceDirectory = {
         source: sourceForPersonaDir(dir, idx, config.userPersonaDir),
         dir,
-        configurable: true
+        configurable: true,
+        // `repo:agents` is omitted above when this directory is already
+        // configured. Keep the nested read here so `<name>/persona.json`
+        // still loads, at the rank the config chose.
+        ...(repoAgentDir !== undefined && resolvePath(dir) === repoAgentDir
+          ? { nested: true }
+          : {})
       };
       // The personal agents dir rides directly behind the personal personas
       // dir, the same way cwd:agents rides behind cwd, so the pair keeps its
