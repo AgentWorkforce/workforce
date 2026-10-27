@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import { mkdtemp, readFile, rm, stat, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { writePersonaSidecars } from './sidecars.js';
+import { composeCursorAgentsMd, writePersonaSidecars } from './sidecars.js';
 import { buildPersonaSpawnPlan, type ResolvedPersona } from './plan.js';
 
 async function exists(path: string): Promise<boolean> {
@@ -38,6 +38,15 @@ function persona(over: Partial<ResolvedPersona> = {}): ResolvedPersona {
     ...over
   };
 }
+
+test('composeCursorAgentsMd keeps the system prompt ahead of the sidecar', () => {
+  assert.equal(
+    composeCursorAgentsMd('System prompt\n', '# Sidecar\n'),
+    'System prompt\n\n---\n\n# Sidecar\n'
+  );
+  assert.equal(composeCursorAgentsMd('   ', '# Sidecar'), '# Sidecar\n');
+  assert.equal(composeCursorAgentsMd('System prompt', '   '), 'System prompt\n');
+});
 
 test('writePersonaSidecars: extend mode preserves the original on dispose', async () => {
   await withTmpDir(async (dir) => {

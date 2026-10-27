@@ -1,7 +1,9 @@
 # @agentworkforce/persona-registry
 
 Programmatic resolution for AgentWorkforce personas. It owns the same source
-cascade used by the CLI: cwd personas, cwd agents, configured directories
+cascade used by the CLI: cwd personas, cwd agents, the repository root's
+personas and agents when the command runs from a subdirectory (only when
+that directory exists and is not already configured), configured directories
 (including the personal directory), personal agents, then the built-in catalog.
 
 ```ts

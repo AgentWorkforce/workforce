@@ -29,7 +29,7 @@ import { listBuiltInPersonas, personaCatalog } from '@agentworkforce/workload-ro
 /**
  * User-defined persona override. Local files are partial overlays — only the
  * fields you specify replace the inherited base; everything else cascades down
- * through cwd → configured persona dirs → library.
+ * through cwd → repository → configured persona dirs → library.
  *
  * `extends` names the base explicitly by id or intent. If omitted and the file
  * has no `intent`, the loader implicitly inherits from the same-id persona
@@ -112,6 +112,11 @@ export type PersonaSource = string;
  *   - `cwd:agents` → same — `<cwd>/.agentworkforce/workforce/agents/<name>/persona.json`,
  *                  agents that keep their persona next to their handler.
  *                  Also a precise pointer, so also kept as-is.
+ *   - `repo`     → `repo`     — `<repo root>/.agentworkforce/workforce/personas/`,
+ *                  the repository's own personas, visible from any
+ *                  subdirectory of it. Present only when cwd is below the
+ *                  root and the directory exists. `repo:agents` is its
+ *                  nested counterpart.
  *   - `user:agents` → `personal:agents` — the `agents/` sibling of the personal
  *                  personas dir; personal agents-with-handlers, available in
  *                  any repo. Renamed to follow `user` → `personal`.
@@ -223,6 +228,32 @@ export function defaultCwdPersonaDir(cwd: string): string {
  */
 export function defaultCwdAgentDir(cwd: string): string {
   return join(cwd, '.agentworkforce', 'workforce', 'agents');
+}
+
+/**
+ * The repository root at or above `cwd`, or `undefined` outside a repository.
+ *
+ * A repo's personas live at its root, but commands are typically run from a
+ * package or source subdirectory. Without this the cascade looks only at the
+ * exact cwd, so the same repo yields different personas depending on which
+ * directory you happen to be standing in.
+ *
+ * The walk stops at `boundary` (the home directory by default) and never
+ * treats that directory as a repository. `~/.agentworkforce/workforce/personas/`
+ * is already the `user` layer, and a dotfiles checkout at `$HOME` must not
+ * re-label those personas as a higher-priority `repo` layer. Ancestors above
+ * the boundary are ignored for the same reason.
+ */
+export function findRepoRoot(cwd: string, boundary: string = homedir()): string | undefined {
+  const stop = resolvePath(boundary);
+  let dir = resolvePath(cwd);
+  while (true) {
+    if (dir === stop) return undefined;
+    if (existsSync(join(dir, '.git'))) return dir;
+    const parent = dirname(dir);
+    if (parent === dir) return undefined;
+    dir = parent;
+  }
 }
 
 /**
@@ -383,11 +414,50 @@ function sourceForPersonaDir(
   return dir === userPersonaDir ? 'user' : `dir:${idx + 1}`;
 }
 
+/**
+ * Persona directories contributed by the repository root when the command runs
+ * from a subdirectory. Ranked directly below the cwd layers: the directory you
+ * are standing in stays the most specific, and the repo answers for everywhere
+ * else inside it.
+ */
+function repoSourceDirectories(
+  cwd: string,
+  configuredDirs: readonly string[]
+): PersonaSourceDirectory[] {
+  const root = findRepoRoot(cwd);
+  if (!root || resolvePath(root) === resolvePath(cwd)) return [];
+  const configured = new Set(configuredDirs.map((dir) => resolvePath(dir)));
+  // Unlike the cwd layers — which are always listed because they are where
+  // `create` writes — a repo layer is only worth naming when it exists. Most
+  // repositories keep no personas, and listing a path nobody created is noise.
+  // A directory already present in `personaDirs` keeps that explicit position.
+  // Inserting it again here would outrank every configured source.
+  const dirs: PersonaSourceDirectory[] = [];
+  const personas = defaultCwdPersonaDir(root);
+  if (existsSync(personas) && !configured.has(resolvePath(personas))) {
+    dirs.push({ source: 'repo', dir: personas, configurable: false });
+  }
+  const agents = defaultCwdAgentDir(root);
+  if (existsSync(agents) && !configured.has(resolvePath(agents))) {
+    dirs.push({ source: 'repo:agents', dir: agents, configurable: false, nested: true });
+  }
+  // When `agents` is already configured, the nested read is inserted beside
+  // that entry in `buildPersonaSourceDirectories` instead of here. Putting it
+  // here would outrank every configured source, and replacing the configured
+  // entry with a nested one would hide top-level JSON in that directory.
+  return dirs;
+}
+
 export function buildPersonaSourceDirectories(
   options: LoadOptions = {}
 ): { directories: PersonaSourceDirectory[]; config: PersonaSourceConfig } {
   const cwd = options.cwd ?? process.cwd();
   const config = loadPersonaSourceConfig(options);
+  const repoRoot = findRepoRoot(cwd);
+  const repoAgentDir =
+    repoRoot && resolvePath(repoRoot) !== resolvePath(cwd)
+      ? resolvePath(defaultCwdAgentDir(repoRoot))
+      : undefined;
   const directories: PersonaSourceDirectory[] = [
     {
       source: 'cwd',
@@ -402,18 +472,28 @@ export function buildPersonaSourceDirectories(
       configurable: false,
       nested: true
     },
+    ...repoSourceDirectories(cwd, config.personaDirs),
     ...config.personaDirs.flatMap((dir, idx) => {
       const entry: PersonaSourceDirectory = {
         source: sourceForPersonaDir(dir, idx, config.userPersonaDir),
         dir,
         configurable: true
       };
+      // The configured entry stays a flat read, so top-level JSON keeps the
+      // rank the user chose. Nested `<name>/persona.json` files in the
+      // repository agents directory are not visible to that flat read, so
+      // they follow immediately after it — still behind every earlier
+      // configured source.
+      const nestedRepoAgents: PersonaSourceDirectory[] =
+        repoAgentDir !== undefined && resolvePath(dir) === repoAgentDir
+          ? [{ source: 'repo:agents', dir, configurable: false, nested: true }]
+          : [];
       // The personal agents dir rides directly behind the personal personas
       // dir, the same way cwd:agents rides behind cwd, so the pair keeps its
       // relative rank wherever the user has moved it in the cascade.
       return dir === config.userPersonaDir
-        ? [entry, userAgentSourceDir(config.userPersonaDir)]
-        : [entry];
+        ? [entry, ...nestedRepoAgents, userAgentSourceDir(config.userPersonaDir)]
+        : [entry, ...nestedRepoAgents];
     }),
     // A user who dropped their personal personas dir from the cascade still
     // gets their personal agents, ranked last among file layers.

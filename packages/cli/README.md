@@ -1,7 +1,7 @@
 # agentworkforce CLI
 
 A thin command-line front end for the workload-router. Spawns the harness CLI
-(`claude`, `codex`, `opencode`, `grok`) configured by a selected **persona** from the
+(`claude`, `codex`, `opencode`, `grok`, `cursor`) configured by a selected **persona** from the
 project-local layer, configured source directories, or the small internal
 built-in system catalog.
 
@@ -46,7 +46,7 @@ agentworkforce --version
   selector accepts agent id, compact agent id, deployed name, persona slug, or
   persona id, and posts to the same cloud trigger endpoint used by the dashboard.
 - `sources` — list, add, or remove persona source directories.
-- `harness check` — probe which harnesses (`claude`, `codex`, `opencode`, `grok`)
+- `harness check` — probe which harnesses (`claude`, `codex`, `opencode`, `grok`, `cursor`)
   are installed. See [`## Harness check`](#harness-check) below.
 - `destroy` — tear down a deployed cloud agent: cancels all relaycron
   schedules and marks the agent as destroyed. Accepts either a persona
@@ -157,9 +157,15 @@ agentworkforce agent <persona>[@<tier>]
 - `<persona>` — matches, in order:
   1. A **cwd-local** id (files in `<cwd>/.agentworkforce/workforce/personas/*.json`)
   2. A **cwd agent** id (`<cwd>/.agentworkforce/workforce/agents/<name>/persona.json`)
-  3. A configured persona source dir, in order. The default is
+  3. A **repository** id (`<repo root>/.agentworkforce/workforce/personas/*.json`),
+     when the command runs below the repository root and that directory exists
+     and is not already a configured source.
+  4. A **repository agent** id
+     (`<repo root>/.agentworkforce/workforce/agents/<name>/persona.json`), on the
+     same terms.
+  5. A configured persona source dir, in order. The default is
      `~/.agentworkforce/workforce/personas/*.json`.
-  4. An internal **library** persona — by intent first, then by id. The built-in
+  6. An internal **library** persona — by intent first, then by id. The built-in
      library is system-only; optional personas such as `code-reviewer` come from
      installed persona packs.
 - `<tier>` — `best` | `best-value` | `minimum`. Defaults to `best-value`.
@@ -403,7 +409,7 @@ combination; by default only the **recommended tier per intent** is shown
 | `--all` | off | Show every tier of every persona. Alias: `--no-recommended`. |
 | `--recommended` | on | Only show the recommended tier per intent. Implicit default; mostly useful for undoing `--all` earlier in a wrapper script. |
 | `--filter-rating <tier>` | — | Restrict to a single tier (`best` \| `best-value` \| `minimum`). **Implicitly turns off the recommended-only default**, so filtering by `best` shows every persona's `best` row even when that's not the recommended tier. |
-| `--filter-harness <harness>` | — | Restrict to a single harness (`claude` \| `codex` \| `opencode` \| `grok`). Composable with `--filter-rating` and `--all`. |
+| `--filter-harness <harness>` | — | Restrict to a single harness (`claude` \| `codex` \| `opencode` \| `grok` \| `cursor`). Composable with `--filter-rating` and `--all`. |
 | `--no-display-description` | off | Hide the `DESCRIPTION` column. `--display-description` re-enables it. |
 | `--json` | off | Emit `{ "personas": [...] }` with one object per row. Same field set as the table, useful for scripting. |
 | `-h`, `--help` | — | Print a one-line usage string and exit. |
@@ -443,9 +449,11 @@ agentworkforce sources remove <dir|config-position>
 
 Two fixed project sources always lead the cascade:
 `<cwd>/.agentworkforce/workforce/personas/*.json`, then
-`<cwd>/.agentworkforce/workforce/agents/<name>/persona.json`. A third fixed
-source, `~/.agentworkforce/workforce/agents/<name>/persona.json`, carries
-personal agents and follows the personal personas dir wherever it ranks.
+`<cwd>/.agentworkforce/workforce/agents/<name>/persona.json`. When the command
+runs from a subdirectory, the same two directories at the repository root
+follow, but only when they exist and are not already listed in `personaDirs`.
+A further fixed source, `~/.agentworkforce/workforce/agents/<name>/persona.json`,
+carries personal agents and follows the personal personas dir wherever it ranks.
 
 After that, the CLI reads an ordered list of configurable persona directories
 from `~/.agentworkforce/workforce/config.json`. If no config exists, the list
@@ -472,7 +480,9 @@ the override without editing JSON by hand.
 
 `sources add` appends by default. `--position <n>` inserts at the 1-based
 position among configurable directories, so `--position 1` gives that directory
-the highest priority after the fixed `cwd` and `cwd:agents` sources. `sources
+the highest priority after the fixed `cwd`, `cwd:agents`, and (when present)
+repository sources. A repository directory that is already in `personaDirs` is
+not inserted again, so its configured position stays authoritative. `sources
 remove` accepts either that configurable position or an exact path.
 
 Examples:
@@ -498,7 +508,7 @@ agentworkforce harness check
 ```
 
 Probes your PATH for each supported harness binary (`claude`, `codex`,
-`opencode`, `grok`) and prints a table with status (`ok` / `missing`), resolved
+`opencode`, `grok`, `cursor-agent`) and prints a table with status (`ok` / `missing`), resolved
 version, and the resolved path (or the error, for missing ones). Exit
 code is always `0` — this command is diagnostic, not a gate.
 
@@ -541,24 +551,32 @@ wins):
 
 1. `<cwd>/.agentworkforce/workforce/personas/*.json` — **cwd**
 2. `<cwd>/.agentworkforce/workforce/agents/<name>/persona.json` — **cwd:agents**
-3. Configurable persona source dirs, in order. Default:
+3. `<repo root>/.agentworkforce/workforce/personas/*.json` — **repo**, when the
+   command runs below the repository root and the directory exists and is not
+   already configured. From the root itself these files are the **cwd** layer.
+4. `<repo root>/.agentworkforce/workforce/agents/<name>/persona.json` —
+   **repo:agents**, on the same terms.
+5. Configurable persona source dirs, in order. Default:
    `~/.agentworkforce/workforce/personas/*.json` — **user**
-4. `~/.agentworkforce/workforce/agents/<name>/persona.json` — **user:agents**,
+6. `~/.agentworkforce/workforce/agents/<name>/persona.json` — **user:agents**,
    the personal mirror of `cwd:agents`. It rides directly behind the personal
    personas dir, so moving that dir in the cascade moves both. The tables
    printed by `list` and `sources list` show it as **personal:agents**,
    following `user` → `personal`; `user:agents` is the value `--json` emits.
-5. Internal built-in system personas in `/personas/` — **library**
+7. Internal built-in system personas in `/personas/` — **library**
 
 Local files are **partial overlays**: only the fields you set replace the
 inherited value. Everything else cascades through from below.
 
 ### Agents that ship their own handler
 
-The same directory layout works in a repo (`cwd:agents`) and in your personal
-config (`user:agents`), so an agent you want everywhere lives in
-`~/.agentworkforce/workforce/agents/<name>/` and a repo's own agents live in its
-working tree. A repo agent outranks a personal one of the same id.
+The same directory layout works in a repo (`cwd:agents` at the directory you
+are in, `repo:agents` at the repository root when you are in a subdirectory)
+and in your personal config (`user:agents`). An agent you want everywhere lives
+in `~/.agentworkforce/workforce/agents/<name>/`, and a repo's own agents live at
+its root. A repo agent outranks a personal one of the same id. The walk stops
+at the home directory, so a dotfiles checkout at `$HOME` stays the personal
+layer rather than becoming `repo`.
 
 An agent with code of its own keeps persona, handler, tests, and README in one
 directory:
@@ -895,9 +913,13 @@ persona JSON remains commit-safe as long as you only use references.
 
 ## Relayfile mount rules
 
-Interactive harness sessions (`claude`, `opencode`, `grok`, `codex`) run inside
-a Relayfile mount by default. File visibility and writability are controlled by
-the persona's `mount` block plus project-level dotfiles:
+Interactive harness sessions (`claude`, `opencode`, `grok`, `codex`, `cursor`) open a
+Relayfile mount when the persona or the project needs filesystem mediation:
+a `mount` block, project `.agentignore` / `.agentreadonly` rules, a sidecar
+or harness config file in the session cwd, or a non-Claude skill install.
+Simple claude and codex prompt/MCP launches stay in the real cwd. Inside a
+mount, file visibility and writability are controlled by the persona's
+`mount` block plus project-level dotfiles:
 
 ```jsonc
 {
@@ -942,9 +964,10 @@ mount rules (`.agentignore` / `.agentreadonly`) for that.
   from that server), `mcp__<server>__<tool>` (specific tool).
 - **Harness support today:** `claude` is wired for allow/deny/mode flags
   (`--allowedTools`, `--disallowedTools`, `--permission-mode`). `grok` maps
-  `mode: "bypassPermissions"` to `--always-approve`; other Grok permission
-  fields warn and are ignored. `codex` and `opencode` emit a warning and fall
-  back to their defaults when `permissions` is set.
+  `mode: "bypassPermissions"` to `--always-approve`; `cursor` maps it to
+  `--force`. Other Grok/Cursor permission fields warn and are ignored.
+  `codex` and `opencode` emit a warning and fall back to their defaults when
+  `permissions` is set.
 - **Cascade merge:** `allow` and `deny` are unions across layers (deduped on
   merge); `mode` is replaced by the topmost layer that sets it. So the
   library can declare the minimum-viable allow list, a user or configured
@@ -1030,6 +1053,7 @@ verbatim. Three transport types:
 | codex    | yes (via `--config mcp_servers.<name>...`) | not yet — SDK workflow path doesn't thread MCP |
 | opencode | not yet — warns and proceeds without MCP | not yet |
 | grok     | not yet — warns and proceeds without MCP | not yet |
+| cursor   | not yet — warns and proceeds without MCP | not yet |
 
 For a persona that needs MCP today, pick `claude` or `codex` as the harness
 for that tier.
@@ -1051,15 +1075,22 @@ persona session, add it to the persona's `mcpServers` block.
 agentworkforce agent [--install-in-repo] [--no-launch-metadata] <persona>[@<tier>]
 ```
 
-By default, interactive harness sessions run inside a sandbox mount — see
-[**Sandbox mount**](#sandbox-mount) below. `--install-in-repo` opts out.
+By default, simple claude and codex prompt/MCP launches run directly in the
+real cwd with normal harness auth and session-scoped argv/config inputs. The
+CLI does not change `$HOME`, run Claude with `--bare`, or otherwise hide
+OAuth/keychain credentials on that path, so a claude persona without its own
+`claudeMd` sees the repo's `CLAUDE.md`, `.claude/`, and `.mcp.json`. A sandbox
+mount is created when the launch needs filesystem mediation — see
+[**Sandbox mount**](#sandbox-mount) below. `--install-in-repo` opts out of
+session staging and the mount, and lets installers write to the repo's
+conventional harness directories.
 
 1. Resolves the persona, walks the cascade, resolves `$VAR` refs.
-2. **Stages skills outside the repo by default** (claude interactive only —
-   see **Skill staging** below). For codex / opencode / grok, or when
-   `--install-in-repo` is passed, falls back to the legacy repo-relative
-   install path (`.claude/skills/`, `.agents/skills/`, `.skills/`,
-   `.grok/skills/`).
+2. **Stages skills outside the repo by default** for Claude interactive
+   sessions — see **Skill staging** below. Codex, opencode, grok, and cursor
+   skill installs still require a sandbox mount unless `--install-in-repo` is
+   passed, because their installers write repo-relative paths
+   (`.agents/skills/`, `.grok/skills/`, `.cursor/rules/`, `.skills/`, lockfiles).
 3. Runs skill install (`prpm install …`) if the persona declares any skills,
    using the computed target (stage dir or repo).
 4. Execs the harness binary with stdio inherited:
@@ -1074,8 +1105,15 @@ By default, interactive harness sessions run inside a sandbox mount — see
      positional `[PROMPT]`. (codex has no `--system-prompt` flag today.)
    - `opencode`: `opencode --agent <personaId>` with a generated
      `opencode.json` in the sandbox carrying the persona model and prompt.
-   - `grok`: `grok --no-auto-update --model <model>`. In one-shot paths, the
-     CLI uses Grok Build's `--single` mode and passes cwd/output flags.
+   - `grok`: `grok --no-auto-update --model <model>`. The system prompt is
+     written to `AGENTS.md` in the sandbox mount (Grok has no system-prompt
+     flag). In one-shot paths, the CLI uses Grok Build's `--single` mode and
+     passes cwd/output flags.
+   - `cursor`: `cursor-agent --model <model>`. The system prompt is written
+     to `AGENTS.md` in the sandbox mount. `--install-in-repo` passes that
+     prompt as Cursor's initial prompt instead of writing the file. In
+     one-shot paths, the CLI uses Cursor Agent's `--print --output-format text`
+     mode.
 5. Runs the skill cleanup command on exit, regardless of exit status. In
    stage-dir mode this is a single `rm -rf <stage-dir>`.
 6. Records launch metadata for the session and refreshes harness session logs
@@ -1149,7 +1187,7 @@ the working tree, and the session only sees the skills the persona declares
 **Opt-out — `--install-in-repo`:**
 
 Pass `--install-in-repo` to fall back to the legacy behavior (skills land in
-the repo's `.claude/skills/` directory, cleaned on exit):
+the repo's harness directory, then are cleaned on exit):
 
 ```sh
 agentworkforce install @agentworkforce/personas-core --persona code-reviewer
@@ -1162,24 +1200,42 @@ stage dir conflicts with something else (network filesystem, read-only
 
 **Caveats for V1:**
 
-- **Claude harness only.** codex, opencode, and grok continue to install into their
-  conventional repo-relative directories. The SDK throws if `installRoot` is
-  passed with a non-claude harness.
+- **Claude installRoot only.** codex, opencode, grok, and cursor do not support
+  out-of-repo install roots yet. When they declare skills, the CLI uses a
+  sandbox mount so installer output stays out of the real repo. The SDK
+  throws if `installRoot` is passed with a non-claude harness.
 - **No cache layer yet.** Every interactive session runs a fresh prpm install
   into a new stage dir. A `~/.agentworkforce/workforce/cache/` content-addressed cache
   is planned but not wired up.
 
 ## Sandbox mount
 
-By default, interactive harness sessions run inside a
+Interactive sessions stay in the real cwd unless they need a filesystem
+mirror. The CLI creates a
 [`@relayfile/local-mount`](https://www.npmjs.com/package/@relayfile/local-mount)
-mount that hides repo-level harness configuration from the session, applies
-the persona `mount` block plus Relayfile `.agentignore` / `.agentreadonly`
-rules, and routes skill-install writes into the sandbox — so the model sees
-persona context + user-level context, and only the project files the mount
-exposes.
+mount only when one of these is true:
 
-`--install-in-repo` opts out and runs against the real cwd.
+- `mount.ignoredPatterns`, `mount.readonlyPatterns`, `mount.enabled: true`,
+  or another declared mount field (for example multi-root `roots`).
+  `mount.enabled: false` skips those persona-driven reasons.
+- Project `.agentignore` / `.agentreadonly` rules, including the
+  persona-scoped `.<personaId>.agentignore` and `.<personaId>.agentreadonly`
+  files. These still mount when `mount.enabled` is false, so repo filesystem
+  rules are not silently dropped. `--install-in-repo` remains the opt-out.
+- Persona sidecars (`claudeMd` / `agentsMd`) that must be materialized as
+  `CLAUDE.md` / `AGENTS.md` without writing into the real repo.
+- Harness cwd config: opencode's per-session `opencode.json`, and grok or
+  cursor `AGENTS.md` when the persona has a system prompt.
+- Codex, opencode, grok, and cursor skill installs, whose providers still
+  write repo-relative directories and lockfiles.
+
+When the mount is active, it hides repo-level harness configuration from the
+session, applies the persona `mount` block plus Relayfile `.agentignore` /
+`.agentreadonly` rules, and routes sandbox-only writes away from the real
+checkout.
+
+`--install-in-repo` prevents the mount from being used for installer isolation
+and runs installers against the real cwd.
 
 The CLI reads these files from the project root before creating the mount:
 
@@ -1206,9 +1262,12 @@ back to the repo):
 
 | Pattern | Rationale |
 | --- | --- |
-| `.agents`, `.claude/skills`, `.factory/skills`, `.grok/skills`, `.kiro/skills`, `skills` | skill.sh universal install root + per-harness symlink farms |
+| `.agents`, `.claude/skills`, `.cursor/rules`, `.factory/skills`, `.grok/skills`, `.kiro/skills`, `skills` | skill.sh universal install root + per-harness symlink farms |
 | `.opencode`, `.skills` | prpm `--as <harness>` output roots |
 | `prpm.lock`, `skills-lock.json` | provider lockfiles |
+
+For `cursor`, the mount also hides root `CLAUDE.md` / `CLAUDE.local.md`
+because Cursor Agent reads root Claude guidance alongside `AGENTS.md`.
 
 **What's preserved:**
 
@@ -1216,14 +1275,15 @@ back to the repo):
   still load. The mount scrubs the *project*, not the user. To exclude
   user-level context too, launch under a scratch `$HOME`.
 - **Persona skills.** For claude, the `--plugin-dir` passed to the harness
-  resolves to an absolute path *outside* the mount, so staged skills from
-  `~/.agentworkforce/workforce/sessions/<id>/claude/plugin/` load normally. For
-  codex, opencode, and grok, the install runs inside the mount so the writes
-  land in the sandbox.
+  resolves to an absolute path under
+  `~/.agentworkforce/workforce/sessions/<id>/claude/plugin/`, so simple
+  Claude personas do not need a mount just to load staged skills. For
+  codex, opencode, grok, and cursor, the install runs inside the mount when
+  skills are declared so repo-relative installer output lands in the sandbox.
 - **Keychain auth.** The mount does not pass `--bare`; it only hides
   files. Claude Code's macOS keychain login stays active.
 - **Persona `mcpServers`.** Still passed via `--mcp-config` — unaffected
-  by the mount. The repo's `.mcp.json` is hidden regardless.
+  by the mount. While the mount is active, the repo's `.mcp.json` is hidden.
 - **Git.** `.git` is included in the mount (one-way project→mount sync per
   `@relayfile/local-mount` 0.6+'s `includeGit`). Tracked paths matching
   the hidden patterns are flagged `skip-worktree` so `git status` doesn't
@@ -1233,9 +1293,10 @@ back to the repo):
 
 ### Session layout
 
-Both the skill install root and the sandbox mount live under a single
-session directory. The session id (`<personaId>-<base36-timestamp>-<hex>`)
-is generated once and both paths are derived from it:
+When a run needs session artifacts, the skill install root and any sandbox
+mount live under a single session directory. The session id
+(`<personaId>-<base36-timestamp>-<hex>`) is generated once and both paths are
+derived from it:
 
 ```
 ~/.agentworkforce/workforce/
@@ -1249,29 +1310,30 @@ is generated once and both paths are derived from it:
         └── <mirrored project tree, minus the hidden patterns>
 ```
 
-`@relayfile/local-mount` handles mount creation, process spawn,
-SIGINT/SIGTERM forwarding, write syncback, and cleanup on exit. The
-agentworkforce CLI just wires the paths and passes the persona's argv.
+`@relayfile/local-mount` handles mount creation, write syncback, and cleanup
+when the conditional mount branch is active. Plain direct launches skip this
+tree walk entirely and keep the harness's normal auth lookup path.
 
 ### Example
 
 ```sh
-# Interactive persona session with the repo's CLAUDE.md, .claude/, and
-# .mcp.json hidden — session sees the persona's staged skills plus your
-# user-level ~/.claude/CLAUDE.md, nothing else from this repo.
-agentworkforce install @agentworkforce/personas-core --persona code-reviewer
-agentworkforce agent code-reviewer@best
+# Interactive persona session with explicit filesystem policy. This uses
+# Relayfile so the session sees only the paths allowed by the persona and
+# project .agentignore/.agentreadonly rules.
+agentworkforce install @agentworkforce/personas-core --persona proactive-agent-builder
+agentworkforce agent proactive-agent-builder
 ```
 
-On exit: mount is synced back to the real repo, then torn down; skill
-stage dir is cleaned up by the existing `rm -rf` cleanup command.
+On exit, mounted runs sync changes back to the real repo, then tear down the
+mount; the skill stage dir is cleaned up by the existing `rm -rf` cleanup
+command.
 
 ## Selecting a harness per tier
 
 A persona's three tiers can use different harnesses.
 
 If a persona uses MCP, use `claude` or `codex` tiers.
-`opencode` still does not inject persona `mcpServers` at spawn time.
+`opencode`, `grok`, and `cursor` still do not inject persona `mcpServers` at spawn time.
 
 ## Troubleshooting
 
@@ -1285,9 +1347,9 @@ If a persona uses MCP, use `claude` or `codex` tiers.
   auth interactively (e.g. Claude Code's MCP OAuth flow).
 
 - **`Failed to spawn "claude": binary not found on PATH.`** — Install the
-  harness CLI (`claude`, `codex`, `opencode`, or `grok`) and ensure it's on your PATH.
+  harness CLI (`claude`, `codex`, `opencode`, `grok`, or `cursor-agent`) and ensure it's on your PATH.
 
-- **`warning: persona declares mcpServers but the opencode harness is not yet
+- **`warning: persona declares mcpServers but the <harness> harness is not yet
   wired …`** — Switch that tier's `harness` to `claude` or `codex`, or drop the
   MCP requirement.
 
