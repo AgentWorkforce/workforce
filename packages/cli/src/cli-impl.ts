@@ -44,6 +44,8 @@ import {
   renderPersonaInputs,
   resolveAiMemory,
   resolveMcpServersLenient,
+  buildMountResolutionEnv,
+  resolveMountRoots,
   resolvePersonaInputs,
   resolveSidecar,
   resolveSkillCacheDir,
@@ -55,6 +57,7 @@ import {
   type InteractiveSpec,
   type NonInteractiveSpec,
   type PersonaMount,
+  type ResolvedMountRoot,
   type AiHistMcpConfig,
   type PersonaSelection,
   type PersonaSpec,
@@ -1232,6 +1235,73 @@ export function buildRelayfileMountPatterns(input: {
   };
 }
 
+export interface PersonaMountTarget {
+  source: string;
+  dest: string;
+  ignoredPatterns: string[];
+  readonlyPatterns: string[];
+  agentName: string;
+}
+
+/**
+ * One `createMount` call per session.
+ *
+ * Single-root personas mirror the launcher cwd and keep the full session
+ * pattern set (harness hides, skill-install dirs, config files, cwd
+ * dotfiles). Multi-root personas mount each resolved alias from its own
+ * source tree. Those session patterns name files at the launcher root
+ * (`CLAUDE.md`, `.claude/`, `AGENTS.md`, `opencode.json`, …); copying them
+ * into every alias would hide real repo files and stop them syncing back.
+ * Each alias instead gets its own dotfiles plus the persona-wide and
+ * per-root pattern lists.
+ */
+export function buildPersonaMountTargets(input: {
+  projectDir: string;
+  mountDir: string;
+  personaId: string;
+  sessionPatterns: RelayfileMountPatterns;
+  personaMount?: PersonaMount;
+  resolvedRoots?: readonly ResolvedMountRoot[];
+  readRootDotfiles?: (
+    sourceDir: string,
+    personaId: string
+  ) => { ignoredPatterns: readonly string[]; readonlyPatterns: readonly string[] };
+}): PersonaMountTarget[] {
+  if (!input.resolvedRoots || input.resolvedRoots.length === 0) {
+    return [
+      {
+        source: input.projectDir,
+        dest: input.mountDir,
+        ignoredPatterns: [...input.sessionPatterns.ignoredPatterns],
+        readonlyPatterns: [...input.sessionPatterns.readonlyPatterns],
+        agentName: input.personaId
+      }
+    ];
+  }
+  const readRootDotfiles =
+    input.readRootDotfiles ??
+    ((sourceDir: string, personaId: string) =>
+      readAgentDotfiles(sourceDir, { agentName: personaId }));
+  return input.resolvedRoots.map((root) => {
+    const dotfiles = readRootDotfiles(root.path, input.personaId);
+    return {
+      source: root.path,
+      dest: join(input.mountDir, root.alias),
+      ignoredPatterns: [
+        ...dotfiles.ignoredPatterns,
+        ...(input.personaMount?.ignoredPatterns ?? []),
+        ...root.ignoredPatterns
+      ],
+      readonlyPatterns: [
+        ...dotfiles.readonlyPatterns,
+        ...(input.personaMount?.readonlyPatterns ?? []),
+        ...root.readonlyPatterns
+      ],
+      agentName: `${input.personaId}:${root.alias}`
+    };
+  });
+}
+
 /**
  * Build the block appended to `<mount>/.git/info/exclude` so untracked-and-
  * hidden files (e.g. `.claude/skills/` materialized by skill installs, or
@@ -1828,6 +1898,7 @@ function buildFastLaunchPlan(input: {
   readonlyPatterns: readonly string[];
 }): LaunchPlan | null {
   const cwd = process.cwd();
+  if (input.selection.mount?.roots && input.selection.mount.roots.length > 0) return null;
   if (input.envResolutionValue !== undefined) return null;
   if (input.resolvedMcp !== undefined) return null;
   if (input.aiHist !== undefined) return null;
@@ -2417,6 +2488,17 @@ async function runInteractive(
   process.stderr.write(`• spawning ${spec.bin} (${summary.join(', ')})\n`);
   perfMark('runInteractive: harness spec + relay MCP resolved');
 
+  // Multi-root mount requires the sandbox. `--install-in-repo` disengages
+  // it, and silently mounting one root (or none) would hide that the
+  // persona cannot see the trees it declared.
+  const declaredMountRoots = effectiveSelection.mount?.roots;
+  if (declaredMountRoots && declaredMountRoots.length > 0 && !useClean) {
+    process.stderr.write(
+      `error: persona "${personaId}" declares mount.roots which requires the sandbox mount; ` +
+        `--install-in-repo disengages the mount. Drop the flag and retry.\n`
+    );
+    return 1;
+  }
 
   // Mount branch: delegate process lifecycle (spawn, signal forwarding,
   // syncback, cleanup) to @relayfile/local-mount.
@@ -2436,6 +2518,37 @@ async function runInteractive(
   if (useClean && sessionRoot) {
     const mountDir = sessionMountDir(sessionRoot);
     let launchMetadata: LaunchMetadataRun | undefined;
+    // Resolve declared roots against the env the harness child actually
+    // receives (process env + persona `env` + inputs), not just the caller
+    // env. A path like `$WORKTREE` that is introduced by `selection.env`
+    // must resolve here. Missing optional roots are dropped; a persona
+    // whose every root disappears is a hard error rather than a silent
+    // fallback to the launcher cwd.
+    let resolvedMountRoots: ResolvedMountRoot[] | undefined;
+    if (declaredMountRoots && declaredMountRoots.length > 0) {
+      // Same input-name and env-name rules as buildPersonaSpawnPlan. Persona
+      // env still wins over resolved inputs; both `$INPUT` and `$INPUT_ENV`
+      // see the resolved value when persona env does not override that key.
+      const mountResolveEnv = buildMountResolutionEnv({
+        processEnv: process.env,
+        inputs: effectiveSelection.inputs,
+        inputValues: inputResolution.values,
+        personaEnv: envResolution.value
+      });
+      try {
+        resolvedMountRoots = resolveMountRoots(effectiveSelection.mount, mountResolveEnv);
+      } catch (err) {
+        process.stderr.write(`error: ${(err as Error).message}\n`);
+        return 1;
+      }
+      if (!resolvedMountRoots || resolvedMountRoots.length === 0) {
+        process.stderr.write(
+          `error: persona "${personaId}" declares mount.roots but no roots resolved — ` +
+            `set the env vars referenced by mount.roots[].path and retry.\n`
+        );
+        return 1;
+      }
+    }
     // Anything we materialize into the mount via onBeforeLaunch must be
     // hidden from the mount-mirror in both directions: without this, any
     // opencode.json already present in the real repo would be copied into
@@ -2450,11 +2563,20 @@ async function runInteractive(
       mount: effectiveSelection.mount,
       configFilePaths: spec.configFiles.map((file) => file.path)
     });
+    const mountTargets = buildPersonaMountTargets({
+      projectDir: process.cwd(),
+      mountDir,
+      personaId,
+      sessionPatterns: { ignoredPatterns, readonlyPatterns },
+      personaMount: effectiveSelection.mount,
+      resolvedRoots: resolvedMountRoots
+    });
     // Warm-launch plan for the NEXT invocation of this selector. Built at
     // resolution time (digests must reflect the inputs this argv came from),
-    // consumed at teardown if the session ends cleanly.
+    // consumed at teardown if the session ends cleanly. Multi-root sessions
+    // are not warm-launch eligible: the fast path reattaches one cwd mount.
     const fastPlan =
-      options.selector && skillCachingEnabled
+      options.selector && skillCachingEnabled && !resolvedMountRoots
         ? buildFastLaunchPlan({
             selector: options.selector,
             personaId,
@@ -2554,37 +2676,47 @@ async function runInteractive(
     };
     process.on('SIGINT', sigintHandler);
 
-    let handle: Awaited<ReturnType<typeof createMount>> | undefined;
-    let autoSync: AutoSyncHandle | undefined;
+    const liveMounts: Array<{
+      label: string;
+      handle: Awaited<ReturnType<typeof createMount>>;
+    }> = [];
+    const autoSyncHandles: Array<{ label: string; auto: AutoSyncHandle }> = [];
     let exitCode = 0;
     try {
       // createMount inside the try so its initial-mirror failures fall into
-      // the catch path and clean up the setup spinner.
+      // the catch path and clean up the setup spinner. Multi-root opens each
+      // alias sequentially; cleanup below tears them down in reverse order.
+      //
+      // Pull `.git` into each mount so git commands work inside the
+      // sandbox. relayfile treats this as one-way project→mount: host-side
+      // `.git` changes flow in, mount-side commits/refs stay sandboxed and
+      // are discarded on cleanup. The agent must `git push` to persist
+      // work. `population: 'auto'` enumerates via `git ls-files` when the
+      // source is a git checkout so gitignored trees are never mirrored.
       perfMark('mount: createMount start');
-      handle = await createMount(process.cwd(), mountDir, {
-        ignoredPatterns: [...ignoredPatterns],
-        readonlyPatterns: [...readonlyPatterns],
-        excludeDirs: [],
-        agentName: personaId,
-        // Pull `.git` into the mount so git commands work inside the
-        // sandbox. relayfile treats this as one-way project→mount: host-side
-        // `.git` changes flow in, mount-side commits/refs stay sandboxed and
-        // are discarded on cleanup. The agent must `git push` to persist
-        // work.
-        includeGit: true,
-        // Enumerate via `git ls-files` when the cwd is a git checkout: only
-        // tracked + untracked-unignored files enter the mount, so gitignored
-        // trees (worktrees, build outputs, caches) never get mirrored or
-        // rescanned by autosync/syncBack. Falls back to the walk elsewhere.
-        population: 'auto'
-      });
-      // Run before install / configFile writes so the freshly written files
-      // (e.g. `.opencode/`, `opencode.json`) aren't yet present when we run
-      // `git ls-files` to pick skip-worktree candidates — we don't need them
-      // flagged in the index, just hidden via the `.git/info/exclude` block.
+      for (const target of mountTargets) {
+        mkdirSync(dirname(target.dest), { recursive: true });
+        const handle = await createMount(target.source, target.dest, {
+          ignoredPatterns: target.ignoredPatterns,
+          readonlyPatterns: target.readonlyPatterns,
+          excludeDirs: [],
+          agentName: target.agentName,
+          includeGit: true,
+          population: 'auto'
+        });
+        liveMounts.push({ label: target.agentName, handle });
+        // Run before install / configFile writes so the freshly written files
+        // (e.g. `.opencode/`, `opencode.json`) aren't yet present when we run
+        // `git ls-files` to pick skip-worktree candidates — we don't need them
+        // flagged in the index, just hidden via the `.git/info/exclude` block.
+        configureGitForMount(handle.mountDir, target.ignoredPatterns);
+      }
       perfMark('mount: createMount done');
-      configureGitForMount(handle.mountDir, ignoredPatterns);
       perfMark('mount: git configured');
+      // Single-root sessions materialize into the mount itself. Multi-root
+      // sessions materialize sidecars, config files, and skill installs into
+      // the parent scratch dir (the harness cwd), not into one alias.
+      const materializeDir = resolvedMountRoots ? mountDir : liveMounts[0].handle.mountDir;
       if (deferInstallToMount) {
         // Cache-aware mount install:
         //   - If we have a cache hit, skip the install and just mirror the
@@ -2602,7 +2734,7 @@ async function runInteractive(
         // setup spinner running avoids a redundant "Setting up sandbox
         // mount…" redraw in the user-visible output.
         if (skillCacheHit && skillCacheDir) {
-          mirrorSkillCacheInto(skillCacheDir, handle.mountDir);
+          mirrorSkillCacheInto(skillCacheDir, materializeDir);
         } else if (skillCachingEnabled && skillCacheDir && skillCacheFingerprint) {
           const lock = await acquireSkillCacheLock(skillCacheDir);
           try {
@@ -2613,7 +2745,7 @@ async function runInteractive(
               !options.refreshSkills &&
               isSkillCacheValid(skillCacheDir, skillCacheFingerprint)
             ) {
-              mirrorSkillCacheInto(skillCacheDir, handle.mountDir);
+              mirrorSkillCacheInto(skillCacheDir, materializeDir);
             } else {
               setupSpinner?.stop();
               // `--refresh-skills`: wipe first so the reinstall is a true
@@ -2629,7 +2761,7 @@ async function runInteractive(
                 harness,
                 effectiveSelection.skills.map((s) => ({ id: s.id, source: s.source }))
               );
-              mirrorSkillCacheInto(skillCacheDir, handle.mountDir);
+              mirrorSkillCacheInto(skillCacheDir, materializeDir);
               setupSpinner?.start();
             }
           } finally {
@@ -2637,14 +2769,14 @@ async function runInteractive(
           }
         } else {
           setupSpinner?.stop();
-          await runInstallOrThrow(install.command, installLabel, handle.mountDir);
+          await runInstallOrThrow(install.command, installLabel, materializeDir);
           setupSpinner?.start();
         }
       }
       perfMark('mount: skills mirrored/installed');
       for (const file of spec.configFiles) {
         assertSafeRelativePath(file.path);
-        const target = join(handle.mountDir, file.path);
+        const target = join(materializeDir, file.path);
         mkdirSync(dirname(target), { recursive: true });
         writeFileSync(target, file.contents, 'utf8');
       }
@@ -2653,32 +2785,52 @@ async function runInteractive(
         // Extend reads the real repo, not the prompt file this loop just
         // wrote into the mount. Put the Cursor system prompt back in front
         // so both the prompt and the sidecar survive overwrite and extend.
+        // materializeDir is the single mount for one root and the parent
+        // scratch dir (the harness cwd) when mount.roots is set.
         const cursorPrompt =
           harness === 'cursor' && resolvedSidecar.mountFile === 'AGENTS.md'
             ? spec.configFiles.find((file) => file.path === 'AGENTS.md')?.contents
             : undefined;
         const body = mergeCursorAgentsMd(cursorPrompt, sidecarBody);
-        writeFileSync(join(handle.mountDir, resolvedSidecar.mountFile), body, 'utf8');
+        writeFileSync(join(materializeDir, resolvedSidecar.mountFile), body, 'utf8');
       }
       perfMark('mount: config files + sidecar written');
-      launchMetadata = await startLaunchMetadataForLaunch(handle.mountDir);
+      launchMetadata = await startLaunchMetadataForLaunch(materializeDir);
       perfMark('mount: launch metadata started');
       if (options.capture) {
         options.capture.stampEnrichment = { ...launchMetadata.metadata };
         options.capture.stampingEnabled = launchMetadata.enabled;
       }
 
-      autoSync = handle.startAutoSync();
+      for (const live of liveMounts) {
+        autoSyncHandles.push({ label: live.label, auto: live.handle.startAutoSync() });
+      }
       perfMark('mount: autosync started');
 
       // Stop the setup spinner before spawning the child — the child
       // inherits stdio and would otherwise interleave its output with
       // spinner frames.
-      setupSpinner?.succeed(formatSandboxMountReadyMessage(mountDir, handle));
+      const readyHandle =
+        liveMounts.length === 1
+          ? liveMounts[0].handle
+          : {
+              initialMountDurationMs: liveMounts.reduce(
+                (sum, live) => sum + (live.handle.initialMountDurationMs ?? 0),
+                0
+              ),
+              initialFileCount: liveMounts.reduce(
+                (sum, live) => sum + (live.handle.initialFileCount ?? 0),
+                0
+              )
+            };
+      const readyDir = resolvedMountRoots
+        ? `${mountDir} (${resolvedMountRoots.map((root) => root.alias).join(', ')})`
+        : mountDir;
+      setupSpinner?.succeed(formatSandboxMountReadyMessage(readyDir, readyHandle));
       setupSpinner = undefined;
 
       const childEnv = resolvedEnv ? { ...process.env, ...resolvedEnv } : process.env;
-      const childCwd = handle.mountDir;
+      const childCwd = materializeDir;
       if (options.capture) {
         options.capture.sessionCwd = childCwd;
         options.capture.harness = harness;
@@ -2714,45 +2866,68 @@ async function runInteractive(
 
       let count = 0;
       let exportedState: Record<string, FileState> | undefined;
-      if (autoSync) {
-        if (fastPlan && !shutdownController.signal.aborted) {
-          // Full pass before stopping so the exported state also covers
-          // paths only reconciles visit (`.git/**` under includeGit) —
-          // without those entries, files git gc removes from the project
-          // between sessions would survive as stale copies in the warm
-          // mount. Re-warming is best-effort; a failure here only costs
-          // the next launch its fast path.
-          try {
-            await autoSync.reconcile({ signal: shutdownController.signal });
-          } catch {
-            /* fall through to the normal drain */
-          }
+      const teardownErrors: string[] = [];
+      // Single-root warm launches reconcile before the drain so the exported
+      // state covers paths only reconciles visit. Multi-root never builds a
+      // fast plan, so this stays a no-op there.
+      const fastAuto = fastPlan ? autoSyncHandles[0] : undefined;
+      if (fastAuto && !shutdownController.signal.aborted) {
+        try {
+          await fastAuto.auto.reconcile({ signal: shutdownController.signal });
+        } catch {
+          /* fall through to the normal drain */
         }
-        await autoSync.stop({ signal: shutdownController.signal });
-        count += autoSync.totalChanges();
-        if (fastPlan && !shutdownController.signal.aborted) {
-          try {
-            exportedState = autoSync.exportState();
-          } catch {
-            /* re-warm skipped below */
-          }
+      }
+      // One root's stop/syncBack failure must not skip the others. Drain
+      // every handle, then surface a combined error.
+      while (autoSyncHandles.length > 0) {
+        const entry = autoSyncHandles.pop();
+        if (!entry) continue;
+        try {
+          await entry.auto.stop({ signal: shutdownController.signal });
+          count += entry.auto.totalChanges();
+        } catch (err) {
+          teardownErrors.push(`${entry.label}: ${(err as Error).message}`);
         }
-        autoSync = undefined;
+      }
+      if (fastAuto && !shutdownController.signal.aborted) {
+        try {
+          exportedState = fastAuto.auto.exportState();
+        } catch {
+          /* re-warm skipped below */
+        }
       }
       perfMark('exit: autosync stopped (draining reconcile done)');
       // NOTE: `count` is bidirectional — it sums autosync activity in both
       // directions (inbound project→mount and outbound mount→project,
       // including deletes) plus the final mount→project syncBack. Phrase as
       // "file events during session" so we don't overclaim direction.
-      count += await handle.syncBack({ signal: shutdownController.signal });
+      for (const live of liveMounts) {
+        try {
+          count += await live.handle.syncBack({ signal: shutdownController.signal });
+        } catch (err) {
+          teardownErrors.push(`${live.label}: ${(err as Error).message}`);
+        }
+      }
+      if (teardownErrors.length > 0) {
+        throw new Error(
+          `Failed to sync ${teardownErrors.length} mount root(s):\n${teardownErrors
+            .map((line) => `- ${line}`)
+            .join('\n')}`
+        );
+      }
       perfMark('exit: final syncBack done');
 
       const aborted = shutdownController.signal.aborted;
-      if (fastPlan && exportedState && !aborted) {
+      if (fastPlan && exportedState && !aborted && liveMounts.length === 1) {
         // The session settled cleanly: keep the mount warm for the next
         // launch instead of discarding it. cleanup()/removeSessionRoot in
         // the finally below no-op on the moved-away mount dir.
-        rewarmMountAndPlan({ plan: fastPlan, mountDir: handle.mountDir, exportedState });
+        rewarmMountAndPlan({
+          plan: fastPlan,
+          mountDir: liveMounts[0].handle.mountDir,
+          exportedState
+        });
       }
       const qualifier = aborted ? ' (partial)' : '';
       const message =
@@ -2797,16 +2972,25 @@ async function runInteractive(
         syncSpinner.stop();
         syncSpinner = undefined;
       }
-      // Best-effort: stop autosync if we errored out before the success path
-      // already cleared it.
-      if (autoSync) {
+      // Best-effort: stop any autosync handles the success path didn't drain,
+      // then tear mounts down in reverse open order so one failure cannot
+      // skip the rest.
+      while (autoSyncHandles.length > 0) {
+        const entry = autoSyncHandles.pop();
+        if (!entry) continue;
         try {
-          await autoSync.stop({ signal: shutdownController.signal });
+          await entry.auto.stop({ signal: shutdownController.signal });
         } catch {
           /* ignore — we're tearing down anyway */
         }
       }
-      handle?.cleanup();
+      for (let i = liveMounts.length - 1; i >= 0; i -= 1) {
+        try {
+          liveMounts[i].handle.cleanup();
+        } catch {
+          /* ignore — best-effort cleanup */
+        }
+      }
       await launchMetadata?.stop();
       process.removeListener('SIGINT', sigintHandler);
       // When the install ran inside the mount, its cleanup paths are
@@ -3531,7 +3715,11 @@ function formatPersonaShow(spec: PersonaSpec, source: PersonaSource): string {
   lines.push('');
   lines.push('MOUNT');
   const mount = spec.mount;
-  if (!mount || (!mount.ignoredPatterns?.length && !mount.readonlyPatterns?.length)) {
+  const mountRoots = mount?.roots ?? [];
+  const hasMountPatterns = Boolean(
+    mount?.ignoredPatterns?.length || mount?.readonlyPatterns?.length
+  );
+  if (!mount || (!hasMountPatterns && mountRoots.length === 0)) {
     lines.push('  (none)');
   } else {
     if (mount.ignoredPatterns?.length) {
@@ -3539,6 +3727,13 @@ function formatPersonaShow(spec: PersonaSpec, source: PersonaSource): string {
     }
     if (mount.readonlyPatterns?.length) {
       lines.push(`  readonly: ${mount.readonlyPatterns.join(', ')}`);
+    }
+    if (mountRoots.length > 0) {
+      lines.push(
+        `  roots:    ${mountRoots
+          .map((root) => `${root.alias}${root.readonly ? ' (readonly)' : ''}`)
+          .join(', ')}`
+      );
     }
   }
 

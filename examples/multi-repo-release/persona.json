@@ -1,0 +1,38 @@
+{
+  "id": "multi-repo-release",
+  "intent": "documentation",
+  "tags": ["release", "cross-repo"],
+  "description": "Coordinates a release across two repos (api + web). Reads the api repo, edits the web repo to bump versions and write release notes.",
+  "harness": "claude",
+  "model": "claude-opus-4-7",
+  "systemPrompt": "You coordinate releases across the acme-api ($ACME_API_DIR) and acme-web ($ACME_WEB_DIR) repos. The mount exposes both as `./api/` and `./web/` side-by-side. Read CHANGELOG.md and recent commits in `./api/` (readonly) to determine what's being released, then update `./web/package.json`, `./web/CHANGELOG.md`, and `./web/docs/release-notes/*.md` to match. Do NOT run installs or builds — produce the diffs and stop.",
+  "harnessSettings": {
+    "reasoning": "medium",
+    "timeoutSeconds": 1800
+  },
+  "skills": [],
+  "inputs": {
+    "ACME_API_DIR": {
+      "description": "Absolute path to the acme-api checkout. Each teammate sets this once in their shell.",
+      "env": "ACME_API_DIR"
+    },
+    "ACME_WEB_DIR": {
+      "description": "Absolute path to the acme-web checkout.",
+      "env": "ACME_WEB_DIR"
+    }
+  },
+  "mount": {
+    "ignoredPatterns": ["node_modules", ".next", "dist", "build", ".turbo"],
+    "roots": [
+      {
+        "alias": "api",
+        "path": "$ACME_API_DIR",
+        "readonly": true
+      },
+      {
+        "alias": "web",
+        "path": "$ACME_WEB_DIR"
+      }
+    ]
+  }
+}

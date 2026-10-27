@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
+import { mkdir, mkdtemp, readFile, readdir, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { applyPersonaMount } from './mount.js';
@@ -44,6 +44,64 @@ test('applyPersonaMount: declared policy without personaId throws a clear error'
   );
 });
 
+test('applyPersonaMount: multi-root mount creates a subdir per alias and tears them down on dispose', async () => {
+  // Real on-disk sources + mountDir; the underlying relayfile primitive
+  // does a one-shot mirror at createMount time, so this exercises the
+  // full N-mount lifecycle. Reverse-order cleanup is verified by removing
+  // the mountDir tree afterwards — handles must not leave orphan watchers.
+  const root = await mkdtemp(join(tmpdir(), 'aw-mount-roots-'));
+  try {
+    const apiSrc = join(root, 'src-api');
+    const webSrc = join(root, 'src-web');
+    const mountDir = join(root, 'mount');
+    await mkdir(apiSrc, { recursive: true });
+    await mkdir(webSrc, { recursive: true });
+    await writeFile(join(apiSrc, 'README.md'), 'api');
+    await writeFile(join(webSrc, 'README.md'), 'web');
+
+    const mount: ResolvedMountPolicy = {
+      ignoredPatterns: ['node_modules'],
+      readonlyPatterns: [],
+      roots: [
+        {
+          alias: 'api',
+          path: apiSrc,
+          readonly: true,
+          ignoredPatterns: [],
+          readonlyPatterns: ['**']
+        },
+        {
+          alias: 'web',
+          path: webSrc,
+          readonly: false,
+          ignoredPatterns: [],
+          readonlyPatterns: []
+        }
+      ]
+    };
+    const handle = await applyPersonaMount(mount, {
+      cwd: root,
+      mountDir,
+      personaId: 'multi-root-test',
+      includeGit: false
+    });
+    try {
+      assert.equal(handle.cwd, mountDir);
+      assert.deepEqual([...handle.aliases], ['api', 'web']);
+      const apiMount = join(mountDir, 'api');
+      const webMount = join(mountDir, 'web');
+      assert.ok((await readdir(apiMount)).includes('README.md'), 'api alias should mirror its source');
+      assert.ok((await readdir(webMount)).includes('README.md'), 'web alias should mirror its source');
+    } finally {
+      await handle.dispose();
+      // Idempotent.
+      await handle.dispose();
+    }
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
 test('applyPersonaMount: autoSync flushes harness changes before disposal', async () => {
   const root = await mkdtemp(join(tmpdir(), 'persona-mount-autosync-'));
   const project = join(root, 'project');
@@ -69,4 +127,10 @@ test('applyPersonaMount: autoSync flushes harness changes before disposal', asyn
   } finally {
     await rm(root, { recursive: true, force: true });
   }
+});
+
+test('applyPersonaMount: no-op handle reports empty aliases', async () => {
+  const handle = await applyPersonaMount(undefined, { cwd: '/x' });
+  assert.deepEqual([...handle.aliases], []);
+  await handle.dispose();
 });

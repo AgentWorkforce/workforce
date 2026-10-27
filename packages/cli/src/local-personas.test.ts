@@ -426,6 +426,82 @@ test('mount patterns merge across local persona layers', () => {
   });
 });
 
+test('mount.roots is replaced wholesale by overlay (matches `skills` semantics)', () => {
+  withLayers(({ cwd, homeDir, pwdDir }) => {
+    writeJson(join(homeDir, 'release-bot.json'), {
+      id: 'release-bot',
+      extends: 'persona-maker',
+      mount: {
+        ignoredPatterns: ['.env*'],
+        roots: [
+          { alias: 'api', path: '$API_DIR', readonly: true },
+          { alias: 'web', path: '$WEB_DIR' }
+        ]
+      }
+    });
+    writeJson(join(pwdDir, 'release-bot.json'), {
+      id: 'release-bot',
+      extends: 'release-bot',
+      mount: {
+        roots: [{ alias: 'monorepo', path: '$MONOREPO_DIR' }]
+      }
+    });
+    const loaded = loadLocalPersonas({ cwd, homeDir });
+    assert.deepEqual(loaded.warnings, []);
+    const spec = loaded.byId.get('release-bot');
+    assert.deepEqual(spec?.mount?.roots, [
+      { alias: 'monorepo', path: '$MONOREPO_DIR' }
+    ]);
+    // Pattern lists keep their existing append-on-merge semantics; only the
+    // `roots` array replaces wholesale.
+    assert.deepEqual(spec?.mount?.ignoredPatterns, ['.env*']);
+  });
+});
+
+test('mount.roots: an overlay that omits roots inherits the base list unchanged', () => {
+  withLayers(({ cwd, homeDir, pwdDir }) => {
+    writeJson(join(homeDir, 'release-bot.json'), {
+      id: 'release-bot',
+      extends: 'persona-maker',
+      mount: {
+        roots: [{ alias: 'api', path: '$API_DIR' }]
+      }
+    });
+    writeJson(join(pwdDir, 'release-bot.json'), {
+      id: 'release-bot',
+      extends: 'release-bot',
+      mount: {
+        ignoredPatterns: ['dist']
+      }
+    });
+    const loaded = loadLocalPersonas({ cwd, homeDir });
+    assert.deepEqual(loaded.warnings, []);
+    const spec = loaded.byId.get('release-bot');
+    assert.deepEqual(spec?.mount?.roots, [
+      { alias: 'api', path: '$API_DIR' }
+    ]);
+    assert.deepEqual(spec?.mount?.ignoredPatterns, ['dist']);
+  });
+});
+
+test('mount.roots: invalid local overlay (empty array) surfaces as a warning, not a throw', () => {
+  withLayers(({ cwd, homeDir }) => {
+    writeJson(join(homeDir, 'release-bot.json'), {
+      id: 'release-bot',
+      extends: 'persona-maker',
+      mount: { roots: [] }
+    });
+    const loaded = loadLocalPersonas({ cwd, homeDir });
+    // Empty `roots: []` is rejected at assertMountShape; the loader records
+    // the issue as a warning so other personas in the layer still load.
+    assert.ok(
+      loaded.warnings.some((w) => /roots must contain at least one entry/.test(w)),
+      `expected an empty-roots warning, got ${JSON.stringify(loaded.warnings)}`
+    );
+    assert.equal(loaded.byId.has('release-bot'), false);
+  });
+});
+
 test('inputs are preserved on standalone local personas', () => {
   withLayers(({ cwd, homeDir }) => {
     writeJson(join(homeDir, 'standalone-reviewer.json'), {

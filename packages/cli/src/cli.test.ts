@@ -14,6 +14,7 @@ import {
   assertSafeRelativePath,
   buildPickCandidates,
   buildRelayfileMountPatterns,
+  buildPersonaMountTargets,
   buildMountGitExcludeBlock,
   buildSpawnSummary,
   buildSidecarBody,
@@ -674,6 +675,75 @@ test('buildRelayfileMountPatterns: merges Relayfile dotfiles with built-in claud
   } finally {
     rmSync(dir, { recursive: true, force: true });
   }
+});
+
+test('buildPersonaMountTargets: single-root keeps session patterns, aliases do not', () => {
+  const sessionPatterns = {
+    ignoredPatterns: ['CLAUDE.md', '.claude', 'node_modules', 'opencode.json'],
+    readonlyPatterns: ['AGENTS.md']
+  };
+  const single = buildPersonaMountTargets({
+    projectDir: '/repo',
+    mountDir: '/session/mount',
+    personaId: 'release-bot',
+    sessionPatterns,
+    personaMount: { ignoredPatterns: ['node_modules'] }
+  });
+  assert.deepEqual(single, [
+    {
+      source: '/repo',
+      dest: '/session/mount',
+      ignoredPatterns: sessionPatterns.ignoredPatterns,
+      readonlyPatterns: sessionPatterns.readonlyPatterns,
+      agentName: 'release-bot'
+    }
+  ]);
+
+  const multi = buildPersonaMountTargets({
+    projectDir: '/repo',
+    mountDir: '/session/mount',
+    personaId: 'release-bot',
+    sessionPatterns,
+    personaMount: { ignoredPatterns: ['dist'], readonlyPatterns: ['docs/**'] },
+    resolvedRoots: [
+      {
+        alias: 'api',
+        path: '/src/api',
+        readonly: true,
+        ignoredPatterns: ['.env'],
+        readonlyPatterns: ['**']
+      },
+      {
+        alias: 'web',
+        path: '/src/web',
+        readonly: false,
+        ignoredPatterns: [],
+        readonlyPatterns: []
+      }
+    ],
+    readRootDotfiles: () => ({
+      ignoredPatterns: ['coverage/'],
+      readonlyPatterns: ['package.json']
+    })
+  });
+  assert.deepEqual(
+    multi.map((target) => target.dest),
+    ['/session/mount/api', '/session/mount/web']
+  );
+  for (const target of multi) {
+    assert.equal(target.ignoredPatterns.includes('CLAUDE.md'), false);
+    assert.equal(target.ignoredPatterns.includes('.claude'), false);
+    assert.equal(target.ignoredPatterns.includes('opencode.json'), false);
+    assert.equal(target.readonlyPatterns.includes('AGENTS.md'), false);
+    assert.ok(target.ignoredPatterns.includes('dist'));
+    assert.ok(target.ignoredPatterns.includes('coverage/'));
+    assert.ok(target.readonlyPatterns.includes('docs/**'));
+    assert.ok(target.readonlyPatterns.includes('package.json'));
+  }
+  assert.ok(multi[0].ignoredPatterns.includes('.env'));
+  assert.ok(multi[0].readonlyPatterns.includes('**'));
+  assert.equal(multi[0].agentName, 'release-bot:api');
+  assert.equal(multi[1].agentName, 'release-bot:web');
 });
 
 test('buildRelayfileMountPatterns: cursor hides root memory files it reads', () => {

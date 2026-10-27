@@ -112,6 +112,34 @@ if (
   };
 }
 
+// Parser rejects empty `mount.roots` and aliases outside
+// `^[a-z0-9](?:[a-z0-9_-]*[a-z0-9])?$` (≤32). The TS types stay wide so
+// consumer index signatures still typecheck; the schema is what deploy
+// validation sees.
+const MOUNT_ROOT_ALIAS_PATTERN = '^[a-z0-9](?:[a-z0-9_-]*[a-z0-9])?$';
+const mountRoot = schema.definitions?.PersonaMountRoot;
+if (mountRoot?.properties?.alias?.type === 'string') {
+  mountRoot.properties.alias = {
+    ...mountRoot.properties.alias,
+    minLength: 1,
+    maxLength: 32,
+    pattern: MOUNT_ROOT_ALIAS_PATTERN
+  };
+}
+if (mountRoot?.properties?.path?.type === 'string') {
+  mountRoot.properties.path = {
+    ...mountRoot.properties.path,
+    minLength: 1
+  };
+}
+const personaMount = schema.definitions?.PersonaMount;
+if (personaMount?.properties?.roots?.type === 'array') {
+  personaMount.properties.roots = {
+    ...personaMount.properties.roots,
+    minItems: 1
+  };
+}
+
 const serialized = `${JSON.stringify(schema, null, 2)}\n`;
 await mkdir(dirname(schemaPath), { recursive: true });
 

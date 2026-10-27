@@ -48,6 +48,7 @@ export type {
   PersonaRelayConfig,
   PersonaTrajectoryConfig,
   PersonaMount,
+  PersonaMountRoot,
   PersonaPermissions,
   PersonaSchedule,
   PersonaSelection,
@@ -132,6 +133,8 @@ export {
   parseMcpServers,
   parseMemory,
   parseMount,
+  parseMountRoot,
+  MOUNT_ROOT_ALIAS_RE,
   parseOnEvent,
   parseRelay,
   parsePermissions,
@@ -256,11 +259,14 @@ export {
 
 // Plan builder + plan types
 export {
+  buildMountResolutionEnv,
   buildPersonaSpawnPlan,
+  resolveMountRoots,
   type PersonaSpawnPlan,
   type PlanOptions,
   type ResolvedInputBinding,
   type ResolvedMountPolicy,
+  type ResolvedMountRoot,
   type ResolvedPersona,
   type ResolvedSidecarWrite
 } from './plan.js';
