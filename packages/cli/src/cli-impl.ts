@@ -166,21 +166,22 @@ Commands:
                       Run a persona. Drops into an interactive harness session.
 
                       Flags:
-                        --install-in-repo   Disengage the sandbox mount and
-                                            install skills into the repo's
+                        --install-in-repo   Install skills into the repo's
                                             harness-conventional directory
                                             (.claude/skills, .opencode/skills,
                                             .agents/skills, .grok/skills,
-                                            .cursor/rules, etc.).
-                                            By default, interactive harness
-                                            sessions run inside a
-                                            @relayfile/local-mount sandbox so
-                                            npx prpm install / npx skills add
-                                            writes never touch the real repo
-                                            and CLAUDE.md / .claude / .mcp.json
-                                            (or AGENTS.md / skill roots for
-                                            non-claude harnesses) are hidden
-                                            from the session.
+                                            .cursor/rules, etc.)
+                                            and skip the sandbox mount. Simple
+                                            claude and codex launches already
+                                            run in the real cwd with normal
+                                            harness auth. A Relayfile mount is
+                                            used only for declared filesystem
+                                            rules (persona mount policy or
+                                            project .agentignore /
+                                            .agentreadonly), sidecars and cwd
+                                            config files, or non-Claude skill
+                                            installs that need repo write
+                                            isolation.
                         --no-launch-metadata
                                             Disable launch metadata recording.
                                             Also disabled by
@@ -206,15 +207,15 @@ Commands:
                                             (e.g. 24h, 30m, 0=always,
                                             never=disable).
 
-                      Repeat launches of the same persona in the same repo
-                      take a warm fast path: the previous session's sandbox
-                      mount is kept (under
+                      Repeat launches that opened a sandbox mount keep that
+                      mount warm (under
                       ~/.agentworkforce/workforce/cache/warm-mounts/) along
                       with a validated launch plan, so the harness spawns in
                       tens of milliseconds and the mount reconciles with the
-                      repo in the background while the harness boots. Any
-                      change to the persona, its sources, skills, dotfiles,
-                      or relevant environment falls back to the full launch.
+                      repo in the background. Direct launches skip the mount
+                      and this warm path. Any change to the persona, its
+                      sources, skills, dotfiles, or relevant environment
+                      falls back to the full launch.
                       Disable with AGENTWORKFORCE_NO_FAST=1.
                         --dry-run           Validate the persona without
                                             spawning the harness or burning
@@ -1311,8 +1312,8 @@ export function configureGitForMount(mountDir: string, patterns: readonly string
 /**
  * Persona-supplied sidecar markdown materialized into a sandbox mount.
  * Pure data carrier — `runInteractive` translates it into the on-disk
- * write inside `onBeforeLaunch` (mount path) and warns/skips when the
- * harness has no mount (`--install-in-repo`).
+ * write inside `onBeforeLaunch` when the conditional mount is active,
+ * and warns/skips on a direct unmounted launch.
  */
 export interface ResolvedSidecar {
   /** Filename inside the mount: `CLAUDE.md` (claude) or `AGENTS.md` (opencode/codex/grok/cursor). */
@@ -1369,8 +1370,10 @@ export function loadSidecarForSelection(
     }
     return {};
   }
-  // opencode, codex, grok, and cursor all read AGENTS.md from cwd. The resolution
-  // rule is identical for these harnesses here.
+  // opencode, codex, grok, and cursor all read AGENTS.md from cwd.
+  // decideCleanMode chooses whether that file is materialized in a mount;
+  // without one the caller warns and skips the write so the real repo stays
+  // untouched.
   if (selection.agentsMdContent) {
     return {
       sidecar: {
@@ -1439,33 +1442,109 @@ export function buildSidecarBody(
   return sidecar.personaContent;
 }
 
+const MOUNT_HARNESSES = new Set<Harness>(['claude', 'opencode', 'codex', 'grok', 'cursor']);
+
+export interface DecideCleanModeOptions {
+  installInRepo?: boolean;
+  mount?: PersonaMount;
+  hasSidecar?: boolean;
+  /**
+   * True when the harness materializes a file in the session cwd.
+   * `runInteractive` knows this before `buildInteractiveSpec`: opencode
+   * always emits `opencode.json`, and grok and cursor emit `AGENTS.md` when
+   * the persona has a system prompt. This is not derived from
+   * `spec.configFiles` — if a harness starts or stops writing a cwd file,
+   * update that call site or the mount decision will drift.
+   */
+  hasConfigFiles?: boolean;
+  installNeedsSandbox?: boolean;
+  /**
+   * Project Relayfile rules (`.agentignore` / `.agentreadonly`, including
+   * persona-scoped `.<personaId>.agent*` files) that the mount would apply.
+   */
+  hasProjectRelayfilePolicy?: boolean;
+}
+
+function mountValueDeclaresPolicy(value: unknown): boolean {
+  if (value == null || value === false) return false;
+  if (typeof value === 'string') return value.length > 0;
+  if (Array.isArray(value)) return value.length > 0;
+  if (typeof value === 'object') return Object.keys(value as object).length > 0;
+  return true;
+}
+
 /**
- * Decide whether to run the interactive session inside a
- * `@relayfile/local-mount` sandbox.
+ * Persona `mount` fields other than `enabled` are filesystem policy.
+ * Unknown keys count too, so an extension such as multi-root `roots`
+ * still opens the sandbox without this function naming that field.
+ */
+function hasDeclaredMountPolicy(mount: PersonaMount | undefined): boolean {
+  if (!mount || mount.enabled === false) return false;
+  return Object.entries(mount).some(
+    ([key, value]) => key !== 'enabled' && mountValueDeclaresPolicy(value)
+  );
+}
+
+/**
+ * Decide whether to run the interactive session inside a Relayfile mount.
  *
- * All interactive harnesses default to the mount.
- * The mount hides CLAUDE.md / .claude / .mcp.json (claude) or the
- * skill-install patterns + AGENTS.md (codex / opencode / grok / cursor) so
- * persona-supplied sidecars and any per-session writes stay sandboxed and
- * don't leak into the user's real repo. `--install-in-repo` is the single
- * opt-out that disengages the mount across all harnesses.
+ * The mount is reserved for filesystem concerns: declared mount policy,
+ * project `.agentignore` / `.agentreadonly` rules, sidecar or cwd config
+ * files, or non-Claude skill installers that would otherwise write
+ * repo-relative artifacts. Plain claude and codex launches pass
+ * harness-native argv directly in the real cwd, so a claude persona
+ * without its own `claudeMd` sees the repo's `CLAUDE.md`. Cursor and grok
+ * mount when a system prompt must be written as `AGENTS.md`.
+ *
+ * `--install-in-repo` is the hard opt-out. `mount.enabled: false` skips
+ * persona-driven reasons but does not override project Relayfile rules.
+ *
+ * The boolean second argument is `installInRepo`, kept because this export
+ * predates the options object.
  *
  * Pure — no side effects, trivially testable.
  */
 export function decideCleanMode(
   harness: Harness,
-  installInRepo = false
+  installInRepoOrOptions: boolean | DecideCleanModeOptions = false,
+  maybeOptions: Omit<DecideCleanModeOptions, 'installInRepo'> = {}
 ): { useClean: boolean } {
-  if (
-    harness === 'claude' ||
-    harness === 'opencode' ||
-    harness === 'codex' ||
-    harness === 'grok' ||
-    harness === 'cursor'
-  ) {
-    return { useClean: !installInRepo };
-  }
-  return { useClean: false };
+  const options =
+    typeof installInRepoOrOptions === 'boolean'
+      ? { ...maybeOptions, installInRepo: installInRepoOrOptions }
+      : installInRepoOrOptions;
+  if (options.installInRepo) return { useClean: false };
+  if (!MOUNT_HARNESSES.has(harness)) return { useClean: false };
+  // Repo filesystem rules outrank a persona `mount.enabled: false`.
+  // Skipping the mount would silently drop `.agentignore` / `.agentreadonly`.
+  if (options.hasProjectRelayfilePolicy) return { useClean: true };
+  if (options.mount?.enabled === false) return { useClean: false };
+  return {
+    useClean: Boolean(
+      options.mount?.enabled === true ||
+        hasDeclaredMountPolicy(options.mount) ||
+        options.hasSidecar ||
+        options.hasConfigFiles ||
+        options.installNeedsSandbox
+    )
+  };
+}
+
+/**
+ * True when the project has Relayfile rules the mount would enforce.
+ * Uses the same dotfile reader as `buildRelayfileMountPatterns`, including
+ * persona-scoped `.<personaId>.agentignore` / `.agentreadonly`.
+ */
+const RELAYFILE_AGENT_NAME = /^[A-Za-z0-9_-]+$/;
+
+export function projectHasRelayfilePolicy(projectDir: string, personaId: string): boolean {
+  // readAgentDotfiles rejects agent names outside [A-Za-z0-9_-]. Persona ids
+  // are not limited to that set, so fall back to project-level dotfiles
+  // instead of failing a direct launch that never opens a mount.
+  const dotfiles = RELAYFILE_AGENT_NAME.test(personaId)
+    ? readAgentDotfiles(projectDir, { agentName: personaId })
+    : readAgentDotfiles(projectDir);
+  return dotfiles.ignoredPatterns.length > 0 || dotfiles.readonlyPatterns.length > 0;
 }
 
 export function formatSandboxMountReadyMessage(
@@ -1966,34 +2045,42 @@ async function runInteractive(
 ): Promise<number> {
   const { effectiveSelection, inputResolution } = renderEffectiveSelection(selection);
   const { personaId, harness, model, harnessSettings, systemPrompt } = effectiveSelection;
-  // `installRoot` (out-of-repo skill staging via `--plugin-dir`) is currently
-  // claude-only; the workload-router SDK throws if it's set for other
-  // harnesses. For other harnesses, we instead keep installs out of the repo by
-  // running them inside a @relayfile/local-mount sandbox (see `useClean`
-  // below). The --install-in-repo flag forces legacy in-repo installs
-  // across the board.
-  const useClean = decideCleanMode(
-    harness,
-    options.installInRepo === true
-  ).useClean;
   // Per-persona CLAUDE.md / AGENTS.md: load the author content if any. The
-  // file is materialized into the mount inside onBeforeLaunch. Without a
-  // mount (--install-in-repo) we skip-and-warn — writing into the real cwd
-  // would pollute the user's repo and is explicitly out of scope.
+  // file is materialized into the mount inside onBeforeLaunch when the
+  // persona still needs a cwd sidecar. Direct launches skip that write
+  // rather than dropping the file into the user's real repo.
   const sidecarLookup = loadSidecarForSelection(effectiveSelection);
   if (sidecarLookup.warning) {
     process.stderr.write(`warning: ${sidecarLookup.warning}\n`);
   }
+  // `installRoot` (out-of-repo skill staging via `--plugin-dir`) is currently
+  // claude-only; persona-kit rejects it for other harnesses. Non-Claude
+  // skill installs still need a sandbox so their repo-relative outputs
+  // don't pollute the checkout. Opencode always needs the mount for
+  // `opencode.json`. Grok and cursor need it when the system prompt is
+  // materialized as `AGENTS.md` (neither has a system-prompt argv flag).
+  const useClean = decideCleanMode(harness, {
+    installInRepo: options.installInRepo === true,
+    mount: effectiveSelection.mount,
+    hasSidecar: Boolean(sidecarLookup.sidecar),
+    // See DecideCleanModeOptions.hasConfigFiles — this predicate is the
+    // pre-spec stand-in for `spec.configFiles.length > 0`.
+    hasConfigFiles:
+      harness === 'opencode' ||
+      ((harness === 'grok' || harness === 'cursor') && systemPrompt.trim().length > 0),
+    installNeedsSandbox: harness !== 'claude' && effectiveSelection.skills.length > 0,
+    hasProjectRelayfilePolicy: projectHasRelayfilePolicy(process.cwd(), personaId)
+  }).useClean;
   const resolvedSidecar = useClean ? sidecarLookup.sidecar : undefined;
   if (sidecarLookup.sidecar && !useClean) {
     process.stderr.write(
       `warning: persona declares ${sidecarLookup.sidecar.mountFile} but no sandbox mount is available ` +
-        `(--install-in-repo disengages the mount); skipping sidecar materialization to avoid writing into your repo.\n`
+        `for this direct unmounted launch; skipping sidecar materialization to avoid writing into your repo.\n`
     );
   }
   // A session dir is needed whenever we either (a) stage skills out-of-repo
-  // via claude's installRoot, or (b) open a mount. Both engage by default;
-  // --install-in-repo disengages both.
+  // via claude's installRoot, or (b) open a mount. Claude still stages
+  // without a mount; --install-in-repo disengages both.
   const useSessionDir =
     !options.installInRepo && (harness === 'claude' || useClean);
   const sessionRoot = useSessionDir ? generateSessionRoot(personaId) : undefined;
@@ -2278,15 +2365,16 @@ async function runInteractive(
   }
 
   // Config-file materialization strategy:
-  //  - Mount path (default): write each configFile into the
-  //    mount dir via onBeforeLaunch, so it lives only in the sandbox and is
-  //    torn down with the session.
-  //  - Non-mount path: opencode materializes opencode.json for its --agent
-  //    wiring; cursor materializes AGENTS.md for the persona prompt. Writing
-  //    either into the user's real repo would pollute the working tree, so we
-  //    degrade under --install-in-repo: launch opencode without --agent and
-  //    pass Cursor's system prompt as its initial prompt. Users who want the
-  //    normal config-file behavior should drop --install-in-repo.
+  //  - Mount path: write each configFile into the mount dir via
+  //    onBeforeLaunch, so it lives only in the sandbox and is torn down
+  //    with the session.
+  //  - Non-mount path (`--install-in-repo`, or `mount.enabled: false`
+  //    with no project Relayfile rules): writing opencode.json / AGENTS.md
+  //    into the user's real repo would pollute the working tree, so we
+  //    skip those files and warn. Opencode also drops `--agent`, because
+  //    that flag selects the agent defined by the skipped opencode.json.
+  //    Cursor passes its system prompt as the initial prompt instead of
+  //    writing AGENTS.md.
   const hasConfigFiles = spec.configFiles.length > 0;
   const degradeConfigFiles = hasConfigFiles && !useClean;
   let effectiveArgs: readonly string[] = spawnArgs;
@@ -2333,12 +2421,13 @@ async function runInteractive(
   // Mount branch: delegate process lifecycle (spawn, signal forwarding,
   // syncback, cleanup) to @relayfile/local-mount.
   //
-  // For interactive harnesses: mount engages by default (unless
-  // `--install-in-repo`). For claude this hides CLAUDE.md / .claude /
-  // .mcp.json; for non-claude harnesses it routes `npx prpm install` /
-  // `npx skills add` writes into the sandbox (skill plugin dir for claude
-  // lives outside the mount at an absolute path, so claude still resolves
-  // `--plugin-dir` normally).
+  // The mount is conditional. Explicit persona mount policy, project
+  // Relayfile dotfiles, cwd sidecars/config files, and non-claude skill
+  // installs route through Relayfile. Plain claude/codex prompt and MCP
+  // launches skip this branch and run in the real cwd, so repo CLAUDE.md
+  // stays visible and harness auth (keychain, no --bare) is unchanged.
+  // Claude's skill plugin dir is an absolute path outside the mount, so
+  // `--plugin-dir` still resolves when the mount is on.
   //
   // The install itself runs inside the mount via `onBeforeLaunch` so that
   // `npx prpm install` / `npx skills add` writes land in the sandbox. The

@@ -7,6 +7,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+
+- Default simple claude and codex interactive launches to direct unmounted mode, so a claude persona without its own `claudeMd` sees the repo `CLAUDE.md`. Relayfile mounts still engage for persona mount policy, project `.agentignore` / `.agentreadonly` rules, sidecars, opencode's `opencode.json`, grok and cursor `AGENTS.md` system prompts, or non-Claude skill installs that need repo write isolation.
+
 ## [4.2.0] - 2026-10-02
 
 ### Dependencies

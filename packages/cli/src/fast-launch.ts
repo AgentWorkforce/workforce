@@ -32,7 +32,12 @@ import { dirname, join } from 'node:path';
  * refuse when the slow path would have produced different session inputs.
  */
 
-export const LAUNCH_PLAN_SCHEMA_VERSION = 1;
+/**
+ * Schema 2 plans are written only for launches that still open a Relayfile
+ * mount. Schema 1 plans assumed every interactive launch mounted, so they
+ * must not fast-path a launch that now runs directly in the real cwd.
+ */
+export const LAUNCH_PLAN_SCHEMA_VERSION = 2;
 
 /** Mirrors persona-kit's skill-cache marker filename (see skill-cache.ts). */
 const SKILL_CACHE_MARKER_FILENAME = '.aw-skill-cache.json';

@@ -20,6 +20,7 @@ import {
   mergeCursorAgentsMd,
   configureGitForMount,
   decideCleanMode,
+  projectHasRelayfilePolicy,
   formatSandboxMountReadyMessage,
   loadSidecarForSelection,
   parseAgentArgs,
@@ -83,7 +84,11 @@ function trapExit(): ExitTrap {
   return trap;
 }
 
-function writeStandaloneCodexPersona(workforceHome: string, id = 'local-codex'): string {
+function writeStandaloneCodexPersona(
+  workforceHome: string,
+  id = 'local-codex',
+  extra: Record<string, unknown> = {}
+): string {
   const personaDir = join(workforceHome, 'personas');
   mkdirSync(personaDir, { recursive: true });
   writeFileSync(
@@ -96,7 +101,8 @@ function writeStandaloneCodexPersona(workforceHome: string, id = 'local-codex'):
       harness: 'codex',
       model: 'test-codex',
       systemPrompt: 'Run the local codex test harness.',
-      harnessSettings: { reasoning: 'medium', timeoutSeconds: 30 }
+      harnessSettings: { reasoning: 'medium', timeoutSeconds: 30 },
+      ...extra
     }),
     'utf8'
   );
@@ -394,44 +400,89 @@ test('parseCreateArgs: --save-default persists create target in source config', 
   }
 });
 
-test('decideCleanMode: claude defaults to mount (parity with opencode)', () => {
-  // claude and opencode both default to the sandbox mount; the includeGit
-  // path in relayfile 0.6 keeps `.git` in the mount so git operations work
-  // inside it. --install-in-repo is the only opt-out.
-  assert.deepEqual(decideCleanMode('claude'), { useClean: true });
+test('decideCleanMode: claude defaults to direct launch without a mount', () => {
+  assert.deepEqual(decideCleanMode('claude'), { useClean: false });
 });
 
-test('decideCleanMode: claude + --install-in-repo disengages mount', () => {
+test('decideCleanMode: claude + --install-in-repo stays unmounted', () => {
   assert.deepEqual(decideCleanMode('claude', true), { useClean: false });
 });
 
-test('decideCleanMode: opencode defaults to mount (skills would otherwise land in repo)', () => {
-  // Opencode has no installRoot support in the SDK, so the mount is the only
-  // way to keep `.opencode/skills/`, `.agents/skills/`, prpm.lock, etc. out
-  // of the real repo. Default-on for non-in-repo runs.
-  assert.deepEqual(decideCleanMode('opencode'), { useClean: true });
+test('decideCleanMode: opencode mounts only when cwd config or skills require it', () => {
+  assert.deepEqual(decideCleanMode('opencode'), { useClean: false });
+  assert.deepEqual(decideCleanMode('opencode', { hasConfigFiles: true }), { useClean: true });
+  assert.deepEqual(decideCleanMode('opencode', { installNeedsSandbox: true }), { useClean: true });
 });
 
 test('decideCleanMode: opencode + --install-in-repo → no mount', () => {
-  assert.deepEqual(decideCleanMode('opencode', true), { useClean: false });
+  assert.deepEqual(
+    decideCleanMode('opencode', { installInRepo: true, hasConfigFiles: true }),
+    { useClean: false }
+  );
 });
 
-test('decideCleanMode: codex defaults to mount (parity with claude/opencode)', () => {
-  // All three harnesses default to the mount; --install-in-repo is the
-  // single opt-out. Codex needs the mount so persona-supplied AGENTS.md
-  // sidecars can be materialized without overwriting the user's real-cwd
-  // copy, and so any per-session writes stay sandboxed.
-  assert.deepEqual(decideCleanMode('codex'), { useClean: true });
+test('decideCleanMode: codex mounts only for filesystem-affecting persona features', () => {
+  assert.deepEqual(decideCleanMode('codex'), { useClean: false });
+  assert.deepEqual(decideCleanMode('codex', { hasSidecar: true }), { useClean: true });
+  assert.deepEqual(decideCleanMode('codex', { installNeedsSandbox: true }), { useClean: true });
+  assert.deepEqual(
+    decideCleanMode('codex', { mount: { readonlyPatterns: ['docs/**'] } }),
+    { useClean: true }
+  );
   assert.deepEqual(decideCleanMode('codex', true), { useClean: false });
 });
 
-test('decideCleanMode: grok defaults to mount', () => {
-  assert.deepEqual(decideCleanMode('grok'), { useClean: true });
+test('decideCleanMode: grok mounts for cwd config, sidecars, and skill installs', () => {
+  assert.deepEqual(decideCleanMode('grok'), { useClean: false });
+  assert.deepEqual(decideCleanMode('grok', { hasConfigFiles: true }), { useClean: true });
+  assert.deepEqual(decideCleanMode('grok', { hasSidecar: true }), { useClean: true });
+  assert.deepEqual(decideCleanMode('grok', { installNeedsSandbox: true }), { useClean: true });
   assert.deepEqual(decideCleanMode('grok', true), { useClean: false });
 });
 
-test('decideCleanMode: cursor defaults to mount', () => {
-  assert.deepEqual(decideCleanMode('cursor'), { useClean: true });
+test('decideCleanMode: explicit mount.enabled opts in, and false opts out of persona policy', () => {
+  assert.deepEqual(decideCleanMode('claude', { mount: { enabled: true } }), { useClean: true });
+  assert.deepEqual(
+    decideCleanMode('claude', {
+      mount: { enabled: false, readonlyPatterns: ['docs/**'] },
+      hasSidecar: true
+    }),
+    { useClean: false }
+  );
+});
+
+test('decideCleanMode: project Relayfile policy forces a mount, including over mount.enabled false', () => {
+  assert.deepEqual(decideCleanMode('claude', { hasProjectRelayfilePolicy: true }), {
+    useClean: true
+  });
+  assert.deepEqual(
+    decideCleanMode('codex', {
+      mount: { enabled: false },
+      hasProjectRelayfilePolicy: true
+    }),
+    { useClean: true }
+  );
+  assert.deepEqual(
+    decideCleanMode('codex', { installInRepo: true, hasProjectRelayfilePolicy: true }),
+    { useClean: false }
+  );
+});
+
+test('decideCleanMode: extension mount fields such as roots count as filesystem policy', () => {
+  assert.deepEqual(
+    decideCleanMode('claude', { mount: { roots: [{ path: '/tmp/other', alias: 'other' }] } }),
+    { useClean: true }
+  );
+  assert.deepEqual(decideCleanMode('claude', { mount: { ignoredPatterns: [] } }), {
+    useClean: false
+  });
+});
+
+test('decideCleanMode: cursor mounts for cwd config, sidecars, and skill installs', () => {
+  assert.deepEqual(decideCleanMode('cursor'), { useClean: false });
+  assert.deepEqual(decideCleanMode('cursor', { hasConfigFiles: true }), { useClean: true });
+  assert.deepEqual(decideCleanMode('cursor', { hasSidecar: true }), { useClean: true });
+  assert.deepEqual(decideCleanMode('cursor', { installNeedsSandbox: true }), { useClean: true });
   assert.deepEqual(decideCleanMode('cursor', true), { useClean: false });
 });
 
@@ -647,22 +698,10 @@ test('buildRelayfileMountPatterns: cursor hides root memory files it reads', () 
 // and return once the child exits. We force the harness binary to fail to
 // spawn (PATH scrubbed) so these runs terminate quickly regardless of what
 // the dispatch path tries next — the assertions target stderr shape alone.
-async function runCliCapturingStderr(args: string[]): Promise<{
-  stderr: string;
-  stdout: string;
-  exitCode: number | null;
-}>;
 async function runCliCapturingStderr(
   args: string[],
-  extraEnv: NodeJS.ProcessEnv
-): Promise<{
-  stderr: string;
-  stdout: string;
-  exitCode: number | null;
-}>;
-async function runCliCapturingStderr(
-  args: string[],
-  extraEnv: NodeJS.ProcessEnv = {}
+  extraEnv: NodeJS.ProcessEnv = {},
+  options: { cwd?: string } = {}
 ): Promise<{
   stderr: string;
   stdout: string;
@@ -685,7 +724,8 @@ async function runCliCapturingStderr(
       PATH: extraEnv.PATH ?? '/nonexistent-path-for-test',
       POSTHOG_API_KEY: extraEnv.POSTHOG_API_KEY ?? 'dummy'
     },
-    stdio: ['ignore', 'pipe', 'pipe']
+    stdio: ['ignore', 'pipe', 'pipe'],
+    ...(options.cwd ? { cwd: options.cwd } : {})
   });
 
   let stderr = '';
@@ -1332,34 +1372,91 @@ test('loadSidecarForSelection: cursor picks agentsMd, not claudeMd', () => {
   assert.equal(sidecar?.personaContent, '# agents\n');
 });
 
-test('main: codex sessions engage the sandbox mount by default', async () => {
-  const root = mkdtempSync(join(tmpdir(), 'aw-cli-mount-'));
+test('projectHasRelayfilePolicy: reads project and persona-scoped dotfiles', () => {
+  const dir = mkdtempSync(join(tmpdir(), 'aw-relayfile-policy-'));
   try {
+    assert.equal(projectHasRelayfilePolicy(dir, 'local-codex'), false);
+    writeFileSync(join(dir, '.agentignore'), '\n# comment only\n\n', 'utf8');
+    assert.equal(projectHasRelayfilePolicy(dir, 'local-codex'), false);
+    writeFileSync(join(dir, '.agentignore'), 'secrets/\n', 'utf8');
+    assert.equal(projectHasRelayfilePolicy(dir, 'local-codex'), true);
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test('projectHasRelayfilePolicy: ids outside the dotfile agent-name set still see project rules', () => {
+  const dir = mkdtempSync(join(tmpdir(), 'aw-relayfile-odd-id-'));
+  try {
+    assert.equal(projectHasRelayfilePolicy(dir, 'local.codex'), false);
+    writeFileSync(join(dir, '.agentignore'), 'secrets/\n', 'utf8');
+    assert.equal(projectHasRelayfilePolicy(dir, 'local.codex'), true);
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test('projectHasRelayfilePolicy: persona-scoped readonly rules count', () => {
+  const dir = mkdtempSync(join(tmpdir(), 'aw-relayfile-persona-'));
+  try {
+    writeFileSync(join(dir, '.local-codex.agentreadonly'), 'package.json\n', 'utf8');
+    assert.equal(projectHasRelayfilePolicy(dir, 'local-codex'), true);
+    assert.equal(projectHasRelayfilePolicy(dir, 'other-persona'), false);
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test('main: codex sessions skip the sandbox mount by default', async () => {
+  const root = mkdtempSync(join(tmpdir(), 'aw-cli-direct-'));
+  try {
+    const project = join(root, 'project');
+    mkdirSync(project);
     const workforceHome = join(root, '.agentworkforce', 'workforce');
     const personaId = writeStandaloneCodexPersona(workforceHome);
-    // Codex defaults to a relayfile mount in parity with claude/opencode so
-    // persona-supplied AGENTS.md sidecars and per-session writes stay sandboxed.
     const { stderr } = await runCliCapturingStderr(
       ['agent', `${personaId}`],
-      { AGENT_WORKFORCE_HOME: workforceHome }
+      { AGENT_WORKFORCE_HOME: workforceHome },
+      { cwd: project }
     );
-    assert.match(
-      stderr,
-      /sandbox mount →/,
-      `expected the mount branch to engage; saw stderr:\n${stderr}`
+    assert.ok(
+      !/sandbox mount →/.test(stderr),
+      `expected the direct launch branch to skip the mount; saw stderr:\n${stderr}`
     );
   } finally {
     rmSync(root, { recursive: true, force: true });
   }
 });
 
-test('main: codex --install-in-repo disengages the sandbox mount', async () => {
+test('main: codex sessions use the sandbox mount for declared mount policy', async () => {
+  const root = mkdtempSync(join(tmpdir(), 'aw-cli-mount-'));
+  try {
+    const project = join(root, 'project');
+    mkdirSync(project);
+    const workforceHome = join(root, '.agentworkforce', 'workforce');
+    const personaId = writeStandaloneCodexPersona(workforceHome, 'local-codex-mounted', {
+      mount: { readonlyPatterns: ['README.md'] }
+    });
+    const { stderr } = await runCliCapturingStderr(
+      ['agent', `${personaId}`],
+      { AGENT_WORKFORCE_HOME: workforceHome },
+      { cwd: project }
+    );
+    assert.match(
+      stderr,
+      /sandbox mount →/,
+      `expected the mount branch to engage for mount policy; saw stderr:\n${stderr}`
+    );
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test('main: codex --install-in-repo keeps direct launch unmounted', async () => {
   const root = mkdtempSync(join(tmpdir(), 'aw-cli-no-mount-'));
   try {
     const workforceHome = join(root, '.agentworkforce', 'workforce');
     const personaId = writeStandaloneCodexPersona(workforceHome);
-    // The single opt-out: --install-in-repo. Confirms parity with claude/
-    // opencode where the same flag turns the mount off.
     const { stderr } = await runCliCapturingStderr(
       ['agent', `${personaId}`, '--install-in-repo'],
       { AGENT_WORKFORCE_HOME: workforceHome }
@@ -1367,6 +1464,152 @@ test('main: codex --install-in-repo disengages the sandbox mount', async () => {
     assert.ok(
       !/sandbox mount →/.test(stderr),
       `expected the mount branch to be skipped under --install-in-repo; saw stderr:\n${stderr}`
+    );
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test('main: project .agentignore forces a sandbox mount', async () => {
+  const root = mkdtempSync(join(tmpdir(), 'aw-cli-agentignore-'));
+  try {
+    const project = join(root, 'project');
+    mkdirSync(project);
+    writeFileSync(join(project, '.agentignore'), 'secrets/\n', 'utf8');
+    const workforceHome = join(root, '.agentworkforce', 'workforce');
+    const personaId = writeStandaloneCodexPersona(workforceHome);
+    const { stderr } = await runCliCapturingStderr(
+      ['agent', `${personaId}`],
+      { AGENT_WORKFORCE_HOME: workforceHome },
+      { cwd: project }
+    );
+    assert.match(
+      stderr,
+      /sandbox mount →/,
+      `expected project Relayfile rules to engage the mount; saw stderr:\n${stderr}`
+    );
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test('main: claude direct launch keeps the repo CLAUDE.md visible', async () => {
+  const root = mkdtempSync(join(tmpdir(), 'aw-cli-claude-direct-'));
+  try {
+    const project = join(root, 'project');
+    const binDir = join(root, 'bin');
+    mkdirSync(project);
+    mkdirSync(binDir);
+    const sentinel = 'VISIBLE_CLAUDE_MD_SENTINEL';
+    writeFileSync(join(project, 'CLAUDE.md'), `# project\n${sentinel}\n`, 'utf8');
+    const claude = join(binDir, 'claude');
+    writeFileSync(
+      claude,
+      `#!/usr/bin/env node
+const { readFileSync } = require('node:fs');
+try {
+  process.stdout.write('claude-md:' + readFileSync('CLAUDE.md', 'utf8'));
+} catch (err) {
+  process.stdout.write('claude-md-missing:' + (err && err.code ? err.code : 'error') + '\\n');
+  process.exit(2);
+}
+process.stdout.write('cwd:' + process.cwd() + '\\n');
+`,
+      'utf8'
+    );
+    chmodSync(claude, 0o755);
+    const workforceHome = join(root, '.agentworkforce', 'workforce');
+    const personaDir = join(workforceHome, 'personas');
+    mkdirSync(personaDir, { recursive: true });
+    writeFileSync(
+      join(personaDir, 'local-claude.json'),
+      JSON.stringify({
+        id: 'local-claude',
+        intent: 'review',
+        tags: ['review'],
+        description: 'Local no-skill claude persona for direct-launch coverage.',
+        harness: 'claude',
+        model: 'test-claude',
+        systemPrompt: 'Run the local claude test harness.',
+        harnessSettings: { reasoning: 'medium', timeoutSeconds: 30 }
+      }),
+      'utf8'
+    );
+    const { stdout, stderr, exitCode } = await runCliCapturingStderr(
+      ['agent', 'local-claude'],
+      {
+        AGENT_WORKFORCE_HOME: workforceHome,
+        PATH: `${binDir}:${process.env.PATH ?? ''}`,
+        AGENTWORKFORCE_LAUNCH_METADATA: '0',
+        AGENTWORKFORCE_NO_FAST: '1'
+      },
+      { cwd: project }
+    );
+    assert.equal(exitCode, 0, stderr);
+    assert.ok(
+      !/sandbox mount →/.test(stderr),
+      `expected a direct claude launch; saw stderr:\n${stderr}`
+    );
+    assert.ok(stdout.includes(sentinel), stdout);
+    assert.ok(stdout.includes(`cwd:${project}`), stdout);
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test('main: grok sessions mount so the system prompt can be written to AGENTS.md', async () => {
+  const root = mkdtempSync(join(tmpdir(), 'aw-cli-grok-mount-'));
+  try {
+    const project = join(root, 'project');
+    mkdirSync(project);
+    const workforceHome = join(root, '.agentworkforce', 'workforce');
+    const personaDir = join(workforceHome, 'personas');
+    mkdirSync(personaDir, { recursive: true });
+    writeFileSync(
+      join(personaDir, 'local-grok.json'),
+      JSON.stringify({
+        id: 'local-grok',
+        intent: 'review',
+        tags: ['review'],
+        description: 'Local grok persona whose prompt is a cwd AGENTS.md file.',
+        harness: 'grok',
+        model: 'test-grok',
+        systemPrompt: 'Run the local grok test harness.',
+        harnessSettings: { reasoning: 'medium', timeoutSeconds: 30 }
+      }),
+      'utf8'
+    );
+    const { stderr } = await runCliCapturingStderr(
+      ['agent', 'local-grok'],
+      { AGENT_WORKFORCE_HOME: workforceHome },
+      { cwd: project }
+    );
+    assert.match(
+      stderr,
+      /sandbox mount →/,
+      `expected grok's AGENTS.md config file to engage the mount; saw stderr:\n${stderr}`
+    );
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test('main: cursor sessions mount so the system prompt can be written to AGENTS.md', async () => {
+  const root = mkdtempSync(join(tmpdir(), 'aw-cli-cursor-mount-'));
+  try {
+    const project = join(root, 'project');
+    mkdirSync(project);
+    const workforceHome = join(root, '.agentworkforce', 'workforce');
+    const personaId = writeStandaloneCursorPersona(workforceHome);
+    const { stderr } = await runCliCapturingStderr(
+      ['agent', `${personaId}`],
+      { AGENT_WORKFORCE_HOME: workforceHome },
+      { cwd: project }
+    );
+    assert.match(
+      stderr,
+      /sandbox mount →/,
+      `expected cursor's AGENTS.md config file to engage the mount; saw stderr:\n${stderr}`
     );
   } finally {
     rmSync(root, { recursive: true, force: true });
