@@ -41,7 +41,7 @@ test('the no-reply prompt contract is appended once', () => {
   assert.equal(appendNoReplyPromptContract(appended), appended);
 });
 
-for (const harness of ['claude', 'codex', 'opencode', 'grok'] as const satisfies readonly Harness[]) {
+for (const harness of ['claude', 'codex', 'opencode', 'grok', 'cursor'] as const satisfies readonly Harness[]) {
   test(`${harness} receives the no-reply contract on its harness-specific prompt surface`, () => {
     const spec = buildNonInteractiveSpec({
       harness,
@@ -76,5 +76,7 @@ function modelFor(harness: Harness): string {
       return 'opencode/minimax-m2.5';
     case 'grok':
       return 'grok-build-0.1';
+    case 'cursor':
+      return 'gpt-5';
   }
 }

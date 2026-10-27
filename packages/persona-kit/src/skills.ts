@@ -128,6 +128,7 @@ function skillShArtifactPaths(installedName: string): readonly string[] {
   return Object.freeze([
     `.agents/skills/${installedName}`,
     `.claude/skills/${installedName}`,
+    `.cursor/rules/${installedName}`,
     `.factory/skills/${installedName}`,
     `.grok/skills/${installedName}`,
     `.kiro/skills/${installedName}`,
@@ -311,7 +312,7 @@ export function materializeSkills(
   if (installRoot !== undefined && harness !== 'claude') {
     throw new Error(
       `installRoot is only supported for the claude harness (got: ${harness}). ` +
-        `codex, opencode, and grok still install into the harness's conventional repo-relative directory.`
+        `codex, opencode, grok, and cursor still install into the harness's conventional repo-relative directory.`
     );
   }
 

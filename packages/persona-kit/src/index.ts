@@ -279,6 +279,7 @@ export {
   type PersonaMountHandle
 } from './mount.js';
 export {
+  composeCursorAgentsMd,
   writePersonaSidecars,
   type PersonaSidecarHandle
 } from './sidecars.js';

@@ -16,6 +16,19 @@ interface ResoredFile {
 const SIDECAR_DELIMITER = '\n\n---\n\n';
 
 /**
+ * Keep a Cursor persona's system prompt in `AGENTS.md` when an `agentsMd`
+ * sidecar is written to the same path. The prompt stays first. Empty sides
+ * are dropped, and a non-empty result ends with a newline.
+ */
+export function composeCursorAgentsMd(systemPrompt: string, sidecarBody: string): string {
+  const prompt = systemPrompt.replace(/\s+$/, '');
+  const sidecar = sidecarBody.replace(/\s+$/, '');
+  if (!prompt) return sidecar ? `${sidecar}\n` : '';
+  if (!sidecar) return `${prompt}\n`;
+  return `${prompt}${SIDECAR_DELIMITER}${sidecar}\n`;
+}
+
+/**
  * The plan's filename is typed `'CLAUDE.md' | 'AGENTS.md'` at compile time,
  * but plans can be JSON-deserialized from untrusted sources at runtime.
  * Bound to safe basenames here so a hand-built or tampered plan cannot
@@ -72,7 +85,7 @@ async function loadSidecarBody(sidecar: ResolvedSidecarWrite): Promise<string> {
  */
 export async function writePersonaSidecars(
   sidecars: readonly ResolvedSidecarWrite[],
-  options: { cwd: string }
+  options: { cwd: string; cursorSystemPrompt?: string }
 ): Promise<PersonaSidecarHandle> {
   const restored: ResoredFile[] = [];
   let disposed = false;
@@ -83,10 +96,18 @@ export async function writePersonaSidecars(
       const personaBody = await loadSidecarBody(sidecar);
       const prior = await readIfExists(target);
       restored.push({ path: target, prior });
+      // Cursor's system prompt is itself an AGENTS.md write. Overwrite mode
+      // would replace that file with the sidecar and drop the prompt, so
+      // keep both. Extend already appends to whatever the config write left
+      // behind, which is the prompt.
       const body =
-        sidecar.mode === 'extend' && prior !== null
-          ? `${prior}${SIDECAR_DELIMITER}${personaBody}`
-          : personaBody;
+        options.cursorSystemPrompt &&
+        sidecar.filename === 'AGENTS.md' &&
+        sidecar.mode === 'overwrite'
+          ? composeCursorAgentsMd(options.cursorSystemPrompt, personaBody)
+          : sidecar.mode === 'extend' && prior !== null
+            ? `${prior}${SIDECAR_DELIMITER}${personaBody}`
+            : personaBody;
       await writeFile(target, body, 'utf8');
     }
   } catch (err) {

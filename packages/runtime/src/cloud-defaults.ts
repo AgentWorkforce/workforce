@@ -4,6 +4,7 @@ import { access, mkdir, readFile, stat, writeFile } from 'node:fs/promises';
 import path from 'node:path';
 import {
   buildNonInteractiveSpec,
+  composeCursorAgentsMd,
   renderPersonaInputs,
   resolveAiMemory,
   resolveMcpServersLenient,
@@ -693,6 +694,15 @@ async function materializeSidecar(args: {
     } catch (err) {
       if (!isNoEntry(err)) throw err;
     }
+  } else if (args.persona.harness === 'cursor' && sidecar.file === 'AGENTS.md') {
+    // configFiles just wrote the system prompt (including the no-reply
+    // contract) to this path. Overwrite must not discard it.
+    try {
+      const existing = await readFile(target, 'utf8');
+      body = composeCursorAgentsMd(existing, sidecar.content);
+    } catch (err) {
+      if (!isNoEntry(err)) throw err;
+    }
   }
   await writeWorkspaceRelativeFile(args.cwd, sidecar.file, body.endsWith('\n') ? body : `${body}\n`);
   args.log('debug', 'harness.sidecar.materialized', { file: sidecar.file, mode: sidecar.mode });
@@ -710,7 +720,10 @@ function sidecarForPersona(
     };
   }
   if (
-    (persona.harness === 'codex' || persona.harness === 'opencode' || persona.harness === 'grok') &&
+    (persona.harness === 'codex' ||
+      persona.harness === 'opencode' ||
+      persona.harness === 'grok' ||
+      persona.harness === 'cursor') &&
     persona.agentsMdContent
   ) {
     return {

@@ -265,6 +265,34 @@ test('executePersonaSpawnPlan happy path orders side effects and disposes them i
   });
 });
 
+test('executePersonaSpawnPlan keeps cursor systemPrompt when an AGENTS.md sidecar overwrites', async () => {
+  await withTmpDir(async (dir) => {
+    const plan = buildPersonaSpawnPlan(
+      persona({
+        personaId: 'sample',
+        harness: 'cursor',
+        model: 'gpt-5',
+        systemPrompt: 'cursor prompt',
+        agentsMdContent: '# persona agents',
+        agentsMdMode: 'overwrite'
+      }),
+      { processEnv: cleanEnv }
+    );
+    assert.deepEqual(plan.configFiles, [
+      { path: 'AGENTS.md', contents: 'cursor prompt\n' }
+    ]);
+    assert.equal(plan.sidecars[0]?.filename, 'AGENTS.md');
+
+    const handle = await executePersonaSpawnPlan(plan, { cwd: dir });
+    const agents = await readFile(join(dir, 'AGENTS.md'), 'utf8');
+    assert.equal(agents, 'cursor prompt\n\n---\n\n# persona agents\n');
+    assert.ok(agents.indexOf('cursor prompt') < agents.indexOf('# persona agents'));
+
+    await handle.dispose();
+    assert.equal(await exists(join(dir, 'AGENTS.md')), false);
+  });
+});
+
 test('executePersonaSpawnPlan lets grok AGENTS.md sidecar override generated systemPrompt file', async () => {
   await withTmpDir(async (dir) => {
     const plan = buildPersonaSpawnPlan(

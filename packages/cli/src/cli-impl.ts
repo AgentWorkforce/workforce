@@ -39,6 +39,7 @@ import {
   MissingPersonaInputError,
   parseCheckInterval,
   PERSONA_TAGS,
+  composeCursorAgentsMd,
   readSkillCacheMarker,
   renderPersonaInputs,
   resolveAiMemory,
@@ -168,7 +169,8 @@ Commands:
                         --install-in-repo   Install skills into the repo's
                                             harness-conventional directory
                                             (.claude/skills, .opencode/skills,
-                                            .agents/skills, .grok/skills, etc.)
+                                            .agents/skills, .grok/skills,
+                                            .cursor/rules, etc.)
                                             and skip the sandbox mount. Simple
                                             claude and codex launches already
                                             run in the real cwd with normal
@@ -236,7 +238,8 @@ Commands:
                                             success, kept on failure for
                                             inspection.
   list [flags]        List available personas from the cascade (cwd →
-                      configured persona dirs → library). Flags:
+                      repo, when present → configured persona dirs →
+                      library). Flags:
                         --deployments                 list deployed cloud agents
                         --json                        emit JSON instead of a table
                         --filter-harness <harness>    only show this harness
@@ -245,8 +248,8 @@ Commands:
                                                       (free-form; common built-in tags: ${PERSONA_TAGS.join(' | ')})
                         --no-display-description      hide the DESCRIPTION column
   show <persona>      Print the fully-resolved spec for a single persona,
-                      including which cascade layer defined it (cwd, user,
-                      dir:<n>, library). Flags:
+                      including which cascade layer defined it (cwd, repo,
+                      user, dir:<n>, library). Flags:
                         --json        emit the resolved PersonaSpec as JSON
   persona compile <path/to/persona.ts>
                       Compile a typed persona.ts authoring file to sibling
@@ -265,7 +268,8 @@ Commands:
                       List persona source directories in cascade order.
   sources add <dir> [--position <n>]
                       Add a configurable persona source directory. Position is
-                      1-based among configurable dirs after the fixed cwd dir.
+                      1-based among configurable dirs after the fixed cwd and
+                      repository layers.
   sources remove <dir|n>
                       Remove a configurable persona source directory by path or
                       1-based configurable position.
@@ -1167,6 +1171,7 @@ export const SKILL_INSTALL_IGNORED_PATTERNS = [
   // skill.sh universal install root + per-harness symlink farms
   '.agents',
   '.claude/skills',
+  '.cursor/rules',
   '.factory/skills',
   '.grok/skills',
   '.kiro/skills',
@@ -1181,6 +1186,14 @@ export const SKILL_INSTALL_IGNORED_PATTERNS = [
   // into the mount; hide so the real-cwd AGENTS.md isn't copied in and
   // the persona-written copy doesn't sync back out.
   'AGENTS.md'
+] as const;
+
+const CURSOR_IGNORED_PATTERNS = [
+  ...SKILL_INSTALL_IGNORED_PATTERNS,
+  // Cursor CLI reads root CLAUDE.md alongside AGENTS.md; hide repo-level
+  // Claude guidance so persona AGENTS.md remains the only root memory file.
+  'CLAUDE.md',
+  'CLAUDE.local.md'
 ] as const;
 
 export interface RelayfileMountPatterns {
@@ -1201,7 +1214,9 @@ export function buildRelayfileMountPatterns(input: {
   const builtInIgnored =
     input.harness === 'claude'
       ? CLEAN_IGNORED_PATTERNS
-      : SKILL_INSTALL_IGNORED_PATTERNS;
+      : input.harness === 'cursor'
+        ? CURSOR_IGNORED_PATTERNS
+        : SKILL_INSTALL_IGNORED_PATTERNS;
 
   return {
     ignoredPatterns: [
@@ -1301,7 +1316,7 @@ export function configureGitForMount(mountDir: string, patterns: readonly string
  * and warns/skips on a direct unmounted launch.
  */
 export interface ResolvedSidecar {
-  /** Filename inside the mount: `CLAUDE.md` (claude) or `AGENTS.md` (opencode/codex/grok). */
+  /** Filename inside the mount: `CLAUDE.md` (claude) or `AGENTS.md` (opencode/codex/grok/cursor). */
   mountFile: 'CLAUDE.md' | 'AGENTS.md';
   /** Persona-author content. Already inlined for built-ins; read from disk for local. */
   personaContent: string;
@@ -1324,7 +1339,8 @@ export function loadSidecarForSelection(
     harness !== 'claude' &&
     harness !== 'opencode' &&
     harness !== 'codex' &&
-    harness !== 'grok'
+    harness !== 'grok' &&
+    harness !== 'cursor'
   ) {
     return {};
   }
@@ -1354,9 +1370,10 @@ export function loadSidecarForSelection(
     }
     return {};
   }
-  // opencode, codex, and grok all read AGENTS.md from cwd. decideCleanMode
-  // chooses whether that file is materialized in a mount; without one the
-  // caller warns and skips the write so the real repo stays untouched.
+  // opencode, codex, grok, and cursor all read AGENTS.md from cwd.
+  // decideCleanMode chooses whether that file is materialized in a mount;
+  // without one the caller warns and skips the write so the real repo stays
+  // untouched.
   if (selection.agentsMdContent) {
     return {
       sidecar: {
@@ -1381,6 +1398,20 @@ export function loadSidecarForSelection(
     }
   }
   return {};
+}
+
+/**
+ * Cursor writes `systemPrompt` and an `agentsMd` sidecar to the same
+ * `AGENTS.md`. Return the sidecar body with the prompt kept in front so
+ * overwrite and extend cannot drop it. Other harnesses pass the sidecar
+ * body through unchanged by leaving `systemPrompt` empty.
+ */
+export function mergeCursorAgentsMd(
+  systemPrompt: string | undefined,
+  sidecarBody: string
+): string {
+  if (!systemPrompt?.trim()) return sidecarBody;
+  return composeCursorAgentsMd(systemPrompt, sidecarBody);
 }
 
 /**
@@ -1411,7 +1442,7 @@ export function buildSidecarBody(
   return sidecar.personaContent;
 }
 
-const MOUNT_HARNESSES = new Set<Harness>(['claude', 'opencode', 'codex', 'grok']);
+const MOUNT_HARNESSES = new Set<Harness>(['claude', 'opencode', 'codex', 'grok', 'cursor']);
 
 export interface DecideCleanModeOptions {
   installInRepo?: boolean;
@@ -1420,8 +1451,8 @@ export interface DecideCleanModeOptions {
   /**
    * True when the harness materializes a file in the session cwd.
    * `runInteractive` knows this before `buildInteractiveSpec`: opencode
-   * always emits `opencode.json`, and grok emits `AGENTS.md` when the
-   * persona has a system prompt. This is not derived from
+   * always emits `opencode.json`, and grok and cursor emit `AGENTS.md` when
+   * the persona has a system prompt. This is not derived from
    * `spec.configFiles` — if a harness starts or stops writing a cwd file,
    * update that call site or the mount decision will drift.
    */
@@ -1462,7 +1493,8 @@ function hasDeclaredMountPolicy(mount: PersonaMount | undefined): boolean {
  * files, or non-Claude skill installers that would otherwise write
  * repo-relative artifacts. Plain claude and codex launches pass
  * harness-native argv directly in the real cwd, so a claude persona
- * without its own `claudeMd` sees the repo's `CLAUDE.md`.
+ * without its own `claudeMd` sees the repo's `CLAUDE.md`. Cursor and grok
+ * mount when a system prompt must be written as `AGENTS.md`.
  *
  * `--install-in-repo` is the hard opt-out. `mount.enabled: false` skips
  * persona-driven reasons but does not override project Relayfile rules.
@@ -2025,8 +2057,8 @@ async function runInteractive(
   // claude-only; persona-kit rejects it for other harnesses. Non-Claude
   // skill installs still need a sandbox so their repo-relative outputs
   // don't pollute the checkout. Opencode always needs the mount for
-  // `opencode.json`. Grok needs it when the system prompt is materialized
-  // as `AGENTS.md` (Grok has no system-prompt argv flag).
+  // `opencode.json`. Grok and cursor need it when the system prompt is
+  // materialized as `AGENTS.md` (neither has a system-prompt argv flag).
   const useClean = decideCleanMode(harness, {
     installInRepo: options.installInRepo === true,
     mount: effectiveSelection.mount,
@@ -2034,7 +2066,8 @@ async function runInteractive(
     // See DecideCleanModeOptions.hasConfigFiles — this predicate is the
     // pre-spec stand-in for `spec.configFiles.length > 0`.
     hasConfigFiles:
-      harness === 'opencode' || (harness === 'grok' && systemPrompt.trim().length > 0),
+      harness === 'opencode' ||
+      ((harness === 'grok' || harness === 'cursor') && systemPrompt.trim().length > 0),
     installNeedsSandbox: harness !== 'claude' && effectiveSelection.skills.length > 0,
     hasProjectRelayfilePolicy: projectHasRelayfilePolicy(process.cwd(), personaId)
   }).useClean;
@@ -2340,17 +2373,33 @@ async function runInteractive(
   //    into the user's real repo would pollute the working tree, so we
   //    skip those files and warn. Opencode also drops `--agent`, because
   //    that flag selects the agent defined by the skipped opencode.json.
+  //    Cursor passes its system prompt as the initial prompt instead of
+  //    writing AGENTS.md.
   const hasConfigFiles = spec.configFiles.length > 0;
   const degradeConfigFiles = hasConfigFiles && !useClean;
   let effectiveArgs: readonly string[] = spawnArgs;
+  let effectiveInitialPrompt = spec.initialPrompt;
   if (degradeConfigFiles) {
-    const paths = spec.configFiles.map((file) => file.path).join(', ');
-    process.stderr.write(
-      `warning: this direct launch cannot safely materialize persona config (${paths}) into your repo; launching without those files. Drop --install-in-repo to apply them inside the sandbox mount.\n`
-    );
-    if (harness === 'opencode') effectiveArgs = stripAgentFlag(spawnArgs);
+    if (harness === 'opencode') {
+      process.stderr.write(
+        'warning: --install-in-repo cannot safely materialize the persona agent config (would write opencode.json into your repo); launching without --agent. Drop --install-in-repo to apply the persona prompt.\n'
+      );
+      effectiveArgs = stripAgentFlag(spawnArgs);
+    } else if (harness === 'cursor') {
+      process.stderr.write(
+        'warning: --install-in-repo cannot safely materialize Cursor AGENTS.md (would write AGENTS.md into your repo); launching with the persona system prompt as Cursor\'s initial prompt. Drop --install-in-repo to apply the persona prompt via AGENTS.md.\n'
+      );
+      effectiveInitialPrompt = systemPrompt || null;
+    } else {
+      const files = spec.configFiles.map((file) => file.path).join(', ');
+      process.stderr.write(
+        `warning: --install-in-repo cannot safely materialize persona config file(s) ${files} into your repo; launching without those config files. Drop --install-in-repo to apply them.\n`
+      );
+    }
   }
-  const finalArgs = spec.initialPrompt ? [...effectiveArgs, spec.initialPrompt] : [...effectiveArgs];
+  const finalArgs = effectiveInitialPrompt
+    ? [...effectiveArgs, effectiveInitialPrompt]
+    : [...effectiveArgs];
 
   // Print a sanitized summary rather than raw argv: spec.args for the claude
   // harness contains the resolved --mcp-config JSON and the full system
@@ -2600,7 +2649,15 @@ async function runInteractive(
         writeFileSync(target, file.contents, 'utf8');
       }
       if (resolvedSidecar) {
-        const body = buildSidecarBody(resolvedSidecar, process.cwd());
+        const sidecarBody = buildSidecarBody(resolvedSidecar, process.cwd());
+        // Extend reads the real repo, not the prompt file this loop just
+        // wrote into the mount. Put the Cursor system prompt back in front
+        // so both the prompt and the sidecar survive overwrite and extend.
+        const cursorPrompt =
+          harness === 'cursor' && resolvedSidecar.mountFile === 'AGENTS.md'
+            ? spec.configFiles.find((file) => file.path === 'AGENTS.md')?.contents
+            : undefined;
+        const body = mergeCursorAgentsMd(cursorPrompt, sidecarBody);
         writeFileSync(join(handle.mountDir, resolvedSidecar.mountFile), body, 'utf8');
       }
       perfMark('mount: config files + sidecar written');

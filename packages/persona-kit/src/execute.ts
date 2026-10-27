@@ -56,7 +56,8 @@ async function disposeAll(handles: readonly Disposer[]): Promise<void> {
 /**
  * Run the plan's side effects in deterministic order with abort-on-failure.
  * After this returns successfully, the harness can be spawned at
- * `handle.cwd` with `plan.cli` + `plan.args` and `plan.env`.
+ * `handle.cwd` with `plan.cli` (the executable binary) + `plan.args` and
+ * `plan.env`.
  *
  * Order:
  *   1. {@link applyPersonaMount} — mount policy first; everything else
@@ -98,9 +99,16 @@ export async function executePersonaSpawnPlan(
     );
     handles.push(configHandle);
 
+    const cursorSystemPrompt =
+      plan.persona.harness === 'cursor'
+        ? plan.configFiles.find((file) => file.path === 'AGENTS.md')?.contents
+        : undefined;
     const sidecarHandle: PersonaSidecarHandle = await writePersonaSidecars(
       plan.sidecars,
-      { cwd: childCwd }
+      {
+        cwd: childCwd,
+        ...(cursorSystemPrompt ? { cursorSystemPrompt } : {})
+      }
     );
     handles.push(sidecarHandle);
 

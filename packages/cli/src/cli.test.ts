@@ -17,6 +17,7 @@ import {
   buildMountGitExcludeBlock,
   buildSpawnSummary,
   buildSidecarBody,
+  mergeCursorAgentsMd,
   configureGitForMount,
   decideCleanMode,
   projectHasRelayfilePolicy,
@@ -102,6 +103,26 @@ function writeStandaloneCodexPersona(
       systemPrompt: 'Run the local codex test harness.',
       harnessSettings: { reasoning: 'medium', timeoutSeconds: 30 },
       ...extra
+    }),
+    'utf8'
+  );
+  return id;
+}
+
+function writeStandaloneCursorPersona(workforceHome: string, id = 'local-cursor'): string {
+  const personaDir = join(workforceHome, 'personas');
+  mkdirSync(personaDir, { recursive: true });
+  writeFileSync(
+    join(personaDir, `${id}.json`),
+    JSON.stringify({
+      id,
+      intent: 'review',
+      tags: ['review'],
+      description: 'Local no-skill cursor persona for CLI subprocess tests.',
+      harness: 'cursor',
+      model: 'test-cursor',
+      systemPrompt: 'Run the local cursor test harness.',
+      harnessSettings: { reasoning: 'medium', timeoutSeconds: 30 }
     }),
     'utf8'
   );
@@ -457,6 +478,14 @@ test('decideCleanMode: extension mount fields such as roots count as filesystem 
   });
 });
 
+test('decideCleanMode: cursor mounts for cwd config, sidecars, and skill installs', () => {
+  assert.deepEqual(decideCleanMode('cursor'), { useClean: false });
+  assert.deepEqual(decideCleanMode('cursor', { hasConfigFiles: true }), { useClean: true });
+  assert.deepEqual(decideCleanMode('cursor', { hasSidecar: true }), { useClean: true });
+  assert.deepEqual(decideCleanMode('cursor', { installNeedsSandbox: true }), { useClean: true });
+  assert.deepEqual(decideCleanMode('cursor', true), { useClean: false });
+});
+
 test('formatSandboxMountReadyMessage: appends mount metrics when available', () => {
   assert.equal(
     formatSandboxMountReadyMessage('/tmp/mount', {
@@ -587,6 +616,7 @@ test('SKILL_INSTALL_IGNORED_PATTERNS: keeps skill-install artifacts out of the r
   assert.deepEqual([...SKILL_INSTALL_IGNORED_PATTERNS], [
     '.agents',
     '.claude/skills',
+    '.cursor/rules',
     '.factory/skills',
     '.grok/skills',
     '.kiro/skills',
@@ -641,6 +671,24 @@ test('buildRelayfileMountPatterns: merges Relayfile dotfiles with built-in claud
       '*',
       '!app/**'
     ]);
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test('buildRelayfileMountPatterns: cursor hides root memory files it reads', () => {
+  const dir = mkdtempSync(join(tmpdir(), 'aw-cursor-patterns-'));
+  try {
+    const patterns = buildRelayfileMountPatterns({
+      projectDir: dir,
+      personaId: 'cursor-persona',
+      harness: 'cursor'
+    });
+
+    assert.ok(patterns.ignoredPatterns.includes('AGENTS.md'));
+    assert.ok(patterns.ignoredPatterns.includes('.cursor/rules'));
+    assert.ok(patterns.ignoredPatterns.includes('CLAUDE.md'));
+    assert.ok(patterns.ignoredPatterns.includes('CLAUDE.local.md'));
   } finally {
     rmSync(dir, { recursive: true, force: true });
   }
@@ -1161,6 +1209,35 @@ test('configureGitForMount: empty patterns is a no-op', () => {
   assert.doesNotThrow(() => configureGitForMount('/nonexistent-path', []));
 });
 
+test('cursor AGENTS.md keeps systemPrompt together with an agentsMd sidecar', () => {
+  const dir = mkdtempSync(join(tmpdir(), 'aw-cursor-agents-'));
+  try {
+    writeFileSync(join(dir, 'AGENTS.md'), '# Real repo\n', 'utf8');
+    const sidecar: ResolvedSidecar = {
+      mountFile: 'AGENTS.md',
+      personaContent: '# Sidecar\n',
+      mode: 'overwrite'
+    };
+    assert.equal(
+      mergeCursorAgentsMd('System prompt\n', buildSidecarBody(sidecar, dir)),
+      'System prompt\n\n---\n\n# Sidecar\n'
+    );
+
+    const extended = mergeCursorAgentsMd(
+      'System prompt\n',
+      buildSidecarBody({ ...sidecar, mode: 'extend' }, dir)
+    );
+    assert.equal(
+      extended,
+      'System prompt\n\n---\n\n# Real repo\n\n\n---\n\n# Sidecar\n'
+    );
+    assert.ok(extended.indexOf('System prompt') < extended.indexOf('# Real repo'));
+    assert.ok(extended.indexOf('# Real repo') < extended.indexOf('# Sidecar'));
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
 test('buildSidecarBody: overwrite mode returns persona content as-is', () => {
   const sidecar: ResolvedSidecar = {
     mountFile: 'CLAUDE.md',
@@ -1266,6 +1343,23 @@ test('loadSidecarForSelection: grok picks agentsMd, not claudeMd', () => {
     personaId: 'p',
     harness: 'grok' as const,
     model: 'grok-build-0.1',
+    systemPrompt: 'X',
+    harnessSettings: { reasoning: 'medium' as const, timeoutSeconds: 300 },
+    skills: [],
+    rationale: 'test',
+    claudeMdContent: '# claude\n',
+    agentsMdContent: '# agents\n'
+  };
+  const { sidecar } = loadSidecarForSelection(selection);
+  assert.equal(sidecar?.mountFile, 'AGENTS.md');
+  assert.equal(sidecar?.personaContent, '# agents\n');
+});
+
+test('loadSidecarForSelection: cursor picks agentsMd, not claudeMd', () => {
+  const selection = {
+    personaId: 'p',
+    harness: 'cursor' as const,
+    model: 'gpt-5',
     systemPrompt: 'X',
     harnessSettings: { reasoning: 'medium' as const, timeoutSeconds: 300 },
     skills: [],
@@ -1497,6 +1591,64 @@ test('main: grok sessions mount so the system prompt can be written to AGENTS.md
     );
   } finally {
     rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test('main: cursor sessions mount so the system prompt can be written to AGENTS.md', async () => {
+  const root = mkdtempSync(join(tmpdir(), 'aw-cli-cursor-mount-'));
+  try {
+    const project = join(root, 'project');
+    mkdirSync(project);
+    const workforceHome = join(root, '.agentworkforce', 'workforce');
+    const personaId = writeStandaloneCursorPersona(workforceHome);
+    const { stderr } = await runCliCapturingStderr(
+      ['agent', `${personaId}`],
+      { AGENT_WORKFORCE_HOME: workforceHome },
+      { cwd: project }
+    );
+    assert.match(
+      stderr,
+      /sandbox mount →/,
+      `expected cursor's AGENTS.md config file to engage the mount; saw stderr:\n${stderr}`
+    );
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test('main: cursor --install-in-repo passes systemPrompt as an initial prompt fallback', async () => {
+  const dir = mkdtempSync(join(tmpdir(), 'aw-cli-cursor-no-mount-'));
+  try {
+    const cursorAgent = join(dir, 'cursor-agent');
+    writeFileSync(
+      cursorAgent,
+      `#!/usr/bin/env node
+process.stderr.write(JSON.stringify(process.argv.slice(2)));
+process.exit(0);
+`,
+      'utf8'
+    );
+    chmodSync(cursorAgent, 0o755);
+
+    const workforceHome = join(dir, '.agentworkforce', 'workforce');
+    const personaId = writeStandaloneCursorPersona(workforceHome);
+    const { stderr, exitCode } = await runCliCapturingStderr(
+      ['agent', `${personaId}`, '--install-in-repo'],
+      {
+        PATH: `${dir}:${process.env.PATH ?? ''}`,
+        AGENT_WORKFORCE_HOME: workforceHome,
+        AGENTWORKFORCE_LAUNCH_METADATA: '0'
+      }
+    );
+
+    assert.equal(exitCode, 0);
+    assert.match(stderr, /cannot safely materialize Cursor AGENTS\.md/);
+    assert.match(
+      stderr,
+      /\["--model","test-cursor","Run the local cursor test harness\."\]/
+    );
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
   }
 });
 
