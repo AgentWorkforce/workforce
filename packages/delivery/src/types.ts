@@ -1,0 +1,158 @@
+import type { WorkforceCtx } from '@agentworkforce/runtime';
+import type { SlackClient } from '@relayfile/relay-helpers';
+import type { TelegramTransport } from './telegram.js';
+import { input } from './helpers.js';
+
+// ── message reference (returned by send, accepted by reply) ──────────────
+
+export interface SlackRef {
+  provider: 'slack';
+  channel: string;
+  /** Delivered message ts (set after the writeback receipt arrives). */
+  ts: string;
+  /** Draft ref for cloud-side replyTo threading. */
+  draftRef: string;
+}
+
+export interface TelegramRef {
+  provider: 'telegram';
+  chatId: string;
+  /** Delivered message id (set after the writeback receipt arrives). */
+  messageId: string;
+}
+
+export interface RelaycastRef {
+  provider: 'relaycast';
+  /** The agent the reply was DM'd to (the inbound message's sender). */
+  to: string;
+  /** Delivered relaycast message id, when the send returns one. */
+  messageId: string;
+}
+
+export type MessageRef = SlackRef | TelegramRef | RelaycastRef;
+
+/** A delivery target provider. */
+export type DeliveryProvider = 'slack' | 'telegram' | 'relaycast';
+
+// ── delivery result ─────────────────────────────────────────────────────
+
+export interface DeliveryResult {
+  ok: boolean;
+  refs: MessageRef[];
+}
+
+// ── options ──────────────────────────────────────────────────────────────
+
+export interface DeliveryOptions {
+  /** Thread the message under a prior delivery result. */
+  replyTo?: DeliveryResult;
+  /**
+   * When true, don't wait for the provider receipt. Slack returns a draft ref
+   * for cloud-side ordering; Telegram queues through Relayfile with a 0ms
+   * writeback timeout and returns an empty messageId until delivery.
+   *
+   * Use this for the header in a header+threaded-body pattern so the
+   * digest never blocks on a receipt — the cloud orders the threaded
+   * body under the header server-side.
+   */
+  nonBlocking?: boolean;
+}
+
+// ── relaycast (agent-to-agent) transport ──────────────────────────────────
+
+/**
+ * Minimal seam for sending a relaycast DM back to a peer agent. The default
+ * implementation posts `POST /v1/dm` with the box's injected
+ * `RELAY_AGENT_TOKEN` (or deprecated `RELAY_API_KEY` alias when it contains an
+ * agent-scoped token);
+ * tests inject a mock. Unlike Slack/Telegram (config-driven via persona
+ * inputs), the relaycast reply address is EVENT-driven — `to` is the inbound
+ * message's sender, supplied by the caller.
+ */
+export interface RelaycastSender {
+  dm(to: string, text: string): Promise<{ ok: boolean; messageId?: string }>;
+}
+
+/**
+ * Relaycast target config. Present iff the agent is replying to a relay DM:
+ * `to` is the inbound sender to reply to; `sender` overrides the default
+ * env-backed client (for tests).
+ */
+export interface RelaycastTarget {
+  to: string;
+  sender?: RelaycastSender;
+}
+
+// ── injectable transport seam (for tests) ────────────────────────────────
+
+export interface DeliveryTransports {
+  /** Injected Slack client (used for both blocking and non-blocking paths). */
+  slack?: SlackClient;
+  /** Injected Telegram client (used for both blocking and non-blocking paths). */
+  telegram?: TelegramTransport;
+  /**
+   * Relaycast reply target. When set, `relaycast` becomes a delivery target
+   * and `send()`/`publish()` DM the inbound sender over the relay. Event-driven
+   * (the `to` address comes from the inbound message), so it is NOT discovered
+   * by `resolveDeliveryTargets(ctx)`.
+   */
+  relaycast?: RelaycastTarget;
+}
+
+// ── delivery client ──────────────────────────────────────────────────────
+
+export interface DeliveryClient {
+  /**
+   * Send a message to all configured targets.
+   *
+   * When `opts.replyTo` is set the message is threaded under the targets
+   * from that prior `DeliveryResult`, each using its transport's native
+   * threading mechanism.
+   *
+   * In blocking mode (default): waits for the writeback receipt and returns
+   * the delivered ts/messageId. In non-blocking mode (`opts.nonBlocking: true`):
+   * queues through Relayfile without a provider receipt round-trip. Slack
+   * returns a draftRef; Telegram's messageId remains empty.
+   */
+  send(text: string, opts?: DeliveryOptions): Promise<DeliveryResult>;
+
+  /**
+   * Convenience: same as `send(text, { nonBlocking: true })`.
+   * Publish a message without waiting for a provider receipt.
+   */
+  publish(text: string): Promise<DeliveryResult>;
+
+  /** Which providers are configured. */
+  readonly targets: ReadonlyArray<DeliveryProvider>;
+}
+
+// ── configuration discovery ──────────────────────────────────────────────
+
+/**
+ * Resolve which transport targets are configured for the given persona ctx.
+ * Uses input() helper for proper resolution order (ctx → env → default).
+ */
+export function resolveDeliveryTargets(ctx: WorkforceCtx): Array<'slack' | 'telegram'> {
+  const targets: Array<'slack' | 'telegram'> = [];
+  if (input(ctx, 'SLACK_CHANNEL')) targets.push('slack');
+  if (input(ctx, 'TELEGRAM_CHAT')) targets.push('telegram');
+  return targets;
+}
+
+/**
+ * Get the configured slack channel id (bare, without `__name` suffix).
+ * Uses input() for proper resolution.
+ */
+export function slackChannel(ctx: WorkforceCtx): string | undefined {
+  const raw = input(ctx, 'SLACK_CHANNEL');
+  return raw?.split('__')[0]?.trim() || undefined;
+}
+
+/**
+ * Get the configured telegram chat id (bare, without `__title` suffix).
+ * Uses input() for proper resolution.
+ */
+export function telegramChat(ctx: WorkforceCtx): string | undefined {
+  const raw = input(ctx, 'TELEGRAM_CHAT');
+  return raw?.split('__')[0]?.trim() || undefined;
+}

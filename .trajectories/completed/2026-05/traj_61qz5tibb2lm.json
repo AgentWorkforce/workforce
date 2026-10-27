@@ -1,0 +1,57 @@
+{
+  "id": "traj_61qz5tibb2lm",
+  "version": 1,
+  "task": {
+    "title": "Address workforce PR 155 feedback",
+    "source": {
+      "system": "plain",
+      "id": "workforce#155"
+    }
+  },
+  "status": "completed",
+  "startedAt": "2026-05-28T07:46:09.716Z",
+  "completedAt": "2026-05-28T07:47:24.475Z",
+  "agents": [
+    {
+      "name": "default",
+      "role": "lead",
+      "joinedAt": "2026-05-28T07:47:24.393Z"
+    }
+  ],
+  "chapters": [
+    {
+      "id": "chap_9o5wn7u582eh",
+      "title": "Work",
+      "agentName": "default",
+      "startedAt": "2026-05-28T07:47:24.393Z",
+      "endedAt": "2026-05-28T07:47:24.475Z",
+      "events": [
+        {
+          "ts": 1779954444394,
+          "type": "decision",
+          "content": "Preserved source-aware status fallback: Preserved source-aware status fallback",
+          "raw": {
+            "question": "Preserved source-aware status fallback",
+            "chosen": "Preserved source-aware status fallback",
+            "alternatives": [],
+            "reasoning": "cubic identified that status 404 fallback was reading workspace integrations even for deployer_user-scoped personas; reusing fetchIntegrationsForScope preserves the same source contract as the primary status request"
+          },
+          "significance": "high"
+        }
+      ]
+    }
+  ],
+  "retrospective": {
+    "summary": "Addressed workforce#155 review feedback by making integration status fallback source-aware and adding deployer_user/workspace fallback regression tests. Verified @agentworkforce/deploy tests and full pnpm check.",
+    "approach": "Standard approach",
+    "confidence": 0.95
+  },
+  "commits": [],
+  "filesChanged": [],
+  "projectId": "/Users/khaliqgant/Projects/AgentWorkforce/workforce-issue-154",
+  "tags": [],
+  "_trace": {
+    "startRef": "18c2bb8f32cf91c3522e8d9935a3d7da50db6eb9",
+    "endRef": "18c2bb8f32cf91c3522e8d9935a3d7da50db6eb9"
+  }
+}

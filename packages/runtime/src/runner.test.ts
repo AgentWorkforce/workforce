@@ -7,7 +7,10 @@ import os from 'node:os';
 import type { AddressInfo } from 'node:net';
 import type { PersonaSpec } from '@agentworkforce/persona-kit';
 import { startRunner } from './runner.js';
+import { createCloudRuntimeDefaults } from './cloud-defaults.js';
+import { buildCtx } from './ctx.js';
 import { handler } from './handler.js';
+import { isCronTickEvent } from '@agent-relay/events';
 import type { RawGatewayEnvelope } from './shim.js';
 import type {
   SandboxContext,
@@ -26,7 +29,12 @@ const persona: PersonaSpec = {
   model: 'anthropic/claude-3-5-sonnet',
   systemPrompt: 'be helpful',
   harnessSettings: { reasoning: 'medium', timeoutSeconds: 300 },
-  cloud: true,
+  cloud: true
+};
+
+// Listeners live on the agent now, not the persona. Passed to startRunner as
+// `agentSpec` (used for startup logging only).
+const agentSpec = {
   schedules: [{ name: 'weekly', cron: '0 9 * * 6' }]
 };
 
@@ -64,6 +72,7 @@ test('startRunner dispatches a cron envelope to the handler', async () => {
   const logs: Array<{ level: string; message: string }> = [];
   await startRunner({
     persona,
+    agentSpec,
     agent: runtimeAgent,
     deployment: runtimeDeployment,
     workspaceId: 'ws-test',
@@ -86,10 +95,38 @@ test('startRunner dispatches a cron envelope to the handler', async () => {
     ])
   });
   assert.equal(received.length, 1);
-  assert.equal(received[0].source, 'cron');
-  if (received[0].source !== 'cron') return;
-  assert.equal(received[0].name, 'weekly');
+  assert.ok(isCronTickEvent(received[0]));
+  if (!isCronTickEvent(received[0])) return;
+  assert.equal(received[0].schedule, '0 9 * * 6');
   assert.ok(logs.find((l) => l.message === 'runner.handler.ok'));
+});
+
+test('startRunner surfaces the supplied bundle manifest in runner.started structured evidence', async () => {
+  const logs: Array<{ level: string; message: string; attrs?: Record<string, unknown> }> = [];
+  const bundleManifest = {
+    schemaVersion: 1 as const,
+    packages: [
+      { name: '@relayfile/adapter-core', version: '0.5.7' },
+      { name: '@relayfile/relay-helpers', version: '0.4.9' }
+    ]
+  };
+
+  await startRunner({
+    persona,
+    agent: runtimeAgent,
+    deployment: runtimeDeployment,
+    workspaceId: 'ws-test',
+    handler: handler(async () => {}),
+    bundleManifest,
+    subsystems: {
+      sandbox: stubSandbox,
+      log: (level, message, attrs) => logs.push({ level, message, attrs })
+    },
+    envelopes: streamOf([])
+  });
+
+  const started = logs.find((entry) => entry.message === 'runner.started');
+  assert.deepEqual(started?.attrs?.bundleManifest, bundleManifest);
 });
 
 test('startRunner logs and continues when the handler throws', async () => {
@@ -118,6 +155,37 @@ test('startRunner logs and continues when the handler throws', async () => {
   assert.equal(errors.length, 2);
 });
 
+test('provider failures reach runner error reporting without changing the agent handler', async () => {
+  const logs: Array<{ level: string; message: string; attrs?: Record<string, unknown> }> = [];
+  let posted = 0;
+  let calls = 0;
+  await startRunner({
+    persona,
+    agent: runtimeAgent,
+    deployment: runtimeDeployment,
+    workspaceId: 'ws-test',
+    handler: handler(async (ctx) => {
+      const result = await ctx.harness.run({ prompt: 'Perform the task' });
+      if (result.exitCode !== 0) throw new Error(`The harness exited with code ${result.exitCode}`);
+      posted++;
+    }),
+    harnessRunner: async () => {
+      calls++;
+      return { output: "You've hit your limit · resets 3:40pm (UTC)", stderr: 'secret-fixture', exitCode: 1, durationMs: 1900 };
+    },
+    subsystems: { sandbox: stubSandbox, log: (level, message, attrs) => logs.push({ level, message, attrs }) },
+    envelopes: streamOf([{ id: 'quota-event', workspace: 'ws-test', type: 'cron.tick', occurredAt: 'x', name: 'tick' }])
+  });
+  const error = logs.find((entry) => entry.message === 'runner.handler.error');
+  assert.match(String(error?.attrs?.error), /Claude account.*usage limit/);
+  assert.match(String(error?.attrs?.error), /3:40pm \(UTC\)/);
+  assert.equal((error?.attrs?.providerFailure as { kind: string }).kind, 'usage_limit');
+  assert.doesNotMatch(JSON.stringify(error), /secret-fixture|exited with code 1/);
+  assert.equal(logs.some((entry) => entry.message === 'runner.handler.ok'), false);
+  assert.equal(calls, 1);
+  assert.equal(posted, 0, 'failure output cannot reach the task success path');
+});
+
 test('startRunner skips envelopes that the shim can not translate', async () => {
   const received: WorkforceEvent[] = [];
   const logs: Array<{ level: string; message: string }> = [];
@@ -134,7 +202,8 @@ test('startRunner skips envelopes that the shim can not translate', async () => 
       log: (level, message) => logs.push({ level, message })
     },
     envelopes: streamOf([
-      { id: 'e1', workspace: 'ws-test', type: 'mystery.thing', occurredAt: 'x' },
+      // No dot, and not a known single-word type → the mapper drops it.
+      { id: 'e1', workspace: 'ws-test', type: 'mystery', occurredAt: 'x' },
       { id: 'e2', workspace: 'ws-test', type: 'cron.tick', occurredAt: 'x', name: 'tick' }
     ])
   });
@@ -142,136 +211,8 @@ test('startRunner skips envelopes that the shim can not translate', async () => 
   assert.ok(logs.find((l) => l.message === 'runner.envelope.unsupported'));
 });
 
-test('startRunner supplies cloud github and harness defaults when generated runner passes none', async () => {
-  const dir = await mkdtemp(path.join(os.tmpdir(), 'wf-runtime-cloud-defaults-'));
-  const binDir = path.join(dir, 'bin');
-  const workspaceRoot = path.join(dir, 'workspace');
-  const usageRequests: unknown[] = [];
-  const usageServer = http.createServer((req, res) => {
-    let body = '';
-    req.setEncoding('utf8');
-    req.on('data', (chunk) => {
-      body += chunk;
-    });
-    req.on('end', () => {
-      usageRequests.push({
-        authorization: req.headers.authorization,
-        body: JSON.parse(body)
-      });
-      res.writeHead(204).end();
-    });
-  });
-  await new Promise<void>((resolve) => usageServer.listen(0, '127.0.0.1', resolve));
-  const usageAddress = usageServer.address();
-  assert.ok(usageAddress && typeof usageAddress === 'object');
-  const usageUrl = `http://127.0.0.1:${(usageAddress as AddressInfo).port}/usage`;
 
-  const previousEnv = snapshotEnv([
-    'PATH',
-    'WORKFORCE_SANDBOX_ROOT',
-    'RELAYFILE_MOUNT_ROOT',
-    'WORKFORCE_USAGE_URL',
-    'WORKFORCE_DEPLOYMENT_TOKEN'
-  ]);
-  try {
-    await writeFakeHarness(binDir, 'claude', [
-      'Generated essay from fake harness',
-      'WORKFORCE_USAGE_JSON={"inputTokens":11,"outputTokens":7,"totalTokens":18,"model":"fake-model"}'
-    ].join('\n'));
-    process.env.PATH = `${binDir}${path.delimiter}${process.env.PATH ?? ''}`;
-    process.env.WORKFORCE_SANDBOX_ROOT = workspaceRoot;
-    process.env.RELAYFILE_MOUNT_ROOT = workspaceRoot;
-    process.env.WORKFORCE_USAGE_URL = usageUrl;
-    process.env.WORKFORCE_DEPLOYMENT_TOKEN = 'deployment-token';
 
-    let harnessOutput = '';
-    let pullRequestUrl = '';
-    await startRunner({
-      persona: {
-        ...persona,
-        integrations: { github: { triggers: [{ on: 'pull_request.opened' }] } }
-      },
-      agent: runtimeAgent,
-      deployment: runtimeDeployment,
-      workspaceId: 'ws-test',
-      handler: handler(async (ctx) => {
-        assert.ok(ctx.github, 'github client should be attached from persona integrations');
-        const result = await ctx.harness.run({ cwd: '/workspace', prompt: 'draft the essay' });
-        harnessOutput = result.output;
-        const pr = await ctx.github.createPullRequest({
-          owner: 'AgentWorkforce',
-          repo: 'proactive-agents',
-          title: 'Essay: Launch notes',
-          body: 'Drafted by test',
-          head: 'essay/launch-notes',
-          base: 'main',
-          files: { 'output/launch-notes.md': result.output }
-        });
-        pullRequestUrl = pr.url;
-      }),
-      subsystems: {
-        log: () => {
-          /* keep test output quiet */
-        }
-      },
-      envelopes: streamOf([
-        { id: 'e1', workspace: 'ws-test', type: 'cron.tick', occurredAt: 'x', name: 'tick' }
-      ])
-    });
-
-    assert.equal(harnessOutput, 'Generated essay from fake harness');
-    assert.match(pullRequestUrl, /^\/github\/repos\/AgentWorkforce\/proactive-agents\/pulls\//);
-    const pullDrafts = await readdir(
-      path.join(workspaceRoot, 'github/repos/AgentWorkforce/proactive-agents/pulls')
-    );
-    assert.equal(pullDrafts.length, 1);
-    const pullDraft = JSON.parse(
-      await readFile(
-        path.join(workspaceRoot, 'github/repos/AgentWorkforce/proactive-agents/pulls', pullDrafts[0]),
-        'utf8'
-      )
-    ) as { title?: string; files?: Record<string, string> };
-    assert.equal(pullDraft.title, 'Essay: Launch notes');
-    assert.equal(pullDraft.files?.['output/launch-notes.md'], 'Generated essay from fake harness');
-    assert.equal(usageRequests.length, 1);
-    const usageRequest = usageRequests[0] as {
-      authorization?: string;
-      body?: {
-        durationMs?: number;
-        usage?: { raw?: unknown };
-        [key: string]: unknown;
-      };
-    };
-    assert.equal(usageRequest.authorization, 'Bearer deployment-token');
-    assert.equal(typeof usageRequest.body?.durationMs, 'number');
-    assert.deepEqual(usageRequest.body, {
-      workspaceId: 'ws-test',
-      deploymentId: 'deployment_456',
-      agentId: 'agent_123',
-      personaId: 'demo',
-      harness: 'claude',
-      model: 'fake-model',
-      durationMs: usageRequest.body?.durationMs,
-      exitCode: 0,
-      usage: {
-        inputTokens: 11,
-        outputTokens: 7,
-        totalTokens: 18,
-        model: 'fake-model',
-        raw: {
-          inputTokens: 11,
-          outputTokens: 7,
-          totalTokens: 18,
-          model: 'fake-model'
-        }
-      }
-    });
-  } finally {
-    restoreEnv(previousEnv);
-    await new Promise<void>((resolve) => usageServer.close(() => resolve()));
-    await rm(dir, { recursive: true, force: true });
-  }
-});
 
 test('buildCtx rejects integrations that collide with core fields', async () => {
   const { buildCtx } = await import('./ctx.js');
@@ -311,6 +252,119 @@ test('startRunner throws when workspaceId is missing from both options and env',
   }
 });
 
+test('cloud harness runner materializes AGENTS.md for grok personas', async () => {
+  const root = await mkdtemp(path.join(os.tmpdir(), 'workforce-grok-cloud-'));
+  const binDir = path.join(root, 'bin');
+  await mkdir(binDir, { recursive: true });
+  await writeFile(
+    path.join(binDir, 'grok'),
+    [
+      '#!/usr/bin/env node',
+      'const fs = require("node:fs");',
+      'const path = require("node:path");',
+      'const args = process.argv.slice(2);',
+      'const promptFlag = args.indexOf("--prompt-file");',
+      'const promptPath = args[promptFlag + 1];',
+      'const prompt = fs.readFileSync(promptPath, "utf8");',
+      'const agents = fs.readFileSync(path.join(process.cwd(), "AGENTS.md"), "utf8");',
+      'process.stdout.write(JSON.stringify({ args, agents, prompt, promptPath }));'
+    ].join('\n'),
+    'utf8'
+  );
+  await chmod(path.join(binDir, 'grok'), 0o755);
+
+  const envSnapshot = snapshotEnv(['PATH', 'WORKFORCE_SANDBOX_ROOT']);
+  process.env.PATH = `${binDir}${path.delimiter}${envSnapshot.PATH ?? ''}`;
+  process.env.WORKFORCE_SANDBOX_ROOT = root;
+  try {
+    const logs: Array<{ level: string; message: string; details?: unknown }> = [];
+    const defaults = createCloudRuntimeDefaults({
+      persona: {
+        ...persona,
+        harness: 'grok',
+        model: 'grok-build-0.1',
+        systemPrompt: 'Grok system prompt',
+        agentsMdContent: 'Grok agents sidecar',
+        agentsMdMode: 'overwrite'
+      },
+      agent: runtimeAgent,
+      deployment: runtimeDeployment,
+      workspaceId: 'ws-test',
+      log: (level, message, details) => logs.push({ level, message, details }),
+      env: process.env
+    });
+
+    const result = await defaults.harnessRunner({ prompt: 'say hello' });
+    assert.equal(result.exitCode, 0);
+    const parsed = JSON.parse(result.output) as {
+      args: string[];
+      agents: string;
+      prompt: string;
+      promptPath: string;
+    };
+    assert.deepEqual(parsed.args.slice(0, -2), [
+      '--no-auto-update',
+      '--model',
+      'grok-build-0.1',
+      '--output-format',
+      'plain',
+      '--cwd',
+      root,
+      '--always-approve'
+    ]);
+    assert.equal(parsed.args.at(-2), '--prompt-file');
+    assert.equal(parsed.args.at(-1), parsed.promptPath);
+    assert.equal(
+      parsed.prompt,
+      'Grok system prompt\n\nWhen no visible reply is useful, make the final message exactly [[NO_REPLY]].\n\nUser task:\nsay hello'
+    );
+    await assert.rejects(() => readFile(parsed.promptPath, 'utf8'), { code: 'ENOENT' });
+    assert.equal(parsed.agents, 'Grok agents sidecar\n');
+    assert.ok(logs.find((l) => l.message === 'harness.sidecar.materialized'));
+  } finally {
+    restoreEnv(envSnapshot);
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
+test('cloud harness runner injects the no-reply contract into opencode config', async () => {
+  const root = await mkdtemp(path.join(os.tmpdir(), 'workforce-opencode-cloud-'));
+  const binDir = path.join(root, 'bin');
+  const capturePath = path.join(root, 'opencode-capture.json');
+  await writeArgCaptureHarness(binDir, 'opencode', capturePath);
+
+  const defaults = createCloudRuntimeDefaults({
+    persona: {
+      ...persona,
+      harness: 'opencode',
+      model: 'opencode/minimax-m2.5',
+      systemPrompt: 'OpenCode system prompt'
+    },
+    agent: runtimeAgent,
+    deployment: runtimeDeployment,
+    workspaceId: 'ws-test',
+    log: () => {},
+    env: {
+      PATH: `${binDir}${path.delimiter}${process.env.PATH ?? ''}`,
+      WORKFORCE_SANDBOX_ROOT: root
+    }
+  });
+
+  try {
+    const result = await defaults.harnessRunner({ prompt: 'say hello' });
+    assert.equal(result.exitCode, 0);
+    const config = JSON.parse(await readFile(path.join(root, 'opencode.json'), 'utf8')) as {
+      agent: Record<string, { prompt: string }>;
+    };
+    assert.equal(
+      config.agent.demo.prompt,
+      'OpenCode system prompt\n\nWhen no visible reply is useful, make the final message exactly [[NO_REPLY]].'
+    );
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
 async function writeFakeHarness(binDir: string, name: string, stdout: string): Promise<void> {
   await mkdir(binDir, { recursive: true });
   await writeFile(
@@ -323,6 +377,520 @@ async function writeFakeHarness(binDir: string, name: string, stdout: string): P
   );
   await chmod(path.join(binDir, name), 0o755);
 }
+
+async function writeArgCaptureHarness(
+  binDir: string,
+  name: string,
+  capturePath: string
+): Promise<void> {
+  await mkdir(binDir, { recursive: true });
+  await writeFile(
+    path.join(binDir, name),
+    [
+      '#!/usr/bin/env node',
+      "const fs = require('node:fs');",
+      "process.stdin.setEncoding('utf8');",
+      "let stdin = '';",
+      "process.stdin.on('data', (chunk) => { stdin += chunk; });",
+      "process.stdin.on('end', () => {",
+      `  fs.writeFileSync(${JSON.stringify(capturePath)}, JSON.stringify({ argv: process.argv.slice(2), stdin }, null, 2));`,
+      "  process.stdout.write('ok\\n');",
+      "});"
+    ].join('\n'),
+    'utf8'
+  );
+  await chmod(path.join(binDir, name), 0o755);
+}
+
+async function writeFakeBroker(binDir: string, capturePath: string): Promise<void> {
+  await mkdir(binDir, { recursive: true });
+  await writeFile(
+    path.join(binDir, 'agent-relay-broker'),
+    [
+      '#!/usr/bin/env node',
+      "const fs = require('node:fs');",
+      'const argv = process.argv.slice(2);',
+      "const cli = argv[argv.indexOf('--cli') + 1];",
+      `fs.writeFileSync(${JSON.stringify(capturePath)}, JSON.stringify({ argv }, null, 2));`,
+      'const brokerArgs = cli === "claude" ? [',
+      '  "--mcp-config",',
+      '  JSON.stringify({',
+      '    mcpServers: {',
+      '      "agent-relay": {',
+      '        type: "stdio",',
+      '        command: "npx",',
+      '        args: ["-y", "agent-relay", "mcp"],',
+      '        env: {',
+      '          RELAY_API_KEY: "rk_live_test",',
+      '          RELAY_BASE_URL: "https://relay.example.test",',
+      '          RELAY_AGENT_NAME: "claude-1",',
+      '          RELAY_AGENT_TYPE: "agent",',
+      '          RELAY_STRICT_AGENT_NAME: "1",',
+      '          RELAY_AGENT_TOKEN: "at_live_test",',
+      '          RELAY_SKIP_BOOTSTRAP: "1"',
+      '        }',
+      '      }',
+      '    }',
+      '  })',
+      '] : [',
+      '  "--config",',
+      '  "check_for_update_on_startup=false",',
+      '  "--config",',
+      '  "mcp_servers.agent-relay.command=\\"npx\\"",',
+      '  "--config",',
+      '  "mcp_servers.agent-relay.args=[\\"-y\\", \\"agent-relay\\", \\"mcp\\"]",',
+      '  "--config",',
+      '  "mcp_servers.agent-relay.env.RELAY_AGENT_TOKEN=\\"at_live_test\\"",',
+      '  "--config",',
+      '  "mcp_servers.agent-relay.env.RELAY_SKIP_BOOTSTRAP=\\"1\\""',
+      '];',
+      'process.stdout.write(JSON.stringify({',
+      '  args: brokerArgs,',
+      '  sideEffectFiles: [],',
+      '  agentToken: "at_live_test"',
+      '}));'
+    ].join('\n'),
+    'utf8'
+  );
+  await chmod(path.join(binDir, 'agent-relay-broker'), 0o755);
+}
+
+async function writeEmptyArgsBroker(binDir: string): Promise<void> {
+  await mkdir(binDir, { recursive: true });
+  await writeFile(
+    path.join(binDir, 'agent-relay-broker'),
+    [
+      '#!/usr/bin/env node',
+      'process.stdout.write(JSON.stringify({ args: [], sideEffectFiles: [] }));'
+    ].join('\n'),
+    'utf8'
+  );
+  await chmod(path.join(binDir, 'agent-relay-broker'), 0o755);
+}
+
+async function writeFailingBroker(binDir: string): Promise<void> {
+  await mkdir(binDir, { recursive: true });
+  await writeFile(
+    path.join(binDir, 'agent-relay-broker'),
+    [
+      '#!/usr/bin/env node',
+      "process.stderr.write(`failed for ${process.argv.join(' ')}\\n`);",
+      'process.exit(2);'
+    ].join('\n'),
+    'utf8'
+  );
+  await chmod(path.join(binDir, 'agent-relay-broker'), 0o755);
+}
+
+test('cloud default codex harness injects agent-relay MCP args from broker helper', async () => {
+  const tempDir = await mkdtemp(path.join(os.tmpdir(), 'workforce-runtime-'));
+  try {
+    const binDir = path.join(tempDir, 'bin');
+    const workspaceRoot = path.join(tempDir, 'workspace');
+    const capturePath = path.join(tempDir, 'codex-argv.json');
+    const brokerCapturePath = path.join(tempDir, 'broker-argv.json');
+    await mkdir(workspaceRoot, { recursive: true });
+    await writeArgCaptureHarness(binDir, 'codex', capturePath);
+    await writeFakeBroker(binDir, brokerCapturePath);
+
+    const defaults = createCloudRuntimeDefaults({
+      persona: {
+        ...persona,
+        id: 'autonomous-actor',
+        harness: 'codex',
+        model: 'openai/gpt-5',
+        systemPrompt: 'coordinate with the team',
+        harnessSettings: {
+          reasoning: 'medium',
+          dangerouslyBypassApprovalsAndSandbox: true,
+          timeoutSeconds: 5
+        }
+      },
+      agent: runtimeAgent,
+      deployment: runtimeDeployment,
+      workspaceId: 'ws-test',
+      log: () => {},
+      env: {
+        PATH: `${binDir}${path.delimiter}${process.env.PATH ?? ''}`,
+        WORKFORCE_SANDBOX_ROOT: workspaceRoot,
+        RELAY_API_KEY: 'rk_live_test',
+        RELAY_AGENT_NAME: 'codex-1',
+        RELAY_BASE_URL: 'https://relay.example.test',
+        RELAY_DEFAULT_WORKSPACE: 'ws-relay',
+        RELAY_WORKSPACES_JSON: '{"workspaces":[{"id":"ws-relay"}]}'
+      }
+    });
+
+    const result = await defaults.harnessRunner({ prompt: 'do the work' });
+    assert.equal(result.exitCode, 0);
+
+    const captured = JSON.parse(await readFile(capturePath, 'utf8')) as {
+      argv: string[];
+      stdin: string;
+    };
+    assert.deepEqual(captured.argv.slice(0, 9), [
+      'exec',
+      '--config',
+      'check_for_update_on_startup=false',
+      '--config',
+      'mcp_servers.agent-relay.command="npx"',
+      '--config',
+      'mcp_servers.agent-relay.args=["-y", "agent-relay", "mcp"]',
+      '--config',
+      'mcp_servers.agent-relay.env.RELAY_AGENT_TOKEN="at_live_test"'
+    ]);
+    assert.equal(captured.argv[9], '--config');
+    assert.equal(captured.argv[10], 'mcp_servers.agent-relay.env.RELAY_SKIP_BOOTSTRAP="1"');
+    assert.equal(captured.argv[11], '-m');
+    assert.equal(captured.argv[12], 'gpt-5');
+    assert.ok(captured.argv.includes('--dangerously-bypass-approvals-and-sandbox'));
+    assert.ok(captured.argv.includes('--skip-git-repo-check'));
+
+    const brokerCaptured = JSON.parse(await readFile(brokerCapturePath, 'utf8')) as {
+      argv: string[];
+    };
+    assert.deepEqual(brokerCaptured.argv.slice(0, 11), [
+      'mcp-args',
+      '--cli',
+      'codex',
+      '--agent-name',
+      'codex-1',
+      '--api-key',
+      'rk_live_test',
+      '--base-url',
+      'https://relay.example.test',
+      '--register',
+      '--cwd'
+    ]);
+    assert.equal(brokerCaptured.argv[11], workspaceRoot);
+    const existingArgsIdx = brokerCaptured.argv.indexOf('--existing-args');
+    assert.notEqual(existingArgsIdx, -1);
+    assert.deepEqual(
+      JSON.parse(brokerCaptured.argv[existingArgsIdx + 1]),
+      captured.argv.slice(11, -1)
+    );
+    assert.equal(captured.argv.at(-1), '-');
+    assert.equal(
+      captured.stdin,
+      'coordinate with the team\n\nWhen no visible reply is useful, make the final message exactly [[NO_REPLY]].\n\nUser task:\ndo the work'
+    );
+    assert.equal(
+      brokerCaptured.argv[brokerCaptured.argv.indexOf('--workspaces-json') + 1],
+      '{"workspaces":[{"id":"ws-relay"}]}'
+    );
+    assert.equal(
+      brokerCaptured.argv[brokerCaptured.argv.indexOf('--default-workspace') + 1],
+      'ws-relay'
+    );
+  } finally {
+    await rm(tempDir, { recursive: true, force: true });
+  }
+});
+
+test('cloud default broker args omit base URL when RELAY_BASE_URL is unset', async () => {
+  const tempDir = await mkdtemp(path.join(os.tmpdir(), 'workforce-runtime-'));
+  try {
+    const binDir = path.join(tempDir, 'bin');
+    const workspaceRoot = path.join(tempDir, 'workspace');
+    const capturePath = path.join(tempDir, 'codex-argv.json');
+    const brokerCapturePath = path.join(tempDir, 'broker-argv.json');
+    await mkdir(workspaceRoot, { recursive: true });
+    await writeArgCaptureHarness(binDir, 'codex', capturePath);
+    await writeFakeBroker(binDir, brokerCapturePath);
+
+    const defaults = createCloudRuntimeDefaults({
+      persona: {
+        ...persona,
+        harness: 'codex',
+        model: 'openai/gpt-5',
+        systemPrompt: 'coordinate with the team',
+        harnessSettings: { reasoning: 'medium', timeoutSeconds: 5 }
+      },
+      agent: runtimeAgent,
+      deployment: runtimeDeployment,
+      workspaceId: 'ws-test',
+      log: () => {},
+      env: {
+        PATH: `${binDir}${path.delimiter}${process.env.PATH ?? ''}`,
+        WORKFORCE_SANDBOX_ROOT: workspaceRoot,
+        RELAY_API_KEY: 'rk_live_test',
+        RELAY_AGENT_NAME: 'codex-1'
+      }
+    });
+
+    const result = await defaults.harnessRunner({ prompt: 'do the work' });
+    assert.equal(result.exitCode, 0);
+
+    const brokerCaptured = JSON.parse(await readFile(brokerCapturePath, 'utf8')) as {
+      argv: string[];
+    };
+    assert.equal(brokerCaptured.argv.includes('--base-url'), false);
+  } finally {
+    await rm(tempDir, { recursive: true, force: true });
+  }
+});
+
+test('cloud default broker failure logs redact Relay API key', async () => {
+  const tempDir = await mkdtemp(path.join(os.tmpdir(), 'workforce-runtime-'));
+  try {
+    const binDir = path.join(tempDir, 'bin');
+    const workspaceRoot = path.join(tempDir, 'workspace');
+    const capturePath = path.join(tempDir, 'codex-argv.json');
+    const logs: Array<{ level: string; message: string; data?: unknown }> = [];
+    await mkdir(workspaceRoot, { recursive: true });
+    await writeArgCaptureHarness(binDir, 'codex', capturePath);
+    await writeFailingBroker(binDir);
+
+    const defaults = createCloudRuntimeDefaults({
+      persona: {
+        ...persona,
+        harness: 'codex',
+        model: 'openai/gpt-5',
+        systemPrompt: 'coordinate with the team',
+        harnessSettings: { reasoning: 'medium', timeoutSeconds: 5 }
+      },
+      agent: runtimeAgent,
+      deployment: runtimeDeployment,
+      workspaceId: 'ws-test',
+      log: (level, message, data) => logs.push({ level, message, data }),
+      env: {
+        PATH: `${binDir}${path.delimiter}${process.env.PATH ?? ''}`,
+        WORKFORCE_SANDBOX_ROOT: workspaceRoot,
+        RELAY_API_KEY: 'rk_live_test',
+        RELAY_AGENT_NAME: 'codex-1',
+        RELAY_BASE_URL: 'https://relay.example.test'
+      }
+    });
+
+    const result = await defaults.harnessRunner({ prompt: 'do the work' });
+    assert.equal(result.exitCode, 0);
+    const failure = logs.find((log) => log.message === 'harness.relay_mcp.broker_args_failed');
+    assert.ok(failure);
+    const stderr = (failure.data as { stderr: string }).stderr;
+    assert.match(stderr, /\[REDACTED\]/);
+    assert.doesNotMatch(stderr, /rk_live_test/);
+  } finally {
+    await rm(tempDir, { recursive: true, force: true });
+  }
+});
+
+test('cloud default codex harness falls back when broker returns no args', async () => {
+  const tempDir = await mkdtemp(path.join(os.tmpdir(), 'workforce-runtime-'));
+  try {
+    const binDir = path.join(tempDir, 'bin');
+    const workspaceRoot = path.join(tempDir, 'workspace');
+    const capturePath = path.join(tempDir, 'codex-argv.json');
+    await mkdir(workspaceRoot, { recursive: true });
+    await writeArgCaptureHarness(binDir, 'codex', capturePath);
+    await writeEmptyArgsBroker(binDir);
+
+    const defaults = createCloudRuntimeDefaults({
+      persona: {
+        ...persona,
+        harness: 'codex',
+        model: 'openai/gpt-5',
+        systemPrompt: 'coordinate with the team',
+        harnessSettings: { reasoning: 'medium', timeoutSeconds: 5 }
+      },
+      agent: runtimeAgent,
+      deployment: runtimeDeployment,
+      workspaceId: 'ws-test',
+      log: () => {},
+      env: {
+        PATH: `${binDir}${path.delimiter}${process.env.PATH ?? ''}`,
+        WORKFORCE_SANDBOX_ROOT: workspaceRoot,
+        RELAY_API_KEY: 'rk_live_test',
+        RELAY_AGENT_NAME: 'codex-1',
+        RELAY_BASE_URL: 'https://relay.example.test'
+      }
+    });
+
+    const result = await defaults.harnessRunner({ prompt: 'do the work' });
+    assert.equal(result.exitCode, 0);
+
+    const captured = JSON.parse(await readFile(capturePath, 'utf8')) as {
+      argv: string[];
+      stdin: string;
+    };
+    assert.ok(captured.argv.includes('mcp_servers.relaycast.command="npx"'));
+    assert.equal(captured.argv.includes('mcp_servers.agent-relay.command="npx"'), false);
+  } finally {
+    await rm(tempDir, { recursive: true, force: true });
+  }
+});
+
+test('cloud default claude harness merges agent-relay MCP config from broker helper', async () => {
+  const tempDir = await mkdtemp(path.join(os.tmpdir(), 'workforce-runtime-'));
+  try {
+    const binDir = path.join(tempDir, 'bin');
+    const workspaceRoot = path.join(tempDir, 'workspace');
+    const capturePath = path.join(tempDir, 'claude-argv.json');
+    const brokerCapturePath = path.join(tempDir, 'broker-argv.json');
+    await mkdir(workspaceRoot, { recursive: true });
+    await writeArgCaptureHarness(binDir, 'claude', capturePath);
+    await writeFakeBroker(binDir, brokerCapturePath);
+
+    const defaults = createCloudRuntimeDefaults({
+      persona: {
+        ...persona,
+        id: 'autonomous-actor',
+        harness: 'claude',
+        model: 'anthropic/claude-3-5-sonnet',
+        systemPrompt: 'coordinate with the team',
+        harnessSettings: { reasoning: 'medium', timeoutSeconds: 5 },
+        mcpServers: {
+          filesystem: { type: 'stdio', command: 'filesystem-mcp' }
+        }
+      },
+      agent: runtimeAgent,
+      deployment: runtimeDeployment,
+      workspaceId: 'ws-test',
+      log: () => {},
+      env: {
+        PATH: `${binDir}${path.delimiter}${process.env.PATH ?? ''}`,
+        WORKFORCE_SANDBOX_ROOT: workspaceRoot,
+        RELAY_API_KEY: 'rk_live_test',
+        RELAY_AGENT_NAME: 'claude-1',
+        RELAY_BASE_URL: 'https://relay.example.test',
+        RELAY_DEFAULT_WORKSPACE: 'ws-relay',
+        RELAY_WORKSPACES_JSON: '{"workspaces":[{"id":"ws-relay"}]}'
+      }
+    });
+
+    const result = await defaults.harnessRunner({ prompt: 'do the work' });
+    assert.equal(result.exitCode, 0);
+
+    const captured = JSON.parse(await readFile(capturePath, 'utf8')) as {
+      argv: string[];
+      stdin: string;
+    };
+    assert.equal(captured.argv.filter((arg) => arg === '--mcp-config').length, 1);
+    assert.ok(captured.argv.includes('--strict-mcp-config'));
+    assert.ok(captured.argv.includes('--print'));
+    assert.ok(captured.argv.includes('--output-format'));
+    assert.notEqual(captured.argv.at(-1), 'do the work');
+    assert.equal(captured.stdin, 'do the work');
+    const systemPromptIdx = captured.argv.indexOf('--append-system-prompt');
+    assert.notEqual(systemPromptIdx, -1);
+    assert.equal(
+      captured.argv[systemPromptIdx + 1],
+      'coordinate with the team\n\nWhen no visible reply is useful, make the final message exactly [[NO_REPLY]].'
+    );
+
+    const mcpConfigIdx = captured.argv.indexOf('--mcp-config');
+    const payload = JSON.parse(captured.argv[mcpConfigIdx + 1]) as {
+      mcpServers: Record<
+        string,
+        { type: string; command?: string; args?: string[]; env?: Record<string, string> }
+      >;
+    };
+    assert.deepEqual(payload.mcpServers.filesystem, {
+      type: 'stdio',
+      command: 'filesystem-mcp'
+    });
+    assert.equal(payload.mcpServers.relaycast, undefined);
+    assert.equal(payload.mcpServers['agent-relay'].command, 'npx');
+    assert.deepEqual(payload.mcpServers['agent-relay'].args, ['-y', 'agent-relay', 'mcp']);
+    assert.equal(payload.mcpServers['agent-relay'].env?.RELAY_AGENT_TOKEN, 'at_live_test');
+    assert.equal(payload.mcpServers['agent-relay'].env?.RELAY_SKIP_BOOTSTRAP, '1');
+    assert.equal(payload.mcpServers['agent-relay'].env?.RELAY_STRICT_AGENT_NAME, '1');
+
+    const brokerCaptured = JSON.parse(await readFile(brokerCapturePath, 'utf8')) as {
+      argv: string[];
+    };
+    assert.deepEqual(brokerCaptured.argv.slice(0, 11), [
+      'mcp-args',
+      '--cli',
+      'claude',
+      '--agent-name',
+      'claude-1',
+      '--api-key',
+      'rk_live_test',
+      '--base-url',
+      'https://relay.example.test',
+      '--register',
+      '--cwd'
+    ]);
+    assert.equal(brokerCaptured.argv[11], workspaceRoot);
+    const existingArgsIdx = brokerCaptured.argv.indexOf('--existing-args');
+    assert.notEqual(existingArgsIdx, -1);
+    assert.deepEqual(JSON.parse(brokerCaptured.argv[existingArgsIdx + 1]), []);
+    assert.equal(
+      brokerCaptured.argv[brokerCaptured.argv.indexOf('--workspaces-json') + 1],
+      '{"workspaces":[{"id":"ws-relay"}]}'
+    );
+    assert.equal(
+      brokerCaptured.argv[brokerCaptured.argv.indexOf('--default-workspace') + 1],
+      'ws-relay'
+    );
+  } finally {
+    await rm(tempDir, { recursive: true, force: true });
+  }
+});
+
+test('cloud default claude harness preserves explicit relay MCP overrides', async () => {
+  const tempDir = await mkdtemp(path.join(os.tmpdir(), 'workforce-runtime-'));
+  try {
+    const binDir = path.join(tempDir, 'bin');
+    const workspaceRoot = path.join(tempDir, 'workspace');
+    const capturePath = path.join(tempDir, 'claude-argv.json');
+    const brokerCapturePath = path.join(tempDir, 'broker-argv.json');
+    const logs: Array<{ level: string; message: string; data?: unknown }> = [];
+    await mkdir(workspaceRoot, { recursive: true });
+    await writeArgCaptureHarness(binDir, 'claude', capturePath);
+    await writeFakeBroker(binDir, brokerCapturePath);
+
+    const defaults = createCloudRuntimeDefaults({
+      persona: {
+        ...persona,
+        id: 'autonomous-actor',
+        harness: 'claude',
+        model: 'anthropic/claude-3-5-sonnet',
+        systemPrompt: 'coordinate with the team',
+        harnessSettings: { reasoning: 'medium', timeoutSeconds: 5 },
+        mcpServers: {
+          relaycast: { type: 'stdio', command: 'custom-relaycast' }
+        }
+      },
+      agent: runtimeAgent,
+      deployment: runtimeDeployment,
+      workspaceId: 'ws-test',
+      log: (level, message, data) => logs.push({ level, message, data }),
+      env: {
+        PATH: `${binDir}${path.delimiter}${process.env.PATH ?? ''}`,
+        WORKFORCE_SANDBOX_ROOT: workspaceRoot,
+        RELAY_API_KEY: 'rk_live_test',
+        RELAY_AGENT_NAME: 'claude-1',
+        RELAY_BASE_URL: 'https://relay.example.test'
+      }
+    });
+
+    const result = await defaults.harnessRunner({ prompt: 'do the work' });
+    assert.equal(result.exitCode, 0);
+
+    const captured = JSON.parse(await readFile(capturePath, 'utf8')) as { argv: string[] };
+    const mcpConfigIdx = captured.argv.indexOf('--mcp-config');
+    const payload = JSON.parse(captured.argv[mcpConfigIdx + 1]) as {
+      mcpServers: Record<string, { type: string; command?: string }>;
+    };
+    assert.deepEqual(payload.mcpServers.relaycast, {
+      type: 'stdio',
+      command: 'custom-relaycast'
+    });
+    assert.equal(payload.mcpServers['agent-relay'], undefined);
+    await assert.rejects(readFile(brokerCapturePath, 'utf8'), /ENOENT/);
+    assert.deepEqual(
+      logs.find((log) => log.message === 'harness.relay_mcp.persona_override'),
+      {
+        level: 'debug',
+        message: 'harness.relay_mcp.persona_override',
+        data: { harness: 'claude', serverNames: ['relaycast'] }
+      }
+    );
+  } finally {
+    await rm(tempDir, { recursive: true, force: true });
+  }
+});
 
 function snapshotEnv(keys: string[]): Record<string, string | undefined> {
   const out: Record<string, string | undefined> = {};

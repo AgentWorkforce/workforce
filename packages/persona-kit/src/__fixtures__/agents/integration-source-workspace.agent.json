@@ -1,0 +1,9 @@
+{
+  "triggers": {
+    "slack": [
+      {
+        "on": "message.created"
+      }
+    ]
+  }
+}

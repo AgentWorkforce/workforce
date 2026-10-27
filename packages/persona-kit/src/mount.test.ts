@@ -1,5 +1,8 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
+import { mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 import { applyPersonaMount } from './mount.js';
 import type { ResolvedMountPolicy } from './plan.js';
 
@@ -39,4 +42,31 @@ test('applyPersonaMount: declared policy without personaId throws a clear error'
     applyPersonaMount(mount, { cwd: '/x', mountDir: '/scratch/mount' }),
     /options\.personaId is required when a mount policy is supplied/
   );
+});
+
+test('applyPersonaMount: autoSync flushes harness changes before disposal', async () => {
+  const root = await mkdtemp(join(tmpdir(), 'persona-mount-autosync-'));
+  const project = join(root, 'project');
+  const mountDir = join(root, 'mount');
+  await mkdir(project);
+  await writeFile(join(project, 'input.txt'), 'input');
+
+  try {
+    const handle = await applyPersonaMount(
+      { ignoredPatterns: [], readonlyPatterns: [] },
+      {
+        cwd: project,
+        mountDir,
+        personaId: 'autosync-test',
+        includeGit: false,
+        autoSync: { scanIntervalMs: 0, healthyScanIntervalMs: 0 }
+      }
+    );
+    await writeFile(join(handle.cwd, 'result.txt'), 'persisted');
+    await handle.dispose();
+
+    assert.equal(await readFile(join(project, 'result.txt'), 'utf8'), 'persisted');
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
 });

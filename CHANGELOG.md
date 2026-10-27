@@ -7,3 +7,94 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
+
+## [4.2.0] - 2026-10-02
+
+### Changed
+
+- `@agentworkforce/mcp-workforce` now uses zod 4 with
+  `@modelcontextprotocol/sdk` `^1.31.0`. The floor is `zod` `^4.4.3`, so
+  consumers can pin 4.4.3 (zod 4.5+ grows `zod/v4/core` substantially).
+- `@agentworkforce/deploy`, `@agentworkforce/cli`, `@agentworkforce/runtime`
+  and `@agentworkforce/local-surface` moved to the zod-4 `@agent-relay/*`
+  lines (`@agent-relay/cloud` and `@agent-relay/fleet` `^12.2.2`,
+  `@agent-relay/events` `^7.1.1`), so installs no longer pull zod 3 through them.
+- `@agentworkforce/local-surface` `spawn:persona` now requires
+  `@agent-relay/fleet` 12 or newer (README and runtime guard updated).
+- `@agentworkforce/runtime` accepts `agent-trajectories` `^0.5.3 || ^0.6.0 || ^0.7.0`,
+  so consumers can dedupe onto the zod-4 trajectories release once it ships.
+
+## [4.1.60] - 2026-09-30
+
+### Fixed
+
+- `deploy`, `deployments list`, `destroy`, `runs`, `trigger` and `local-surface`
+  now address cloud APIs with the cloud workspace id instead of the relaycast
+  workspace id, which cloud rejected with `403 Forbidden` after
+  `agentworkforce login`. When the cloud returns no cloud workspace id for a
+  workspace, the CLI now stops with an actionable error instead of silently
+  falling back to the relaycast id.
+- `WORKFORCE_WORKSPACE_TOKEN` set to a relaycast workspace key (`rk_…` from
+  `workspaces.json`) is rejected up front with guidance instead of failing
+  later with `401`.
+
+### Added
+
+- `agentworkforce login` prints the cloud workspace id, and warns when the
+  chosen workspace has none.
+
+## [4.1.51] - 2026-08-31
+
+### Added
+
+- `agentworkforce --version` tells you when a newer release is published and
+  prints the command that installs it.
+
+### Changed
+
+- `@agentworkforce/deploy` and `@agentworkforce/daytona-runner` migrated off the
+  deprecated `@daytonaio/sdk` to its replacement `@daytona/sdk` (same API, no
+  breaking changes upstream). Installing workforce no longer prints a
+  deprecation warning for it.
+- `@agentworkforce/deploy` tracks `@agent-relay/cloud` ^10.1.0, matching
+  `@agentworkforce/cli`, so an install resolves one copy instead of two.
+
+## [4.1.39] - 2026-08-11
+
+### Added
+
+- `@agentworkforce/persona-registry` exposes the CLI's built-in, project,
+  personal, configured-directory, and exact JSON-path persona resolution as an
+  in-process SDK.
+- `@agentworkforce/local-surface` adds a deduplicated `spawn:persona` Fleet
+  capability. It prepares interactive personas through `persona-kit`, layers a
+  concrete task over standing instructions, auto-syncs isolated-mount changes,
+  and requests verified Relay registration and readiness without invoking the
+  `agentworkforce` binary. It requires `@agent-relay/fleet` 11.5 or newer.
+
+## [4.1.15] - 2026-07-13
+
+### Added
+
+- `@agentworkforce/cli`: warm fast path for `agent <persona>`. Repeat
+  launches of the same persona in the same repo reuse the previous session's
+  sandbox mount plus a digest-validated launch plan, spawning the harness in
+  tens of milliseconds; the mount reconciles with the repo in the background
+  while the harness boots. Any change to the persona, its source dirs,
+  skills, dotfiles, or relevant environment falls back to the full launch.
+  Disable with `AGENTWORKFORCE_NO_FAST=1`. Launch-phase timings are printable
+  with `AGENTWORKFORCE_PERF=1`.
+
+### Changed
+
+- `@agentworkforce/cli`: cold launches are an order of magnitude faster.
+  Sandbox mounts populate from `git ls-files` (`@relayfile/local-mount`
+  `population: 'auto'`), so gitignored trees never get mirrored or rescanned;
+  autosync starts from population-seeded state instead of re-reading every
+  file pair; the skill-cache mirror no longer copies the install-time npm
+  cache into the mount; and cloud subcommand handlers load lazily off the
+  launch path. In the relay repo, launch-to-harness went from ~26s to ~2.5s
+  cold and ~20ms warm, and session teardown from ~11s to under 1s.
+- `@agentworkforce/cli`: requires `@relayfile/local-mount` ^0.10.23
+  (git-list population, `attachMount`, exported autosync state, and the
+  external-teardown safety guard).

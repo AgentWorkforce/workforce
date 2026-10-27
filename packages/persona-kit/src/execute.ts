@@ -63,9 +63,9 @@ async function disposeAll(handles: readonly Disposer[]): Promise<void> {
  *      writes into the resulting cwd.
  *   2. {@link runSkillInstalls} — install before sidecars/configFiles so a
  *      failing skill doesn't strand a half-written sidecar on disk.
- *   3. {@link writePersonaSidecars} — claudeMd / agentsMd to disk with
+ *   3. {@link materializePersonaConfigFiles} — opencode.json and friends.
+ *   4. {@link writePersonaSidecars} — claudeMd / agentsMd to disk with
  *      restore tracking.
- *   4. {@link materializePersonaConfigFiles} — opencode.json and friends.
  *
  * If any step throws, prior steps' handles are disposed in LIFO order
  * before the original error propagates. Callers never see partial state.
@@ -92,17 +92,17 @@ export async function executePersonaSpawnPlan(
     });
     handles.push(skillsHandle);
 
-    const sidecarHandle: PersonaSidecarHandle = await writePersonaSidecars(
-      plan.sidecars,
-      { cwd: childCwd }
-    );
-    handles.push(sidecarHandle);
-
     const configHandle: PersonaConfigFilesHandle = await materializePersonaConfigFiles(
       plan.configFiles,
       { cwd: childCwd }
     );
     handles.push(configHandle);
+
+    const sidecarHandle: PersonaSidecarHandle = await writePersonaSidecars(
+      plan.sidecars,
+      { cwd: childCwd }
+    );
+    handles.push(sidecarHandle);
 
     let disposed = false;
     return {

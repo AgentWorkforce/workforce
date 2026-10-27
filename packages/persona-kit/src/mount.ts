@@ -1,4 +1,5 @@
 import type { ResolvedMountPolicy } from './plan.js';
+import type { AutoSyncHandle, AutoSyncOptions } from '@relayfile/local-mount';
 
 // `@relayfile/local-mount` pulls in `@parcel/watcher`, which loads a
 // per-platform native binary at module evaluation time
@@ -48,6 +49,12 @@ export interface ApplyPersonaMountOptions {
    * pure file overlay.
    */
   includeGit?: boolean;
+  /**
+   * Keep the project and mount synchronized for the lifetime of the handle.
+   * `dispose()` stops the watchers and performs their final flush before the
+   * mount is removed.
+   */
+  autoSync?: boolean | AutoSyncOptions;
 }
 
 /**
@@ -93,6 +100,19 @@ export async function applyPersonaMount(
     agentName: options.personaId,
     includeGit: options.includeGit ?? true
   });
+  let autoSync: AutoSyncHandle | undefined;
+  try {
+    autoSync = options.autoSync
+      ? handle.startAutoSync(typeof options.autoSync === 'object' ? options.autoSync : undefined)
+      : undefined;
+  // Do not hand the mount to a fast-starting harness before watcher setup has
+  // settled. A degraded watcher is still usable: stop() performs a full
+  // reconcile, so setup errors intentionally fall through to that fallback.
+    await Promise.resolve(autoSync?.ready()).catch(() => undefined);
+  } catch (error) {
+    await handle.cleanup();
+    throw error;
+  }
 
   let disposed = false;
   return {
@@ -100,10 +120,14 @@ export async function applyPersonaMount(
     async dispose(): Promise<void> {
       if (disposed) return;
       disposed = true;
-      // Defensive await — relayfile's typed signature is void today, but
-      // future versions may return a promise; awaiting a non-promise is a
-      // no-op and protects the dispose contract executors rely on.
-      await handle.cleanup();
+      try {
+        await autoSync?.stop();
+      } finally {
+        // Defensive await — relayfile's typed signature is void today, but
+        // future versions may return a promise; awaiting a non-promise is a
+        // no-op and protects the dispose contract executors rely on.
+        await handle.cleanup();
+      }
     }
   };
 }

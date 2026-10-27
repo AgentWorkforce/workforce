@@ -3,75 +3,177 @@ import type {
   PersonaSpec,
   PersonaMemoryScope
 } from '@agentworkforce/persona-kit';
-import type { GithubClient } from './clients/github.js';
-import type { LinearClient } from './clients/linear.js';
-import type { SlackClient } from './clients/slack.js';
-import type { NotionClient } from './clients/notion.js';
-import type { JiraClient } from './clients/jira.js';
+import type { AgentEvent, EventType } from '@agent-relay/events';
 
 /**
- * Source of an event delivered to a persona's `onEvent` handler. The
- * runtime narrows the rest of the envelope based on this discriminator.
+ * v4: the event delivered to a persona handler IS the relay SDK's normalized
+ * {@link AgentEvent} (`@agent-relay/events`). The runtime decodes cloud's
+ * gateway envelope into it via `envelopeToAgentEvent`. Events discriminate on
+ * `event.type` (e.g. `cron.tick`, `github.pull_request.opened`,
+ * `relaycast.message`); the provider payload is reached via
+ * `await event.expand('full')`, and `event.resource` is the resource handle.
  *
- * Sources today: `cron` (schedule tick), the Tier-1 Relayfile providers
- * (`github`, `linear`, `slack`, `notion`, `jira`). Additional sources land
- * as cloud proactive-runtime milestones M2/M3 ship.
+ * The pre-v4 `{ source, payload, workspaceId }` shape and its
+ * `WorkforceEventSource`/`WorkforceCronEvent`/`WorkforceProviderEvent`
+ * members are gone — see CHANGELOG and the migration notes in `define-agent`.
  */
-export type WorkforceEventSource =
-  | 'cron'
-  | 'github'
-  | 'linear'
-  | 'slack'
-  | 'notion'
-  | 'jira';
+export type { AgentEvent, EventType };
+export type {
+  CronTickEvent,
+  RelaycastMessageEvent,
+  RelayfileChangeEvent,
+  StartupEvent
+} from '@agent-relay/events';
+export {
+  isCronTickEvent,
+  isRelaycastMessageEvent,
+  isRelayfileChangeEvent,
+  isStartupEvent
+} from '@agent-relay/events';
 
-/** Common envelope fields every event carries, regardless of source. */
-interface WorkforceEventBase {
-  /** Stable, idempotency-safe identifier; the runtime dedupes on this. */
+/**
+ * @deprecated v4 alias for the relay SDK {@link AgentEvent}. Retained so
+ * internal runtime references keep compiling during the migration; new code
+ * should use `AgentEvent` directly.
+ */
+export type WorkforceEvent = AgentEvent;
+
+export function unwrapResourceRecord<T = unknown>(payload: unknown): T | unknown {
+  const resource = isRecord(payload) && 'resource' in payload ? payload.resource : payload;
+  return isRecord(resource) && 'payload' in resource ? resource.payload : resource;
+}
+
+export interface LinearIssueReference {
   id: string;
-  /** ISO timestamp the event fired at the source (not at delivery). */
-  occurredAt: string;
-  /** Delivery attempt count, 1 for first delivery. */
-  attempt: number;
-  /** Workspace this event is scoped to. */
-  workspaceId: string;
+  identifier?: string;
+  title?: string;
+  url?: string;
 }
 
-export interface WorkforceCronEvent extends WorkforceEventBase {
-  source: 'cron';
-  /** Schedule name as declared in the persona's `schedules[].name`. */
-  name: string;
-  /** The persona's resolved cron expression for the schedule. */
-  cron: string;
+export interface LinearAgentSession {
+  id: string;
+  issue?: LinearIssueReference;
+  [key: string]: unknown;
 }
 
-/** Provider-specific event payload — kept loose for v1. */
-export interface WorkforceProviderEvent extends WorkforceEventBase {
-  source: Exclude<WorkforceEventSource, 'cron'>;
-  /** Provider-normalized event name (e.g. `pull_request.opened`). */
-  type: string;
-  /** Raw provider payload, normalized by the Relayfile adapter. */
-  payload: unknown;
-  /** Optional summary the gateway computed (M2). Missing on M1. */
-  summary?: {
-    title?: string;
-    status?: string;
-    actor?: string;
+export type LinearAgentActivityType =
+  | 'action'
+  | 'elicitation'
+  | 'error'
+  | 'response'
+  | 'thought';
+
+export interface LinearAgentActivity {
+  type?: LinearAgentActivityType | string;
+  body?: string;
+  action?: string;
+  parameter?: string;
+  result?: string;
+}
+
+export interface LinearAgentSessionPayload {
+  type: 'AgentSessionEvent';
+  action: 'created' | 'prompted' | string;
+  agentSession: LinearAgentSession;
+  agentActivity?: LinearAgentActivity & {
+    id?: string;
+    agentSessionId?: string;
+    content?: LinearAgentActivity;
     [key: string]: unknown;
   };
+  issue?: LinearIssueReference;
+  promptContext?: string;
+  notification?: {
+    issue?: LinearIssueReference;
+    comment?: { id?: string; body?: string; [key: string]: unknown };
+    [key: string]: unknown;
+  };
+  [key: string]: unknown;
 }
 
-export type WorkforceEvent = WorkforceCronEvent | WorkforceProviderEvent;
+export interface LinearAppUserNotificationPayload {
+  type: 'AppUserNotification';
+  action: 'issueCommentMention' | string;
+  issue?: LinearIssueReference;
+  comment?: { id?: string; body?: string; [key: string]: unknown };
+  notification?: {
+    issue?: LinearIssueReference;
+    comment?: { id?: string; body?: string; [key: string]: unknown };
+    [key: string]: unknown;
+  };
+  [key: string]: unknown;
+}
+
+export interface LinearWrappedPayload<TRecord> {
+  resource: {
+    payload: TRecord;
+    [key: string]: unknown;
+  };
+  [key: string]: unknown;
+}
+
+export type LinearAgentSessionEventPayload =
+  LinearWrappedPayload<LinearAgentSessionPayload> & {
+    agentSession?: LinearAgentSession;
+    agentActivity?: LinearAgentSessionPayload['agentActivity'];
+    issue?: LinearIssueReference;
+    promptContext?: string;
+  };
+
+export type LinearAppUserNotificationEventPayload =
+  LinearWrappedPayload<LinearAppUserNotificationPayload> & {
+    issue?: LinearIssueReference;
+    comment?: { id?: string; body?: string; [key: string]: unknown };
+    notification?: LinearAppUserNotificationPayload['notification'];
+  };
+
+/**
+ * Linear app-notification event types as cloud's gateway delivers them
+ * (provider-prefixed). The payload data (see {@link LinearAgentSessionEventPayload}
+ * / {@link LinearAppUserNotificationEventPayload}) is reached via
+ * `await event.expand('full')` — it is no longer a synchronous `event.payload`.
+ */
+export type LinearAgentSessionEventType =
+  | 'linear.AgentSessionEvent.created'
+  | 'linear.AgentSessionEvent.prompted'
+  | 'linear.AppUserNotification.issueCommentMention';
+
+export type LinearAgentSessionEvent = AgentEvent<LinearAgentSessionEventType>;
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === 'object' && value !== null;
+}
 
 /**
  * Result of a harness invocation. The runtime translates whatever the
  * underlying harness streamed into this minimal shape.
  */
 export interface HarnessRunResult {
-  /** Final stdout/output from the harness. */
+  /**
+   * Final stdout/output from the harness. On a non-zero {@link exitCode} the
+   * trimmed {@link stderr} is appended so the failure reason (CLI errors,
+   * `spawn ... ENOENT`, etc.) is visible to callers that only read `output`.
+   */
   output: string;
+  /**
+   * True when the raw harness output contained the reserved `[[NO_REPLY]]`
+   * marker. The runtime always strips the marker before returning `output`;
+   * mixed-content occurrences are also logged as leaks.
+   */
+  containsMarker?: boolean;
+  /**
+   * True when stripping `[[NO_REPLY]]` leaves no user-visible output. This is
+   * a successful silent result when {@link exitCode} is 0, not a failure.
+   */
+  suppressed?: boolean;
   /** Process exit code; 0 on success. */
   exitCode: number;
+  /**
+   * Trimmed stderr from the harness process, when non-empty. Carries the
+   * failure reason on a non-zero {@link exitCode}; also folded into
+   * {@link output} on failure for callers that only inspect stdout.
+   */
+  stderr?: string;
   /** Wall-clock duration in milliseconds. */
   durationMs: number;
   /** Optional usage metadata emitted by a harness or launcher. */
@@ -125,6 +227,29 @@ export interface FilesContext {
   write(path: string, contents: string): Promise<void>;
 }
 
+export interface RelayfileCredentials {
+  url: string;
+  token: string;
+  workspaceId: string;
+}
+
+export interface CloudApiCredentials {
+  url: string;
+  token: string;
+}
+
+export interface RequiredRuntimeCredentials {
+  relayfile: RelayfileCredentials;
+  cloudApi: CloudApiCredentials;
+}
+
+export interface CredentialsContext {
+  readonly relayfile: RelayfileCredentials;
+  readonly cloudApi: CloudApiCredentials;
+  tryRequire(): RequiredRuntimeCredentials | null;
+  require(): RequiredRuntimeCredentials;
+}
+
 export interface MemorySaveOptions {
   tags?: string[];
   scope?: PersonaMemoryScope;
@@ -139,6 +264,11 @@ export interface MemoryRecallOptions {
   scope?: PersonaMemoryScope;
   scopes?: PersonaMemoryScope[];
   tags?: string[];
+  /**
+   * Reject when the backing memory service is unavailable instead of
+   * degrading to an empty result.
+   */
+  failOnError?: boolean;
 }
 
 export interface MemoryItem {
@@ -161,12 +291,67 @@ export interface WorkflowRunHandle {
 
 export interface WorkflowContext {
   run(name: string, args?: Record<string, unknown>): Promise<WorkflowRunHandle>;
-  status(runId: string): Promise<{ status: 'pending' | 'success' | 'failure'; output?: unknown; error?: string }>;
+  status(runId: string): Promise<{ status: 'pending' | 'running' | 'success' | 'failure'; output?: unknown; error?: string; patches?: unknown }>;
+}
+
+export type ScheduleStatus =
+  | 'pending'
+  | 'active'
+  | 'fired'
+  | 'cancelled'
+  | 'cancellation_pending'
+  | 'failed';
+
+export interface ScheduleRecord {
+  id: string;
+  name: string;
+  scheduledAt: string;
+  timezone: string;
+  payload: Record<string, unknown>;
+  status: ScheduleStatus;
+  lastError?: string;
+  firedAt?: string;
+  cancelledAt?: string;
+  createdAt?: string;
+  updatedAt?: string;
+}
+
+export interface ScheduleAtOptions {
+  /**
+   * Stable cancellation key. Cloud generates a unique name when omitted.
+   * Supplying a name lets callers cancel a known wake-up slot before replacing
+   * or abandoning it.
+   */
+  name?: string;
+  /** IANA timezone recorded with the schedule. Defaults to UTC. */
+  timezone?: string;
 }
 
 export interface ScheduleContext {
-  at(when: Date, payload: unknown): Promise<void>;
+  /**
+   * Register a one-shot wake-up. Managed Cloud returns the durable active
+   * receipt; legacy/injected schedulers may continue returning void.
+   */
+  at(
+    when: Date,
+    payload: unknown,
+    options?: ScheduleAtOptions
+  ): Promise<ScheduleRecord | void>;
   cancel(name: string): Promise<void>;
+  /** Available on managed/queryable schedulers. */
+  list?(): Promise<ScheduleRecord[]>;
+  /** Available on managed/queryable schedulers. */
+  get?(id: string): Promise<ScheduleRecord | null>;
+}
+
+export interface ManagedScheduleContext extends ScheduleContext {
+  at(
+    when: Date,
+    payload: unknown,
+    options?: ScheduleAtOptions
+  ): Promise<ScheduleRecord>;
+  list(): Promise<ScheduleRecord[]>;
+  get(id: string): Promise<ScheduleRecord | null>;
 }
 
 /**
@@ -177,20 +362,6 @@ export interface ScheduleContext {
  */
 export interface LlmContext {
   complete(prompt: string, opts?: { maxTokens?: number }): Promise<string>;
-}
-
-/**
- * Per-integration clients attached to the ctx. All Tier-1 providers
- * (github, linear, slack, notion, jira) ship typed VFS-backed clients;
- * a persona only sees the fields its `integrations` block declared, so
- * cron-only handlers get an undefined field across the board.
- */
-export interface IntegrationClients {
-  github?: GithubClient;
-  linear?: LinearClient;
-  slack?: SlackClient;
-  notion?: NotionClient;
-  jira?: JiraClient;
 }
 
 export interface WorkforcePersonaContext extends Omit<PersonaSpec, 'inputs'> {
@@ -212,13 +383,101 @@ export interface WorkforceDeploymentContext {
   readonly parentDeploymentId: string | null;
 }
 
+/** A single decision in the compacted trajectory contract. */
+export interface TrajectoryDecisionRecord {
+  question: string;
+  chosen: string;
+  reasoning: string;
+  alternatives: Array<{ option: string; reason?: string }>;
+}
+
+/** Retrospective subset carried in the compacted trajectory contract. */
+export interface TrajectoryRetrospectiveRecord {
+  summary: string;
+  approach: string;
+  learnings: string[];
+  confidence: number;
+}
+
 /**
- * The context object handlers receive on every event invocation. Per-
- * integration fields are populated only for providers the persona
- * declared in `integrations`. Cron-only personas get a context with all
- * integration fields undefined.
+ * Compacted, contract-shaped trajectory artifact emitted once per completed
+ * (or abandoned) run. This is the frozen A↔B interface consumed by the
+ * ai-hist trajectory sync source — one JSON file per run at
+ * `$TRAJECTORY_ROOT/<personaId>/compacted/<id>.json`. It deliberately omits
+ * the `type:"compacted"` / `sourceTrajectories[]` markers of `trail compact`
+ * aggregates so ai-hist's defensive ingest filter keeps it.
  */
-export interface WorkforceCtx extends IntegrationClients {
+export interface CompactedTrajectoryContract {
+  id: string;
+  version: number;
+  personaId: string;
+  projectId: string | null;
+  task: { title: string; description: string | null };
+  status: 'active' | 'completed' | 'abandoned' | string;
+  startedAt: string;
+  completedAt: string | null;
+  decisions: TrajectoryDecisionRecord[];
+  retrospective: TrajectoryRetrospectiveRecord | null;
+}
+
+/**
+ * Auto-recording trajectory surface. Handlers narrate their decision
+ * trajectory (the WHY) through these methods; the runtime opens a trajectory
+ * around each run and emits the compacted contract on completion. Every method
+ * is safe to call even when recording is disabled (no `memory.trajectories`
+ * opt-in, or no resolvable `TRAJECTORY_ROOT`) — it then no-ops.
+ */
+export interface TrajectoryContext {
+  /** Open a new logical phase of work within the run. */
+  chapter(title: string): Promise<void>;
+  /** Record a free-form observation. */
+  note(content: string): Promise<void>;
+  /** Record a structured decision and the alternatives considered. */
+  decide(
+    question: string,
+    chosen: string,
+    reasoning: string,
+    alternatives?: Array<{ option: string; reason?: string }>
+  ): Promise<void>;
+  /** Record an error encountered while working. */
+  error(content: string): Promise<void>;
+  /**
+   * Finish the run with a retrospective. Optional — when the handler does not
+   * call it, the runner auto-finalizes on return. Idempotent: the first
+   * `done`/auto-finalize wins.
+   */
+  done(summary: string, confidence: number): Promise<void>;
+}
+
+/** Result of a relay send (DM or channel post). */
+export interface RelaySendResult {
+  ok: boolean;
+  /** Delivered relaycast message id, when the gateway returns one. */
+  messageId?: string;
+}
+
+/**
+ * Agent-to-agent messaging over the relay (relaycast). Lets a handler DM a peer
+ * agent or post to a relay channel using the box's injected agent token —
+ * the inbound counterpart to the relay `inbox` trigger. Never throws: returns
+ * `{ ok: false }` (logged) on missing token / timeout / non-2xx, so a relay
+ * reply degrades gracefully. To reply to whoever messaged this agent, read the
+ * sender off the inbound relay event and pass it as `to`.
+ */
+export interface RelayContext {
+  /** DM a peer agent by registered name. */
+  dm(to: string, text: string): Promise<RelaySendResult>;
+  /** Post a message to a relay channel by name. */
+  post(channel: string, text: string): Promise<RelaySendResult>;
+}
+
+/**
+ * The context object handlers receive on every event invocation.
+ * Provider data is accessed via the VFS helpers exported from the runtime
+ * (listJsonFiles / readJsonFile / writeJsonFile) using provider path
+ * conventions (e.g. /linear/issues, /slack/channels).
+ */
+export interface WorkforceCtx {
   /** Read-only persona metadata plus resolved runtime inputs. */
   readonly persona: WorkforcePersonaContext;
   /** Agent row metadata for the agent handling this event. */
@@ -233,18 +492,34 @@ export interface WorkforceCtx extends IntegrationClients {
   llm: LlmContext;
   /** Spawn the persona's harness inside the sandbox. */
   harness: {
+    /**
+     * Recognized provider errors (quota, rate limit, auth, context, timeout,
+     * availability) reject with HarnessProviderError before returning output.
+     * Other nonzero exits retain the HarnessRunResult contract. No automatic
+     * retry or credential/provider fallback is performed by this boundary.
+     */
     run(args: HarnessRunArgs): Promise<HarnessRunResult>;
   };
   /** Sandbox shell + filesystem. */
   sandbox: SandboxContext;
   /** Relayfile/sandbox file helpers for handlers that should not shell out. */
   files: FilesContext;
+  /** Runtime credentials populated by the cloud persona launcher. */
+  credentials: CredentialsContext;
   /** Persistent memory (no-op when persona.memory is false or unset). */
   memory: MemoryContext;
   /** Cloud workflows invocation (HTTP). */
   workflow: WorkflowContext;
   /** Schedule one-off follow-up ticks. */
   schedule: ScheduleContext;
+  /** Agent-to-agent messaging over the relay (DM a peer / post to a channel). */
+  relay: RelayContext;
+  /**
+   * Auto-recorded decision trajectory (the WHY). No-op when recording is
+   * disabled (no `persona.memory.trajectories` opt-in or no resolvable
+   * `TRAJECTORY_ROOT`), so it is always safe to call from a handler.
+   */
+  trajectory: TrajectoryContext;
   /** Structured logger; every line is forwarded to the gateway. */
   log: (level: 'debug' | 'info' | 'warn' | 'error', message: string, attrs?: Record<string, unknown>) => void;
 }

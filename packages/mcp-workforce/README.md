@@ -13,6 +13,7 @@ then has tool access to:
 | `workflow.status` | Poll a previously-started workflow run for status/output. |
 | `memory.save` | Persist a memory entry to the workspace memory bag. |
 | `memory.recall` | Semantic search over the workspace memory bag. |
+| `list_integrations` | Enumerate integration providers, connection status, and trigger events before writing `agent.triggers`. |
 | `integration.github.comment` | Post a comment on a GitHub issue/PR. |
 | `integration.github.createIssue` | Create a GitHub issue. |
 | `integration.github.upsertIssue` | Update an open issue matching `matchTitle`, or create one. |
@@ -51,7 +52,7 @@ spawns a harness. Personas that want to declare it manually can use:
 
 | Env var | Purpose | Required when |
 |---|---|---|
-| `WORKFORCE_WORKSPACE_ID` | Workspace this server is bound to | always |
+| `WORKFORCE_WORKSPACE_ID` | Cloud workspace id (UUID printed by `agentworkforce login`, not the `rw_…` relaycast id) this server is bound to | always |
 | `WORKFORCE_PERSONA_ID` | Persona id (logged for audit) | optional |
 | `WORKFORCE_RUNTIME_TOKEN` | Workspace-scoped token for cloud API calls | `workflow.*` |
 | `WORKFORCE_CLOUD_URL` | Override cloud base URL | optional |

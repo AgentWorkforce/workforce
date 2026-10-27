@@ -3,7 +3,6 @@ import path from 'node:path';
 import {
   createTerminalIO,
   formatHttpErrorBody,
-  readActiveWorkspace,
   resolveCloudUrl,
   resolveWorkspaceToken
 } from '@agentworkforce/deploy';
@@ -17,7 +16,7 @@ export interface DestroyOptions {
   target: string;
   /** Workforce workspace id. Falls back to WORKFORCE_WORKSPACE_ID. */
   workspace?: string;
-  /** Override cloud base URL. Falls back to env, then active.json, then the canonical default. */
+  /** Override cloud base URL. Falls back to env, then the canonical default. */
   cloudUrl?: string;
   /** Fail instead of opening the browser to log in. */
   noPrompt?: boolean;
@@ -82,10 +81,8 @@ export async function runDestroy(args: readonly string[]): Promise<void> {
 }
 
 async function executeDestroy(opts: DestroyOptions): Promise<void> {
-  const active = await readActiveWorkspace().catch(() => null);
   const cloudUrl = resolveCloudUrl({
-    ...(opts.cloudUrl ? { flag: opts.cloudUrl } : {}),
-    active
+    ...(opts.cloudUrl ? { flag: opts.cloudUrl } : {})
   });
 
   const io = createTerminalIO();

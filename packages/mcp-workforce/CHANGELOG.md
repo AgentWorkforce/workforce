@@ -1,0 +1,58 @@
+# Changelog
+
+All notable changes to `@agentworkforce/mcp-workforce` will be documented in this file.
+
+The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
+and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
+
+## [Unreleased]
+
+## [4.2.0] - 2026-10-02
+
+### Dependencies
+
+- Floor zod at ^4.4.3; require Fleet 12 in local-surface (#4080)
+- Move to zod 4 and zod-4 @agent-relay lines (#4080)
+
+## [4.1.60] - 2026-09-30
+
+### Fixed
+
+- Use the cloud workspace id for cloud API calls (#342)
+
+## [4.1.50] - 2026-08-24
+
+### Released
+
+- v4.1.50
+
+## [4.1.41] - 2026-08-14
+
+### Released
+
+- v4.1.41
+
+## [4.1.36] - 2026-07-24
+
+### Changed
+
+- 296: deriveAgentCard(personaSpec): canonical persona → A2A agent card in persona-kit (#298)
+
+## [4.1.18] - 2026-07-15
+
+### Added
+
+- **Add reusable cron and Slack delivery helpers** (#261)
+
+## [3.0.45] - 2026-06-04
+
+### Documentation
+
+- Spec — `agentworkforce integrations` integration & trigger discoverability (CLI + mcp-workforce tool) (#191)
+
+## [3.0.31] - 2026-05-28
+
+### Added
+
+- **Make sandbox a boolean field — skip boot with sandbox: false** (#159)
+

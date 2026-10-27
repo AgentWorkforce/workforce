@@ -1,7 +1,6 @@
 import {
   createTerminalIO,
   formatHttpErrorBody,
-  readActiveWorkspace,
   resolveCloudUrl,
   resolveWorkspaceToken
 } from '@agentworkforce/deploy';
@@ -25,16 +24,32 @@ type DeploymentLogsOptions = {
   noPrompt?: boolean;
 };
 
-type DeploymentAgent = {
+export type DeploymentAgent = {
   agentId: string;
   personaId: string;
   personaSlug: string;
   deployedName: string;
   status: string;
   createdAt: string;
+  updatedAt?: string;
   lastUsedAt: string | null;
+  lastRunStatus?: string | null;
+  lastError?: string | null;
+  integrationWatchHealth?: DeploymentIntegrationWatchHealth | null;
   scheduleIds: string[];
   deployedByUserId: string;
+};
+
+export type DeploymentIntegrationWatchHealth = {
+  status: string;
+  reason: string | null;
+  lastSuccessfulDeliveryAt: string | null;
+  lastDeliveryAt: string | null;
+  lastFailedDeliveryAt: string | null;
+  pendingDeliveryCount: number;
+  recentFailedDeliveryCount: number;
+  recentWorkspaceDispatchFailureCount: number;
+  latestWorkspaceDispatchFailureAt: string | null;
 };
 
 type ListResponse = {
@@ -68,10 +83,8 @@ export async function runDeploymentList(args: readonly string[]): Promise<void> 
   try {
     const opts = parseDeploymentListArgs(args);
     const io = createTerminalIO();
-    const active = await readActiveWorkspace().catch(() => null);
     const cloudUrl = resolveCloudUrl({
-      ...(opts.cloudUrl ? { flag: opts.cloudUrl } : {}),
-      active
+      ...(opts.cloudUrl ? { flag: opts.cloudUrl } : {})
     });
     const auth = await resolveWorkspaceToken({
       ...(opts.workspace ? { workspace: opts.workspace } : {}),
@@ -103,7 +116,7 @@ export async function runDeploymentList(args: readonly string[]): Promise<void> 
       const hint = formatHttpErrorBody(body, { url: url.toString() });
       throw new Error(`list failed: ${res.status}${hint ? ` ${hint}` : ''}`);
     }
-    const agents = parseAgents((await res.json()) as ListResponse);
+    const agents = parseDeploymentAgents((await res.json()) as ListResponse);
     if (opts.json) {
       process.stdout.write(`${JSON.stringify({ agents }, null, 2)}\n`);
     } else {
@@ -277,32 +290,46 @@ export function formatDeploymentsTable(agents: readonly DeploymentAgent[]): stri
   const rows = agents.map((agent) => ({
     name: deploymentDisplayName(agent),
     agentId: compactId(agent.agentId),
-    status: agent.status,
-    deployed: formatDate(agent.createdAt),
+    deployment: agent.status,
+    lastRun: agent.lastRunStatus ?? '-',
+    watch: agent.integrationWatchHealth?.status ?? '-',
+    deployed: formatDate(agent.updatedAt ?? agent.createdAt),
     lastUsed: agent.lastUsedAt ? formatRelative(agent.lastUsedAt) : '-'
   }));
   const widths = {
     name: Math.max('name'.length, ...rows.map((r) => r.name.length)),
     agentId: Math.max('agentId'.length, ...rows.map((r) => r.agentId.length)),
-    status: Math.max('status'.length, ...rows.map((r) => r.status.length)),
+    deployment: Math.max('deployment'.length, ...rows.map((r) => r.deployment.length)),
+    lastRun: Math.max('lastRun'.length, ...rows.map((r) => r.lastRun.length)),
+    watch: Math.max('watch'.length, ...rows.map((r) => r.watch.length)),
     deployed: Math.max('deployed'.length, ...rows.map((r) => r.deployed.length)),
     lastUsed: Math.max('lastUsed'.length, ...rows.map((r) => r.lastUsed.length))
   };
   const header = [
     pad('name', widths.name),
-    pad('status', widths.status),
+    pad('deployment', widths.deployment),
+    pad('lastRun', widths.lastRun),
+    pad('watch', widths.watch),
     pad('deployed', widths.deployed),
     pad('lastUsed', widths.lastUsed),
     pad('agentId', widths.agentId)
   ].join('  ');
   const body = rows.map((row) => [
     pad(row.name, widths.name),
-    pad(row.status, widths.status),
+    pad(row.deployment, widths.deployment),
+    pad(row.lastRun, widths.lastRun),
+    pad(row.watch, widths.watch),
     pad(row.deployed, widths.deployed),
     pad(row.lastUsed, widths.lastUsed),
     pad(row.agentId, widths.agentId)
   ].join('  '));
-  return `${[header, ...body].join('\n')}\n`;
+  const table = [header, ...body].join('\n');
+  const errors = agents
+    .filter((agent) => agent.lastError)
+    .map((agent) => `  ${deploymentDisplayName(agent)}: ${formatDeploymentErrorSnippet(agent.lastError!)}`);
+  return errors.length > 0
+    ? `${table}\n\nErrors:\n${errors.join('\n')}\n`
+    : `${table}\n`;
 }
 
 export function formatDeploymentLogEntries(entries: readonly LogEntry[]): string {
@@ -321,13 +348,14 @@ export function tailLogEntriesFromNewestFiles(
   return chronological.slice(-tail);
 }
 
-function parseAgents(body: ListResponse): DeploymentAgent[] {
+export function parseDeploymentAgents(body: ListResponse): DeploymentAgent[] {
   const raw = Array.isArray(body) ? body : Array.isArray(body.agents) ? body.agents : [];
   return raw.map((value) => {
     if (!value || typeof value !== 'object' || Array.isArray(value)) {
       throw new Error('list response contained an invalid agent entry');
     }
     const record = value as Record<string, unknown>;
+    const updatedAt = readString(record, 'updatedAt');
     return {
       agentId: readString(record, 'agentId') ?? readString(record, 'id') ?? '',
       personaId: readString(record, 'personaId') ?? readString(record, 'persona') ?? '',
@@ -335,7 +363,11 @@ function parseAgents(body: ListResponse): DeploymentAgent[] {
       deployedName: readString(record, 'deployedName') ?? readString(record, 'name') ?? '',
       status: readString(record, 'status') ?? 'unknown',
       createdAt: readString(record, 'createdAt') ?? '',
+      ...(updatedAt ? { updatedAt } : {}),
       lastUsedAt: readNullableString(record, 'lastUsedAt'),
+      lastRunStatus: readNullableString(record, 'lastRunStatus'),
+      lastError: readNullableText(record, 'lastError'),
+      integrationWatchHealth: readIntegrationWatchHealth(record),
       scheduleIds: Array.isArray(record.scheduleIds)
         ? record.scheduleIds.filter((id): id is string => typeof id === 'string')
         : [],
@@ -344,16 +376,19 @@ function parseAgents(body: ListResponse): DeploymentAgent[] {
   }).filter((agent) => agent.agentId);
 }
 
-async function resolveDeploymentRequestContext(opts: {
+export async function resolveDeploymentRequestContext(opts: {
   workspace?: string;
   cloudUrl?: string;
   noPrompt?: boolean;
-}): Promise<{ cloudUrl: string; workspace: string; token: string }> {
+}): Promise<{
+  cloudUrl: string;
+  workspace: string;
+  token: string;
+  authSource?: 'env' | 'cloud-session';
+}> {
   const io = createTerminalIO();
-  const active = await readActiveWorkspace().catch(() => null);
   const cloudUrl = resolveCloudUrl({
-    ...(opts.cloudUrl ? { flag: opts.cloudUrl } : {}),
-    active
+    ...(opts.cloudUrl ? { flag: opts.cloudUrl } : {})
   });
   const auth = await resolveWorkspaceToken({
     ...(opts.workspace ? { workspace: opts.workspace } : {}),
@@ -365,16 +400,28 @@ async function resolveDeploymentRequestContext(opts: {
   if (!workspace) {
     throw new Error('workspace is required: pass --workspace, set WORKFORCE_WORKSPACE_ID, or run `agentworkforce login`');
   }
-  return { cloudUrl, workspace, token: auth.token };
+  const authSource = readAuthSource(auth);
+  return {
+    cloudUrl,
+    workspace,
+    token: auth.token,
+    ...(authSource ? { authSource } : {})
+  };
 }
 
-async function fetchDeployments(args: {
+function readAuthSource(value: unknown): 'env' | 'cloud-session' | undefined {
+  if (!value || typeof value !== 'object') return undefined;
+  const authSource = (value as { authSource?: unknown }).authSource;
+  return authSource === 'env' || authSource === 'cloud-session' ? authSource : undefined;
+}
+
+export async function fetchDeployments(args: {
   cloudUrl: string;
   workspace: string;
   token: string;
 }): Promise<DeploymentAgent[]> {
   const url = new URL(`${args.cloudUrl}/api/v1/workspaces/${encodeURIComponent(args.workspace)}/deployments`);
-  return parseAgents(await requestJson<ListResponse>(url, args.token, 'deployment list'));
+  return parseDeploymentAgents(await requestJson<ListResponse>(url, args.token, 'deployment list'));
 }
 
 async function fetchLogPaths(args: {
@@ -406,7 +453,7 @@ async function fetchLogEntries(args: {
   return entries.filter((entry): entry is LogEntry => Boolean(entry) && typeof entry === 'object' && !Array.isArray(entry));
 }
 
-async function requestJson<T>(url: URL, token: string, action: string): Promise<T> {
+export async function requestJson<T>(url: URL, token: string, action: string): Promise<T> {
   const res = await fetch(url, {
     method: 'GET',
     headers: {
@@ -425,7 +472,7 @@ async function requestJson<T>(url: URL, token: string, action: string): Promise<
   return (await res.json()) as T;
 }
 
-function resolveAgentSelector(agents: readonly DeploymentAgent[], selector: string): DeploymentAgent {
+export function resolveAgentSelector(agents: readonly DeploymentAgent[], selector: string): DeploymentAgent {
   const matches = agents.filter((agent) => {
     const candidates = [
       agent.agentId,
@@ -505,6 +552,69 @@ function readString(record: Record<string, unknown>, key: string): string | unde
 function readNullableString(record: Record<string, unknown>, key: string): string | null {
   const value = record[key];
   return typeof value === 'string' && value.trim() ? value.trim() : null;
+}
+
+function readNullableText(record: Record<string, unknown>, key: string): string | null {
+  const value = record[key];
+  return typeof value === 'string' && value.length > 0 ? value : null;
+}
+
+function readIntegrationWatchHealth(
+  record: Record<string, unknown>
+): DeploymentIntegrationWatchHealth | null {
+  const value = record.integrationWatchHealth;
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return null;
+  const health = value as Record<string, unknown>;
+  return {
+    status: readString(health, 'status') ?? 'unknown',
+    reason: readNullableString(health, 'reason'),
+    lastSuccessfulDeliveryAt: readNullableString(health, 'lastSuccessfulDeliveryAt'),
+    lastDeliveryAt: readNullableString(health, 'lastDeliveryAt'),
+    lastFailedDeliveryAt: readNullableString(health, 'lastFailedDeliveryAt'),
+    pendingDeliveryCount: readFiniteNumber(health, 'pendingDeliveryCount'),
+    recentFailedDeliveryCount: readFiniteNumber(health, 'recentFailedDeliveryCount'),
+    recentWorkspaceDispatchFailureCount: readFiniteNumber(
+      health,
+      'recentWorkspaceDispatchFailureCount'
+    ),
+    latestWorkspaceDispatchFailureAt: readNullableString(
+      health,
+      'latestWorkspaceDispatchFailureAt'
+    )
+  };
+}
+
+function readFiniteNumber(record: Record<string, unknown>, key: string): number {
+  const value = record[key];
+  return typeof value === 'number' && Number.isFinite(value) ? value : 0;
+}
+
+const DEPLOYMENT_ERROR_SNIPPET_LENGTH = 240;
+
+// cloud's deployment-run-failure-class.ts marks an unrecognized long failure
+// as "<head>...[N chars omitted]...<tail>" (head = boilerplate mount/smithy
+// bootstrap that runs before every persona invocation, tail = whatever
+// actually happened). Truncating from position 0 below would always show the
+// boilerplate and never reach the tail where the real cause lives, so when
+// this marker is present, snippet from just after it instead.
+const OMITTED_MARKER_PATTERN = /\.\.\.\[\d+ chars omitted\]\.\.\./;
+
+function formatDeploymentErrorSnippet(error: string): string {
+  const normalized = error
+    .replace(/[\u0000-\u001f\u007f]+/g, ' ')
+    .replace(/\s+/g, ' ')
+    .trim();
+  if (normalized.length <= DEPLOYMENT_ERROR_SNIPPET_LENGTH) return normalized;
+  const marker = normalized.match(OMITTED_MARKER_PATTERN);
+  if (marker && marker.index !== undefined) {
+    const afterMarker = normalized.slice(marker.index + marker[0].length).trim();
+    if (afterMarker.length > 0) {
+      return afterMarker.length <= DEPLOYMENT_ERROR_SNIPPET_LENGTH
+        ? afterMarker
+        : `${afterMarker.slice(0, DEPLOYMENT_ERROR_SNIPPET_LENGTH - 3)}...`;
+    }
+  }
+  return `${normalized.slice(0, DEPLOYMENT_ERROR_SNIPPET_LENGTH - 3)}...`;
 }
 
 function parseTail(value: string): number {

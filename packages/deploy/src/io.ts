@@ -41,6 +41,28 @@ export function createTerminalIO(): DeployIO {
       const answer = (await ask(`${question}${suffix} `)).trim().toLowerCase();
       if (answer === '') return def;
       return answer === 'y' || answer === 'yes';
+    },
+    async select(question, options) {
+      if (options.length === 0) return '';
+      process.stdout.write(`${question}:\n`);
+      options.forEach((option, index) => {
+        const hint = option.hint ? ` — ${option.hint}` : '';
+        process.stdout.write(`  ${index + 1}) ${option.label}${hint}\n`);
+      });
+      // Default to the first option on empty input; accept an in-range number;
+      // re-prompt a purely-numeric out-of-range answer; otherwise treat the
+      // answer as a directly-pasted value (escape hatch for ids not listed).
+      for (;;) {
+        const answer = (await ask(`Enter 1-${options.length} (or paste a value) [1] `)).trim();
+        if (answer === '') return options[0]!.value;
+        const index = Number.parseInt(answer, 10);
+        if (String(index) === answer) {
+          if (index >= 1 && index <= options.length) return options[index - 1]!.value;
+          process.stderr.write(`! ${answer} is out of range (1-${options.length})\n`);
+          continue;
+        }
+        return answer;
+      }
     }
   };
 }

@@ -1,8 +1,12 @@
 import {
-  createGithubClient,
-  handler,
+  defineAgent,
+  draftFile,
+  encodeSegment,
+  resolveMountRoot,
   WorkforceIntegrationError,
-  type GithubClient,
+  writeJsonFile,
+  isCronTickEvent,
+  type IntegrationClientOptions,
   type WorkforceCtx,
   type WorkforceEvent
 } from '@agentworkforce/runtime';
@@ -19,14 +23,19 @@ interface DigestCluster {
   items: DigestItem[];
 }
 
-export default handler(async (ctx, event) => {
-  if (event.source !== 'cron' || event.name !== 'weekly') {
-    ctx.log('warn', 'weekly-digest.ignored', { source: event.source });
+export default defineAgent({
+  schedules: [{ name: 'weekly', cron: '0 9 * * 6', tz: 'UTC' }],
+  handler: async (ctx, event) => {
+  if (!isCronTickEvent(event)) {
+    ctx.log('warn', 'weekly-digest.ignored', { reason: 'non-cron event' });
     return;
   }
 
   const config = readConfig();
-  const github = resolveGithubClient(ctx);
+  const githubClient: IntegrationClientOptions = {
+    relayfileMountRoot: resolveMountRoot({}),
+    writebackTimeoutMs: 30_000
+  };
 
   const topics = parseTopics(config.topics);
   const fetchedAt = new Date(event.occurredAt);
@@ -65,28 +74,33 @@ export default handler(async (ctx, event) => {
   }
   const [owner, repo] = repoSegments as [string, string];
 
-  const result = await github.upsertIssue({
-    owner,
-    repo,
-    title,
-    body,
-    matchTitle: title,
-    labels: ['weekly-digest']
-  });
+  const result = await writeJsonFile(
+    githubClient,
+    'github',
+    'upsertIssue',
+    `/github/repos/${encodeSegment(owner)}/${encodeSegment(repo)}/issues/${draftFile('upsert issue')}`,
+    {
+      title,
+      body,
+      matchTitle: title,
+      labels: ['weekly-digest']
+    }
+  );
 
+  const issueUrl = result.receipt?.url ?? result.path;
   ctx.log('info', 'weekly-digest.issue.upserted', {
     week: isoWeek,
-    number: result.number,
-    url: result.url,
-    created: result.created,
+    url: issueUrl,
+    receipt: result.receipt,
     clusterCount: clusters.length,
     itemCount: deduped.length
   });
 
-  await ctx.memory.save(`Weekly digest ${isoWeek} published: ${result.url}`, {
+  await ctx.memory.save(`Weekly digest ${isoWeek} published: ${issueUrl}`, {
     tags: ['weekly-digest', `week:${isoWeek}`],
     scope: 'workspace'
   });
+  }
 });
 
 function readConfig(): { topics: string; repo: string; braveApiKey: string } {
@@ -103,20 +117,6 @@ function readConfig(): { topics: string; repo: string; braveApiKey: string } {
     throw new Error('BRAVE_API_KEY is required to query Brave Search');
   }
   return { topics, repo, braveApiKey };
-}
-
-function resolveGithubClient(ctx: WorkforceCtx): GithubClient {
-  // The runtime injects a Relayfile-VFS-backed github client whenever
-  // the persona declares the `github` integration. For stand-alone
-  // dev runs without the runtime, fall back to a client rooted at the
-  // configured Relayfile mount (or cwd if RELAYFILE_MOUNT_ROOT is
-  // unset). The fallback path is mostly useful for local smoke tests
-  // — production handlers always get `ctx.github`.
-  if (ctx.github) return ctx.github;
-  return createGithubClient({
-    ...(process.env.RELAYFILE_MOUNT_ROOT ? { relayfileMountRoot: process.env.RELAYFILE_MOUNT_ROOT } : {}),
-    writebackTimeoutMs: 30_000
-  });
 }
 
 function parseTopics(raw: string): string[] {
@@ -222,4 +222,4 @@ function truncate(s: string, n: number): string {
 }
 
 // Touch the imported types so build does not warn on type-only imports.
-type _Touch = WorkforceEvent;
+type _Touch = WorkforceEvent | WorkforceCtx;

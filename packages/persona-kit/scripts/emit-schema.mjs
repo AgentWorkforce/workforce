@@ -9,6 +9,7 @@ const { createGenerator } = require('ts-json-schema-generator');
 
 const packageRoot = resolve(dirname(fileURLToPath(import.meta.url)), '..');
 const schemaPath = resolve(packageRoot, 'schemas/persona.schema.json');
+const agentSchemaPath = resolve(packageRoot, 'schemas/agent.schema.json');
 const tsconfigPath = resolve(packageRoot, 'tsconfig.json');
 const typesPath = resolve(packageRoot, 'src/types.ts');
 
@@ -80,6 +81,17 @@ function tightenWorkspaceServiceAccountName(node) {
 }
 tightenWorkspaceServiceAccountName(schema);
 
+// httpRead grants live network access during local preview, so it is the
+// deliberately closed exception to the otherwise extension-safe persona
+// records. Keep the generated contract aligned with parse.ts's allowlists.
+for (const definitionName of [
+  'PersonaHttpReadCapability',
+  'PersonaHttpReadRule'
+]) {
+  const definition = schema.definitions?.[definitionName];
+  if (definition) definition.additionalProperties = false;
+}
+
 // Post-process: tighten the persona `tags[]` items to match parseTags
 // (non-empty, ≤64 chars). The TS type widens to `readonly string[]` after
 // cloud#553 — the generator emits a bare `{ "type": "string" }` because
@@ -112,4 +124,64 @@ try {
 
 if (existing !== serialized) {
   await writeFile(schemaPath, serialized);
+}
+
+// Emit the agent (`defineAgent`) schema from AgentSpec — the listener half of
+// a deployed agent (triggers/schedules/watch) that travels to cloud as the
+// deploy `agent` block.
+const agentGenerator = createGenerator({
+  path: typesPath,
+  tsconfig: tsconfigPath,
+  type: 'AgentSpec',
+  expose: 'export',
+  topRef: true,
+  jsDoc: 'extended',
+  additionalProperties: true,
+  sortProps: true,
+  skipTypeCheck: true
+});
+
+const agentSchema = agentGenerator.createSchema('AgentSpec');
+agentSchema.$schema = 'https://json-schema.org/draft/2020-12/schema';
+agentSchema.$id = 'https://agentworkforce.dev/schemas/agent.schema.json';
+
+const agentTrigger = agentSchema.definitions?.PersonaIntegrationTrigger;
+if (
+  agentTrigger &&
+  agentTrigger.properties?.maxConcurrency?.type === 'number'
+) {
+  agentTrigger.properties.maxConcurrency = {
+    ...agentTrigger.properties.maxConcurrency,
+    type: 'integer',
+    minimum: 1
+  };
+}
+
+const absolutePathArrayConstraint = {
+  minItems: 1,
+  items: {
+    type: 'string',
+    minLength: 1,
+    pattern: '^/(?:[^\\r\\n\\u2028\\u2029]*\\S)?$'
+  }
+};
+
+function applyAbsolutePathArrayConstraint(pathsSchema) {
+  if (pathsSchema?.type !== 'array') return;
+  Object.assign(pathsSchema, absolutePathArrayConstraint);
+}
+
+applyAbsolutePathArrayConstraint(agentTrigger?.properties?.paths);
+applyAbsolutePathArrayConstraint(agentSchema.definitions?.WatchRule?.properties?.paths);
+
+const agentSerialized = `${JSON.stringify(agentSchema, null, 2)}\n`;
+let existingAgent = '';
+try {
+  existingAgent = await readFile(agentSchemaPath, 'utf8');
+} catch {
+  // First emission.
+}
+
+if (existingAgent !== agentSerialized) {
+  await writeFile(agentSchemaPath, agentSerialized);
 }

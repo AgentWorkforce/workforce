@@ -7,6 +7,369 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [4.2.0] - 2026-10-02
+
+### Dependencies
+
+- Move to zod 4 and zod-4 @agent-relay lines (#4080)
+
+## [4.1.60] - 2026-09-30
+
+### Fixed
+
+- Use the cloud workspace id for cloud API calls (#342)
+
+## [4.1.58] - 2026-09-15
+
+### Fixed
+
+- Actionable guidance on stale-workspace 404s (#340)
+
+## [4.1.55] - 2026-09-04
+
+### Fixed
+
+- Scope harness credential probes to deploy auth (#335)
+- Preserve integration source intent through JSON (#334)
+
+## [4.1.51] - 2026-08-31
+
+### Added
+
+- Collect a Supabase project ref before generic MCP OAuth so the connection is
+  project-scoped and read-only instead of account-wide.
+
+### Changed
+
+- Migrated from the deprecated `@daytonaio/sdk` to `@daytona/sdk` (same API, no
+  breaking changes upstream).
+- Bumped `@agent-relay/cloud` to ^10.1.0 to match `@agentworkforce/cli` and
+  deduplicate the installed tree.
+
+## [4.1.50] - 2026-08-24
+
+### Released
+
+- v4.1.50
+
+## [4.1.48] - 2026-08-24
+
+### Fixed
+
+- Resolve authored persona imports from the installed CLI tree (#325)
+
+## [4.1.45] - 2026-08-19
+
+### Fixed
+
+- Bound integration status requests (#314)
+
+## [4.1.44] - 2026-08-18
+
+### Fixed
+
+- Don't treat an unrunnable harness probe as "not connected" (#313)
+
+## [4.1.42] - 2026-08-15
+
+### Added
+
+- **Lint integration mount scopes at deploy** (#311)
+
+## [4.1.41] - 2026-08-14
+
+### Changed
+
+- Deploy: print the app-trigger URL after a cloud deploy (#309)
+
+## [4.1.36] - 2026-07-24
+
+### Fixed
+
+- Merge colliding trigger aliases (#297)
+
+## [4.1.29] - 2026-07-17
+
+### Added
+
+- Record exact versions for package inputs bundled into `agent.bundle.mjs` in
+  a deterministic, path-free `package.json` manifest (#279).
+
+### Fixed
+
+- Retry transient network failures for idempotent cloud integration catalog,
+  status, and fallback-list GETs before deploy preflight fails (#163).
+
+## [4.1.26] - 2026-07-16
+
+### Fixed
+
+- Preserve trigger paths (#276)
+
+## [4.1.23] - 2026-07-15
+
+### Added
+
+- **Close the composable local runtime loop** (#272)
+
+## [4.1.19] - 2026-07-15
+
+### Added
+
+- **Compile single-file Agent presets** (#267)
+- **Fleet-node bridge for running proactive personas on a laptop** (#263)
+
+## [4.1.18] - 2026-07-15
+
+### Added
+
+- **Add reusable cron and Slack delivery helpers** (#261)
+
+### Fixed
+
+- Pin exact runtime version in generated sandbox package.json (#262)
+
+## [4.1.13] - 2026-06-25
+
+### Added
+
+- **Add managed harness source alias** (#257)
+
+## [4.1.12] - 2026-06-24
+
+### Added
+
+- **Support optional integrations**
+
+### Fixed
+
+- Fix optional integration activation inputs
+
+## [4.1.11] - 2026-06-24
+
+### Fixed
+
+- Fix staging cloud URL canonicalization
+
+## [4.1.8] - 2026-06-21
+
+### Fixed
+
+- Explain trigger auth source on 403
+
+## [4.1.4] - 2026-06-17
+
+### Fixed
+
+- Externalize bare Node builtins + add createRequire banner for CJS compat
+
+### Dependencies
+
+- Simplify NODE_EXTERNALS — node:* already covers prefixed forms
+
+## [4.1.3] - 2026-06-16
+
+### Added
+
+- **Add OpenRouter/opencode LLM provider support**
+
+### Changed
+
+- Opencode is its own provider, not an alias for openrouter
+- Harness-first provider derivation in deriveModelProvider
+
+## [4.1.2] - 2026-06-16
+
+### Fixed
+
+- Catch sync resolver failures
+- Skip catalog key for CLI-captured providers
+
+## [4.0.6] - 2026-06-15
+
+### Fixed
+
+- Map grok/xai models to the xai provider for credential matching
+
+## [4.0.5] - 2026-06-14
+
+### Fixed
+
+- Let --reconnect refresh a revoked harness LLM credential (#235)
+
+## [4.0.4] - 2026-06-14
+
+### Added
+
+- **Surface daytona connect + gate in agentworkforce deploy** (#232)
+
+### Changed
+
+- Unify workforce cloud auth session (#234)
+
+### Reliability
+
+- Characterize cloud subscription credential flow (#196)
+
+## [4.0.3] - 2026-06-11
+
+### Fixed
+
+- Normalize trigger provider aliases before cloud deploy (#227)
+
+## [4.0.2] - 2026-06-11
+
+### Fixed
+
+- Patch vulnerable transitive deps (shell-quote, protobufjs, hono) and align adapter-core
+
+## [3.0.52] - 2026-06-09
+
+### Added
+
+- **Drain paginated picker options (lockstep consumer for cloud#2018)** (#2018)
+- **Phase 5 — installation-centric connect flow in CLI** (#217)
+
+## [3.0.51] - 2026-06-08
+
+### Added
+
+- **Auto-inject ai-hist MCP + enforce trajectory recording**
+
+### Changed
+
+- Consolidate trajectories + ai-memory under memory (opt-in) (#210)
+
+## [3.0.47] - 2026-06-04
+
+### Added
+
+- Allow listener-free agents only when marked `launchedBy: "team-dispatcher"`.
+
+## [3.0.46] - 2026-06-04
+
+### Fixed
+
+- Stamp credentialSelections on oauth harness legs (#196) (#196)
+
+## [3.0.45] - 2026-06-04
+
+### Documentation
+
+- Spec — `agentworkforce integrations` integration & trigger discoverability (CLI + mcp-workforce tool) (#191)
+
+## [3.0.38] - 2026-06-01
+
+### Added
+
+- **Move triggers/schedules/watch to agent.ts (defineAgent)** (#175)
+
+## [3.0.37] - 2026-06-01
+
+### Added
+
+- **Thread persona integrations through proxy mint** (#173)
+
+## [3.0.36] - 2026-06-01
+
+### Added
+
+- **Wire runtime credentials into workforce deploy** (#171)
+
+## [3.0.33] - 2026-05-29
+
+### Fixed
+
+- Reconcile canonical integration status (#165)
+
+## [3.0.31] - 2026-05-28
+
+### Added
+
+- **Make sandbox a boolean field — skip boot with sandbox: false** (#159)
+
+## [3.0.29] - 2026-05-28
+
+### Fixed
+
+- Detect workspace-scoped integration fallback (#157)
+
+## [3.0.28] - 2026-05-28
+
+### Changed
+
+- Require ready integration status before deploy (#155)
+
+## [3.0.27] - 2026-05-27
+
+### Added
+
+- **First-class select() on the terminal IO for pickers**
+- **Onboarding pickers for picker-annotated inputs**
+
+### Fixed
+
+- Prepare subscription credentials before integrations (#152)
+
+### Changed
+
+- Address review: preserve picker values, fix paste parsing, warn on --no-prompt
+
+## [3.0.26] - 2026-05-27
+
+### Added
+
+- Accept authored `persona.ts`/JS source modules anywhere deploy preflight accepts
+  persona JSON, preserving sibling-file `import.meta.url` reads during evaluation.
+
+## [3.0.25] - 2026-05-26
+
+### Added
+
+- **Add GitHub PR merge writeback client** (#148)
+
+## [3.0.24] - 2026-05-26
+
+### Changed
+
+- Deploy/persona-kit: catch integration-provider + persona-tag footguns before the cloud rejects them (#141)
+
+## [3.0.22] - 2026-05-24
+
+### Dependencies
+
+- Bump @daytonaio/sdk to ^0.179.0 (#134)
+
+## [3.0.20] - 2026-05-23
+
+### Added
+
+- **Make harness/model/systemPrompt optional for handler personas** (#135)
+
+## [3.0.19] - 2026-05-23
+
+### Fixed
+
+- Pass persona source.kind into connect-session + status poll (#133)
+
+## [3.0.18] - 2026-05-22
+
+### Fixed
+
+- Accept pending/syncing/degraded as connected in preflight (#132)
+
+## [3.0.17] - 2026-05-22
+
+### Fixed
+
+- Scope-aware + configKey-aware integration preflight (#131)
+
+## [3.0.16] - 2026-05-22
+
+### Added
+
+- **Cloud mode + relayfile watch personas (spec 03)** (#130)
+
 ## [3.0.10] - 2026-05-13
 
 ### Fixed
@@ -55,4 +418,3 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Added
 
 - **--mode cloud (OSS-generic persona+bundle POST)** (#102)
-

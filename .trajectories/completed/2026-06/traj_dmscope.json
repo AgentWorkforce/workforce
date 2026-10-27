@@ -1,0 +1,89 @@
+{
+  "id": "traj_dmscope",
+  "version": 1,
+  "task": { "title": "Slack DM-send silent failure — missing_scope diagnosis & fix" },
+  "status": "completed",
+  "startedAt": "2026-06-08T16:00:00.000Z",
+  "completedAt": "2026-06-08T18:52:00.000Z",
+  "projectId": "/Users/khaliqgant/Projects/AgentWorkforce/pear",
+  "tags": ["slack", "relayfile", "cloud", "writeback", "debugging"],
+  "agents": [ { "name": "cloud-worker", "role": "lead", "joinedAt": "2026-06-08T16:00:00.000Z" } ],
+  "chapters": [
+    {
+      "id": "chap_dmsend",
+      "title": "DM-send diagnosis",
+      "agentName": "cloud-worker",
+      "startedAt": "2026-06-08T16:00:00.000Z",
+      "endedAt": "2026-06-08T18:52:00.000Z",
+      "events": [
+        {
+          "ts": 1780935000000,
+          "type": "decision",
+          "content": "Not a cloud code or adapter-version bug — rule out before blaming code",
+          "raw": {
+            "question": "Why does a /slack/users/<U>/messages writeback push up but never send a DM, with no error and no dead-letter?",
+            "chosen": "Treat the cloud send-path as present+deployed and look elsewhere",
+            "alternatives": [
+              "Missing cf processor routing for users path (ruled out: SLACK_UPSERT_WRITEBACK_PATH includes users/.../messages, provider-executor.ts:1203-1205, deployed 2026-05-12)",
+              "Adapter version not deployed (ruled out: adapter-slack 0.3.9 already resolves DM->post_dm; 0.3.9->0.3.10 changed only READ-side path-mapper; cloud#1997 fixed DM read, not send)",
+              "cf/bridge missing DM dispatch (ruled out: cf dispatchSlackDirectMessage + bridge fallback both present pre-#1997)"
+            ],
+            "reasoning": "Every cloud-side send component (executor allowlist, cf provider, bridge fallback, adapter resolution) was present and deployed. The gap had to be runtime config/scope, not code."
+          },
+          "significance": "high"
+        },
+        {
+          "ts": 1780937412000,
+          "type": "decision",
+          "content": "ROOT CAUSE: Slack app missing im:write scope for conversations.open",
+          "raw": {
+            "question": "What is the actual failing leg for DM send when channel writebacks work?",
+            "chosen": "Missing im:write bot scope on conversations.open",
+            "alternatives": [
+              "user_not_found / cannot_dm_bot (excluded by the persisted op error)",
+              "Nango proxy mapping (excluded: channels dispatch fine through the same proxy)"
+            ],
+            "reasoning": "DM send calls conversations.open BEFORE chat.postMessage; conversations.open to a user requires the im:write bot scope, while channel chat.postMessage only needs chat:write. Missing im:write -> Slack returns {ok:false,error:missing_scope} (HTTP 200); missing_scope is NOT in the retryable set (providers/slack.ts:476-485) -> permanent_failure -> acknowledgePermanentFailure: no retry, no dead-letter, no surfaced error -> silent no-DM. CONFIRMED via relayfile getOp on op_27419: status=failed, lastError=missing_scope, attemptCount=0."
+          },
+          "significance": "critical"
+        },
+        {
+          "ts": 1780944000000,
+          "type": "decision",
+          "content": "Fix applies in THREE places, in order — reconnect alone is insufficient",
+          "raw": {
+            "question": "How does the operator apply the scope so the new token carries it?",
+            "chosen": "Slack app scope+reinstall -> Nango dashboard requested scopes -> re-OAuth",
+            "alternatives": [
+              "Just reconnect Slack (insufficient: the OAuth requested-scope set lives in the Nango dashboard slack-relay, not the repo; reconnect without adding it there re-grants the old set)"
+            ],
+            "reasoning": "The OAuth authorize URL requests scopes from the Nango dashboard config (not auto-derived from the Slack app, not in the repo). So add im:write(+mpim:write) in BOTH the Slack app (manifest + reinstall) AND the Nango slack-relay dashboard, THEN re-OAuth; existing tokens get no retroactive grant."
+          },
+          "significance": "high"
+        },
+        {
+          "ts": 1780944300000,
+          "type": "decision",
+          "content": "Diagnostic mechanic: read the op lastError, not the writeback-consumer logs",
+          "raw": {
+            "question": "Where does the Slack error actually surface?",
+            "chosen": "op lastError (relayfile getOp / writeback list) + cf audit event in cloud-web-worker",
+            "alternatives": [
+              "wrangler tail relayfile-writeback-consumer (dead end: the batch executor queue-consumer.ts:71 logs ONLY writeback.start, never the slackError)"
+            ],
+            "reasoning": "The dispatch result is acked to the op (status+lastError) and forwarded to the external audit sink (cloud-web-worker '[relayfile] writeback audit event'). getOp requires the X-Correlation-Id header (400 without)."
+          },
+          "significance": "high"
+        }
+      ]
+    }
+  ],
+  "commits": [],
+  "filesChanged": [],
+  "retrospective": {
+    "summary": "Outbound Slack DM-send failed silently (lastError=missing_scope) because the Slack app lacked im:write for conversations.open. Not a cloud code/adapter bug. Fixed by adding im:write/mpim:write in BOTH the Slack app AND the Nango dashboard + re-OAuth. Verified: re-test op_27514 status=succeeded, bidirectional DM working. Repo sync drafted as cloud#2014.",
+    "approach": "Rule out deployed code first (executor allowlist, adapter version, cf/bridge dispatch), then read the persisted op lastError via relayfile getOp — not the writeback-consumer logs — to localize the fault to runtime scope.",
+    "confidence": 0.97
+  },
+  "_trace": { "startRef": "4f3a28e", "endRef": "4f3a28e" }
+}

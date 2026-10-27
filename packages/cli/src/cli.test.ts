@@ -15,9 +15,12 @@ import {
   buildPickCandidates,
   buildRelayfileMountPatterns,
   buildMountGitExcludeBlock,
+  buildSpawnSummary,
   buildSidecarBody,
   configureGitForMount,
   decideCleanMode,
+  projectHasRelayfilePolicy,
+  formatSandboxMountReadyMessage,
   loadSidecarForSelection,
   parseAgentArgs,
   parseInstallArgs,
@@ -30,7 +33,7 @@ import {
   stripAgentFlag,
   type ImproverProposal,
   type ResolvedSidecar
-} from './cli.js';
+} from './cli-impl.js';
 
 // The conflict-detection path inside parseAgentArgs uses the module-local
 // `die()` helper, which calls process.exit(1) after writing to stderr. Tests
@@ -408,6 +411,81 @@ test('decideCleanMode: codex mounts only for filesystem-affecting persona featur
   assert.deepEqual(decideCleanMode('codex', true), { useClean: false });
 });
 
+test('decideCleanMode: grok mounts for cwd config, sidecars, and skill installs', () => {
+  assert.deepEqual(decideCleanMode('grok'), { useClean: false });
+  assert.deepEqual(decideCleanMode('grok', { hasConfigFiles: true }), { useClean: true });
+  assert.deepEqual(decideCleanMode('grok', { hasSidecar: true }), { useClean: true });
+  assert.deepEqual(decideCleanMode('grok', { installNeedsSandbox: true }), { useClean: true });
+  assert.deepEqual(decideCleanMode('grok', true), { useClean: false });
+});
+
+test('decideCleanMode: explicit mount.enabled opts in, and false opts out of persona policy', () => {
+  assert.deepEqual(decideCleanMode('claude', { mount: { enabled: true } }), { useClean: true });
+  assert.deepEqual(
+    decideCleanMode('claude', {
+      mount: { enabled: false, readonlyPatterns: ['docs/**'] },
+      hasSidecar: true
+    }),
+    { useClean: false }
+  );
+});
+
+test('decideCleanMode: project Relayfile policy forces a mount, including over mount.enabled false', () => {
+  assert.deepEqual(decideCleanMode('claude', { hasProjectRelayfilePolicy: true }), {
+    useClean: true
+  });
+  assert.deepEqual(
+    decideCleanMode('codex', {
+      mount: { enabled: false },
+      hasProjectRelayfilePolicy: true
+    }),
+    { useClean: true }
+  );
+  assert.deepEqual(
+    decideCleanMode('codex', { installInRepo: true, hasProjectRelayfilePolicy: true }),
+    { useClean: false }
+  );
+});
+
+test('decideCleanMode: extension mount fields such as roots count as filesystem policy', () => {
+  assert.deepEqual(
+    decideCleanMode('claude', { mount: { roots: [{ path: '/tmp/other', alias: 'other' }] } }),
+    { useClean: true }
+  );
+  assert.deepEqual(decideCleanMode('claude', { mount: { ignoredPatterns: [] } }), {
+    useClean: false
+  });
+});
+
+test('formatSandboxMountReadyMessage: appends mount metrics when available', () => {
+  assert.equal(
+    formatSandboxMountReadyMessage('/tmp/mount', {
+      initialMountDurationMs: 123,
+      initialFileCount: 456
+    }),
+    'Sandbox mount ready (123ms, 456 files) → /tmp/mount'
+  );
+});
+
+test('formatSandboxMountReadyMessage: omits metrics when linked against an older mount handle', () => {
+  assert.equal(
+    formatSandboxMountReadyMessage('/tmp/mount', {
+      initialMountDurationMs: 123
+    }),
+    'Sandbox mount ready → /tmp/mount'
+  );
+  assert.equal(
+    formatSandboxMountReadyMessage('/tmp/mount', {
+      initialFileCount: 456
+    }),
+    'Sandbox mount ready → /tmp/mount'
+  );
+  assert.equal(
+    formatSandboxMountReadyMessage('/tmp/mount', {}),
+    'Sandbox mount ready → /tmp/mount'
+  );
+});
+
 test('stripAgentFlag: removes --agent <name> pair preserving surrounding args', () => {
   // Degrade path: when the CLI cannot materialize opencode.json (non-mount
   // --install-in-repo), it strips the --agent selector so opencode launches
@@ -510,6 +588,7 @@ test('SKILL_INSTALL_IGNORED_PATTERNS: keeps skill-install artifacts out of the r
     '.agents',
     '.claude/skills',
     '.factory/skills',
+    '.grok/skills',
     '.kiro/skills',
     'skills',
     '.opencode',
@@ -571,22 +650,10 @@ test('buildRelayfileMountPatterns: merges Relayfile dotfiles with built-in claud
 // and return once the child exits. We force the harness binary to fail to
 // spawn (PATH scrubbed) so these runs terminate quickly regardless of what
 // the dispatch path tries next — the assertions target stderr shape alone.
-async function runCliCapturingStderr(args: string[]): Promise<{
-  stderr: string;
-  stdout: string;
-  exitCode: number | null;
-}>;
 async function runCliCapturingStderr(
   args: string[],
-  extraEnv: NodeJS.ProcessEnv
-): Promise<{
-  stderr: string;
-  stdout: string;
-  exitCode: number | null;
-}>;
-async function runCliCapturingStderr(
-  args: string[],
-  extraEnv: NodeJS.ProcessEnv = {}
+  extraEnv: NodeJS.ProcessEnv = {},
+  options: { cwd?: string } = {}
 ): Promise<{
   stderr: string;
   stdout: string;
@@ -609,7 +676,8 @@ async function runCliCapturingStderr(
       PATH: extraEnv.PATH ?? '/nonexistent-path-for-test',
       POSTHOG_API_KEY: extraEnv.POSTHOG_API_KEY ?? 'dummy'
     },
-    stdio: ['ignore', 'pipe', 'pipe']
+    stdio: ['ignore', 'pipe', 'pipe'],
+    ...(options.cwd ? { cwd: options.cwd } : {})
   });
 
   let stderr = '';
@@ -663,11 +731,211 @@ test('main: --version prints the package version', async () => {
   try {
     const { stderr, stdout, exitCode } = await runCliCapturingStderr(
       ['--version'],
-      { AGENT_WORKFORCE_HOME: workforceHome }
+      {
+        AGENT_WORKFORCE_HOME: workforceHome,
+        // Keep the registry out of this assertion; the update check has its
+        // own tests below.
+        AGENTWORKFORCE_NO_UPDATE_CHECK: '1'
+      }
     );
     assert.equal(exitCode, 0);
     assert.equal(stderr, '');
     assert.equal(stdout, `${CLI_VERSION}\n`);
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+/**
+ * Neutralizes both update-check opt-outs for a child process, so a test that
+ * asserts on the notice does not depend on the environment it runs in.
+ */
+const UPDATE_CHECK_ENABLED = {
+  AGENTWORKFORCE_NO_UPDATE_CHECK: '',
+  NO_UPDATE_NOTIFIER: ''
+} as const;
+
+/**
+ * Stand-in npm registry serving one `dist-tags` response, so the `--version`
+ * update check can be exercised end to end without the network.
+ */
+async function withStubRegistry<T>(
+  latest: string,
+  run: (registry: string) => Promise<T>
+): Promise<T> {
+  const { createServer } = await import('node:http');
+  const server = createServer((req, res) => {
+    if (req.url === '/-/package/agentworkforce/dist-tags') {
+      res.writeHead(200, { 'content-type': 'application/json' });
+      res.end(JSON.stringify({ latest }));
+      return;
+    }
+    res.writeHead(404).end('{}');
+  });
+  await new Promise<void>((resolve) => server.listen(0, '127.0.0.1', resolve));
+  const address = server.address();
+  const port = typeof address === 'object' && address ? address.port : 0;
+  try {
+    return await run(`http://127.0.0.1:${port}`);
+  } finally {
+    await new Promise<void>((resolve) => server.close(() => resolve()));
+  }
+}
+
+test('main: --version reports a newer published release and how to install it', async () => {
+  const root = mkdtempSync(join(tmpdir(), 'aw-version-update-'));
+  const workforceHome = join(root, 'home', '.agentworkforce', 'workforce');
+  mkdirSync(join(workforceHome, 'personas'), { recursive: true });
+  try {
+    const { stderr, stdout, exitCode } = await withStubRegistry('999.0.0', (registry) =>
+      runCliCapturingStderr(['--version'], {
+        AGENT_WORKFORCE_HOME: workforceHome,
+        AGENTWORKFORCE_REGISTRY: registry,
+        // The child inherits this process's env, and CI images commonly set
+        // NO_UPDATE_NOTIFIER=1 — which would make this assertion vacuous.
+        ...UPDATE_CHECK_ENABLED
+      })
+    );
+    assert.equal(exitCode, 0);
+    // stdout stays exactly the version so `$(agentworkforce --version)` keeps
+    // working; the notice goes to stderr.
+    assert.equal(stdout, `${CLI_VERSION}\n`);
+    assert.ok(
+      stderr.includes(`Update available: ${CLI_VERSION} → 999.0.0`),
+      `expected an update notice on stderr, got: ${JSON.stringify(stderr)}`
+    );
+    assert.match(stderr, /npm install (-g )?agentworkforce@latest/);
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test('main: --version says nothing when the installed build is current', async () => {
+  const root = mkdtempSync(join(tmpdir(), 'aw-version-current-'));
+  const workforceHome = join(root, 'home', '.agentworkforce', 'workforce');
+  mkdirSync(join(workforceHome, 'personas'), { recursive: true });
+  try {
+    const { stderr, stdout, exitCode } = await withStubRegistry(CLI_VERSION, (registry) =>
+      runCliCapturingStderr(['--version'], {
+        AGENT_WORKFORCE_HOME: workforceHome,
+        AGENTWORKFORCE_REGISTRY: registry,
+        ...UPDATE_CHECK_ENABLED
+      })
+    );
+    assert.equal(exitCode, 0);
+    assert.equal(stdout, `${CLI_VERSION}\n`);
+    assert.equal(stderr, '');
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test('main: --version still prints when the registry is unreachable', async () => {
+  const root = mkdtempSync(join(tmpdir(), 'aw-version-offline-'));
+  const workforceHome = join(root, 'home', '.agentworkforce', 'workforce');
+  mkdirSync(join(workforceHome, 'personas'), { recursive: true });
+  const { createServer } = await import('node:net');
+  // A port we own that hangs up on contact, rather than a low port guessed to
+  // be free: the failure is then the same on any host.
+  const dead = createServer((socket) => socket.destroy());
+  await new Promise<void>((resolve) => dead.listen(0, '127.0.0.1', resolve));
+  const address = dead.address();
+  const port = typeof address === 'object' && address ? address.port : 0;
+  try {
+    const { stderr, stdout, exitCode } = await runCliCapturingStderr(['--version'], {
+      AGENT_WORKFORCE_HOME: workforceHome,
+      AGENTWORKFORCE_REGISTRY: `http://127.0.0.1:${port}`,
+      AGENTWORKFORCE_UPDATE_CHECK_TIMEOUT_MS: '750',
+      ...UPDATE_CHECK_ENABLED
+    });
+    assert.equal(exitCode, 0);
+    assert.equal(stdout, `${CLI_VERSION}\n`);
+    assert.equal(stderr, '');
+  } finally {
+    await new Promise<void>((resolve) => dead.close(() => resolve()));
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test('main: persona compile dispatches to the typed persona compiler', async () => {
+  const root = mkdtempSync(join(tmpdir(), 'aw-persona-compile-cli-'));
+  const workforceHome = join(root, 'home', '.agentworkforce', 'workforce');
+  mkdirSync(join(workforceHome, 'personas'), { recursive: true });
+  const personaPath = join(root, 'persona.ts');
+  writeFileSync(
+    personaPath,
+    `export default {
+  id: 'cli-compiled',
+  intent: 'review',
+  description: 'Compiled through the CLI dispatcher.',
+  onEvent: './agent.ts',
+  harnessSettings: { reasoning: 'medium', timeoutSeconds: 60 }
+};
+`,
+    'utf8'
+  );
+
+  try {
+    const { stderr, stdout, exitCode } = await runCliCapturingStderr(
+      ['persona', 'compile', personaPath],
+      { AGENT_WORKFORCE_HOME: workforceHome }
+    );
+    assert.equal(exitCode, 0);
+    assert.equal(stderr, '');
+    assert.match(
+      stdout,
+      /Compiled .*persona\.ts -> .*persona\.json, .*agent-card\.json \(cli-compiled\)/
+    );
+    const compiled = JSON.parse(readFileSync(join(root, 'persona.json'), 'utf8')) as {
+      id: string;
+    };
+    const agentCard = JSON.parse(
+      readFileSync(join(root, 'agent-card.json'), 'utf8')
+    ) as { name: string };
+    assert.equal(compiled.id, 'cli-compiled');
+    assert.equal(agentCard.name, 'cli-compiled');
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test('main: deploy dry-run accepts an authored persona.ts path', async () => {
+  const root = mkdtempSync(join(tmpdir(), 'aw-persona-deploy-cli-'));
+  const workforceHome = join(root, 'home', '.agentworkforce', 'workforce');
+  mkdirSync(join(workforceHome, 'personas'), { recursive: true });
+  const personaPath = join(root, 'persona.ts');
+  writeFileSync(
+    join(root, 'agent.ts'),
+    `import { defineAgent } from '@agentworkforce/runtime';
+export default defineAgent({
+  schedules: [{ name: 'daily', cron: '0 9 * * *' }],
+  handler: async () => {}
+});
+`,
+    'utf8'
+  );
+  writeFileSync(
+    personaPath,
+    `export default {
+  id: 'cli-deploy-source',
+  intent: 'review',
+  description: 'Deploy through the CLI dispatcher.',
+  cloud: true,
+  onEvent: './agent.ts',
+  harnessSettings: { reasoning: 'medium', timeoutSeconds: 60 }
+};
+`,
+    'utf8'
+  );
+
+  try {
+    const { stderr, stdout, exitCode } = await runCliCapturingStderr(
+      ['deploy', personaPath, '--mode', 'dev', '--dry-run'],
+      { AGENT_WORKFORCE_HOME: workforceHome }
+    );
+    assert.equal(exitCode, 0);
+    assert.equal(stderr, '');
+    assert.match(stdout, /ok: cli-deploy-source \(dry-run\)/);
   } finally {
     rmSync(root, { recursive: true, force: true });
   }
@@ -747,8 +1015,11 @@ test('main: sources add/list/remove manages persona source dirs', async () => {
       sources: Array<{ source: string; config: string; dir: string }>;
     };
     assert.deepEqual(parsed.personaDirs, [userPersonaDir]);
+    // The two working-tree dirs are fixed and always lead the cascade;
+    // configurable dirs are appended after them.
     assert.equal(parsed.sources[0]?.source, 'cwd');
-    assert.equal(parsed.sources[1]?.source, 'user');
+    assert.equal(parsed.sources[1]?.source, 'cwd:agents');
+    assert.equal(parsed.sources[2]?.source, 'user');
 
     res = await runCliCapturingStderr(
       ['sources', 'add', customDir, '--position', '1'],
@@ -761,8 +1032,8 @@ test('main: sources add/list/remove manages persona source dirs', async () => {
     assert.equal(res.exitCode, 0);
     parsed = JSON.parse(res.stdout) as typeof parsed;
     assert.deepEqual(parsed.personaDirs, [customDir, userPersonaDir]);
-    assert.equal(parsed.sources[1]?.source, 'dir:1');
-    assert.equal(parsed.sources[2]?.source, 'user');
+    assert.equal(parsed.sources[2]?.source, 'dir:1');
+    assert.equal(parsed.sources[3]?.source, 'user');
 
     res = await runCliCapturingStderr(['sources', 'remove', '1'], env);
     assert.equal(res.exitCode, 0);
@@ -786,6 +1057,26 @@ test('buildMountGitExcludeBlock: emits a header comment and one line per pattern
   assert.match(out, /^# agentworkforce:/m);
   assert.match(out, /^CLAUDE\.md$/m);
   assert.match(out, /^\.claude$/m);
+});
+
+test('buildSpawnSummary uses final spec MCP servers, including broker-injected relaycast', () => {
+  const summary = buildSpawnSummary({
+    harness: 'claude',
+    model: 'claude-sonnet-4-6',
+    spec: {
+      initialPrompt: null,
+      mcpServers: {
+        relaycast: { type: 'stdio', command: 'npx', args: ['-y', '@relaycast/mcp'] }
+      }
+    },
+    useClean: true
+  });
+
+  assert.deepEqual(summary, [
+    'model=claude-sonnet-4-6',
+    'mcp-strict=relaycast',
+    'mount=on'
+  ]);
 });
 
 test('configureGitForMount: marks tracked hidden paths as skip-worktree and appends to .git/info/exclude', async () => {
@@ -970,14 +1261,69 @@ test('loadSidecarForSelection: opencode picks agentsMd, not claudeMd', () => {
   assert.equal(sidecar?.personaContent, '# agents\n');
 });
 
+test('loadSidecarForSelection: grok picks agentsMd, not claudeMd', () => {
+  const selection = {
+    personaId: 'p',
+    harness: 'grok' as const,
+    model: 'grok-build-0.1',
+    systemPrompt: 'X',
+    harnessSettings: { reasoning: 'medium' as const, timeoutSeconds: 300 },
+    skills: [],
+    rationale: 'test',
+    claudeMdContent: '# claude\n',
+    agentsMdContent: '# agents\n'
+  };
+  const { sidecar } = loadSidecarForSelection(selection);
+  assert.equal(sidecar?.mountFile, 'AGENTS.md');
+  assert.equal(sidecar?.personaContent, '# agents\n');
+});
+
+test('projectHasRelayfilePolicy: reads project and persona-scoped dotfiles', () => {
+  const dir = mkdtempSync(join(tmpdir(), 'aw-relayfile-policy-'));
+  try {
+    assert.equal(projectHasRelayfilePolicy(dir, 'local-codex'), false);
+    writeFileSync(join(dir, '.agentignore'), '\n# comment only\n\n', 'utf8');
+    assert.equal(projectHasRelayfilePolicy(dir, 'local-codex'), false);
+    writeFileSync(join(dir, '.agentignore'), 'secrets/\n', 'utf8');
+    assert.equal(projectHasRelayfilePolicy(dir, 'local-codex'), true);
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test('projectHasRelayfilePolicy: ids outside the dotfile agent-name set still see project rules', () => {
+  const dir = mkdtempSync(join(tmpdir(), 'aw-relayfile-odd-id-'));
+  try {
+    assert.equal(projectHasRelayfilePolicy(dir, 'local.codex'), false);
+    writeFileSync(join(dir, '.agentignore'), 'secrets/\n', 'utf8');
+    assert.equal(projectHasRelayfilePolicy(dir, 'local.codex'), true);
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test('projectHasRelayfilePolicy: persona-scoped readonly rules count', () => {
+  const dir = mkdtempSync(join(tmpdir(), 'aw-relayfile-persona-'));
+  try {
+    writeFileSync(join(dir, '.local-codex.agentreadonly'), 'package.json\n', 'utf8');
+    assert.equal(projectHasRelayfilePolicy(dir, 'local-codex'), true);
+    assert.equal(projectHasRelayfilePolicy(dir, 'other-persona'), false);
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
 test('main: codex sessions skip the sandbox mount by default', async () => {
   const root = mkdtempSync(join(tmpdir(), 'aw-cli-direct-'));
   try {
+    const project = join(root, 'project');
+    mkdirSync(project);
     const workforceHome = join(root, '.agentworkforce', 'workforce');
     const personaId = writeStandaloneCodexPersona(workforceHome);
     const { stderr } = await runCliCapturingStderr(
       ['agent', `${personaId}`],
-      { AGENT_WORKFORCE_HOME: workforceHome }
+      { AGENT_WORKFORCE_HOME: workforceHome },
+      { cwd: project }
     );
     assert.ok(
       !/sandbox mount →/.test(stderr),
@@ -991,13 +1337,16 @@ test('main: codex sessions skip the sandbox mount by default', async () => {
 test('main: codex sessions use the sandbox mount for declared mount policy', async () => {
   const root = mkdtempSync(join(tmpdir(), 'aw-cli-mount-'));
   try {
+    const project = join(root, 'project');
+    mkdirSync(project);
     const workforceHome = join(root, '.agentworkforce', 'workforce');
     const personaId = writeStandaloneCodexPersona(workforceHome, 'local-codex-mounted', {
       mount: { readonlyPatterns: ['README.md'] }
     });
     const { stderr } = await runCliCapturingStderr(
       ['agent', `${personaId}`],
-      { AGENT_WORKFORCE_HOME: workforceHome }
+      { AGENT_WORKFORCE_HOME: workforceHome },
+      { cwd: project }
     );
     assert.match(
       stderr,
@@ -1021,6 +1370,130 @@ test('main: codex --install-in-repo keeps direct launch unmounted', async () => 
     assert.ok(
       !/sandbox mount →/.test(stderr),
       `expected the mount branch to be skipped under --install-in-repo; saw stderr:\n${stderr}`
+    );
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test('main: project .agentignore forces a sandbox mount', async () => {
+  const root = mkdtempSync(join(tmpdir(), 'aw-cli-agentignore-'));
+  try {
+    const project = join(root, 'project');
+    mkdirSync(project);
+    writeFileSync(join(project, '.agentignore'), 'secrets/\n', 'utf8');
+    const workforceHome = join(root, '.agentworkforce', 'workforce');
+    const personaId = writeStandaloneCodexPersona(workforceHome);
+    const { stderr } = await runCliCapturingStderr(
+      ['agent', `${personaId}`],
+      { AGENT_WORKFORCE_HOME: workforceHome },
+      { cwd: project }
+    );
+    assert.match(
+      stderr,
+      /sandbox mount →/,
+      `expected project Relayfile rules to engage the mount; saw stderr:\n${stderr}`
+    );
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test('main: claude direct launch keeps the repo CLAUDE.md visible', async () => {
+  const root = mkdtempSync(join(tmpdir(), 'aw-cli-claude-direct-'));
+  try {
+    const project = join(root, 'project');
+    const binDir = join(root, 'bin');
+    mkdirSync(project);
+    mkdirSync(binDir);
+    const sentinel = 'VISIBLE_CLAUDE_MD_SENTINEL';
+    writeFileSync(join(project, 'CLAUDE.md'), `# project\n${sentinel}\n`, 'utf8');
+    const claude = join(binDir, 'claude');
+    writeFileSync(
+      claude,
+      `#!/usr/bin/env node
+const { readFileSync } = require('node:fs');
+try {
+  process.stdout.write('claude-md:' + readFileSync('CLAUDE.md', 'utf8'));
+} catch (err) {
+  process.stdout.write('claude-md-missing:' + (err && err.code ? err.code : 'error') + '\\n');
+  process.exit(2);
+}
+process.stdout.write('cwd:' + process.cwd() + '\\n');
+`,
+      'utf8'
+    );
+    chmodSync(claude, 0o755);
+    const workforceHome = join(root, '.agentworkforce', 'workforce');
+    const personaDir = join(workforceHome, 'personas');
+    mkdirSync(personaDir, { recursive: true });
+    writeFileSync(
+      join(personaDir, 'local-claude.json'),
+      JSON.stringify({
+        id: 'local-claude',
+        intent: 'review',
+        tags: ['review'],
+        description: 'Local no-skill claude persona for direct-launch coverage.',
+        harness: 'claude',
+        model: 'test-claude',
+        systemPrompt: 'Run the local claude test harness.',
+        harnessSettings: { reasoning: 'medium', timeoutSeconds: 30 }
+      }),
+      'utf8'
+    );
+    const { stdout, stderr, exitCode } = await runCliCapturingStderr(
+      ['agent', 'local-claude'],
+      {
+        AGENT_WORKFORCE_HOME: workforceHome,
+        PATH: `${binDir}:${process.env.PATH ?? ''}`,
+        AGENTWORKFORCE_LAUNCH_METADATA: '0',
+        AGENTWORKFORCE_NO_FAST: '1'
+      },
+      { cwd: project }
+    );
+    assert.equal(exitCode, 0, stderr);
+    assert.ok(
+      !/sandbox mount →/.test(stderr),
+      `expected a direct claude launch; saw stderr:\n${stderr}`
+    );
+    assert.ok(stdout.includes(sentinel), stdout);
+    assert.ok(stdout.includes(`cwd:${project}`), stdout);
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test('main: grok sessions mount so the system prompt can be written to AGENTS.md', async () => {
+  const root = mkdtempSync(join(tmpdir(), 'aw-cli-grok-mount-'));
+  try {
+    const project = join(root, 'project');
+    mkdirSync(project);
+    const workforceHome = join(root, '.agentworkforce', 'workforce');
+    const personaDir = join(workforceHome, 'personas');
+    mkdirSync(personaDir, { recursive: true });
+    writeFileSync(
+      join(personaDir, 'local-grok.json'),
+      JSON.stringify({
+        id: 'local-grok',
+        intent: 'review',
+        tags: ['review'],
+        description: 'Local grok persona whose prompt is a cwd AGENTS.md file.',
+        harness: 'grok',
+        model: 'test-grok',
+        systemPrompt: 'Run the local grok test harness.',
+        harnessSettings: { reasoning: 'medium', timeoutSeconds: 30 }
+      }),
+      'utf8'
+    );
+    const { stderr } = await runCliCapturingStderr(
+      ['agent', 'local-grok'],
+      { AGENT_WORKFORCE_HOME: workforceHome },
+      { cwd: project }
+    );
+    assert.match(
+      stderr,
+      /sandbox mount →/,
+      `expected grok's AGENTS.md config file to engage the mount; saw stderr:\n${stderr}`
     );
   } finally {
     rmSync(root, { recursive: true, force: true });

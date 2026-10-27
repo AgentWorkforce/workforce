@@ -1,0 +1,1 @@
+No manifest-driven deleted paths to check.

@@ -11,9 +11,18 @@ export {
   SIDECAR_MD_MODES,
   SKILL_SOURCE_KINDS
 } from './constants.js';
+export type { KnownPersonaTag } from './constants.js';
+
+// Canonical A2A agent-card derivation
+export {
+  deriveAgentCard,
+  type DeriveAgentCardOptions
+} from './agent-card.js';
 
 // Types
 export type {
+  AgentSpec,
+  CapabilityValue,
   CodexApprovalPolicy,
   CodexSandboxMode,
   Harness,
@@ -23,14 +32,21 @@ export type {
   McpServerSpec,
   PermissionMode,
   PersonaContext,
+  PersonaHttpReadCapability,
+  PersonaHttpReadRule,
+  PersonaInputPicker,
   PersonaInputSpec,
   PersonaInstallContext,
   PersonaIntegrationConfig,
   PersonaIntegrationTrigger,
   PersonaIntent,
+  PersonaAiMemoryConfig,
   PersonaMemory,
   PersonaMemoryConfig,
   PersonaMemoryScope,
+  PersonaRelay,
+  PersonaRelayConfig,
+  PersonaTrajectoryConfig,
   PersonaMount,
   PersonaPermissions,
   PersonaSchedule,
@@ -38,12 +54,58 @@ export type {
   PersonaSkill,
   PersonaSpec,
   PersonaTag,
+  ProactiveCapabilities,
   SidecarMdMode,
   SkillInstall,
   SkillMaterializationOptions,
   SkillMaterializationPlan,
-  SkillSourceKind
+  SkillSourceKind,
+  WatchEvent,
+  WatchRule
 } from './types.js';
+
+// Typed persona authoring
+export {
+  definePersona,
+  type AdapterConfigFor,
+  type GitLabAdapterConfig,
+  type GitLabMaterializationFilter,
+  type GitLabMaterializationMode,
+  type GitLabMaterializationPolicy,
+  type GitLabMaterializationResource,
+  type GitLabMaterializationResourcePolicy,
+  type GitLabMaterializationRule,
+  type GitLabMaterializationState,
+  type GitHubAdapterConfig,
+  type GitHubMaterializationFilter,
+  type GitHubMaterializationMode,
+  type GitHubMaterializationPolicy,
+  type GitHubMaterializationResource,
+  type GitHubMaterializationResourcePolicy,
+  type GitHubMaterializationRule,
+  type GitHubMaterializationState,
+  type PersonaDefinition,
+  type PersonaDefinitionBase,
+  type ScopeKeysFor,
+  type TriggerNameFor,
+  type TypedAdapterMaterializationFilter,
+  type TypedAdapterMaterializationPolicy,
+  type TypedAdapterMaterializationRule,
+  type TypedAdapterResourceMaterializationPolicy,
+  type TypedIntegrationConfig,
+  type TypedIntegrations,
+  type TypedScopeMap,
+  type TypedTrigger,
+  type TypedTriggerMap
+} from './define.js';
+
+// Per-provider connection scope-key catalog (from @relayfile/adapter-core/scope-keys)
+export {
+  KNOWN_SCOPE_KEY_CATALOG,
+  ADAPTERS_WITHOUT_KNOWN_SCOPE_KEYS,
+  type ScopeKey,
+  type ScopeKeyProvider
+} from './scope-keys.js';
 
 // Parsers + sidecar resolver
 export {
@@ -53,10 +115,14 @@ export {
   INPUT_NAME_RE,
   INTEGRATION_SOURCE_NAME_RE,
   isHarness,
+  isImplicitIntegrationSource,
   isIntent,
   isObject,
+  isPlainObject,
   isSidecarMode,
   isTag,
+  parseAgentSpec,
+  parseCapabilities,
   parseHarnessSettings,
   parseInputs,
   parseIntegrationConfig,
@@ -67,19 +133,26 @@ export {
   parseMemory,
   parseMount,
   parseOnEvent,
+  parseRelay,
   parsePermissions,
   parsePersonaSpec,
+  resolveAiMemory,
+  resolveTrajectoryRecording,
   parseSchedules,
   parseSkills,
   parseStringList,
   parseStringMap,
   parseTags,
+  parseWatch,
   resolveSidecar,
   sidecarSelectionFields
 } from './parse.js';
 
 // Trigger registry + lint helper
 export {
+  ADAPTERS_WITHOUT_KNOWN_TRIGGERS,
+  KNOWN_TRIGGER_CATALOG,
+  KNOWN_TRIGGER_PROVIDER_ALIASES,
   KNOWN_TRIGGERS,
   lintTriggers,
   type KnownProviderName,
@@ -88,6 +161,12 @@ export {
   type TriggerLintIssue,
   type TriggerLintLevel
 } from './triggers.js';
+export {
+  lintScopes,
+  type ScopeLintCode,
+  type ScopeLintIssue,
+  type ScopeLintLevel
+} from './scopes.js';
 
 // Skill materialization
 export {
@@ -157,10 +236,15 @@ export {
 export {
   buildInteractiveSpec,
   buildNonInteractiveSpec,
+  type AiHistMcpConfig,
   type BuildInteractiveSpecInput,
   type InteractiveConfigFile,
   type InteractiveSpec,
-  type NonInteractiveSpec
+  type NonInteractivePrompt,
+  type NonInteractiveSpec,
+  type RelayMcpConfig,
+  resolvePersonaRelayMcp,
+  type ResolveRelayMcpResult
 } from './interactive-spec.js';
 
 // Harness detection

@@ -1,0 +1,12 @@
+{
+  "triggers": {
+    "github": [
+      {
+        "on": "pull_request.opened"
+      },
+      {
+        "on": "pull_request.evaporated"
+      }
+    ]
+  }
+}

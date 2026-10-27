@@ -64,13 +64,23 @@ interface PackageJsonShape {
  * the persona — a stable POSIX-style relative path used as the on-disk
  * filename under `__assets/<personaId>/`.
  */
-interface PersonaAsset {
-  /** Where the field appears in the JSON (for path-rewriting). */
-  field: 'claudeMd' | 'agentsMd';
-  sourcePath: string;
-  /** Stable relative target inside `<targetDir>/__assets/<personaId>/`. */
-  assetKey: string;
-}
+type PersonaAsset =
+  | {
+      kind: 'sidecar';
+      /** Where the field appears in the JSON (for path-rewriting). */
+      field: 'claudeMd' | 'agentsMd';
+      sourcePath: string;
+      /** Stable relative target inside `<targetDir>/__assets/<personaId>/`. */
+      assetKey: string;
+    }
+  | {
+      kind: 'skill';
+      /** Index into the persona `skills[]` array. */
+      skillIndex: number;
+      sourcePath: string;
+      /** Stable relative target inside `<targetDir>/__assets/<personaId>/`. */
+      assetKey: string;
+    };
 
 interface PersonaFile {
   id: string;
@@ -243,7 +253,47 @@ function assertPackagedSidecarPath(
   return normalize(relPath);
 }
 
-function collectPersonaAssets(personaJsonPath: string, json: Record<string, unknown>): PersonaAsset[] {
+function assertPackagedSkillPath(
+  relPath: unknown,
+  context: string,
+  jsonPath: string
+): string | undefined {
+  if (typeof relPath !== 'string' || !relPath.trim()) return undefined;
+  if (/^[a-z][a-z0-9+.-]*:\/\//i.test(relPath)) return undefined;
+  if (!relPath.toLowerCase().endsWith('.md')) return undefined;
+  if (isAbsolute(relPath)) {
+    throw new Error(
+      `install: ${jsonPath}: ${context} local skill source must be relative; got "${relPath}"`
+    );
+  }
+  const segments = relPath.split(/[\\/]+/);
+  if (segments.some((s) => s === '..')) {
+    throw new Error(
+      `install: ${jsonPath}: ${context} local skill source must not contain ".." segments`
+    );
+  }
+  return normalize(relPath);
+}
+
+function uniqueAssetKey(baseKey: string, assetKeys: Set<string>): string {
+  let assetKey = baseKey;
+  let suffix = 1;
+  while (assetKeys.has(assetKey)) {
+    const dot = baseKey.lastIndexOf('.');
+    assetKey =
+      dot >= 0
+        ? `${baseKey.slice(0, dot)}-${++suffix}${baseKey.slice(dot)}`
+        : `${baseKey}-${++suffix}`;
+  }
+  assetKeys.add(assetKey);
+  return assetKey;
+}
+
+function collectPersonaAssets(
+  personaJsonPath: string,
+  json: Record<string, unknown>,
+  packageRoot: string
+): PersonaAsset[] {
   const assets: PersonaAsset[] = [];
   const assetKeys = new Set<string>();
   const sourceDir = dirname(personaJsonPath);
@@ -262,21 +312,42 @@ function collectPersonaAssets(personaJsonPath: string, json: Record<string, unkn
         `install: ${personaJsonPath}: referenced ${field} sidecar not found at ${sourcePath}`
       );
     }
-    const baseKey = basename(relPath);
-    let assetKey = baseKey;
-    let suffix = 1;
-    while (assetKeys.has(assetKey)) {
-      const dot = baseKey.lastIndexOf('.');
-      assetKey = `${baseKey.slice(0, dot)}-${++suffix}${baseKey.slice(dot)}`;
+    const assetKey = uniqueAssetKey(basename(relPath), assetKeys);
+    assets.push({ kind: 'sidecar', field, sourcePath, assetKey });
+  };
+
+  const addSkillAsset = (skillIndex: number, relPath: string): void => {
+    const sourcePath = resolvePath(packageRoot, relPath);
+    const fromRoot = relative(packageRoot, sourcePath);
+    if (fromRoot.startsWith('..') || isAbsolute(fromRoot)) {
+      throw new Error(
+        `install: ${personaJsonPath}: skill source "${relPath}" resolves outside the package`
+      );
     }
-    assetKeys.add(assetKey);
-    assets.push({ field, sourcePath, assetKey });
+    if (!existsSync(sourcePath)) {
+      throw new Error(
+        `install: ${personaJsonPath}: referenced skill source not found at ${sourcePath}`
+      );
+    }
+    const assetKey = uniqueAssetKey(`skills/${basename(relPath)}`, assetKeys);
+    assets.push({ kind: 'skill', skillIndex, sourcePath, assetKey });
   };
 
   for (const field of sidecarFields) {
     if (json[field] !== undefined) {
       const rel = assertPackagedSidecarPath(json[field], field, personaJsonPath);
       addAsset(field, rel);
+    }
+  }
+  if (Array.isArray(json.skills)) {
+    for (const [idx, rawSkill] of json.skills.entries()) {
+      if (!isPlainObject(rawSkill)) continue;
+      const rel = assertPackagedSkillPath(
+        rawSkill.source,
+        `skills[${idx}].source`,
+        personaJsonPath
+      );
+      if (rel) addSkillAsset(idx, rel);
     }
   }
   return assets;
@@ -289,9 +360,19 @@ function rewriteJsonAssetPaths(
 ): Record<string, unknown> {
   if (assets.length === 0) return json;
   const cloned = JSON.parse(JSON.stringify(json)) as Record<string, unknown>;
-  const newPath = (assetKey: string): string => `__assets/${personaId}/${assetKey}`;
+  const localPersonaAssetPath = (assetKey: string): string =>
+    `.agentworkforce/workforce/personas/__assets/${personaId}/${assetKey}`;
+  const sidecarPath = (assetKey: string): string => `__assets/${personaId}/${assetKey}`;
   for (const asset of assets) {
-    cloned[asset.field] = newPath(asset.assetKey);
+    if (asset.kind === 'sidecar') {
+      cloned[asset.field] = sidecarPath(asset.assetKey);
+      continue;
+    }
+    const skills = cloned.skills;
+    if (!Array.isArray(skills)) continue;
+    const skill = skills[asset.skillIndex];
+    if (!isPlainObject(skill)) continue;
+    skill.source = localPersonaAssetPath(asset.assetKey);
   }
   return cloned;
 }
@@ -307,7 +388,11 @@ function dedupe(values: readonly string[]): string[] {
   return out;
 }
 
-function collectPersonas(personaDir: string, targetDir: string): PersonaFile[] {
+function collectPersonas(
+  personaDir: string,
+  targetDir: string,
+  packageRoot: string
+): PersonaFile[] {
   const jsonFiles = collectJsonFiles(personaDir);
   if (jsonFiles.length === 0) {
     throw new Error(`install: no persona JSON files found in ${personaDir}`);
@@ -335,7 +420,7 @@ function collectPersonas(personaDir: string, targetDir: string): PersonaFile[] {
       );
     }
     byFileName.set(fileName, sourcePath);
-    const assets = collectPersonaAssets(sourcePath, json);
+    const assets = collectPersonaAssets(sourcePath, json, packageRoot);
     personas.push({
       id,
       sourcePath,
@@ -450,7 +535,7 @@ export function installPersonas(options: PersonaInstallOptions): PersonaInstallR
     }
 
     const personaDir = resolvePersonaDir(packageRoot);
-    const personas = collectPersonas(personaDir, targetDir);
+    const personas = collectPersonas(personaDir, targetDir, packageRoot);
     const selected = resolveRequestedPersonas(personas, options.personaIds ?? []);
     mkdirSync(targetDir, { recursive: true });
 

@@ -55,10 +55,26 @@ jobs:
       versions: ${{ steps.bump.outputs.versions }}
       release_version: ${{ steps.bump.outputs.release_version }}
     steps:
+      # `github.ref_name` is the branch this run pushes its release commit to.
+      # On a tag dispatch it would be the tag name, and the push would create a
+      # branch named after the tag while npm already has the new versions.
+      - name: Require a branch dispatch
+        if: ${{ github.ref_type != 'branch' }}
+        run: |
+          echo "::error title=Dispatch from a branch::This workflow publishes and then pushes a release commit to '${{ github.ref_name }}', which is a ${{ github.ref_type }}. Re-run it from a branch."
+          exit 1
+
       - name: Checkout
         uses: actions/checkout@v6
         with:
           fetch-depth: 0
+          # `workflow_dispatch` pins `github.sha` at dispatch time, but the
+          # concurrency group above makes a second dispatch *queue* — so by the
+          # time it runs, that SHA can be several commits stale. Building,
+          # bumping and changelogging from it produced 2026-08-24's split brain
+          # (run 32713237250 bumped from a pre-release commit and then could not
+          # push). Take the branch tip at run start instead.
+          ref: ${{ github.ref_name }}
 
       - name: Setup pnpm
         uses: pnpm/action-setup@v5
@@ -66,7 +82,7 @@ jobs:
       - name: Setup Node
         uses: actions/setup-node@v6
         with:
-          node-version: '22.14.0'
+          node-version: '26.5.0'
           registry-url: 'https://registry.npmjs.org'
           cache: 'pnpm'
 
@@ -86,16 +102,23 @@ jobs:
         id: targets
         run: |
           # Dependency order (topological):
+          #   events          (leaf — consumed by runtime and Cloud)
           #   persona-kit     (leaf — consumed by everyone)
           #   runtime         (→ persona-kit; consumed by deploy + mcp-workforce)
+          #   compose         (leaf — TeamSpec parsing and preview planning)
+          #   delivery        (→ runtime; consumed by external agents)
           #   workload-router (→ persona-kit; consumed by cli)
+          #   persona-registry (→ persona-kit + workload-router; consumed by local-surface + cli)
           #   deploy          (→ persona-kit + runtime; consumed by cli)
+          #   review-kit      (→ persona-kit + runtime; authoring infrastructure)
+          #   turn-kit        (→ persona-kit + runtime; multi-turn agent infrastructure)
           #   mcp-workforce   (→ persona-kit + runtime)
           #   daytona-runner  (no workspace deps)
-          #   cli             (→ persona-kit + workload-router + deploy)
+          #   local-surface   (→ deploy + persona-kit + persona-registry + runtime; consumed by cli)
+          #   cli             (→ persona-kit + persona-registry + workload-router + deploy + local-surface)
           #   agentworkforce  (→ cli — umbrella wrapper, must publish last)
           # personas-core publishes via the separate publish-personas.yml workflow.
-          echo "packages=persona-kit runtime workload-router deploy mcp-workforce daytona-runner cli agentworkforce" >> "$GITHUB_OUTPUT"
+          echo "packages=events persona-kit runtime compose delivery workload-router persona-registry deploy review-kit turn-kit mcp-workforce daytona-runner local-surface cli agentworkforce" >> "$GITHUB_OUTPUT"
 
       # Lockstep baseline heal. The workspace publishes every package at the
       # same version, so if any package's local version lags either its own
@@ -171,7 +194,10 @@ jobs:
           }
 
           for (const e of heals) {
-            execSync(`npm version ${baseline} --no-git-tag-version --allow-same-version`, {
+            // --workspaces-update=false: with any npm `workspaces` config in scope,
+            // `npm version` otherwise tries to reify the root lockfile and dies on
+            // pnpm's workspace:* protocol (EUNSUPPORTEDPROTOCOL).
+            execSync(`npm version ${baseline} --no-git-tag-version --allow-same-version --workspaces-update=false`, {
               cwd: `packages/${e.pkg}`,
               stdio: 'inherit',
             });
@@ -196,14 +222,17 @@ jobs:
           PREID='${{ github.event.inputs.prerelease_id }}'
           for pkg in ${{ steps.targets.outputs.packages }}; do
             pushd "packages/$pkg" > /dev/null
+            # --workspaces-update=false keeps `npm version` from reifying the root
+            # lockfile, which fails on pnpm's workspace:* protocol if an npm
+            # `workspaces` field ever appears in the root package.json.
             if [ -n "$CUSTOM" ]; then
-              npm version "$CUSTOM" --no-git-tag-version --allow-same-version
+              npm version "$CUSTOM" --no-git-tag-version --allow-same-version --workspaces-update=false
             elif [ "$BUMP" = "none" ]; then
               : # keep existing version (useful for first publish or re-publish)
             elif [[ "$BUMP" == pre* ]]; then
-              npm version "$BUMP" --no-git-tag-version --preid="$PREID"
+              npm version "$BUMP" --no-git-tag-version --preid="$PREID" --workspaces-update=false
             else
-              npm version "$BUMP" --no-git-tag-version
+              npm version "$BUMP" --no-git-tag-version --workspaces-update=false
             fi
             NEW=$(node -p "require('./package.json').version")
             VERSIONS+=" $pkg:$NEW"
@@ -543,9 +572,11 @@ jobs:
             git commit -m "$MSG"
           fi
 
-      # npm >= 11.5.1 is required for the OIDC trusted-publisher flow.
-      - name: Install latest npm
-        run: npm install -g npm@latest
+      # npm >= 11.5.1 is required for the OIDC trusted-publisher flow. Pinned
+      # to the npm 11 line: @latest broke 2026-07-13 when npm 12 dropped
+      # support for the runner's node 22.14 (EBADENGINE).
+      - name: Install npm 11
+        run: npm install -g npm@11
 
       # Authentication note: this workflow does NOT use an NPM_TOKEN. It relies
       # on npm's OIDC trusted-publisher flow — the `id-token: write` permission
@@ -587,21 +618,73 @@ jobs:
               exit 1
             fi
             echo "==> Publishing $TARBALL $COMMON_FLAGS"
-            npm publish "$TARBALL" $COMMON_FLAGS
+            if ! npm publish "$TARBALL" $COMMON_FLAGS; then
+              # npm's provenance flow makes a second, separate authenticated
+              # call after the tarball PUT to attach the attestation. That
+              # second call has been observed to fail with a transient
+              # "401 Failed to generate Web Auth URLs" even though the
+              # publish itself already landed on the registry. Don't fail
+              # the whole (lockstep, multi-package) run for a flake that
+              # already succeeded — but only trust this for real publishes;
+              # a dry run has nothing on the registry to check against.
+              if [ "${{ github.event.inputs.dry_run }}" = "true" ]; then
+                echo "::error::npm publish failed for $NPM_NAME@$VERSION (dry run)" >&2
+                exit 1
+              fi
+              PUBLISHED_VERSION=$(npm view "$NPM_NAME@$VERSION" version 2>/dev/null || true)
+              if [ "$PUBLISHED_VERSION" = "$VERSION" ]; then
+                echo "::warning::npm publish exited non-zero for $NPM_NAME@$VERSION but the registry already has that version (likely a post-publish attestation flake) - continuing"
+              else
+                echo "::error::npm publish failed for $NPM_NAME@$VERSION and the registry does not have it" >&2
+                exit 1
+              fi
+            fi
           done
 
-      # Annotated tags (-a) so `git push --follow-tags` actually pushes them;
-      # lightweight tags are skipped by --follow-tags.
-      - name: Tag + push
+      # This step runs *after* the packages are already on npm, so failing
+      # here is the worst outcome available: the registry moves ahead of git
+      # and the next run bumps from a version main has never seen. A plain
+      # `git push` is rejected by anything that landed on the branch mid-run —
+      # a merged PR, or another publish run's release commit (2026-08-24).
+      #
+      # So don't fail: rebuild the release commit on the current tip and retry.
+      # This run's version strings are what was actually published, so they win;
+      # every other file comes from the newer branch tip.
+      - name: Push release commit
+        if: ${{ github.event.inputs.dry_run != 'true' && (github.event.inputs.version != 'none' || github.event.inputs.custom_version != '') }}
+        env:
+          BRANCH: ${{ github.ref_name }}
+        run: scripts/push-release-commit.sh
+
+      # Tags are created only once the release commit is on the branch, so a
+      # rejected push can never strand them on an unreachable commit — which is
+      # exactly what run 32713237250 did with fifteen 4.1.49 tags. Annotated
+      # (-a) because the create-release job checks the canonical tag out.
+      - name: Tag + push tags
         if: ${{ github.event.inputs.dry_run != 'true' && (github.event.inputs.version != 'none' || github.event.inputs.custom_version != '') }}
         run: |
+          set -euo pipefail
+          CREATED=""
           for entry in ${{ steps.bump.outputs.versions }}; do
             pkg="${entry%%:*}"
             version="${entry##*:}"
+            TAG="$pkg-v$version"
             NPM_NAME=$(node -p "require('./packages/$pkg/package.json').name")
-            git tag -a "$pkg-v$version" -m "$NPM_NAME@$version"
+            if git rev-parse -q --verify "refs/tags/$TAG" >/dev/null; then
+              # Left behind by an earlier run that published this version but
+              # failed before its commit landed. Repointing a published tag is
+              # not this workflow's call, so leave it and say so.
+              echo "::warning::tag $TAG already exists - leaving it as is"
+              continue
+            fi
+            git tag -a "$TAG" -m "$NPM_NAME@$version"
+            CREATED="$CREATED refs/tags/$TAG"
           done
-          git push origin HEAD --follow-tags
+          if [ -n "$CREATED" ]; then
+            set -f
+            git push origin $CREATED
+            set +f
+          fi
 
       - name: Summary
         run: |
@@ -699,12 +782,18 @@ jobs:
           // packages" step. Sorting release-notes entries by this order
           // ensures missing packages don't all collapse to indexOf=-1.
           const packageOrder = [
+            'events',
             'persona-kit',
             'runtime',
+            'compose',
+            'delivery',
             'workload-router',
             'deploy',
+            'review-kit',
+            'turn-kit',
             'mcp-workforce',
             'daytona-runner',
+            'local-surface',
             'cli',
             'agentworkforce',
           ];

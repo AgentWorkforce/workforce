@@ -1,4 +1,5 @@
-import type { PersonaSpec } from './types.js';
+import type { AgentSpec } from './types.js';
+import { KNOWN_TRIGGER_CATALOG } from '@relayfile/adapter-core/triggers';
 
 /**
  * Known event names per Relayfile provider, used by the deploy CLI to lint
@@ -6,30 +7,32 @@ import type { PersonaSpec } from './types.js';
  * authoritative source of truth — unknown names here produce a warning,
  * not a failure, so adding a new event upstream doesn't gate workforce
  * releases.
- *
- * This file ships intentionally sparse in v1; the full per-provider list
- * lands when the Relayfile adapter packages publish their normalized
- * event catalogs.
  */
-export const KNOWN_TRIGGERS = {
-  github: [
-    'pull_request.opened',
-    'pull_request.synchronize',
-    'pull_request.closed',
-    'pull_request_review_comment.created',
-    'issue_comment.created',
-    'issues.opened',
-    'check_run.completed',
-    'workflow_run.completed'
-  ],
-  linear: ['issue.created', 'issue.updated', 'comment.created'],
-  slack: ['app_mention', 'message.channels'],
-  notion: ['page.updated', 'page.created'],
-  jira: ['issue.created', 'issue.updated', 'comment.created']
-} as const satisfies Record<string, readonly string[]>;
+export const KNOWN_TRIGGER_PROVIDER_ALIASES = {
+  'google-mail': 'gmail'
+} as const satisfies Record<string, keyof typeof KNOWN_TRIGGER_CATALOG>;
 
-export type KnownProviderName = keyof typeof KNOWN_TRIGGERS;
-export type KnownTriggerName<P extends KnownProviderName> = (typeof KNOWN_TRIGGERS)[P][number];
+const KNOWN_TRIGGER_ALIAS_CATALOG = Object.fromEntries(
+  Object.entries(KNOWN_TRIGGER_PROVIDER_ALIASES).map(([alias, canonical]) => [
+    alias,
+    KNOWN_TRIGGER_CATALOG[canonical]
+  ])
+) as {
+  [Provider in keyof typeof KNOWN_TRIGGER_PROVIDER_ALIASES]:
+    (typeof KNOWN_TRIGGER_CATALOG)[(typeof KNOWN_TRIGGER_PROVIDER_ALIASES)[Provider]];
+};
+
+export const KNOWN_TRIGGERS = {
+  ...KNOWN_TRIGGER_CATALOG,
+  ...KNOWN_TRIGGER_ALIAS_CATALOG
+};
+
+export {
+  ADAPTERS_WITHOUT_KNOWN_TRIGGERS,
+  KNOWN_TRIGGER_CATALOG,
+  type KnownProviderName,
+  type KnownTriggerName
+} from '@relayfile/adapter-core/triggers';
 
 export type TriggerLintLevel = 'warning';
 
@@ -37,7 +40,11 @@ export type TriggerLintLevel = 'warning';
  * Machine-readable issue category, so callers can branch on
  * `issue.code` without parsing the human-readable `message`.
  */
-export type TriggerLintCode = 'unknown_provider' | 'unknown_trigger';
+export type TriggerLintCode =
+  | 'unknown_provider'
+  | 'unknown_trigger'
+  | 'watch_path_not_absolute'
+  | 'watch_empty_events';
 
 export interface TriggerLintIssue {
   level: TriggerLintLevel;
@@ -46,58 +53,87 @@ export interface TriggerLintIssue {
   provider: string;
   /** The trigger name that was flagged. */
   trigger: string;
-  /** Field-pointed location, e.g. `integrations.github.triggers[2].on`. */
+  /** Field-pointed location, e.g. `triggers.github[2].on`. */
   path: string;
   message: string;
 }
 
 /**
- * Walk a persona's integration triggers and flag any that don't appear in
+ * Walk an agent's triggers and flag any that don't appear in
  * {@link KNOWN_TRIGGERS}. Always returns; never throws. Empty array when
- * the persona has no integrations or every trigger is recognized.
+ * the agent has no triggers or every trigger is recognized.
  *
  * The deploy CLI surfaces these as yellow warnings before deploy and
  * continues regardless. The runtime applies the trigger regardless of
  * what this registry knows.
  */
-export function lintTriggers(persona: PersonaSpec): TriggerLintIssue[] {
+export function lintTriggers(agent: AgentSpec): TriggerLintIssue[] {
   const issues: TriggerLintIssue[] = [];
-  const integrations = persona.integrations;
-  if (!integrations) return issues;
+  const triggers = agent.triggers;
 
-  for (const [provider, config] of Object.entries(integrations)) {
-    const triggers = config.triggers;
-    if (!triggers) continue;
-    const known = (KNOWN_TRIGGERS as Record<string, readonly string[] | undefined>)[provider];
+  if (triggers) {
+    for (const [provider, providerTriggers] of Object.entries(triggers)) {
+      if (!providerTriggers) continue;
+      const known = knownTriggersForProvider(provider);
 
-    if (!known) {
-      // Unknown provider: warn once on the integration as a whole so we
-      // don't spam per-trigger warnings for a provider workforce hasn't
-      // catalogued yet.
-      issues.push({
-        level: 'warning',
-        code: 'unknown_provider',
-        provider,
-        trigger: '*',
-        path: `integrations.${provider}`,
-        message: `provider "${provider}" is not in the known-trigger registry; trigger names will not be linted`
-      });
-      continue;
-    }
-
-    for (const [idx, trigger] of triggers.entries()) {
-      if (!known.includes(trigger.on)) {
+      if (!known) {
+        // Unknown provider: warn once on the provider as a whole so we don't
+        // spam per-trigger warnings for a provider workforce hasn't
+        // catalogued yet.
         issues.push({
           level: 'warning',
-          code: 'unknown_trigger',
+          code: 'unknown_provider',
           provider,
-          trigger: trigger.on,
-          path: `integrations.${provider}.triggers[${idx}].on`,
-          message: `trigger "${trigger.on}" is not in the known-trigger registry for ${provider} (known: ${known.join(', ')})`
+          trigger: '*',
+          path: `triggers.${provider}`,
+          message: `provider "${provider}" is not in the known-trigger registry; trigger names will not be linted`
+        });
+        continue;
+      }
+
+      for (const [idx, trigger] of providerTriggers.entries()) {
+        if (!known.includes(trigger.on)) {
+          issues.push({
+            level: 'warning',
+            code: 'unknown_trigger',
+            provider,
+            trigger: trigger.on,
+            path: `triggers.${provider}[${idx}].on`,
+            message: `trigger "${trigger.on}" is not in the known-trigger registry for ${provider} (known: ${known.join(', ')})`
+          });
+        }
+      }
+    }
+  }
+
+  for (const [idx, rule] of (agent.watch ?? []).entries()) {
+    if (!rule.events || rule.events.length === 0) {
+      issues.push({
+        level: 'warning',
+        code: 'watch_empty_events',
+        provider: 'relayfile',
+        trigger: '*',
+        path: `watch[${idx}].events`,
+        message: 'watch rule must declare at least one relayfile event'
+      });
+    }
+    for (const [pathIdx, path] of (rule.paths ?? []).entries()) {
+      if (!path.startsWith('/')) {
+        issues.push({
+          level: 'warning',
+          code: 'watch_path_not_absolute',
+          provider: 'relayfile',
+          trigger: '*',
+          path: `watch[${idx}].paths[${pathIdx}]`,
+          message: `watch path "${path}" must start with /`
         });
       }
     }
   }
 
   return issues;
+}
+
+function knownTriggersForProvider(provider: string): readonly string[] | undefined {
+  return (KNOWN_TRIGGERS as Record<string, readonly string[] | undefined>)[provider];
 }
