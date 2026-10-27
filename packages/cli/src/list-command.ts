@@ -591,12 +591,29 @@ function readFiniteNumber(record: Record<string, unknown>, key: string): number 
 
 const DEPLOYMENT_ERROR_SNIPPET_LENGTH = 240;
 
+// cloud's deployment-run-failure-class.ts marks an unrecognized long failure
+// as "<head>...[N chars omitted]...<tail>" (head = boilerplate mount/smithy
+// bootstrap that runs before every persona invocation, tail = whatever
+// actually happened). Truncating from position 0 below would always show the
+// boilerplate and never reach the tail where the real cause lives, so when
+// this marker is present, snippet from just after it instead.
+const OMITTED_MARKER_PATTERN = /\.\.\.\[\d+ chars omitted\]\.\.\./;
+
 function formatDeploymentErrorSnippet(error: string): string {
   const normalized = error
     .replace(/[\u0000-\u001f\u007f]+/g, ' ')
     .replace(/\s+/g, ' ')
     .trim();
   if (normalized.length <= DEPLOYMENT_ERROR_SNIPPET_LENGTH) return normalized;
+  const marker = normalized.match(OMITTED_MARKER_PATTERN);
+  if (marker && marker.index !== undefined) {
+    const afterMarker = normalized.slice(marker.index + marker[0].length).trim();
+    if (afterMarker.length > 0) {
+      return afterMarker.length <= DEPLOYMENT_ERROR_SNIPPET_LENGTH
+        ? afterMarker
+        : `${afterMarker.slice(0, DEPLOYMENT_ERROR_SNIPPET_LENGTH - 3)}...`;
+    }
+  }
   return `${normalized.slice(0, DEPLOYMENT_ERROR_SNIPPET_LENGTH - 3)}...`;
 }
 

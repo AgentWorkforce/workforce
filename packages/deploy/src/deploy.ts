@@ -8,7 +8,10 @@ import type {
   PersonaIntegrationTrigger,
   PersonaSpec
 } from '@agentworkforce/persona-kit';
-import { KNOWN_TRIGGER_PROVIDER_ALIASES as TRIGGER_PROVIDER_ALIASES } from '@agentworkforce/persona-kit';
+import {
+  isImplicitIntegrationSource,
+  KNOWN_TRIGGER_PROVIDER_ALIASES as TRIGGER_PROVIDER_ALIASES
+} from '@agentworkforce/persona-kit';
 import { bundleStager } from './bundle.js';
 import { resolveCloudUrl } from './cloud-url.js';
 import {
@@ -255,6 +258,9 @@ export async function deploy(opts: DeployOptions, resolvers: DeployResolvers = {
     noConnect: opts.noConnect === true,
     ...(opts.noPrompt ? { noPrompt: true } : {}),
     ...(opts.reconnectProviders ? { reconnectProviders: opts.reconnectProviders } : {}),
+    ...(opts.supabaseMcpProjectRef
+      ? { supabaseMcpProjectRef: opts.supabaseMcpProjectRef }
+      : {}),
     io,
     integrations: resolvers.integrations ?? defaultIntegrationResolver({
       mode,
@@ -607,6 +613,9 @@ function defaultIntegrationResolver(args: {
       if (await relayfile.isConnected(input).catch(() => false)) return true;
       return env.isConnected(input);
     },
+    async listConnectionSources(input) {
+      return await relayfile.listConnectionSources?.(input) ?? [];
+    },
     async connect(input) {
       return relayfile.connect(input);
     }
@@ -740,11 +749,7 @@ function shouldRequestRuntimeCredentials(args: {
 }
 
 function integrationAllowsWorkspaceFallback(value: unknown): boolean {
-  return Boolean(
-    value &&
-    typeof value === 'object' &&
-    (value as { __agentworkforceImplicitSource?: unknown }).__agentworkforceImplicitSource === true
-  );
+  return isImplicitIntegrationSource(value);
 }
 
 function hasByoSandboxEnv(): boolean {

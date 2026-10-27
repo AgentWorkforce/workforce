@@ -1,6 +1,6 @@
 {
   "name": "@agentworkforce/local-surface",
-  "version": "4.1.46",
+  "version": "4.2.1",
   "private": false,
   "type": "module",
   "main": "dist/index.js",
@@ -32,7 +32,7 @@
     "lint": "tsc -p tsconfig.json --noEmit"
   },
   "dependencies": {
-    "@agent-relay/fleet": "^11.5.0",
+    "@agent-relay/fleet": "^12.2.2",
     "@agentworkforce/deploy": "workspace:*",
     "@agentworkforce/persona-kit": "workspace:*",
     "@agentworkforce/persona-registry": "workspace:*",

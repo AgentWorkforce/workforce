@@ -17,6 +17,7 @@ import type {
 import { attachTrajectoryRecorder, createTrajectoryRecorder } from './trajectory.js';
 import { buildRelayContext } from './relay.js';
 import { NO_REPLY_MARKER, sanitizeNoReplyOutput } from './no-reply.js';
+import { classifyHarnessProviderFailure, HarnessProviderError } from './harness-provider-error.js';
 
 type AgentInputValue = string | number | boolean | null | undefined;
 
@@ -169,6 +170,16 @@ export function buildCtx(options: CtxBuildOptions): WorkforceCtx {
     harness: {
       async run(args) {
         const result = await options.harnessRunner(args);
+        const providerFailure = classifyHarnessProviderFailure(result, options.persona.harness);
+        if (providerFailure) {
+          log('error', 'harness.provider_error', {
+            providerFailure,
+            exitCode: result.exitCode,
+            durationMs: result.durationMs,
+            harness: options.persona.harness
+          });
+          throw new HarnessProviderError(providerFailure, result);
+        }
         const sanitizedOutput = sanitizeNoReplyOutput(result.output);
         const sanitizedStderr = result.stderr === undefined
           ? undefined

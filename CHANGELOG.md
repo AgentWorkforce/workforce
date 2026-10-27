@@ -8,6 +8,57 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [4.2.0] - 2026-10-02
+
+### Changed
+
+- `@agentworkforce/mcp-workforce` now uses zod 4 with
+  `@modelcontextprotocol/sdk` `^1.31.0`. The floor is `zod` `^4.4.3`, so
+  consumers can pin 4.4.3 (zod 4.5+ grows `zod/v4/core` substantially).
+- `@agentworkforce/deploy`, `@agentworkforce/cli`, `@agentworkforce/runtime`
+  and `@agentworkforce/local-surface` moved to the zod-4 `@agent-relay/*`
+  lines (`@agent-relay/cloud` and `@agent-relay/fleet` `^12.2.2`,
+  `@agent-relay/events` `^7.1.1`), so installs no longer pull zod 3 through them.
+- `@agentworkforce/local-surface` `spawn:persona` now requires
+  `@agent-relay/fleet` 12 or newer (README and runtime guard updated).
+- `@agentworkforce/runtime` accepts `agent-trajectories` `^0.5.3 || ^0.6.0 || ^0.7.0`,
+  so consumers can dedupe onto the zod-4 trajectories release once it ships.
+
+## [4.1.60] - 2026-09-30
+
+### Fixed
+
+- `deploy`, `deployments list`, `destroy`, `runs`, `trigger` and `local-surface`
+  now address cloud APIs with the cloud workspace id instead of the relaycast
+  workspace id, which cloud rejected with `403 Forbidden` after
+  `agentworkforce login`. When the cloud returns no cloud workspace id for a
+  workspace, the CLI now stops with an actionable error instead of silently
+  falling back to the relaycast id.
+- `WORKFORCE_WORKSPACE_TOKEN` set to a relaycast workspace key (`rk_…` from
+  `workspaces.json`) is rejected up front with guidance instead of failing
+  later with `401`.
+
+### Added
+
+- `agentworkforce login` prints the cloud workspace id, and warns when the
+  chosen workspace has none.
+
+## [4.1.51] - 2026-08-31
+
+### Added
+
+- `agentworkforce --version` tells you when a newer release is published and
+  prints the command that installs it.
+
+### Changed
+
+- `@agentworkforce/deploy` and `@agentworkforce/daytona-runner` migrated off the
+  deprecated `@daytonaio/sdk` to its replacement `@daytona/sdk` (same API, no
+  breaking changes upstream). Installing workforce no longer prints a
+  deprecation warning for it.
+- `@agentworkforce/deploy` tracks `@agent-relay/cloud` ^10.1.0, matching
+  `@agentworkforce/cli`, so an install resolves one copy instead of two.
+
 ## [4.1.39] - 2026-08-11
 
 ### Added

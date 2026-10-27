@@ -88,6 +88,31 @@ test('preflight evaluates a single-file Agent source exactly once', async () => 
   }
 });
 
+test('compiled JSON preserves implicit source as omission without leaking parser metadata', async () => {
+  const dir = await mkdtemp(path.join(tmpdir(), 'compiled-agent-source-roundtrip-'));
+  try {
+    const implicitPath = path.join(dir, 'implicit-agent.ts');
+    const explicitPath = path.join(dir, 'explicit-agent.ts');
+    await writeFile(implicitPath, PRESET);
+    await writeFile(
+      explicitPath,
+      PRESET.replace(
+        'integrations: { github: {} },',
+        "integrations: { github: { source: { kind: 'deployer_user' } } },"
+      )
+    );
+
+    const implicit = projectCompiledAgentForPersistence(await compileAgentSource(implicitPath));
+    const explicit = projectCompiledAgentForPersistence(await compileAgentSource(explicitPath));
+
+    assert.equal(implicit.persona.integrations?.github.source, undefined);
+    assert.equal(JSON.stringify(implicit).includes('__agentworkforceImplicitSource'), false);
+    assert.deepEqual(explicit.persona.integrations?.github.source, { kind: 'deployer_user' });
+  } finally {
+    await rm(dir, { recursive: true, force: true });
+  }
+});
+
 test('single-file detection routes invalid persona fields to precise validation', async () => {
   const dir = await mkdtemp(path.join(tmpdir(), 'compiled-agent-invalid-'));
   try {

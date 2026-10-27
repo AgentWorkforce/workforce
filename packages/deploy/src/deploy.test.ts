@@ -744,6 +744,49 @@ test('deploy connects each missing persona integration before launch', async () 
   }
 });
 
+test('deploy forwards the Supabase project ref into the OAuth connect flow', async () => {
+  const { personaPath, cleanup } = await withTempPersona(
+    basePersonaJson({ integrations: { 'supabase-mcp': {} } })
+  );
+  const io = createBufferedIO();
+  let connectedProjectRef: string | undefined;
+  const workspaceAuth: WorkspaceAuth = {
+    async resolveWorkspace() {
+      return { workspace: 'ws-test', token: 'tok' };
+    }
+  };
+  const integrations: IntegrationConnectResolver = {
+    async isConnected() {
+      return false;
+    },
+    async connect({ supabaseMcpProjectRef }) {
+      connectedProjectRef = supabaseMcpProjectRef;
+      return { connectionId: 'conn-supabase' };
+    }
+  };
+
+  try {
+    await deploy(
+      {
+        personaPath,
+        mode: 'dev',
+        io,
+        supabaseMcpProjectRef: 'BVZZCAFZOYSEZUMRDVIF'
+      },
+      {
+        workspaceAuth,
+        integrations,
+        bundle: successfulBundleStager(),
+        modes: { dev: successfulDevLauncher() }
+      }
+    );
+
+    assert.equal(connectedProjectRef, 'bvzzcafzoysezumrdvif');
+  } finally {
+    await cleanup();
+  }
+});
+
 test('cloud deploy retries transient catalog and status fetch failures before launch', async () => {
   const { personaPath, cleanup } = await withTempPersona(
     basePersonaJson({ integrations: { github: {} } }),

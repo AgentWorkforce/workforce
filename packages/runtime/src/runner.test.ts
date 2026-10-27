@@ -155,6 +155,37 @@ test('startRunner logs and continues when the handler throws', async () => {
   assert.equal(errors.length, 2);
 });
 
+test('provider failures reach runner error reporting without changing the agent handler', async () => {
+  const logs: Array<{ level: string; message: string; attrs?: Record<string, unknown> }> = [];
+  let posted = 0;
+  let calls = 0;
+  await startRunner({
+    persona,
+    agent: runtimeAgent,
+    deployment: runtimeDeployment,
+    workspaceId: 'ws-test',
+    handler: handler(async (ctx) => {
+      const result = await ctx.harness.run({ prompt: 'Perform the task' });
+      if (result.exitCode !== 0) throw new Error(`The harness exited with code ${result.exitCode}`);
+      posted++;
+    }),
+    harnessRunner: async () => {
+      calls++;
+      return { output: "You've hit your limit · resets 3:40pm (UTC)", stderr: 'secret-fixture', exitCode: 1, durationMs: 1900 };
+    },
+    subsystems: { sandbox: stubSandbox, log: (level, message, attrs) => logs.push({ level, message, attrs }) },
+    envelopes: streamOf([{ id: 'quota-event', workspace: 'ws-test', type: 'cron.tick', occurredAt: 'x', name: 'tick' }])
+  });
+  const error = logs.find((entry) => entry.message === 'runner.handler.error');
+  assert.match(String(error?.attrs?.error), /Claude account.*usage limit/);
+  assert.match(String(error?.attrs?.error), /3:40pm \(UTC\)/);
+  assert.equal((error?.attrs?.providerFailure as { kind: string }).kind, 'usage_limit');
+  assert.doesNotMatch(JSON.stringify(error), /secret-fixture|exited with code 1/);
+  assert.equal(logs.some((entry) => entry.message === 'runner.handler.ok'), false);
+  assert.equal(calls, 1);
+  assert.equal(posted, 0, 'failure output cannot reach the task success path');
+});
+
 test('startRunner skips envelopes that the shim can not translate', async () => {
   const received: WorkforceEvent[] = [];
   const logs: Array<{ level: string; message: string }> = [];

@@ -57,3 +57,41 @@ test('createWorkforceMcpServer registers the documented tool set', () => {
     'workflow.status'
   ]);
 });
+
+test('tool input schemas are advertised as JSON Schema and enforced over the MCP protocol', async () => {
+  const { Client } = await import('@modelcontextprotocol/sdk/client/index.js');
+  const { InMemoryTransport } = await import('@modelcontextprotocol/sdk/inMemory.js');
+  const config = loadConfig({
+    WORKFORCE_WORKSPACE_ID: 'ws-demo',
+    WORKFORCE_RUNTIME_TOKEN: 'tok',
+    SUPERMEMORY_API_KEY: 'sm',
+    RELAYFILE_MOUNT_ROOT: '/tmp/wf-mcp-server-test'
+  });
+  const server = createWorkforceMcpServer(config);
+  const client = new Client({ name: 'mcp-workforce-test', version: '0.0.0' });
+  const [clientTransport, serverTransport] = InMemoryTransport.createLinkedPair();
+  await Promise.all([server.connect(serverTransport), client.connect(clientTransport)]);
+  try {
+    const { tools } = await client.listTools();
+    const run = tools.find((tool) => tool.name === 'workflow.run');
+    assert.ok(run, 'workflow.run should be listed');
+    assert.equal(run.inputSchema.type, 'object');
+    assert.deepEqual(run.inputSchema.required, ['name']);
+    const properties = run.inputSchema.properties as Record<string, Record<string, unknown>>;
+    assert.equal(properties.name?.type, 'string');
+    assert.equal(properties.name?.minLength, 1);
+    assert.equal(properties.args?.type, 'object');
+
+    const review = tools.find((tool) => tool.name === 'integration.github.postReview');
+    const reviewProps = review?.inputSchema.properties as Record<string, Record<string, unknown>>;
+    const event = (reviewProps.review?.properties as Record<string, Record<string, unknown>>)?.event;
+    assert.deepEqual(event?.enum, ['COMMENT', 'APPROVE', 'REQUEST_CHANGES']);
+
+    // Invalid input is rejected by the zod schema before the handler runs.
+    const invalid = await client.callTool({ name: 'workflow.status', arguments: { runId: '' } });
+    assert.equal(invalid.isError, true);
+  } finally {
+    await client.close();
+    await server.close();
+  }
+});

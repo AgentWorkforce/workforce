@@ -167,6 +167,99 @@ test('runLocalSurface resolves the deployed persona UUID, reuses a persisted enr
   }
 });
 
+test('runLocalSurface uses the cloud workspace id for cloud APIs and the relaycast id for fleet enrollment', async () => {
+  const enrollmentLookups: unknown[] = [];
+  const deploymentWorkspaces: string[] = [];
+  let capturedLocalSurfaceBody: unknown;
+  const { writes, restore } = withMockedDeps({
+    resolveWorkspaceToken: (async () => ({
+      token: 'tok_workspace',
+      workspace: '0b6c2d4e-1f3a-4b5c-8d7e-9f0a1b2c3d4e',
+      relaycastWorkspaceId: 'rw_1234abcd'
+    })) as never,
+    fetchDeployments: (async (args: { workspace: string }) => {
+      deploymentWorkspaces.push(args.workspace);
+      return [deployedAgent()];
+    }) as never,
+    resolveActiveFleetNodeEnrollment: ((input: unknown) => {
+      enrollmentLookups.push(input);
+      return {
+        nodeId: 'node_1',
+        nodeName: 'my-laptop',
+        nodeToken: 'nt_live_abc',
+        relayWorkspaceId: 'rw_1234abcd',
+        relaycastUrl: 'https://relaycast.example.com',
+        websocketUrl: 'wss://relaycast.example.com/v1/node/ws',
+        enrolledAt: '2026-07-01T00:00:00.000Z'
+      };
+    }) as never,
+    fetch: (async (_url: string, init: { body?: string }) => {
+      capturedLocalSurfaceBody = JSON.parse(init.body ?? '{}');
+      return fakeResponse({ ok: true, json: { channel: 'local-surface-demo-persona' } });
+    }) as never
+  });
+
+  try {
+    process.exitCode = undefined;
+    await runLocalSurface(['/personas/demo.json']);
+    assert.equal(process.exitCode, 0);
+    assert.deepEqual(deploymentWorkspaces, ['0b6c2d4e-1f3a-4b5c-8d7e-9f0a1b2c3d4e']);
+    assert.deepEqual(enrollmentLookups, [{ workspaceId: 'rw_1234abcd' }]);
+    assert.deepEqual(capturedLocalSurfaceBody, {
+      workspaceId: '0b6c2d4e-1f3a-4b5c-8d7e-9f0a1b2c3d4e',
+      personaId: 'persona-uuid-1'
+    });
+    assert.ok(writes[0]!.contents.includes('"0b6c2d4e-1f3a-4b5c-8d7e-9f0a1b2c3d4e"'));
+  } finally {
+    restore();
+    process.exitCode = undefined;
+  }
+});
+
+test('runLocalSurface resolves the relaycast id for env-override auth before the fleet enrollment lookup', async () => {
+  const enrollmentLookups: unknown[] = [];
+  const requests: Array<{ url: string; method?: string }> = [];
+  const { restore } = withMockedDeps({
+    // WORKFORCE_WORKSPACE_ID + WORKFORCE_WORKSPACE_TOKEN: no relaycast id.
+    resolveWorkspaceToken: (async () => ({
+      token: 'tok_workspace',
+      workspace: '0b6c2d4e-1f3a-4b5c-8d7e-9f0a1b2c3d4e',
+      authSource: 'env'
+    })) as never,
+    resolveActiveFleetNodeEnrollment: ((input: unknown) => {
+      enrollmentLookups.push(input);
+      return {
+        nodeId: 'node_1',
+        nodeName: 'my-laptop',
+        nodeToken: 'nt_live_abc',
+        relayWorkspaceId: 'rw_1234abcd',
+        relaycastUrl: 'https://relaycast.example.com',
+        websocketUrl: 'wss://relaycast.example.com/v1/node/ws',
+        enrolledAt: '2026-07-01T00:00:00.000Z'
+      };
+    }) as never,
+    fetch: (async (url: string, init: { method?: string }) => {
+      requests.push({ url, method: init.method });
+      if (url.endsWith('/resolve')) {
+        return fakeResponse({ ok: true, json: { relaycastWorkspaceId: 'rw_1234abcd' } });
+      }
+      return fakeResponse({ ok: true, json: { channel: 'local-surface-demo-persona' } });
+    }) as never
+  });
+
+  try {
+    process.exitCode = undefined;
+    await runLocalSurface(['/personas/demo.json']);
+    assert.equal(process.exitCode, 0);
+    assert.ok(requests.some((r) =>
+      r.url.endsWith('/api/v1/workspaces/0b6c2d4e-1f3a-4b5c-8d7e-9f0a1b2c3d4e/resolve') && r.method === 'GET'));
+    assert.deepEqual(enrollmentLookups, [{ workspaceId: 'rw_1234abcd' }]);
+  } finally {
+    restore();
+    process.exitCode = undefined;
+  }
+});
+
 test('runLocalSurface fails loud (does not proceed) when the persona has no active cloud deployment', async () => {
   const { errors, logs, restore } = withMockedDeps({
     fetchDeployments: (async () => []) as never
