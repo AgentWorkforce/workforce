@@ -29,7 +29,7 @@ import { listBuiltInPersonas, personaCatalog } from '@agentworkforce/workload-ro
 /**
  * User-defined persona override. Local files are partial overlays — only the
  * fields you specify replace the inherited base; everything else cascades down
- * through cwd → configured persona dirs → library.
+ * through cwd → repository → configured persona dirs → library.
  *
  * `extends` names the base explicitly by id or intent. If omitted and the file
  * has no `intent`, the loader implicitly inherits from the same-id persona
@@ -236,15 +236,20 @@ export function defaultCwdAgentDir(cwd: string): string {
  * A repo's personas live at its root, but commands are typically run from a
  * package or source subdirectory. Without this the cascade looks only at the
  * exact cwd, so the same repo yields different personas depending on which
- * directory you happen to be standing in. The walk stops at the home directory
- * — `~/.agentworkforce/workforce/personas/` is already the `user` layer.
+ * directory you happen to be standing in.
+ *
+ * The walk stops at `boundary` (the home directory by default) and never
+ * treats that directory as a repository. `~/.agentworkforce/workforce/personas/`
+ * is already the `user` layer, and a dotfiles checkout at `$HOME` must not
+ * re-label those personas as a higher-priority `repo` layer. Ancestors above
+ * the boundary are ignored for the same reason.
  */
-export function findRepoRoot(cwd: string): string | undefined {
-  const home = resolvePath(homedir());
+export function findRepoRoot(cwd: string, boundary: string = homedir()): string | undefined {
+  const stop = resolvePath(boundary);
   let dir = resolvePath(cwd);
   while (true) {
+    if (dir === stop) return undefined;
     if (existsSync(join(dir, '.git'))) return dir;
-    if (dir === home) return undefined;
     const parent = dirname(dir);
     if (parent === dir) return undefined;
     dir = parent;
@@ -415,19 +420,25 @@ function sourceForPersonaDir(
  * are standing in stays the most specific, and the repo answers for everywhere
  * else inside it.
  */
-function repoSourceDirectories(cwd: string): PersonaSourceDirectory[] {
+function repoSourceDirectories(
+  cwd: string,
+  configuredDirs: readonly string[]
+): PersonaSourceDirectory[] {
   const root = findRepoRoot(cwd);
   if (!root || resolvePath(root) === resolvePath(cwd)) return [];
+  const configured = new Set(configuredDirs.map((dir) => resolvePath(dir)));
   // Unlike the cwd layers — which are always listed because they are where
   // `create` writes — a repo layer is only worth naming when it exists. Most
   // repositories keep no personas, and listing a path nobody created is noise.
+  // A directory already present in `personaDirs` keeps that explicit position.
+  // Inserting it again here would outrank every configured source.
   const dirs: PersonaSourceDirectory[] = [];
   const personas = defaultCwdPersonaDir(root);
-  if (existsSync(personas)) {
+  if (existsSync(personas) && !configured.has(resolvePath(personas))) {
     dirs.push({ source: 'repo', dir: personas, configurable: false });
   }
   const agents = defaultCwdAgentDir(root);
-  if (existsSync(agents)) {
+  if (existsSync(agents) && !configured.has(resolvePath(agents))) {
     dirs.push({ source: 'repo:agents', dir: agents, configurable: false, nested: true });
   }
   return dirs;
@@ -452,7 +463,7 @@ export function buildPersonaSourceDirectories(
       configurable: false,
       nested: true
     },
-    ...repoSourceDirectories(cwd),
+    ...repoSourceDirectories(cwd, config.personaDirs),
     ...config.personaDirs.flatMap((dir, idx) => {
       const entry: PersonaSourceDirectory = {
         source: sourceForPersonaDir(dir, idx, config.userPersonaDir),

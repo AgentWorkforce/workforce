@@ -235,7 +235,8 @@ Commands:
                                             success, kept on failure for
                                             inspection.
   list [flags]        List available personas from the cascade (cwd →
-                      configured persona dirs → library). Flags:
+                      repo, when present → configured persona dirs →
+                      library). Flags:
                         --deployments                 list deployed cloud agents
                         --json                        emit JSON instead of a table
                         --filter-harness <harness>    only show this harness
@@ -244,8 +245,8 @@ Commands:
                                                       (free-form; common built-in tags: ${PERSONA_TAGS.join(' | ')})
                         --no-display-description      hide the DESCRIPTION column
   show <persona>      Print the fully-resolved spec for a single persona,
-                      including which cascade layer defined it (cwd, user,
-                      dir:<n>, library). Flags:
+                      including which cascade layer defined it (cwd, repo,
+                      user, dir:<n>, library). Flags:
                         --json        emit the resolved PersonaSpec as JSON
   persona compile <path/to/persona.ts>
                       Compile a typed persona.ts authoring file to sibling
@@ -264,7 +265,8 @@ Commands:
                       List persona source directories in cascade order.
   sources add <dir> [--position <n>]
                       Add a configurable persona source directory. Position is
-                      1-based among configurable dirs after the fixed cwd dir.
+                      1-based among configurable dirs after the fixed cwd and
+                      repository layers.
   sources remove <dir|n>
                       Remove a configurable persona source directory by path or
                       1-based configurable position.
