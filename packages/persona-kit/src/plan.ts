@@ -167,6 +167,10 @@ function resolveAiHistConfig(env: NodeJS.ProcessEnv, dbPathOverride?: string): A
  * name (what {@link buildPersonaSpawnPlan} injects into the harness).
  * Precedence matches the spawn plan: ambient process env, then those input
  * bindings, then `envOverrides`, then persona `env`.
+ *
+ * An input name is not written when it is another input's `env` name.
+ * `FIRST.env = SECOND` and an input named `SECOND` would otherwise replace
+ * the harness binding, so `$SECOND` would mount the wrong repo.
  */
 export function buildMountResolutionEnv(options: {
   processEnv?: NodeJS.ProcessEnv;
@@ -182,14 +186,20 @@ export function buildMountResolutionEnv(options: {
     }
   }
   const inputValues = options.inputValues ?? {};
-  if (options.inputs) {
-    for (const [name, spec] of Object.entries(options.inputs)) {
-      const value = inputValues[name];
-      if (value === undefined) continue;
-      const envName = spec.env ?? name;
-      env[envName] = value;
-      env[name] = value;
-    }
+  const inputs = options.inputs ?? {};
+  const envNames = new Set(
+    Object.entries(inputs).map(([name, spec]) => spec.env ?? name)
+  );
+  for (const [name, spec] of Object.entries(inputs)) {
+    const value = inputValues[name];
+    if (value === undefined) continue;
+    env[spec.env ?? name] = value;
+  }
+  for (const [name, spec] of Object.entries(inputs)) {
+    const value = inputValues[name];
+    if (value === undefined) continue;
+    const envName = spec.env ?? name;
+    if (name !== envName && !envNames.has(name)) env[name] = value;
   }
   if (options.envOverrides) Object.assign(env, options.envOverrides);
   if (options.personaEnv) Object.assign(env, options.personaEnv);

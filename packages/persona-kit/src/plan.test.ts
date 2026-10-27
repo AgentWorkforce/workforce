@@ -234,14 +234,14 @@ test('buildPersonaSpawnPlan resolves mount.roots via inputs + processEnv', () =>
     assert.deepEqual(plan.mount?.roots, [
       {
         alias: 'api',
-        path: apiDir,
+        path: realpathSync(apiDir),
         readonly: true,
         ignoredPatterns: [],
         readonlyPatterns: ['**']
       },
       {
         alias: 'web',
-        path: webDir,
+        path: realpathSync(webDir),
         readonly: false,
         ignoredPatterns: [],
         readonlyPatterns: []
@@ -262,7 +262,7 @@ test('buildPersonaSpawnPlan resolves mount.roots from persona env', () => {
       }),
       { processEnv: cleanEnv }
     );
-    assert.equal(plan.mount?.roots?.[0]?.path, root);
+    assert.equal(plan.mount?.roots?.[0]?.path, realpathSync(root));
   } finally {
     rmSync(root, { recursive: true, force: true });
   }
@@ -283,8 +283,8 @@ test('resolveMountRoots expands ~ and $VAR in root paths', () => {
     const roots = resolveMountRoots(mount, { REPO_PATH: repo } as NodeJS.ProcessEnv);
     assert.equal(roots?.length, 2);
     assert.equal(roots?.[0].alias, 'home');
-    assert.equal(roots?.[0].path, homeDir);
-    assert.equal(roots?.[1].path, repo);
+    assert.equal(roots?.[0].path, realpathSync(homeDir));
+    assert.equal(roots?.[1].path, realpathSync(repo));
   } finally {
     rmSync(homeDir, { recursive: true, force: true });
     rmSync(repo, { recursive: true, force: true });
@@ -330,7 +330,7 @@ test('resolveMountRoots drops optional roots whose absolute path does not exist'
     const roots = resolveMountRoots(mount, {} as NodeJS.ProcessEnv);
     assert.equal(roots?.length, 1);
     assert.equal(roots?.[0].alias, 'web');
-    assert.equal(roots?.[0].path, present);
+    assert.equal(roots?.[0].path, realpathSync(present));
   } finally {
     rmSync(present, { recursive: true, force: true });
   }
@@ -437,6 +437,19 @@ test('buildPersonaSpawnPlan resolves mount paths by input name and env name', ()
   } finally {
     rmSync(repo, { recursive: true, force: true });
   }
+});
+
+test('buildMountResolutionEnv keeps an env binding when a later input reuses that name', () => {
+  const env = buildMountResolutionEnv({
+    inputs: {
+      FIRST: { env: 'SECOND', default: '/repo-a' },
+      SECOND: { env: 'THIRD', default: '/repo-b' }
+    },
+    inputValues: { FIRST: '/repo-a', SECOND: '/repo-b' }
+  });
+  assert.equal(env.FIRST, '/repo-a');
+  assert.equal(env.SECOND, '/repo-a');
+  assert.equal(env.THIRD, '/repo-b');
 });
 
 test('buildMountResolutionEnv lets persona env win over either input key', () => {
