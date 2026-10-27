@@ -30,6 +30,37 @@ const stubSandbox: SandboxContext = {
   }
 };
 
+test('ctx.harness.run surfaces provider usage limits before a caller can replace them with exit 1', async () => {
+  let calls = 0;
+  let reachedCallerFailure = false;
+  const logs: Array<{ message: string; attrs?: Record<string, unknown> }> = [];
+  const ctx = buildCtx({
+    persona: basePersona,
+    workspaceId: 'ws-test',
+    agent: { id: 'agent-test', deployedName: 'example', spawnedByAgentId: null },
+    deployment: { id: 'deployment-test', triggerKind: 'inbox', parentDeploymentId: null },
+    sandbox: stubSandbox,
+    log: (_level, message, attrs) => logs.push({ message, attrs }),
+    harnessRunner: async () => {
+      calls++;
+      return { output: "You've hit your limit · resets 3:40pm (UTC)", stderr: 'secret-fixture-value', exitCode: 1, durationMs: 1900 };
+    }
+  });
+  await assert.rejects(async () => {
+    const run = await ctx.harness.run({ prompt: 'Perform a task' });
+    reachedCallerFailure = true;
+    if (run.exitCode !== 0) throw new Error(`The harness exited with code ${run.exitCode}`);
+  }, (error: Error) => {
+    assert.match(error.message, /Claude account.*usage limit/);
+    assert.match(error.message, /3:40pm \(UTC\)/);
+    assert.doesNotMatch(error.message, /secret-fixture/);
+    return true;
+  });
+  assert.equal(calls, 1, 'provider failure must not replay task side effects');
+  assert.equal(reachedCallerFailure, false);
+  assert.ok(logs.some((entry) => entry.message === 'harness.provider_error'));
+});
+
 function ctxFor(
   persona: PersonaSpec,
   inputValues?: Record<string, string | number | boolean | null | undefined>,
@@ -121,6 +152,151 @@ test('buildCtx exposes agent and deployment metadata', () => {
   });
 });
 
+test('ctx.harness.run turns an exact no-reply marker into observable silent success', async () => {
+  const logs: Array<{ level: string; message: string; attrs?: Record<string, unknown> }> = [];
+  const ctx = buildCtx({
+    persona: basePersona,
+    workspaceId: 'ws-test',
+    sandbox: stubSandbox,
+    harnessRunner: async () => ({ output: '  [[NO_REPLY]]\n', exitCode: 0, durationMs: 12 }),
+    agent: {
+      id: 'agent_123',
+      deployedName: 'docs-demo',
+      spawnedByAgentId: null
+    },
+    deployment: {
+      id: 'deployment_456',
+      triggerKind: 'inbox',
+      parentDeploymentId: null
+    },
+    log: (level, message, attrs) => logs.push({ level, message, attrs })
+  });
+
+  const result = await ctx.harness.run({ prompt: 'decide whether to reply' });
+  assert.deepEqual(result, {
+    output: '',
+    exitCode: 0,
+    durationMs: 12,
+    containsMarker: true,
+    suppressed: true
+  });
+  assert.deepEqual(logs, [
+    {
+      level: 'info',
+      message: 'harness.no_reply.suppressed',
+      attrs: { containsMarker: true }
+    }
+  ]);
+});
+
+test('ctx.harness.run strips a mixed no-reply marker and logs the leak', async () => {
+  const logs: Array<{ level: string; message: string; attrs?: Record<string, unknown> }> = [];
+  const ctx = buildCtx({
+    persona: basePersona,
+    workspaceId: 'ws-test',
+    sandbox: stubSandbox,
+    harnessRunner: async () => ({
+      output: 'Visible before. [[NO_REPLY]] Visible after.',
+      exitCode: 0,
+      durationMs: 8
+    }),
+    agent: {
+      id: 'agent_123',
+      deployedName: 'docs-demo',
+      spawnedByAgentId: null
+    },
+    deployment: {
+      id: 'deployment_456',
+      triggerKind: 'inbox',
+      parentDeploymentId: null
+    },
+    log: (level, message, attrs) => logs.push({ level, message, attrs })
+  });
+
+  const result = await ctx.harness.run({ prompt: 'decide whether to reply' });
+  assert.deepEqual(result, {
+    output: 'Visible before.  Visible after.',
+    exitCode: 0,
+    durationMs: 8,
+    containsMarker: true,
+    suppressed: false
+  });
+  assert.deepEqual(logs, [
+    {
+      level: 'warn',
+      message: 'harness.no_reply.marker_leak',
+      attrs: { containsMarker: true }
+    }
+  ]);
+});
+
+test('ctx.harness.run strips the marker from stderr as well as output', async () => {
+  const logs: Array<{ level: string; message: string; attrs?: Record<string, unknown> }> = [];
+  const ctx = buildCtx({
+    persona: basePersona,
+    workspaceId: 'ws-test',
+    sandbox: stubSandbox,
+    harnessRunner: async () => ({
+      output: 'Visible response.',
+      stderr: 'diagnostic [[NO_REPLY]]',
+      exitCode: 0,
+      durationMs: 5
+    }),
+    agent: {
+      id: 'agent_123',
+      deployedName: 'docs-demo',
+      spawnedByAgentId: null
+    },
+    deployment: {
+      id: 'deployment_456',
+      triggerKind: 'inbox',
+      parentDeploymentId: null
+    },
+    log: (level, message, attrs) => logs.push({ level, message, attrs })
+  });
+
+  const result = await ctx.harness.run({ prompt: 'decide whether to reply' });
+  assert.equal(result.output, 'Visible response.');
+  assert.equal(result.stderr, 'diagnostic');
+  assert.equal(result.containsMarker, true);
+  assert.equal(result.suppressed, false);
+  assert.deepEqual(logs, [
+    {
+      level: 'warn',
+      message: 'harness.no_reply.marker_leak',
+      attrs: { containsMarker: true }
+    }
+  ]);
+});
+
+test('ctx.harness.run does not turn a failed marker result into success', async () => {
+  const logs: Array<{ level: string; message: string }> = [];
+  const ctx = buildCtx({
+    persona: basePersona,
+    workspaceId: 'ws-test',
+    sandbox: stubSandbox,
+    harnessRunner: async () => ({ output: '[[NO_REPLY]]', exitCode: 1, durationMs: 4 }),
+    agent: {
+      id: 'agent_123',
+      deployedName: 'docs-demo',
+      spawnedByAgentId: null
+    },
+    deployment: {
+      id: 'deployment_456',
+      triggerKind: 'inbox',
+      parentDeploymentId: null
+    },
+    log: (level, message) => logs.push({ level, message })
+  });
+
+  const result = await ctx.harness.run({ prompt: 'decide whether to reply' });
+  assert.equal(result.output, '');
+  assert.equal(result.exitCode, 1);
+  assert.equal(result.containsMarker, true);
+  assert.equal(result.suppressed, true);
+  assert.deepEqual(logs, [{ level: 'warn', message: 'harness.no_reply.marker_leak' }]);
+});
+
 test('buildCtx exposes ctx.files as a sandbox file helper', async () => {
   const reads: string[] = [];
   const writes: Array<{ path: string; contents: string }> = [];
@@ -159,6 +335,80 @@ test('buildCtx exposes ctx.files as a sandbox file helper', async () => {
   assert.deepEqual(writes, [{ path: '/workspace/output/page-1.md', contents: 'essay' }]);
 });
 
+test('buildCtx exposes typed runtime credentials from sandbox env', async () => {
+  await withEnv(
+    {
+      RELAYFILE_URL: 'https://relayfile.example.test',
+      RELAYFILE_TOKEN: 'relayfile-token',
+      RELAYFILE_WORKSPACE_ID: 'rw_test',
+      CLOUD_API_URL: 'https://cloud.example.test',
+      CLOUD_API_ACCESS_TOKEN: 'cloud-api-token'
+    },
+    async () => {
+      const ctx = ctxFor(basePersona);
+      const expected = {
+        relayfile: {
+          url: 'https://relayfile.example.test',
+          token: 'relayfile-token',
+          workspaceId: 'rw_test'
+        },
+        cloudApi: {
+          url: 'https://cloud.example.test',
+          token: 'cloud-api-token'
+        }
+      };
+
+      assert.deepEqual(ctx.credentials.tryRequire(), expected);
+      assert.deepEqual(ctx.credentials.require(), expected);
+      assert.deepEqual(ctx.credentials.relayfile, expected.relayfile);
+      assert.deepEqual(ctx.credentials.cloudApi, expected.cloudApi);
+    }
+  );
+});
+
+test('ctx.credentials returns null or throws with missing runtime credential keys', async () => {
+  await withEnv(
+    {
+      RELAYFILE_URL: 'https://relayfile.example.test',
+      RELAYFILE_TOKEN: undefined,
+      RELAYFILE_WORKSPACE_ID: 'rw_test',
+      CLOUD_API_URL: 'https://cloud.example.test',
+      CLOUD_API_ACCESS_TOKEN: 'cloud-api-token'
+    },
+    async () => {
+      const ctx = ctxFor(basePersona);
+
+      assert.equal(ctx.credentials.tryRequire(), null);
+      assert.throws(
+        () => ctx.credentials.require(),
+        /Runtime credentials are required: missing relayfile\.token/
+      );
+      assert.throws(
+        () => ctx.credentials.relayfile,
+        /Runtime credentials are required: missing relayfile\.token/
+      );
+    }
+  );
+});
+
+test('ctx.credentials strips trailing slashes from runtime credential URLs', async () => {
+  await withEnv(
+    {
+      RELAYFILE_URL: 'https://relayfile.example.test///',
+      RELAYFILE_TOKEN: 'relayfile-token',
+      RELAYFILE_WORKSPACE_ID: 'rw_test',
+      CLOUD_API_URL: 'https://cloud.example.test/',
+      CLOUD_API_ACCESS_TOKEN: 'cloud-api-token'
+    },
+    async () => {
+      const ctx = ctxFor(basePersona);
+
+      assert.equal(ctx.credentials.require().relayfile.url, 'https://relayfile.example.test');
+      assert.equal(ctx.credentials.require().cloudApi.url, 'https://cloud.example.test');
+    }
+  );
+});
+
 test('ctx.memory.save posts to the cloud memory endpoint when sandbox env is present', async () => {
   await withEnv(
     {
@@ -195,6 +445,28 @@ test('ctx.memory.save posts to the cloud memory endpoint when sandbox env is pre
   );
 });
 
+test('ctx.memory.save preserves a configured cloud base pathname', async () => {
+  await withEnv(
+    {
+      WORKFORCE_CLOUD_URL: 'https://agentrelay.com/cloud',
+      WORKFORCE_WORKSPACE_ID: 'ws-env',
+      WORKFORCE_AGENT_TOKEN: 'agent-token'
+    },
+    async () => {
+      const calls: string[] = [];
+      await withFetch(async (url) => {
+        calls.push(String(url));
+        return jsonResponse({ id: 'mem_123' });
+      }, async () => {
+        const ctx = ctxFor({ ...basePersona, memory: true });
+        assert.deepEqual(await ctx.memory.save('remember this'), { id: 'mem_123' });
+      });
+
+      assert.equal(calls[0], 'https://agentrelay.com/cloud/api/v1/workspaces/ws-env/memory');
+    }
+  );
+});
+
 test('ctx.memory.recall fetches normalized cloud memory items', async () => {
   await withEnv(
     {
@@ -227,6 +499,31 @@ test('ctx.memory.recall fetches normalized cloud memory items', async () => {
       assert.equal(url.searchParams.get('scope'), 'workspace');
       assert.equal(url.searchParams.get('query'), 'essay');
       assert.equal(url.searchParams.get('limit'), '5');
+    }
+  );
+});
+
+test('ctx.memory.recall preserves a configured cloud base pathname', async () => {
+  await withEnv(
+    {
+      WORKFORCE_CLOUD_URL: 'https://agentrelay.com/cloud',
+      WORKFORCE_AGENT_TOKEN: 'agent-token',
+      WORKFORCE_WORKSPACE_ID: undefined,
+      RELAY_WORKSPACE_ID: undefined,
+      RELAY_DEFAULT_WORKSPACE: undefined
+    },
+    async () => {
+      const calls: string[] = [];
+      await withFetch(async (url) => {
+        calls.push(String(url));
+        return jsonResponse({ items: [] });
+      }, async () => {
+        const ctx = ctxFor({ ...basePersona, memory: true });
+        assert.deepEqual(await ctx.memory.recall('essay'), []);
+      });
+
+      const url = new URL(calls[0]);
+      assert.equal(url.origin + url.pathname, 'https://agentrelay.com/cloud/api/v1/workspaces/ws-test/memory');
     }
   );
 });
@@ -277,6 +574,34 @@ test('ctx.memory.recall falls back to [] on network failure', async () => {
   );
 });
 
+test('ctx.memory.recall rejects backend failures when failOnError is set', async () => {
+  await withEnv(
+    {
+      WORKFORCE_CLOUD_URL: 'https://cloud.example.test',
+      WORKFORCE_AGENT_TOKEN: 'agent-token'
+    },
+    async () => {
+      await withFetch(async () => {
+        throw new Error('offline');
+      }, async () => {
+        const ctx = ctxFor({ ...basePersona, memory: true });
+        await assert.rejects(
+          () => ctx.memory.recall('anything', { failOnError: true }),
+          /offline/
+        );
+      });
+
+      await withFetch(async () => jsonResponse({ error: 'unavailable' }, { status: 503 }), async () => {
+        const ctx = ctxFor({ ...basePersona, memory: true });
+        await assert.rejects(
+          () => ctx.memory.recall('anything', { failOnError: true }),
+          /HTTP 503/
+        );
+      });
+    }
+  );
+});
+
 test('ctx.memory logs a bounded timeout when cloud memory fetch aborts', async () => {
   await withEnv(
     {
@@ -322,6 +647,8 @@ test('ctx.memory stays a safe no-op when cloud auth is absent', async () => {
       WORKFORCE_CLOUD_URL: undefined,
       WORKFORCE_AGENT_TOKEN: undefined,
       RELAY_AGENT_TOKEN: undefined,
+      RELAYFILE_TOKEN: undefined,
+      RELAY_AGENT_TOKENS: undefined,
       RELAY_API_KEY: undefined,
       WORKFORCE_WORKSPACE_TOKEN: undefined
     },
@@ -334,6 +661,10 @@ test('ctx.memory stays a safe no-op when cloud auth is absent', async () => {
         const ctx = ctxFor({ ...basePersona, memory: true });
         assert.equal(await ctx.memory.save('quiet'), undefined);
         assert.deepEqual(await ctx.memory.recall('quiet'), []);
+        await assert.rejects(
+          () => ctx.memory.recall('quiet', { failOnError: true }),
+          /ctx\.memory is unavailable/
+        );
       });
       assert.equal(fetchCalled, false);
     }

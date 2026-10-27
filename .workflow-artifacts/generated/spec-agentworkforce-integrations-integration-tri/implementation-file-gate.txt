@@ -1,0 +1,31 @@
+Declared targets:
+[
+  "@relayfile/adapter-core/triggers",
+  "packages/deploy/src/connect.ts",
+  "/me/integrations",
+  "packages/deploy/src/integrations-list.ts",
+  "packages/cli/src/integrations-command.ts",
+  "packages/mcp-workforce",
+  "packages/deploy"
+]
+Changed paths:
+.relay/workspaces.json
+.trajectories/active/traj_mdb27kev6r8e/trajectory.json
+docs/plans/integrations-discoverability-spec.md
+package-lock.json
+packages/cli/README.md
+packages/cli/src/cli.ts
+packages/cli/src/integrations-command.test.ts
+packages/cli/src/integrations-command.ts
+packages/deploy/src/index.ts
+packages/deploy/src/integrations-list.test.ts
+packages/deploy/src/integrations-list.ts
+packages/mcp-workforce/README.md
+packages/mcp-workforce/package.json
+packages/mcp-workforce/src/index.ts
+packages/mcp-workforce/src/server.test.ts
+packages/mcp-workforce/src/server.ts
+packages/mcp-workforce/src/tools/list-integrations.test.ts
+packages/mcp-workforce/src/tools/list-integrations.ts
+pnpm-lock.yaml
+workflows/generated/ricky-spec-agentworkforce-integrations-integration-tri.ts

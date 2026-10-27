@@ -11,9 +11,14 @@ import type {
 export type Harness = (typeof HARNESS_VALUES)[number];
 export type PersonaIntent = (typeof PERSONA_INTENTS)[number];
 /**
- * Persona tag. Denormalized catalog metadata (mirrors `tags text[]` in
- * cloud#553) — free-form, not a closed enum. The legacy {@link PERSONA_TAGS}
- * tuple is preserved only for back-compat hints in list/filter UIs.
+ * Runtime persona tag — intentionally an open `string`. The CLI uses this for
+ * arbitrary-tag catalog filtering (`--filter-tag`), and `parseTags` accepts any
+ * string for forward-compatibility, so this is NOT a closed enum.
+ *
+ * For *authoring*, {@link KnownPersonaTag} (constants.ts) is the closed
+ * vocabulary the cloud enforces — `definePersona` types `tags` against it so an
+ * off-vocabulary tag is a compile error. Two distinct types on purpose:
+ * runtime-open here, authoring-closed there.
  */
 export type PersonaTag = string;
 export type CodexSandboxMode = (typeof CODEX_SANDBOX_MODES)[number];
@@ -31,7 +36,10 @@ export interface HarnessSettings {
    * missing capability; `danger-full-access` is the fully unsandboxed fallback.
    */
   sandboxMode?: CodexSandboxMode;
-  /** Codex CLI approval policy (`--ask-for-approval`). */
+  /**
+   * @deprecated
+   * @description `--ask-for-approval` was removed in codex 0.1.77+. Use `dangerouslyBypassApprovalsAndSandbox` or `sandboxMode` instead. Setting this field emits a warning and has no effect.
+   */
   approvalPolicy?: CodexApprovalPolicy;
   /**
    * Allow outbound network access inside Codex's workspace-write sandbox
@@ -49,6 +57,8 @@ export interface HarnessSettings {
    * which still prompts.
    */
   dangerouslyBypassApprovalsAndSandbox?: boolean;
+  /** Consumer-defined harness settings are forwarded unchanged. */
+  [key: string]: unknown;
 }
 
 /**
@@ -60,6 +70,8 @@ export interface PersonaSkill {
   id: string;
   source: string;
   description: string;
+  /** Consumer-defined skill metadata is forwarded unchanged. */
+  [key: string]: unknown;
 }
 
 /**
@@ -88,6 +100,36 @@ export interface PersonaInputSpec {
    * misconfigured launches surface loudly.
    */
   optional?: boolean;
+  /**
+   * Declares that this input's value is an id chosen from a live list backed
+   * by an integration connection (e.g. a Slack user id, a Linear team id).
+   * When set, the deploy CLI offers the operator a picker right after the
+   * provider's OAuth connect — fetching the options through the cloud and
+   * writing the chosen id into this input — instead of making them paste a
+   * raw id. Purely an onboarding affordance: the runtime still resolves the
+   * value the usual way (explicit value → env → default), so a `picker` can
+   * coexist with `env`/`default`/`optional`.
+   */
+  picker?: PersonaInputPicker;
+  /** Consumer-defined input metadata is forwarded unchanged. */
+  [key: string]: unknown;
+}
+
+/**
+ * How the deploy CLI sources a picker's options for a {@link PersonaInputSpec}.
+ * `provider` must be one the persona declares under `integrations` (so it is
+ * connected before the picker runs). `resource` names what to list from that
+ * provider — known values today are `users`, `channels` (Slack), and `teams`
+ * (Linear); the value is passed through to the cloud, so new resources don't
+ * require a persona-kit release.
+ */
+export interface PersonaInputPicker {
+  /** Integration provider whose connection backs the option list (e.g. `slack`, `linear`). */
+  provider: string;
+  /** Resource to list from that provider (e.g. `users`, `channels`, `teams`). */
+  resource: string;
+  /** Consumer-defined picker metadata is forwarded unchanged. */
+  [key: string]: unknown;
 }
 
 /**
@@ -104,6 +146,8 @@ export interface PersonaPermissions {
   deny?: string[];
   /** Permission mode for the session. */
   mode?: PermissionMode;
+  /** Consumer-defined permission metadata is forwarded unchanged. */
+  [key: string]: unknown;
 }
 
 /**
@@ -131,7 +175,7 @@ export interface PersonaPermissions {
 export interface PersonaMountRoot {
   /**
    * Subdirectory name the root is exposed as inside the mount. Must match
-   * `^[a-z0-9](?:[a-z0-9-_]*[a-z0-9])?$` and be unique within the persona.
+   * `^[a-z0-9](?:[a-z0-9_-]*[a-z0-9])?$` and be unique within the persona.
    * Used verbatim as a filesystem path segment.
    */
   alias: string;
@@ -180,6 +224,11 @@ export interface PersonaMountRoot {
  * (mount = launcher cwd). See {@link PersonaMountRoot}.
  */
 export interface PersonaMount {
+  /**
+   * Whether launchers should create a Relayfile mount for this persona.
+   * Defaults to true when omitted so existing mount policies keep working.
+   */
+  enabled?: boolean;
   ignoredPatterns?: string[];
   readonlyPatterns?: string[];
   /**
@@ -189,6 +238,8 @@ export interface PersonaMount {
    * mean to opt in.
    */
   roots?: PersonaMountRoot[];
+  /** Consumer-defined mount metadata is forwarded unchanged. */
+  [key: string]: unknown;
 }
 
 /**
@@ -203,30 +254,53 @@ export type McpServerSpec =
       type: 'http' | 'sse';
       url: string;
       headers?: Record<string, string>;
+      [key: string]: unknown;
     }
   | {
       type: 'stdio';
       command: string;
       args?: string[];
       env?: Record<string, string>;
+      [key: string]: unknown;
     };
 
 /**
- * A single event trigger declared by an integration. `on` is a Relayfile-
- * adapter-normalized event name (e.g. `pull_request.opened`,
- * `issue.created`, `app_mention`). `match` and `where` are filter sugars
+ * A single event trigger declared by an **agent** (`agent.ts`). `on` is a
+ * Relayfile-adapter-normalized event name (e.g. `pull_request.opened`,
+ * `issue.create`, `message.created`). `match` and `where` are filter sugars
  * the deploy CLI lints against a known registry; unknown values warn but
  * do not fail parse, so the cloud runtime stays the source of truth.
  *
+ * Triggers live on the agent ({@link AgentSpec.triggers}), not the persona —
+ * the persona only declares which providers it connects to
+ * ({@link PersonaIntegrationConfig}). The deploy CLI joins the two: events
+ * from `agent.triggers[provider]`, connection/scope from
+ * `persona.integrations[provider]`.
+ *
  * Examples:
  *   { on: "pull_request.opened" }
- *   { on: "issue_comment.created", match: "@mention" }
+ *   { on: "pull_request_review_comment.created", match: "@mention" }
  *   { on: "check_run.completed", where: "conclusion=failure" }
+ *   { on: "message.created", paths: ["/slack/channels/C_REVIEW/**"] }
+ *   { on: "message.created", maxConcurrency: 1 }
  */
 export interface PersonaIntegrationTrigger {
   on: string;
   match?: string;
   where?: string;
+  /**
+   * Optional Relayfile path globs used to scope wake routing before an agent is
+   * provisioned. Paths are absolute (leading `/`) and provider-specific.
+   */
+  paths?: string[];
+  /**
+   * Optional delivery backpressure hint for this trigger. Positive integers are
+   * preserved by the parser; invalid values are treated as unset so older or
+   * malformed specs do not block delivery.
+   */
+  maxConcurrency?: number;
+  /** Consumer-defined trigger fields are forwarded to the cloud unchanged. */
+  [key: string]: unknown;
 }
 
 /**
@@ -245,38 +319,110 @@ export interface PersonaIntegrationTrigger {
  * which sources are actually permitted at deploy time.
  */
 export type IntegrationSource =
-  | { kind: 'deployer_user' }
-  | { kind: 'workspace' }
-  | { kind: 'workspace_service_account'; name: string };
+  | { kind: 'deployer_user'; [key: string]: unknown }
+  | { kind: 'workspace'; [key: string]: unknown }
+  | { kind: 'workspace_service_account'; name: string; [key: string]: unknown };
 
 /**
- * Radio listener configuration for a RelayFile provider. The map key is
- * the provider slug (`github`, `linear`, `slack`, `notion`, `jira`).
+ * Per-provider **connection** configuration for a RelayFile provider. The map
+ * key is the provider slug (`github`, `linear`, `slack`, `notion`, `jira`).
  * `scope` is provider-specific filter metadata (e.g. `{ repo: "org/repo" }`
- * for github, `{ database: "<id>" }` for notion). `triggers` are flat —
- * all radio listener events for this provider fan into the same `onEvent`
- * handler, which discriminates on `event.source` + `event.type`.
+ * for github, `{ database: "<id>" }` for notion).
+ *
+ * This declares only *that the persona connects to the provider* and how the
+ * connection resolves — **not** which events fire it. Event triggers live on
+ * the agent ({@link AgentSpec.triggers}); the deploy CLI requires every
+ * provider in `agent.triggers` to also appear here so the connection is set up.
  *
  * `source` discriminates the cloud-side resolver between `user_integrations`
  * and `workspace_integrations`; defaults to `{ kind: 'deployer_user' }` when
  * omitted so existing personas keep their pre-discriminator behavior.
+ *
+ * `config` is a forward-compatible adapter passthrough. Persona-kit validates
+ * only that it is an object; provider adapters own the nested schema
+ * (for example GitHub materialization policy).
+ *
+ * Optional integrations are deploy-time choices controlled by persona inputs:
+ * set `optional: true` and `enabledByInput: "SLACK_CHANNEL"` to include this
+ * provider only when that input resolves to a non-empty value. Inactive
+ * optional providers are skipped before deploy connects integrations or
+ * registers provider triggers.
  */
 export interface PersonaIntegrationConfig {
   source?: IntegrationSource;
   scope?: Record<string, string>;
-  triggers?: PersonaIntegrationTrigger[];
+  config?: Record<string, unknown>;
+  optional?: boolean;
+  enabledByInput?: string;
+  /** Consumer-defined connection fields are forwarded to the cloud unchanged. */
+  [key: string]: unknown;
 }
 
 /**
- * Clock listener configuration. `name` is unique within the persona and
- * surfaces to the handler as `event.name`. `cron` is a standard 5-field
- * expression. `tz` defaults to `UTC` at the runtime layer (the parser keeps
- * it optional so the spec stays close to what the author wrote).
+ * Clock listener configuration declared by an **agent** ({@link AgentSpec.schedules}).
+ * `name` is unique within the agent and surfaces to the handler as
+ * `event.name`. `cron` is a standard 5-field expression. `tz` defaults to
+ * `UTC` at the runtime layer (the parser keeps it optional so the spec stays
+ * close to what the author wrote).
  */
 export interface PersonaSchedule {
   name: string;
   cron: string;
   tz?: string;
+  /** Consumer-defined schedule fields are forwarded to the cloud unchanged. */
+  [key: string]: unknown;
+}
+
+export type WatchEvent = 'created' | 'updated' | 'deleted';
+
+/**
+ * Relayfile-change listener configuration declared by an **agent**
+ * ({@link AgentSpec.watch}). `paths` are absolute Relayfile glob roots (for
+ * example `/integrations/github/repos/acme/web/issues/*.json`). Runtime
+ * matching is owned by the cloud trigger router; persona-kit only validates
+ * the portable declaration shape.
+ */
+export interface WatchRule {
+  paths: string[];
+  events: WatchEvent[];
+  debounceMs?: number;
+  match?: string;
+  /** Consumer-defined watch fields are forwarded to the cloud unchanged. */
+  [key: string]: unknown;
+}
+
+/**
+ * Runtime-parsed shape of an **agent** (`agent.ts`) — the "when/how it fires"
+ * half of a deployed agent, authored via `defineAgent(...)` in the runtime
+ * package and extracted from the bundle by the deploy CLI. The persona owns
+ * "what the agent is" (model, harness, skills, mcp, integration *connections*);
+ * the agent owns the listeners.
+ *
+ * `launchedBy: "team-dispatcher"` is the one listener-free exception: team
+ * member agents are not event-listeners themselves; they are launched by a
+ * dispatcher agent as part of a team run.
+ *
+ * Three listener kinds:
+ *  - **radio** — {@link triggers}: a provider-keyed map of
+ *    {@link PersonaIntegrationTrigger} arrays. Keys mirror
+ *    `persona.integrations` so the deploy CLI can join events→connection.
+ *  - **clock** — {@link schedules}: cron {@link PersonaSchedule}s.
+ *  - **relayfile** — {@link watch}: {@link WatchRule}s.
+ *
+ * At least one listener is required for a cloud agent unless `launchedBy`
+ * names a supported dispatcher launch mode (enforced at deploy).
+ */
+export interface AgentSpec {
+  /** Declares that this agent is launched by another runtime path, not direct listeners. */
+  launchedBy?: 'team-dispatcher';
+  /** Radio listeners keyed by provider slug (`github`, `linear`, …). */
+  triggers?: Record<string, PersonaIntegrationTrigger[]>;
+  /** Cron-style clock listeners. Each `name` is unique within the agent. */
+  schedules?: PersonaSchedule[];
+  /** Relayfile-change listeners for proactive cloud agents. */
+  watch?: WatchRule[];
+  /** Consumer-defined agent fields are forwarded to the cloud unchanged. */
+  [key: string]: unknown;
 }
 
 /**
@@ -298,27 +444,149 @@ export interface PersonaMemoryConfig {
   ttlDays?: number;
   autoPromote?: boolean;
   dedupMs?: number;
+  /**
+   * Opt into decision-trajectory recording (the "why"). **Off by default.**
+   * When enabled, the runtime auto-records this persona's decisions per run and
+   * writes a compacted contract artifact to
+   * `<root>/<personaId>/compacted/<runId>.json` (root = `TRAJECTORY_ROOT` env or
+   * the cloud workspace default). Object form lets you toggle compaction.
+   */
+  trajectories?: boolean | PersonaTrajectoryConfig;
+  /**
+   * Opt into ai-memory recall (the "how" + "why" retrieval). **Off by default.**
+   * When enabled, the persona loads the ai-hist MCP so it can recall its own
+   * compacted trajectories (the why) and cross-tool prompt/session history
+   * (the how). Object form lets you override the history DB path.
+   */
+  aiMemory?: boolean | PersonaAiMemoryConfig;
+  /** Consumer-defined memory metadata is forwarded unchanged. */
+  [key: string]: unknown;
+}
+
+/**
+ * Decision-trajectory recording config (the "why"). `enabled` defaults to true
+ * in object form, so `{ autoCompact: false }` means "record, don't compact".
+ * The store root is never per-persona — it's resolved once from
+ * `TRAJECTORY_ROOT` (or the cloud default) so the recorder's write-root always
+ * matches the ai-hist MCP's read-root.
+ */
+export interface PersonaTrajectoryConfig {
+  enabled?: boolean;
+  /** Run mechanical+markdown compaction on completion. Defaults to true. */
+  autoCompact?: boolean;
+  /** Consumer-defined trajectory metadata is forwarded unchanged. */
+  [key: string]: unknown;
+}
+
+/**
+ * ai-memory recall config (the "how" + "why" retrieval via the ai-hist MCP).
+ * `enabled` defaults to true in object form.
+ */
+export interface PersonaAiMemoryConfig {
+  enabled?: boolean;
+  /** Override the ai-hist history DB path; else `AI_HIST_DB` env / discovery. */
+  dbPath?: string;
+  /** Consumer-defined AI-memory metadata is forwarded unchanged. */
+  [key: string]: unknown;
 }
 
 export type PersonaMemory = boolean | PersonaMemoryConfig;
 
 /**
- * A persona listens for events. Three listener kinds: clock (cron schedules
- * through `schedules[]`), radio (RelayFile integration events through
- * `integrations.<provider>.triggers[]`), and inbox (RelayCast targeted
- * messages, not yet modeled in v1). The current shape predates the
- * listeners framing; semantics are equivalent.
+ * Relay (agent-relay / relaycast) participation config. Like {@link
+ * PersonaMemoryConfig}, the persona declares **intent** only — the API key and
+ * base URL are secrets that come from workforce env (`RELAY_API_KEY`,
+ * `RELAY_BASE_URL`). When enabled, launchers inject the relaycast MCP server
+ * (see `buildRelaycastMcpServer`) so the persona is a first-class chat
+ * participant: it can post to channels, DM, and answer replies — the
+ * human-in-the-loop surface a solo persona otherwise lacks.
+ */
+export interface PersonaRelayConfig {
+  /** Master switch. Object form defaults to enabled (`{}` ⇒ on). */
+  enabled?: boolean;
+  /**
+   * Agent identity registered on relay (`RELAY_AGENT_NAME`). Defaults to the
+   * env value, then the persona id. Must match the broker's routing name.
+   */
+  agentName?: string;
+  /**
+   * Relaycast channels the persona participates in (names may omit the leading
+   * `#`). Declarative intent consumed when wiring inbox triggers (Unit C);
+   * does not affect MCP injection on its own.
+   */
+  channels?: string[];
+  /**
+   * Relaycast inbox selectors the persona subscribes to (e.g. `@self`, `#eng`),
+   * mirroring the SDK `AgentDefinition.inbox` contract.
+   */
+  inbox?: string[];
+  /** Default relay workspace (`RELAY_DEFAULT_WORKSPACE`); else env. */
+  defaultWorkspace?: string;
+  /** Consumer-defined relay metadata is forwarded unchanged. */
+  [key: string]: unknown;
+}
+
+export type PersonaRelay = boolean | PersonaRelayConfig;
+
+export type CapabilityValue =
+  | boolean
+  | { enabled?: boolean; [k: string]: unknown };
+
+export interface PersonaHttpReadRule {
+  method: 'GET' | 'HEAD';
+  urlGlob: string;
+}
+
+export type PersonaHttpReadCapability = {
+  enabled?: boolean;
+  allow?: PersonaHttpReadRule[];
+};
+
+/**
+ * Portable proactive capability declarations.
+ *
+ * A capability is enabled when its value is `true` or an object whose
+ * `.enabled !== false` (`{}` is enabled; `{ enabled: false }` is disabled).
+ * `pullRequest` is the legacy alias of `review`; both map to the review
+ * capability.
+ */
+export interface ProactiveCapabilities {
+  /** Review a PR/MR diff and post a review. */
+  review?: CapabilityValue;
+  /** Claim an issue and open a change request. */
+  issueClaim?: CapabilityValue;
+  /** Rebase a dirty PR/MR. */
+  conflictAutofix?: CapabilityValue;
+  /** Legacy alias of `review`. */
+  pullRequest?: CapabilityValue;
+  /** Declarative local live-read allowlist for GET/HEAD URLs. */
+  httpRead?: PersonaHttpReadCapability;
+  /**
+   * Consumer-defined capabilities pass through the parser unchanged. persona-kit
+   * is platform-agnostic and must not drop capability keys it does not model
+   * directly - e.g. the cloud-only `teamSolve` capability that drives
+   * `cloud-team-issue` team-launch (workforce#182 / cloud#1732).
+   */
+  [capability: string]: CapabilityValue | undefined;
+}
+
+/**
+ * A persona describes *what an agent is* — its identity, runtime (harness,
+ * model, system prompt), skills, MCP servers, inputs, and which providers it
+ * *connects* to ({@link integrations}). It does **not** describe when the
+ * agent fires: event triggers, cron schedules, and relayfile watch rules live
+ * on the agent ({@link AgentSpec}, authored via `defineAgent` in `agent.ts`).
  */
 export interface PersonaSpec {
   id: string;
   intent: string;
   /**
-   * Free-form catalog labels mirroring `tags text[]` in cloud#553. Tags are
-   * denormalized metadata for catalog filtering — they are NOT a closed enum
-   * and do NOT overlap with {@link intent}. Authors are free to label personas
-   * with provider names, project codes, or workflow shapes
-   * (e.g. `['proactive', 'notion', 'github']`). Optional; omitted, `null`,
-   * and empty-array values are treated identically.
+   * Catalog labels from the closed {@link PERSONA_TAGS} vocabulary (e.g.
+   * `['documentation', 'review']`); they do NOT overlap with {@link intent}.
+   * The cloud rejects off-vocabulary tags with `400 invalid_persona`, and
+   * `definePersona` types `tags` against {@link KnownPersonaTag} to catch that
+   * at compile time. This parsed shape stays `string[]` for runtime leniency.
+   * Optional; omitted, `null`, and empty-array values are treated identically.
    */
   tags?: readonly string[];
   description: string;
@@ -329,12 +597,17 @@ export interface PersonaSpec {
    * values are substituted into the persona's system prompt.
    */
   inputs?: Record<string, PersonaInputSpec>;
-  /** Harness binary used to run this persona (`claude`, `codex`, `opencode`). */
-  harness: Harness;
-  /** Model identifier passed to the harness. */
-  model: string;
-  /** System prompt body. `$NAME` / `${NAME}` references to inputs are substituted at spawn time. */
-  systemPrompt: string;
+  /**
+   * Harness binary used to run this persona (`claude`, `codex`, `opencode`, `grok`).
+   * Required for interactive personas. Optional for handler-style personas
+   * ({@link onEvent} set): only consumed when the handler calls
+   * `ctx.harness.run(...)`; pure orchestrators omit it.
+   */
+  harness?: Harness;
+  /** Model identifier passed to the harness. Optional for handler-style personas — see {@link harness}. */
+  model?: string;
+  /** System prompt body. `$NAME` / `${NAME}` references to inputs are substituted at spawn time. Optional for handler-style personas — see {@link harness}. */
+  systemPrompt?: string;
   /** Harness-level knobs (reasoning, timeout, codex sandbox/approval policy, etc.). */
   harnessSettings: HarnessSettings;
   /**
@@ -347,15 +620,37 @@ export interface PersonaSpec {
    * MCP servers to attach to the harness session.
    * - `claude`: passed via `--mcp-config`
    * - `codex`: translated into `--config mcp_servers.<name>...` overrides
-   * - `opencode`: currently warns and skips
+   * - `opencode` / `grok`: currently warn and skip
    */
   mcpServers?: Record<string, McpServerSpec>;
   /**
    * Permission policy (allow/deny lists, mode) for the harness session.
-   * Only wired for `claude` today (via `--allowedTools`, `--disallowedTools`,
-   * `--permission-mode`); other harnesses warn and skip.
+   * `claude` is wired for allow/deny/mode flags (via `--allowedTools`,
+   * `--disallowedTools`, `--permission-mode`). `grok` maps
+   * `mode: "bypassPermissions"` to `--always-approve`; other
+   * fields/harnesses warn and skip.
    */
   permissions?: PersonaPermissions;
+  /**
+   * Sandbox boot policy for this persona. Controls whether the runtime boots
+   * an isolated sandbox (Daytona/process) for harness execution and file ops.
+   *
+   * - **`true`** (default) — always boot a sandbox. The persona can use
+   *   `ctx.sandbox.exec()` to shell out, `ctx.files.read/write`, and
+   *   `ctx.harness.run()`.
+   * - **`false`** — skip sandbox boot entirely. Handler code reads provider
+   *   data via the runtime's VFS helpers (`listJsonFiles` / `readJsonFile`
+   *   / `writeJsonFile`) against provider path conventions (e.g.
+   *   `/linear/issues`, `/slack/channels`) instead of `ctx.sandbox.exec(find …)`
+   *   + `ctx.files.read()` loops. `ctx.harness.run()` still works.
+   *   `ctx.sandbox.exec()` rejects with `SandboxNotAvailableError`.
+   *
+   * Setting this to `false` dramatically reduces cold-start latency
+   * (no sandbox boot ≈ milliseconds vs seconds) and is appropriate for
+   * read-mostly handler agents that consume pre-synced VFS data directly
+   * rather than shell-globbing JSON files.
+   */
+  sandbox?: boolean;
   /**
    * Relayfile mount policy for file visibility and writability. Applied by
    * launchers that run the harness inside `@relayfile/local-mount`.
@@ -373,7 +668,7 @@ export interface PersonaSpec {
   claudeMdMode?: SidecarMdMode;
   /**
    * Author-supplied path to an `AGENTS.md` sidecar that should be applied
-   * when the persona runs under the opencode harness. Same resolution
+   * when the persona runs under the opencode/codex/grok harnesses. Same resolution
    * rules as {@link claudeMd}.
    */
   agentsMd?: string;
@@ -405,20 +700,34 @@ export interface PersonaSpec {
    */
   useSubscription?: boolean;
   /**
-   * Per-provider integration declarations keyed by Relayfile provider slug
-   * (`github`, `linear`, `slack`, `notion`, `jira`). At deploy time the CLI
-   * runs `RelayfileSetup.connectIntegration({ allowedIntegrations: [key] })`
-   * for each provider not yet connected to the active workspace.
+   * Per-provider integration **connection** declarations keyed by Relayfile
+   * provider slug (`github`, `linear`, `slack`, `notion`, `jira`). At deploy
+   * time the CLI runs `RelayfileSetup.connectIntegration({ allowedIntegrations:
+   * [key] })` for each provider not yet connected to the active workspace.
+   * Event triggers are declared on the agent ({@link AgentSpec.triggers}), not
+   * here — every provider an agent triggers on must also appear in this map.
    */
   integrations?: Record<string, PersonaIntegrationConfig>;
-  /** Cron-style clock listeners. Each `name` is unique within the persona. */
-  schedules?: PersonaSchedule[];
+  /**
+   * Portable proactive capability declarations. A capability is enabled when
+   * its value is `true` or an object whose `.enabled !== false` (`{}` is
+   * enabled; `{ enabled: false }` is disabled). `pullRequest` is the legacy
+   * alias of `review`; both map to the review capability.
+   */
+  capabilities?: ProactiveCapabilities;
   /**
    * Memory subsystem opt-in. Wires the agent-assistant memory adapter at
    * runtime; the persona spec only declares intent, not implementation
    * details (api keys, adapter type, etc. come from workforce env).
    */
   memory?: PersonaMemory;
+  /**
+   * Relay (agent-relay / relaycast) participation. Off unless declared. When
+   * enabled, launchers inject the relaycast MCP so the persona can post to
+   * channels, DM, and answer replies — see {@link PersonaRelayConfig}. Secrets
+   * (`RELAY_API_KEY`, `RELAY_BASE_URL`) come from workforce env, not the spec.
+   */
+  relay?: PersonaRelay;
   /**
    * Relative POSIX path to the TypeScript (or compiled .js / .mjs) file
    * whose default export is the deploy-time event handler. Resolved
@@ -429,6 +738,8 @@ export interface PersonaSpec {
    * optional so partially-authored specs still parse.
    */
   onEvent?: string;
+  /** Consumer-defined persona fields are forwarded to downstream runtimes unchanged. */
+  [key: string]: unknown;
 }
 
 export interface PersonaSelection {
@@ -445,6 +756,13 @@ export interface PersonaSelection {
   mcpServers?: Record<string, McpServerSpec>;
   permissions?: PersonaPermissions;
   mount?: PersonaMount;
+  /**
+   * Carried through from {@link PersonaSpec.memory}. Launchers read its opt-in
+   * facets: `memory.aiMemory` gates injecting the `ai-hist` MCP (recall), and
+   * `memory.trajectories` gates runtime decision-trajectory recording. Both are
+   * off unless declared. Use {@link resolveAiMemory} / {@link resolveTrajectoryRecording}.
+   */
+  memory?: PersonaMemory;
   /**
    * Effective sidecar config for the persona. Modes default to `overwrite`
    * when a path or inlined content exists; otherwise the mode field is omitted.

@@ -1,9 +1,12 @@
+import { readFileSync } from 'node:fs';
 import path from 'node:path';
+import { fileURLToPath } from 'node:url';
 import {
   CloudApiClient,
   clearStoredAuth,
   defaultApiUrl,
-  ensureAuthenticated,
+  ensureCloudSession,
+  setWorkspaceKey,
   type StoredAuth
 } from '@agent-relay/cloud';
 import {
@@ -12,32 +15,36 @@ import {
   clearStoredWorkspaceToken,
   createTerminalIO,
   deploy,
-  writeActiveWorkspace,
+  isPersonaSourcePath,
   type CloudAuthRecoveryResolver,
   type DeployMode,
   type DeployOptions,
   type ModeLaunchHandle
 } from '@agentworkforce/deploy';
-import { BUILD_YOUR_OWN_RUNTIME_DOCS_URL, pickRuntime } from './runtime-picker.js';
+
 
 type LoginApiClient = Pick<CloudApiClient, 'fetch'>;
 
 type DeployCommandDeps = {
-  ensureAuthenticated: typeof ensureAuthenticated;
+  ensureCloudSession(options?: {
+    apiUrl?: string;
+    force?: boolean;
+    interactive?: boolean;
+  }): Promise<{ auth: StoredAuth }>;
   clearStoredAuth: typeof clearStoredAuth;
   clearStoredWorkspaceToken: typeof clearStoredWorkspaceToken;
   clearActiveWorkspace: typeof clearActiveWorkspace;
-  writeActiveWorkspace: typeof writeActiveWorkspace;
+  setWorkspaceKey(name: string, key: string): unknown | Promise<unknown>;
   createTerminalIO: typeof createTerminalIO;
   createCloudApiClient(auth: StoredAuth, apiUrl: string): LoginApiClient;
 };
 
 const defaultDeployCommandDeps: DeployCommandDeps = {
-  ensureAuthenticated,
+  ensureCloudSession,
   clearStoredAuth,
   clearStoredWorkspaceToken,
   clearActiveWorkspace,
-  writeActiveWorkspace,
+  setWorkspaceKey,
   createTerminalIO,
   createCloudApiClient(auth, apiUrl) {
     return new CloudApiClient({
@@ -71,17 +78,7 @@ export async function runDeploy(args: readonly string[]): Promise<void> {
   }
 
   let parsed = parseDeployArgs(args);
-  if (!parsed.mode && (parsed.noPrompt || !process.stdin.isTTY || !process.stdout.isTTY)) {
-    die('deploy: --mode is required when prompts are disabled or stdio is non-interactive');
-  }
-  if (!parsed.mode) {
-    const picked = await pickRuntime();
-    if (picked === 'docs') {
-      process.stdout.write(`${BUILD_YOUR_OWN_RUNTIME_DOCS_URL}\n`);
-      process.exit(0);
-    }
-    parsed = { ...parsed, mode: picked };
-  }
+  parsed = withDefaultDeployMode(parsed);
 
   try {
     const result = await deploy(parsed, {
@@ -108,16 +105,54 @@ export async function runDeploy(args: readonly string[]): Promise<void> {
     const exit = await result.runHandle.done;
     process.exit(exit.code);
   } catch (err) {
-    process.stderr.write(
-      `\nagentworkforce deploy failed: ${err instanceof Error ? err.message : String(err)}\n`
-    );
+    process.stderr.write(`\n${formatDeployFailure(parsed.personaPath, err)}\n`);
     process.exit(1);
   }
+}
+
+/** #158: omitted mode is deterministic in TTY and non-interactive callers. */
+export function withDefaultDeployMode(opts: DeployOptions): DeployOptions {
+  return opts.mode ? opts : { ...opts, mode: 'cloud' };
+}
+
+/**
+ * Authored source support is version-sensitive. Include the implementation
+ * version and its actual package source when a .ts/.js persona fails so a
+ * PATH-selected stale global install is distinguishable from a source error.
+ * The path is intentionally user-visible local diagnostic evidence; install
+ * consistency errors in the top-level wrapper remain path-free.
+ */
+export function formatDeployFailure(
+  personaPath: string,
+  error: unknown,
+  packageJsonUrl = new URL('../package.json', import.meta.url)
+): string {
+  const message = `agentworkforce deploy failed: ${
+    error instanceof Error ? error.message : String(error)
+  }`;
+  if (!isPersonaSourcePath(personaPath)) return message;
+
+  let version = 'unknown';
+  try {
+    const pkg = JSON.parse(readFileSync(packageJsonUrl, 'utf8')) as { version?: unknown };
+    if (typeof pkg.version === 'string' && pkg.version) version = pkg.version;
+  } catch {
+    // Preserve the original deploy failure even when package metadata is
+    // unavailable in a bundled or partially installed CLI environment.
+  }
+  return [
+    message,
+    `authored-source CLI: @agentworkforce/cli ${version} from ${fileURLToPath(packageJsonUrl)}`,
+    'If this .ts/.js persona was reported as JSON, a stale agentworkforce binary is ahead on PATH.',
+    'Check: command -v agentworkforce && agentworkforce --version',
+    'Update: npm install -g agentworkforce@latest'
+  ].join('\n');
 }
 
 function createDeployAuthRecovery(opts: DeployOptions): CloudAuthRecoveryResolver {
   return {
     async recover({ workspace, cloudUrl, io, reason }) {
+      if (opts.noPrompt) return false;
       const ok = await io.confirm(
         'Cloud login is required before deploy can check integrations. Log in now? (opens browser)',
         { defaultValue: true }
@@ -125,16 +160,15 @@ function createDeployAuthRecovery(opts: DeployOptions): CloudAuthRecoveryResolve
       if (!ok) return false;
 
       io.info(`cloud: starting login because integration auth failed (${reason})`);
-      const auth = await deployCommandDeps.ensureAuthenticated(cloudUrl, { force: true });
-      const apiUrl = normalizeCloudUrl(auth.apiUrl || cloudUrl);
-      const activeWorkspace = opts.workspace ?? workspace;
-      await deployCommandDeps.writeActiveWorkspace({
-        workspace: activeWorkspace,
-        cloudUrl: apiUrl
+      const session = await deployCommandDeps.ensureCloudSession({
+        apiUrl: cloudUrl,
+        force: true,
+        interactive: true
       });
+      const activeWorkspace = opts.workspace ?? workspace;
       io.info(`cloud: logged in for workspace ${activeWorkspace}; retrying integration check`);
       return {
-        token: auth.accessToken
+        token: session.auth.accessToken
       };
     }
   };
@@ -161,12 +195,8 @@ export async function runLogin(args: readonly string[]): Promise<void> {
   ));
 
   try {
-    const auth = await deployCommandDeps.ensureAuthenticated(cloudUrl);
-    // Canonicalize what ensureAuthenticated handed back — when the auth
-    // request happens to route through cloud's edge-bypass hostname,
-    // auth.apiUrl can be `https://origin.agentrelay.cloud` even though
-    // the user's session cookies are scoped to `agentrelay.com`. Storing
-    // that URL is what causes every subsequent API call to 401.
+    const session = await deployCommandDeps.ensureCloudSession({ apiUrl: cloudUrl });
+    const auth = session.auth;
     const apiUrl = canonicalizeCloudUrl(normalizeCloudUrl(auth.apiUrl || cloudUrl));
     let workspaces: LoginWorkspace[] = [];
     let chosen: string;
@@ -182,19 +212,19 @@ export async function runLogin(args: readonly string[]): Promise<void> {
       }
       chosen = await pickWorkspaceInteractive(workspaces, io);
     }
-    // No workspace-scoped token mint — cloud's resolveRequestAuth accepts
-    // the shared @agent-relay/cloud accessToken as Bearer directly. We just
-    // persist a pointer recording which workspace the user picked so
-    // resolveWorkspaceToken can pair it with the shared accessToken on
-    // each subsequent deploy call.
     const match = findWorkspace(workspaces, chosen);
-    await deployCommandDeps.writeActiveWorkspace({
-      workspace: chosen,
-      ...(match?.slug ? { workspaceSlug: match.slug } : {}),
-      ...(match?.id ? { workspaceId: match.id } : {}),
-      cloudUrl: apiUrl
-    });
-    process.stdout.write(`\nlogged in: ${chosen}\n`);
+    const descriptor = await resolveWorkspaceForLogin(auth, apiUrl, match?.id ?? chosen);
+    const workspaceName = descriptor.name ?? descriptor.slug ?? match?.slug ?? match?.name ?? chosen;
+    await deployCommandDeps.setWorkspaceKey(workspaceName, descriptor.key);
+    process.stdout.write(`\nlogged in: ${workspaceName}\n`);
+    if (descriptor.cloudWorkspaceId) {
+      process.stdout.write(`cloud workspace id: ${descriptor.cloudWorkspaceId}\n`);
+    } else {
+      process.stderr.write(
+        `warn: workspace ${descriptor.relaycastWorkspaceId} has no linked cloud workspace; ` +
+          'deploy, deployments list and destroy will fail until it is linked. Contact support with this id.\n'
+      );
+    }
     process.exit(0);
   } catch (err) {
     process.stderr.write(
@@ -237,13 +267,19 @@ Flags:
   --mode dev|sandbox|cloud    Pick a run mode (prompts in an interactive terminal)
   --workspace <name>           Workforce workspace; defaults to the active workspace
   --no-connect                 Skip integration-connect prompts; fail if any are missing
+  --reconnect <provider>       Force a fresh connect flow even if already connected,
+                               for an integration or the harness LLM credential
+                               (e.g. openai/codex, anthropic/claude). Repeatable.
+  --supabase-project-ref <ref> Select the 20-character Supabase project used by
+                               the project-scoped, read-only MCP connection
   --byo-sandbox                Force BYO Daytona auth even when logged in
   --detach                     Background the runner instead of streaming logs
   --bundle-out <dir>           Emit the bundle to <dir> and exit (no launch)
   --dry-run                    Validate the persona and exit before any side effects
   --cloud-url <url>            Override the workforce cloud base URL
   --no-prompt                  Fail instead of prompting for cloud setup
-  --harness-source <source>    Cloud harness source: plan, byok, or oauth
+  --harness-source <source>    Cloud harness source: managed, byok, or oauth
+                               (legacy alias: plan)
   --byok-key <key>             API key for --harness-source byok
   --on-exists <choice>         Existing cloud persona behavior: cancel, update, or destroy
   --input <key>=<value>        Override a declared persona input (repeatable)
@@ -252,9 +288,8 @@ Flags:
 
 const LOGIN_USAGE = `usage: agentworkforce login [flags]
 
-Connect this machine to a workforce workspace. Opens the browser to sign in
-to the workforce cloud and stores a small pointer at
-\`~/.agentworkforce/active.json\` recording which workspace this machine targets.
+Connect this machine to a workforce workspace through the canonical
+\`agent-relay\` cloud session and active workspace store.
 
 Flags:
   --workspace <name>          Workforce workspace; defaults to WORKFORCE_WORKSPACE_ID or prompt
@@ -276,7 +311,6 @@ Flags:
   -h, --help                  Print this message
 `;
 
-const HARNESS_SOURCES = ['plan', 'byok', 'oauth'] as const;
 const ON_EXISTS_CHOICES = ['update', 'destroy', 'cancel'] as const;
 
 export function parseDeployArgs(args: readonly string[]): DeployOptions {
@@ -293,7 +327,9 @@ export function parseDeployArgs(args: readonly string[]): DeployOptions {
   let harnessSource: DeployOptions['harnessSource'];
   let byokKey: string | undefined;
   let onExists: DeployOptions['onExists'];
+  let supabaseMcpProjectRef: string | undefined;
   const inputs: Record<string, string> = {};
+  const reconnectProviders: string[] = [];
 
   for (let i = 0; i < args.length; i += 1) {
     const a = args[i];
@@ -310,6 +346,21 @@ export function parseDeployArgs(args: readonly string[]): DeployOptions {
       workspace = expectValue('--workspace', args[++i]);
     } else if (a === '--no-connect') {
       noConnect = true;
+    } else if (a === '--reconnect') {
+      reconnectProviders.push(...parseProviderList(expectValue('--reconnect', args[++i])));
+    } else if (a.startsWith('--reconnect=')) {
+      reconnectProviders.push(...parseProviderList(expectInlineValue('--reconnect', a.slice('--reconnect='.length))));
+    } else if (a === '--supabase-project-ref') {
+      supabaseMcpProjectRef = expectSupabaseMcpProjectRef(
+        expectValue('--supabase-project-ref', args[++i]),
+      );
+    } else if (a.startsWith('--supabase-project-ref=')) {
+      supabaseMcpProjectRef = expectSupabaseMcpProjectRef(
+        expectInlineValue(
+          '--supabase-project-ref',
+          a.slice('--supabase-project-ref='.length),
+        ),
+      );
     } else if (a === '--byo-sandbox') {
       byoSandbox = true;
     } else if (a === '--detach') {
@@ -326,9 +377,9 @@ export function parseDeployArgs(args: readonly string[]): DeployOptions {
       noPrompt = true;
       noConnect = true;
     } else if (a === '--harness-source') {
-      harnessSource = expectChoice('--harness-source', expectValue('--harness-source', args[++i]), HARNESS_SOURCES);
+      harnessSource = expectHarnessSourceFlag(expectValue('--harness-source', args[++i]));
     } else if (a.startsWith('--harness-source=')) {
-      harnessSource = expectChoice('--harness-source', expectInlineValue('--harness-source', a.slice('--harness-source='.length)), HARNESS_SOURCES);
+      harnessSource = expectHarnessSourceFlag(expectInlineValue('--harness-source', a.slice('--harness-source='.length)));
     } else if (a === '--byok-key') {
       byokKey = expectValue('--byok-key', args[++i]);
     } else if (a.startsWith('--byok-key=')) {
@@ -365,11 +416,31 @@ export function parseDeployArgs(args: readonly string[]): DeployOptions {
     ...(dryRun ? { dryRun: true } : {}),
     ...(cloudUrl ? { cloudUrl } : {}),
     ...(noPrompt ? { noPrompt: true } : {}),
+    ...(reconnectProviders.length > 0 ? { reconnectProviders: [...new Set(reconnectProviders)] } : {}),
+    ...(supabaseMcpProjectRef ? { supabaseMcpProjectRef } : {}),
     ...(harnessSource ? { harnessSource } : {}),
     ...(byokKey ? { byokKey } : {}),
     ...(onExists ? { onExists } : {}),
     ...(Object.keys(inputs).length > 0 ? { inputs } : {})
   };
+}
+
+function expectSupabaseMcpProjectRef(value: string): string {
+  const projectRef = value.trim().toLowerCase();
+  if (!/^[a-z0-9]{20}$/u.test(projectRef)) {
+    die(
+      '--supabase-project-ref: expected exactly 20 lowercase letters or digits',
+    );
+  }
+  return projectRef;
+}
+
+function parseProviderList(value: string): string[] {
+  const providers = value.split(',').map((entry) => entry.trim()).filter(Boolean);
+  if (providers.length === 0) {
+    die('--reconnect: expected <provider>');
+  }
+  return providers;
 }
 
 function expectDeployInputValue(value: string | undefined): string {
@@ -413,6 +484,13 @@ function expectChoice<T extends string>(flag: string, value: string, allowed: re
     die(`${flag}: expected one of ${allowed.join('|')}; got "${value}"`);
   }
   return value as T;
+}
+
+function expectHarnessSourceFlag(value: string): DeployOptions['harnessSource'] {
+  const normalized = value.trim().toLowerCase();
+  if (normalized === 'plan') return 'managed';
+  if (normalized === 'managed' || normalized === 'byok' || normalized === 'oauth') return normalized;
+  die(`--harness-source: expected one of managed|byok|oauth (legacy alias: plan); got "${value}"`);
 }
 
 function parseLoginArgs(args: readonly string[]): { workspace?: string; cloudUrl?: string } {
@@ -473,6 +551,14 @@ type LoginWorkspace = {
   name?: string;
 };
 
+type LoginWorkspaceDescriptor = {
+  key: string;
+  relaycastWorkspaceId: string;
+  cloudWorkspaceId?: string;
+  name?: string;
+  slug?: string;
+};
+
 async function listWorkspacesForLogin(auth: StoredAuth, apiUrl: string): Promise<LoginWorkspace[]> {
   const client = deployCommandDeps.createCloudApiClient(auth, apiUrl);
   const res = await client.fetch('/api/v1/workspaces');
@@ -492,6 +578,38 @@ async function listWorkspacesForLogin(auth: StoredAuth, apiUrl: string): Promise
   const who = await client.fetch('/api/v1/auth/whoami');
   if (!who.ok) return [];
   return parseWorkspaceList(await who.json().catch(() => null));
+}
+
+async function resolveWorkspaceForLogin(
+  auth: StoredAuth,
+  apiUrl: string,
+  workspace: string
+): Promise<LoginWorkspaceDescriptor> {
+  const client = deployCommandDeps.createCloudApiClient(auth, apiUrl);
+  const res = await client.fetch(`/api/v1/workspaces/${encodeURIComponent(workspace)}/resolve`);
+  if (!res.ok) {
+    throw new Error(`workspace resolve failed: ${res.status} ${await res.text().catch(() => '')}`.trim());
+  }
+  const payload = await res.json().catch(() => null);
+  if (!payload || typeof payload !== 'object' || Array.isArray(payload)) {
+    throw new Error('workspace resolve returned an invalid descriptor');
+  }
+  const record = payload as Record<string, unknown>;
+  const key = readString(record, 'key') ?? readString(record, 'relaycastApiKey') ?? '';
+  const relaycastWorkspaceId = readString(record, 'relaycastWorkspaceId')
+    ?? readString(record, 'workspaceId')
+    ?? '';
+  if (!key || !relaycastWorkspaceId) {
+    throw new Error('workspace resolve returned an incomplete descriptor');
+  }
+  const cloudWorkspaceId = readString(record, 'cloudWorkspaceId');
+  return {
+    key,
+    relaycastWorkspaceId,
+    ...(cloudWorkspaceId ? { cloudWorkspaceId } : {}),
+    ...(readString(record, 'name') ? { name: readString(record, 'name') } : {}),
+    ...(readString(record, 'slug') ? { slug: readString(record, 'slug') } : {})
+  };
 }
 
 async function pickWorkspaceInteractive(

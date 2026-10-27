@@ -1,0 +1,390 @@
+import { existsSync, readFileSync } from 'node:fs';
+import { mkdtemp, rm } from 'node:fs/promises';
+import { createRequire } from 'node:module';
+import { tmpdir } from 'node:os';
+import { dirname, join, resolve as resolvePath } from 'node:path';
+
+import * as fleetSdk from '@agent-relay/fleet';
+import {
+  action,
+  defineNode,
+  type FleetActionContext,
+  type FleetActionDefinition,
+  type FleetNodeDefinition
+} from '@agent-relay/fleet';
+import {
+  buildPersonaSpawnPlan,
+  executePersonaSpawnPlan,
+  type ExecutionHandle,
+  type PersonaSpawnPlan
+} from '@agentworkforce/persona-kit';
+import {
+  resolvePersonaReference,
+  type LoadOptions,
+  type ResolvedPersonaReference
+} from '@agentworkforce/persona-registry';
+
+export const WORKFORCE_PERSONA_SPAWN_CAPABILITY = 'spawn:persona';
+
+export interface WorkforcePersonaSpawnInput {
+  /** Agent Relay identity to register for the launched harness. */
+  name: string;
+  /** Persona id, built-in intent, or JSON path. */
+  persona: string;
+  /** Concrete assignment layered over the persona's standing instructions. */
+  task?: string;
+  /** Project cwd used for registry lookup and the isolated runtime mount. */
+  cwd?: string;
+  /** Relay channels the persona should join. */
+  channels?: string[];
+}
+
+export interface WorkforcePersonaSpawnResult {
+  spawned: true;
+  name: string;
+  persona: string;
+  harness: string;
+  model: string;
+  source: string;
+  result: unknown;
+}
+
+/** Resources prepared for one launch; the handle is the executor's actual handle. */
+export interface WorkforcePersonaExecution {
+  readonly handle: ExecutionHandle;
+  /** Factory-owned parent of handle.cwd; remove after disposing the handle. */
+  readonly scratchDir: string;
+}
+
+export interface WorkforcePersonaSpawnOptions {
+  /**
+   * Awaited once per prepared launch, before delegating to the broker. Use this
+   * to retain the actual resources and bank ownership before a worker can start.
+   * Throwing/rejecting prevents delegation and the factory cleans up. Delegation
+   * failure also triggers factory cleanup; discard the retained receipt then.
+   * After success the host owns cleanup: first release the launched worker and
+   * confirm it stopped, then await handle.dispose() and remove scratchDir. The
+   * callback must not dispose resources while preparation/delegation is pending.
+   * Without this callback, successful resources retain their existing lifetime.
+   */
+  onExecutionPrepared?: (
+    name: string,
+    execution: WorkforcePersonaExecution
+  ) => void | Promise<void>;
+  /** Default project cwd. Request-local `cwd` wins. */
+  cwd?: string;
+  /** Registry source configuration shared with `agentworkforce agent`. */
+  registry?: Omit<LoadOptions, 'cwd'>;
+  /** Forward non-fatal registry warnings to the node host. */
+  onWarning?: (warning: string) => void;
+}
+
+export interface DefineWorkforcePersonaSpawnNodeOptions extends WorkforcePersonaSpawnOptions {
+  nodeName: string;
+  maxAgents?: number;
+  tags?: string[];
+  version?: string;
+}
+
+interface PreparedPersonaExecution {
+  handle: ExecutionHandle;
+  scratchDir: string;
+  plan: PersonaSpawnPlan;
+  resolved: ResolvedPersonaReference;
+}
+
+type ResolvePersona = typeof resolvePersonaReference;
+type BuildPlan = typeof buildPersonaSpawnPlan;
+type ExecutePlan = typeof executePersonaSpawnPlan;
+type CheckFleetCompatibility = () => void;
+
+let resolvePersonaImpl: ResolvePersona = resolvePersonaReference;
+let buildPlanImpl: BuildPlan = buildPersonaSpawnPlan;
+let executePlanImpl: ExecutePlan = executePersonaSpawnPlan;
+let checkFleetCompatibilityImpl: CheckFleetCompatibility = assertFleetCompatibility;
+
+/** @internal Test seam for SDK orchestration; not part of the stable API. */
+export function __setPersonaSpawnImplementationsForTest(input?: {
+  resolvePersona?: ResolvePersona;
+  buildPlan?: BuildPlan;
+  executePlan?: ExecutePlan;
+  checkFleetCompatibility?: CheckFleetCompatibility;
+}): void {
+  resolvePersonaImpl = input?.resolvePersona ?? resolvePersonaReference;
+  buildPlanImpl = input?.buildPlan ?? buildPersonaSpawnPlan;
+  executePlanImpl = input?.executePlan ?? executePersonaSpawnPlan;
+  checkFleetCompatibilityImpl = input?.checkFleetCompatibility ?? assertFleetCompatibility;
+}
+
+/**
+ * A reusable `spawn:persona` capability for custom fleet node definitions.
+ * Resolution and preparation happen on the target node, so local persona
+ * paths, installed skills, and MCP configuration never have to exist on the
+ * orchestrator.
+ */
+export function workforcePersonaSpawnCapability(
+  options: WorkforcePersonaSpawnOptions = {}
+): FleetActionDefinition<unknown, WorkforcePersonaSpawnResult> {
+  const inFlight = new Map<string, Promise<WorkforcePersonaSpawnResult>>();
+  const active = new Map<string, PreparedPersonaExecution>();
+
+  return action({}, async (rawInput, ctx) => {
+    checkFleetCompatibilityImpl();
+    const input = parseSpawnInput(rawInput);
+    const cwd = resolvePath(input.cwd ?? options.cwd ?? process.cwd());
+    const resolved = resolvePersonaImpl(input.persona, {
+      ...(options.registry ?? {}),
+      cwd
+    });
+    for (const warning of resolved.warnings) options.onWarning?.(warning);
+
+    // A Relay identity is a capacity request. Coalesce only callers that name
+    // the same node, project, persona, and registered agent identity.
+    const key = [ctx.node.name, input.name, cwd, resolved.path ?? resolved.spec.id].join('\u001f');
+    const existing = inFlight.get(key);
+    if (existing) return existing;
+
+    const launch = launchResolvedPersona({
+      input, cwd, resolved, ctx, active,
+      onExecutionPrepared: options.onExecutionPrepared
+    });
+    inFlight.set(key, launch);
+    try {
+      return await launch;
+    } finally {
+      if (inFlight.get(key) === launch) inFlight.delete(key);
+    }
+  });
+}
+
+/**
+ * Define a fleet node whose capacity is interactive AgentWorkforce personas.
+ * This is the ergonomic counterpart to `defineWorkforcePersonaNode`, which is
+ * intentionally for one long-lived cloud/onEvent persona.
+ */
+export function defineWorkforcePersonaSpawnNode(
+  options: DefineWorkforcePersonaSpawnNodeOptions
+): FleetNodeDefinition {
+  const nodeName = requireNonEmpty(options.nodeName, 'nodeName');
+  return defineNode({
+    name: nodeName,
+    ...(options.maxAgents !== undefined ? { maxAgents: options.maxAgents } : {}),
+    capabilities: {
+      [WORKFORCE_PERSONA_SPAWN_CAPABILITY]: workforcePersonaSpawnCapability(options)
+    },
+    ...(options.tags ? { tags: [...options.tags] } : {}),
+    ...(options.version ? { version: options.version } : {})
+  });
+}
+
+async function launchResolvedPersona(input: {
+  input: WorkforcePersonaSpawnInput;
+  cwd: string;
+  resolved: ResolvedPersonaReference;
+  ctx: FleetActionContext;
+  active: Map<string, PreparedPersonaExecution>;
+  onExecutionPrepared?: WorkforcePersonaSpawnOptions['onExecutionPrepared'];
+}): Promise<WorkforcePersonaSpawnResult> {
+  const { resolved, ctx } = input;
+  const scratchDir = await mkdtemp(join(tmpdir(), 'agentworkforce-relay-persona-'));
+  // @relayfile/local-mount owns mountDir: createMount() either creates a
+  // missing path or reuses one carrying its .relayfile-local-mount marker.
+  // Keep our cleanup root separate and hand it a nonexistent child path.
+  const mountDir = join(scratchDir, 'mount');
+  let execution: ExecutionHandle | undefined;
+  try {
+    const built = buildPlanImpl(resolved.selection, {
+      // Input values are resolved on the target node. Forward only declared
+      // input variables instead of serializing the node's whole environment
+      // into this inspectable plan.
+      processEnv: declaredInputEnv(resolved.selection)
+    });
+    // Interactive CLI launches use an isolated mount by default even when the
+    // persona has no custom filters. Preserve that safety property: skills,
+    // AGENTS.md/CLAUDE.md, and generated MCP config must never overwrite the
+    // real project while a remote spawn is running.
+    const plan: PersonaSpawnPlan = built.mount
+      ? built
+      : {
+          ...built,
+          mount: { ignoredPatterns: [], readonlyPatterns: [] }
+        };
+    execution = await executePlanImpl(plan, {
+      cwd: input.cwd,
+      mount: { mountDir, includeGit: true, autoSync: true }
+    });
+
+    await input.onExecutionPrepared?.(input.input.name, { handle: execution, scratchDir });
+
+    const args = plan.initialPrompt ? [...plan.args, plan.initialPrompt] : [...plan.args];
+    const result = await ctx.spawnAgent({
+      agent: {
+        name: input.input.name,
+        runtime: 'pty',
+        cli: plan.cli,
+        model: resolved.selection.model,
+        args,
+        ...(input.input.channels ? { channels: [...input.input.channels] } : {}),
+        cwd: execution.cwd,
+        harness_config: {
+          runtime: 'pty',
+          command: plan.cli,
+          args,
+          cwd: execution.cwd,
+          ...(Object.keys(plan.env).length > 0 ? { env: plan.env } : {}),
+          metadata: {
+            workforce_persona: resolved.spec.id,
+            // Relay 11.5+ treats this typed launch contract as synchronous:
+            // node registration + worker_ready, with release on either failure.
+            verify_ready: true,
+            require_node_registration: true
+          }
+        }
+      },
+      ...(input.input.task !== undefined ? { initialTask: input.input.task } : {}),
+      skipRelayPrompt: false,
+      invocationId: ctx.invocationId
+    });
+
+    input.active.set(input.input.name, {
+      handle: execution,
+      scratchDir,
+      plan,
+      resolved
+    });
+    return {
+      spawned: true,
+      name: input.input.name,
+      persona: resolved.spec.id,
+      harness: resolved.selection.harness,
+      model: resolved.selection.model,
+      source: resolved.source,
+      result
+    };
+  } catch (error) {
+    try {
+      await execution?.dispose();
+    } finally {
+      await rm(scratchDir, { recursive: true, force: true });
+    }
+    throw error;
+  }
+}
+
+/** Oldest `@agent-relay/fleet` major this package is built and tested against. */
+export const MIN_FLEET_MAJOR = 12;
+
+const FLEET_COMPATIBILITY_ERROR = `spawn:persona requires @agent-relay/fleet ${MIN_FLEET_MAJOR} or newer; older Fleet versions are not supported by @agentworkforce/local-surface`;
+
+/**
+ * Validate the loaded Fleet SDK. `version` is the installed package version
+ * when it can be read; when it cannot (e.g. a bundled build without the
+ * package manifest) only the capability flag is checked.
+ * @internal Exported for tests; not part of the stable API.
+ */
+export function checkFleetSdkCompatibility(sdk: {
+  dynamicSpawnDelegation: unknown;
+  version: string | undefined;
+}): void {
+  if (sdk.dynamicSpawnDelegation !== true) {
+    throw new Error(FLEET_COMPATIBILITY_ERROR);
+  }
+  if (sdk.version !== undefined) {
+    const major = Number.parseInt(sdk.version, 10);
+    if (!Number.isFinite(major) || major < MIN_FLEET_MAJOR) {
+      throw new Error(`${FLEET_COMPATIBILITY_ERROR} (found ${sdk.version})`);
+    }
+  }
+}
+
+function assertFleetCompatibility(): void {
+  checkFleetSdkCompatibility({
+    dynamicSpawnDelegation: (fleetSdk as unknown as { FLEET_DYNAMIC_SPAWN_DELEGATION?: unknown })
+      .FLEET_DYNAMIC_SPAWN_DELEGATION,
+    version: installedFleetVersion()
+  });
+}
+
+/**
+ * Memoize a Fleet version reader so the manifest lookup (sync fs I/O) runs at
+ * most once per process; an unreadable result (`undefined`) is cached too.
+ * @internal Exported for tests; not part of the stable API.
+ */
+export function createCachedFleetVersionReader(
+  read: () => string | undefined
+): () => string | undefined {
+  let cached: { version: string | undefined } | undefined;
+  return () => {
+    cached ??= { version: read() };
+    return cached.version;
+  };
+}
+
+const installedFleetVersion = createCachedFleetVersionReader(readInstalledFleetVersion);
+
+function readInstalledFleetVersion(): string | undefined {
+  try {
+    let dir = dirname(createRequire(import.meta.url).resolve('@agent-relay/fleet'));
+    for (;;) {
+      const manifest = join(dir, 'package.json');
+      if (existsSync(manifest)) {
+        const parsed = JSON.parse(readFileSync(manifest, 'utf8')) as { name?: unknown; version?: unknown };
+        if (parsed.name === '@agent-relay/fleet') {
+          return typeof parsed.version === 'string' ? parsed.version : undefined;
+        }
+      }
+      const parent = dirname(dir);
+      if (parent === dir) return undefined;
+      dir = parent;
+    }
+  } catch {
+    return undefined;
+  }
+}
+
+function declaredInputEnv(selection: ResolvedPersonaReference['selection']): NodeJS.ProcessEnv {
+  const env: NodeJS.ProcessEnv = {};
+  for (const [name, input] of Object.entries(selection.inputs ?? {})) {
+    const envName = input.env ?? name;
+    const value = process.env[envName];
+    if (typeof value === 'string') env[envName] = value;
+  }
+  return env;
+}
+
+function parseSpawnInput(value: unknown): WorkforcePersonaSpawnInput {
+  if (!isRecord(value)) throw new Error('spawn:persona input must be an object');
+  const name = requireNonEmpty(value.name, 'name');
+  const persona = requireNonEmpty(value.persona, 'persona');
+  const task = optionalString(value.task, 'task');
+  const cwd = optionalString(value.cwd, 'cwd');
+  let channels: string[] | undefined;
+  if (value.channels !== undefined) {
+    if (!Array.isArray(value.channels)) throw new Error('channels must be an array of strings');
+    channels = value.channels.map((channel, index) => requireNonEmpty(channel, `channels[${index}]`));
+  }
+  return {
+    name,
+    persona,
+    ...(task !== undefined ? { task } : {}),
+    ...(cwd !== undefined ? { cwd } : {}),
+    ...(channels ? { channels } : {})
+  };
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === 'object' && value !== null && !Array.isArray(value);
+}
+
+function optionalString(value: unknown, label: string): string | undefined {
+  if (value === undefined) return undefined;
+  if (typeof value !== 'string') throw new Error(`${label} must be a string`);
+  return value;
+}
+
+function requireNonEmpty(value: unknown, label: string): string {
+  if (typeof value !== 'string' || !value.trim()) {
+    throw new Error(`${label} must be a non-empty string`);
+  }
+  return value.trim();
+}

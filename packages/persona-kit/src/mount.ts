@@ -1,6 +1,7 @@
 import { mkdir } from 'node:fs/promises';
 import { join } from 'node:path';
 
+import type { AutoSyncHandle, AutoSyncOptions } from '@relayfile/local-mount';
 import type { ResolvedMountPolicy, ResolvedMountRoot } from './plan.js';
 
 // `@relayfile/local-mount` pulls in `@parcel/watcher`, which loads a
@@ -65,6 +66,12 @@ export interface ApplyPersonaMountOptions {
    * pure file overlay.
    */
   includeGit?: boolean;
+  /**
+   * Keep the project and mount synchronized for the lifetime of the handle.
+   * `dispose()` stops the watchers and performs their final flush before the
+   * mount is removed.
+   */
+  autoSync?: boolean | AutoSyncOptions;
 }
 
 /**
@@ -82,10 +89,9 @@ export interface ApplyPersonaMountOptions {
  *     personas don't depend on where the launcher was invoked from).
  *
  * `dispose()` tears everything down in reverse open order, best-effort.
- * The caller is responsible for picking the mountDir (typically a
- * per-session scratch directory) and for any auto-sync orchestration
- * outside of mount lifecycle. Persona-kit's mount handle covers
- * open/close only.
+ * When `options.autoSync` is set, each root (or the single mount) starts
+ * a watcher that `dispose()` stops before cleanup. The caller picks the
+ * mountDir, typically a per-session scratch directory.
  */
 export async function applyPersonaMount(
   mount: ResolvedMountPolicy | undefined,
@@ -125,6 +131,19 @@ export async function applyPersonaMount(
     agentName: options.personaId,
     includeGit: options.includeGit ?? true
   });
+  let autoSync: AutoSyncHandle | undefined;
+  try {
+    autoSync = options.autoSync
+      ? handle.startAutoSync(typeof options.autoSync === 'object' ? options.autoSync : undefined)
+      : undefined;
+  // Do not hand the mount to a fast-starting harness before watcher setup has
+  // settled. A degraded watcher is still usable: stop() performs a full
+  // reconcile, so setup errors intentionally fall through to that fallback.
+    await Promise.resolve(autoSync?.ready()).catch(() => undefined);
+  } catch (error) {
+    await handle.cleanup();
+    throw error;
+  }
 
   let disposed = false;
   return {
@@ -133,17 +152,24 @@ export async function applyPersonaMount(
     async dispose(): Promise<void> {
       if (disposed) return;
       disposed = true;
-      // Defensive await — relayfile's typed signature is void today, but
-      // future versions may return a promise; awaiting a non-promise is a
-      // no-op and protects the dispose contract executors rely on.
-      await handle.cleanup();
+      try {
+        await autoSync?.stop();
+      } finally {
+        // Defensive await — relayfile's typed signature is void today, but
+        // future versions may return a promise; awaiting a non-promise is a
+        // no-op and protects the dispose contract executors rely on.
+        await handle.cleanup();
+      }
     }
   };
 }
 
-interface RelayfileHandle {
-  mountDir: string;
-  cleanup(): void | Promise<void>;
+interface OpenedRoot {
+  handle: {
+    mountDir: string;
+    cleanup(): void | Promise<void>;
+  };
+  autoSync?: AutoSyncHandle;
 }
 
 async function openMultiRoot(
@@ -155,13 +181,17 @@ async function openMultiRoot(
     // Already guarded above, repeated here for the type narrowing.
     throw new Error('applyPersonaMount: options.mountDir is required');
   }
+  const roots = mount.roots;
+  if (!roots || roots.length === 0) {
+    throw new Error('applyPersonaMount: multi-root mount requires at least one root');
+  }
   const parent = options.mountDir;
   await mkdir(parent, { recursive: true });
 
-  const opened: RelayfileHandle[] = [];
+  const opened: OpenedRoot[] = [];
   const aliases: string[] = [];
   try {
-    for (const root of mount.roots ?? []) {
+    for (const root of roots) {
       const dest = join(parent, root.alias);
       const handle = await createMount(root.path, dest, {
         ignoredPatterns: mergePatterns(mount.ignoredPatterns, root.ignoredPatterns),
@@ -170,7 +200,17 @@ async function openMultiRoot(
         agentName: `${options.personaId}:${root.alias}`,
         includeGit: options.includeGit ?? true
       });
-      opened.push(handle);
+      let autoSync: AutoSyncHandle | undefined;
+      try {
+        autoSync = options.autoSync
+          ? handle.startAutoSync(typeof options.autoSync === 'object' ? options.autoSync : undefined)
+          : undefined;
+        await Promise.resolve(autoSync?.ready()).catch(() => undefined);
+      } catch (error) {
+        await handle.cleanup();
+        throw error;
+      }
+      opened.push({ handle, autoSync });
       aliases.push(root.alias);
     }
   } catch (err) {
@@ -198,10 +238,15 @@ function mergePatterns(
   return [...base, ...extra];
 }
 
-async function disposeAll(handles: readonly RelayfileHandle[]): Promise<void> {
-  for (let i = handles.length - 1; i >= 0; i -= 1) {
+async function disposeAll(opened: readonly OpenedRoot[]): Promise<void> {
+  for (let i = opened.length - 1; i >= 0; i -= 1) {
     try {
-      await handles[i].cleanup();
+      await opened[i].autoSync?.stop();
+    } catch {
+      // Best-effort: one failed watcher stop must not block the rest.
+    }
+    try {
+      await opened[i].handle.cleanup();
     } catch {
       // Best-effort: one failed cleanup must not block the rest.
     }

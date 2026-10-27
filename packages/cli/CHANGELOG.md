@@ -7,6 +7,313 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [4.2.0] - 2026-10-02
+
+### Dependencies
+
+- Move to zod 4 and zod-4 @agent-relay lines (#4080)
+
+## [4.1.60] - 2026-09-30
+
+### Fixed
+
+- Use the cloud workspace id for cloud API calls (#342)
+
+## [4.1.59] - 2026-09-17
+
+### Fixed
+
+- Show the real cause in the deployments-list error snippet, not the boilerplate head (#341)
+
+## [4.1.56] - 2026-09-08
+
+### Fixed
+
+- Digest only the compiled persona in a nested agent dir (#318)
+
+## [4.1.54] - 2026-09-03
+
+### Added
+
+- Add workspace-scoped `env set`, `env list`, and `env unset` commands. Secret
+  values are accepted only from stdin, output is metadata-only, and cloud
+  deployments receive the variables through their runtime environment rather
+  than persona prompt inputs.
+
+## [4.1.51] - 2026-08-31
+
+### Added
+
+- Add `--supabase-project-ref <ref>` for non-interactive, project-scoped
+  Supabase MCP deploys; interactive deploys prompt for the same value.
+
+- `--version` now checks the npm registry for a newer published release and,
+  when the installed build is behind, writes `Update available: <current> →
+  <latest>` and the install command to stderr. stdout stays exactly the version
+  string. The check is best-effort (1s timeout, silent on any failure), honours
+  `AGENTWORKFORCE_REGISTRY` / `npm_config_registry`, and is skipped with
+  `AGENTWORKFORCE_NO_UPDATE_CHECK=1` or `NO_UPDATE_NOTIFIER=1`. A CLI resolved
+  from the working tree's own `node_modules` — including an ancestor's — is
+  told to update without `-g`.
+
+## [4.1.50] - 2026-08-24
+
+### Fixed
+
+- Ship every persona-authoring kit in the CLI install tree (#327)
+
+## [4.1.46] - 2026-08-19
+
+### Added
+
+- **Load agents/<name>/persona.json as a cascade layer**
+
+## [4.1.43] - 2026-08-16
+
+### Added
+
+- **Let `trigger` carry a payload** (#312)
+
+## [4.1.41] - 2026-08-14
+
+### Released
+
+- v4.1.41
+
+## [4.1.39] - 2026-08-11
+
+### Added
+
+- **Expose SDK-backed persona fleet spawning** (#307)
+
+## [4.1.36] - 2026-07-24
+
+### Changed
+
+- 296: deriveAgentCard(personaSpec): canonical persona → A2A agent card in persona-kit (#298)
+
+## [4.1.31] - 2026-07-17
+
+### Fixed
+
+- Preserve deployment run failures and integration-watch health in JSON output,
+  and surface them clearly in the human-readable deployments list.
+
+## [4.1.29] - 2026-07-17
+
+### Fixed
+
+- Authored `.ts`/`.js` deploy failures now report the selected CLI version and
+  package source plus a copyable PATH/update check, making stale global binary
+  selection explicit (#163).
+
+## [4.1.25] - 2026-07-16
+
+### Fixed
+
+- Deliver harness prompts off argv (#274)
+
+## [4.1.24] - 2026-07-16
+
+### Fixed
+
+- Close composable runtime policy and contract gaps (#273)
+
+## [4.1.23] - 2026-07-15
+
+### Added
+
+- **Close the composable local runtime loop** (#272)
+
+## [4.1.19] - 2026-07-15
+
+### Added
+
+- **Fleet-node bridge for running proactive personas on a laptop** (#263)
+
+## [4.1.18] - 2026-07-15
+
+### Added
+
+- **Add reusable cron and Slack delivery helpers** (#261)
+
+## [4.1.15] - 2026-07-13
+
+### Added
+
+- **Warm fast path spawns the harness in ~20ms; 10x faster cold launches**
+
+### Fixed
+
+- Split PATH on the platform delimiter in resolveBinOnPath
+- Harden the warm fast path per review
+- Resolve fast-session exit even when the child exits during module load
+
+### Dependencies
+
+- Consume published @relayfile/local-mount 0.10.23
+
+## [4.1.13] - 2026-06-25
+
+### Added
+
+- **Add managed harness source alias** (#257)
+
+## [4.1.8] - 2026-06-21
+
+### Fixed
+
+- Explain trigger auth source on 403
+
+## [4.1.7] - 2026-06-21
+
+### Added
+
+- **Add deployed persona trigger command**
+
+## [4.0.5] - 2026-06-14
+
+### Fixed
+
+- Let --reconnect refresh a revoked harness LLM credential (#235)
+
+## [4.0.4] - 2026-06-14
+
+### Changed
+
+- Unify workforce cloud auth session (#234)
+
+## [4.0.2] - 2026-06-11
+
+### Added
+
+- **Add linear-dispatcher and repo-router persona packs** (#223)
+
+### Fixed
+
+- Resolve local skill sources against the persona JSON directory (#226)
+
+## [4.0.0] - 2026-06-10
+
+### Breaking Changes
+
+- **Relay SDK AgentEvent + declarative relay persona field (Stage 1, A, B, C-runtime)** (#220)
+
+## [3.0.51] - 2026-06-08
+
+### Added
+
+- **Auto-inject ai-hist MCP + enforce trajectory recording**
+- **Add grok harness support**
+
+### Fixed
+
+- Use broker-aware agent-relay MCP for local persona spawns (#214)
+- Route launch-metadata warnings to a log file
+- Address grok harness review feedback
+
+### Changed
+
+- Consolidate trajectories + ai-memory under memory (opt-in) (#210)
+
+### Dependencies
+
+- Apply pr-reviewer fixes for #206 (#206)
+
+## [3.0.45] - 2026-06-04
+
+### Documentation
+
+- Spec — `agentworkforce integrations` integration & trigger discoverability (CLI + mcp-workforce tool) (#191)
+
+## [3.0.44] - 2026-06-04
+
+### Added
+
+- **Runs export + invoke --scaffold + envelope contract test vs cloud (#189)** (#189)
+
+## [3.0.43] - 2026-06-04
+
+### Added
+
+- **Workforce invoke — fixture-replay simulation CLI (#186 P2)** (#186)
+
+## [3.0.38] - 2026-06-01
+
+### Added
+
+- **Move triggers/schedules/watch to agent.ts (defineAgent)** (#175)
+
+## [3.0.37] - 2026-06-01
+
+### Added
+
+- **Wire relaycast MCP into broker-launched personas** (#170)
+
+## [3.0.31] - 2026-05-28
+
+### Released
+
+- v3.0.31
+
+## [3.0.29] - 2026-05-28
+
+### Changed
+
+- Cli: default deploy mode to cloud (#158)
+
+## [3.0.28] - 2026-05-28
+
+### Changed
+
+- Require ready integration status before deploy (#155)
+
+## [3.0.26] - 2026-05-27
+
+### Fixed
+
+- `agentworkforce persona compile` now evaluates typed persona modules beside
+  their source file, so `import.meta.url` sibling-file reads behave correctly.
+- `agentworkforce deploy` now accepts authored persona source modules in
+  addition to prebuilt JSON, and the CLI ships current trigger lint data for
+  Slack `message.created` plus the `google-mail` deploy provider id.
+
+## [3.0.23] - 2026-05-26
+
+### Changed
+
+- Vendor Relayfile trigger catalog in persona-kit (#139)
+
+## [3.0.20] - 2026-05-23
+
+### Added
+
+- **Make harness/model/systemPrompt optional for handler personas** (#135)
+
+## [3.0.15] - 2026-05-20
+
+### Changed
+
+- Bump @relayfile/local-mount 0.7.19 → 0.7.24 and include mount setup timing/file-count metrics in the sandbox ready line when available.
+
+## [3.0.14] - 2026-05-20
+
+### Added
+
+- **Persistent skill cache to skip prpm install on repeat launches** (#124)
+
+## [3.0.13] - 2026-05-19
+
+### Changed
+
+- Improve deployment list and logs CLI (#126)
+
+## [3.0.12] - 2026-05-18
+
+### Fixed
+
+- Preserve dangerouslyBypassApprovalsAndSandbox on standalone personas (#125)
+
 ## [3.0.11] - 2026-05-14
 
 ### Dependencies

@@ -14,7 +14,7 @@ agentworkforce agent multi-repo-release
 
 The harness starts with `cwd = <session>/mount/` and sees:
 
-```
+```text
 mount/
   api/    ← readonly mirror of $ACME_API_DIR
   web/    ← read-write mirror of $ACME_WEB_DIR

@@ -102,12 +102,16 @@ test('toProactiveSession honors an explicit agentId override', () => {
   assert.equal(session.metadata.agentId, 'alt-agent');
 });
 
-test('schedulerBindingFromCtx routes requestWakeUp through ctx.schedule.at', async () => {
-  const calls: Array<{ at: Date; payload: unknown }> = [];
+test('schedulerBindingFromCtx routes a named request through ctx.schedule.at', async () => {
+  const calls: Array<{
+    at: Date;
+    payload: unknown;
+    options: unknown;
+  }> = [];
   const ctx = fakeCtx({
     schedule: {
-      async at(at, payload) {
-        calls.push({ at, payload });
+      async at(at, payload, options) {
+        calls.push({ at, payload, options });
       },
       async cancel() {
         /* unused here */
@@ -119,9 +123,7 @@ test('schedulerBindingFromCtx routes requestWakeUp through ctx.schedule.at', asy
   const id = await binding.requestWakeUp(at, { reason: 'follow-up' } as never);
   assert.equal(calls.length, 1);
   assert.equal(calls[0].at.toISOString(), at.toISOString());
-  // The bindingId is a stable per-agent slot name so a pre-registered
-  // persona schedule slot can be cancelled by `cancelWakeUp`. It is not
-  // per-timestamp, since `ctx.schedule.at` does not accept caller names.
+  assert.deepEqual(calls[0].options, { name: 'proactive-reviewer' });
   assert.equal(id, 'proactive-reviewer');
 });
 

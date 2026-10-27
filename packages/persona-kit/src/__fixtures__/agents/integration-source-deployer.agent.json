@@ -1,0 +1,9 @@
+{
+  "triggers": {
+    "github": [
+      {
+        "on": "pull_request.opened"
+      }
+    ]
+  }
+}

@@ -5,14 +5,16 @@ import { dirname, resolve } from 'node:path';
 import test from 'node:test';
 import { fileURLToPath } from 'node:url';
 
-import { parsePersonaSpec } from './parse.js';
+import { parseAgentSpec, parsePersonaSpec } from './parse.js';
 import { lintTriggers } from './triggers.js';
 
 const packageRoot = resolve(dirname(fileURLToPath(import.meta.url)), '..');
 const fixturesDir = resolve(packageRoot, 'src/__fixtures__/personas');
+const agentFixturesDir = resolve(packageRoot, 'src/__fixtures__/agents');
 const schemaPath = resolve(packageRoot, 'schemas/persona.schema.json');
+const agentSchemaPath = resolve(packageRoot, 'schemas/agent.schema.json');
 
-test('persona fixtures validate against generated schema and parse', async () => {
+test('persona fixtures validate against generated schema and parse (connection-only)', async () => {
   const schema = JSON.parse(await readFile(schemaPath, 'utf8'));
   const fixtureNames = (await readdir(fixturesDir)).filter((name) => name.endsWith('.json')).sort();
 
@@ -23,16 +25,39 @@ test('persona fixtures validate against generated schema and parse', async () =>
     'integration-source-service-account.json',
     'integration-source-workspace.json',
     'invalid-unknown-trigger.json',
-    'minimal.json'
+    'minimal.json',
+    'proactive-watch-persona.json'
   ]);
 
   for (const fixtureName of fixtureNames) {
     const fixture = JSON.parse(await readFile(resolve(fixturesDir, fixtureName), 'utf8'));
     assertSchema(fixture, schema, schema, fixtureName);
+    // Personas no longer carry triggers/schedules/watch — parse must succeed.
+    parsePersonaSpec(fixture, fixture.intent);
+  }
+});
 
-    const parsed = parsePersonaSpec(fixture, fixture.intent);
+test('agent fixtures validate against agent schema, parse, and lint triggers', async () => {
+  const schema = JSON.parse(await readFile(agentSchemaPath, 'utf8'));
+  const fixtureNames = (await readdir(agentFixturesDir)).filter((name) => name.endsWith('.json')).sort();
+
+  assert.deepEqual(fixtureNames, [
+    'cron-only.agent.json',
+    'full.agent.json',
+    'integration-source-deployer.agent.json',
+    'integration-source-service-account.agent.json',
+    'integration-source-workspace.agent.json',
+    'invalid-unknown-trigger.agent.json',
+    'proactive-watch-persona.agent.json'
+  ]);
+
+  for (const fixtureName of fixtureNames) {
+    const fixture = JSON.parse(await readFile(resolve(agentFixturesDir, fixtureName), 'utf8'));
+    assertSchema(fixture, schema, schema, fixtureName);
+
+    const parsed = parseAgentSpec(fixture);
     const triggerIssues = lintTriggers(parsed);
-    if (fixtureName === 'invalid-unknown-trigger.json') {
+    if (fixtureName === 'invalid-unknown-trigger.agent.json') {
       assert.equal(triggerIssues.length, 1);
       assert.equal(triggerIssues[0].code, 'unknown_trigger');
     } else {
@@ -41,14 +66,15 @@ test('persona fixtures validate against generated schema and parse', async () =>
   }
 });
 
-test('emit-schema script is idempotent', async () => {
+test('emit-schema script is idempotent (persona + agent schemas)', async () => {
   const before = await readFile(schemaPath, 'utf8');
+  const agentBefore = await readFile(agentSchemaPath, 'utf8');
   execFileSync('node', [resolve(packageRoot, 'scripts/emit-schema.mjs')], {
     cwd: packageRoot,
     stdio: 'pipe'
   });
-  const after = await readFile(schemaPath, 'utf8');
-  assert.equal(after, before);
+  assert.equal(await readFile(schemaPath, 'utf8'), before);
+  assert.equal(await readFile(agentSchemaPath, 'utf8'), agentBefore);
 });
 
 test('generated schema requires onEvent for cloud personas', async () => {
@@ -68,12 +94,201 @@ test('generated schema reflects locked v1 persona fields', async () => {
   const personaSpec = definitions.PersonaSpec;
   const properties = personaSpec.properties ?? {};
 
-  assert.equal('sandbox' in properties, false);
   assert.equal('traits' in properties, false);
   assert.deepEqual(definitions.PersonaMemoryScope.enum, ['workspace', 'user', 'global']);
   assert.equal('PersonaSandbox' in definitions, false);
   assert.equal('PersonaSandboxConfig' in definitions, false);
   assert.equal('PersonaTraits' in definitions, false);
+});
+
+test('persona schema keeps the httpRead security boundary closed', async () => {
+  const schema = JSON.parse(await readFile(schemaPath, 'utf8')) as SchemaNode;
+  const definitions = schema.definitions as Record<string, SchemaNode>;
+  const capability = definitions.PersonaHttpReadCapability;
+  const rule = definitions.PersonaHttpReadRule;
+
+  assert.equal(capability.additionalProperties, false);
+  assert.equal(rule.additionalProperties, false);
+  assert.throws(
+    () => assertSchema(
+      { enabled: true, futureNetworkPolicy: true },
+      capability,
+      schema,
+      'capabilities.httpRead'
+    ),
+    /capabilities\.httpRead\.futureNetworkPolicy is not allowed/
+  );
+  assert.throws(
+    () => assertSchema(
+      {
+        method: 'GET',
+        urlGlob: 'https://example.test/*',
+        followRedirects: true
+      },
+      rule,
+      schema,
+      'capabilities.httpRead.allow[0]'
+    ),
+    /capabilities\.httpRead\.allow\[0\]\.followRedirects is not allowed/
+  );
+});
+
+test('persona schema keeps mount.enabled but drops the moved listener fields', async () => {
+  const schema = JSON.parse(await readFile(schemaPath, 'utf8')) as SchemaNode;
+  const definitions = schema.definitions as Record<string, SchemaNode>;
+  const personaSpec = definitions.PersonaSpec;
+  const personaMount = definitions.PersonaMount;
+
+  // Listener fields moved to the agent schema.
+  assert.equal('watch' in (personaSpec.properties ?? {}), false);
+  assert.equal('schedules' in (personaSpec.properties ?? {}), false);
+  // Integration connection config no longer exposes triggers.
+  assert.equal('triggers' in (definitions.PersonaIntegrationConfig.properties ?? {}), false);
+  assert.equal(
+    definitions.PersonaIntegrationConfig.properties?.optional &&
+      definitions.PersonaIntegrationConfig.properties.optional !== true
+      ? definitions.PersonaIntegrationConfig.properties.optional.type
+      : undefined,
+    'boolean'
+  );
+  assert.equal(
+    definitions.PersonaIntegrationConfig.properties?.enabledByInput &&
+      definitions.PersonaIntegrationConfig.properties.enabledByInput !== true
+      ? definitions.PersonaIntegrationConfig.properties.enabledByInput.type
+      : undefined,
+    'string'
+  );
+  const integrationConfig = definitions.PersonaIntegrationConfig.properties?.config;
+  assert.equal(integrationConfig && integrationConfig !== true
+    ? integrationConfig.type
+    : undefined, 'object');
+  assert.deepEqual(integrationConfig && integrationConfig !== true
+    ? integrationConfig.additionalProperties
+    : undefined, {});
+  assert.equal(personaMount.properties?.enabled && personaMount.properties.enabled !== true
+    ? personaMount.properties.enabled.type
+    : undefined, 'boolean');
+});
+
+test('agent schema exposes launchedBy/triggers/schedules/watch', async () => {
+  const schema = JSON.parse(await readFile(agentSchemaPath, 'utf8')) as SchemaNode;
+  const definitions = schema.definitions as Record<string, SchemaNode>;
+  const agentSpec = definitions.AgentSpec;
+  const watchRule = definitions.WatchRule;
+
+  assert.equal(agentSpec.properties?.launchedBy && agentSpec.properties.launchedBy !== true
+    ? agentSpec.properties.launchedBy.const
+    : undefined, 'team-dispatcher');
+  assert.equal(agentSpec.properties?.triggers && agentSpec.properties.triggers !== true
+    ? agentSpec.properties.triggers.type
+    : undefined, 'object');
+  assert.equal(agentSpec.properties?.schedules && agentSpec.properties.schedules !== true
+    ? agentSpec.properties.schedules.type
+    : undefined, 'array');
+  assert.equal(agentSpec.properties?.watch && agentSpec.properties.watch !== true
+    ? agentSpec.properties.watch.type
+    : undefined, 'array');
+  assert.equal(watchRule.properties?.paths && watchRule.properties.paths !== true
+    ? watchRule.properties.paths.type
+    : undefined, 'array');
+  const absolutePathItems = {
+    type: 'string',
+    minLength: 1,
+    pattern: '^/(?:[^\\r\\n\\u2028\\u2029]*\\S)?$'
+  };
+  const watchPaths = watchRule.properties?.paths;
+  assert.equal(watchPaths && watchPaths !== true
+    ? watchPaths.minItems
+    : undefined, 1);
+  assert.deepEqual(watchPaths && watchPaths !== true
+    ? watchPaths.items
+    : undefined, absolutePathItems);
+  const trigger = definitions.PersonaIntegrationTrigger;
+  const triggerPaths = trigger.properties?.paths;
+  assert.equal(triggerPaths && triggerPaths !== true
+    ? triggerPaths.type
+    : undefined, 'array');
+  assert.equal(triggerPaths && triggerPaths !== true
+    ? triggerPaths.minItems
+    : undefined, 1);
+  assert.deepEqual(triggerPaths && triggerPaths !== true
+    ? triggerPaths.items
+    : undefined, absolutePathItems);
+  const maxConcurrency = trigger.properties?.maxConcurrency;
+  assert.equal(maxConcurrency && maxConcurrency !== true
+    ? maxConcurrency.type
+    : undefined, 'integer');
+  assert.equal(maxConcurrency && maxConcurrency !== true
+    ? maxConcurrency.minimum
+    : undefined, 1);
+
+  assertSchema(
+    {
+      triggers: {
+        slack: [
+          {
+            on: 'message.created',
+            paths: ['/ slack/channels/C_REVIEW/**'],
+            maxConcurrency: 1
+          }
+        ]
+      },
+      watch: [{ paths: ['/ github/**'], events: ['created'] }]
+    },
+    schema,
+    schema,
+    'agent'
+  );
+  assert.throws(
+    () => assertSchema({ triggers: { slack: [{ on: 'message.created', paths: [] }] } }, schema, schema, 'agent'),
+    /agent\.triggers\.slack\[0\]\.paths must have at least 1 item/
+  );
+  assert.throws(
+    () => assertSchema({ triggers: { slack: [{ on: 'message.created', paths: ['slack/**'] }] } }, schema, schema, 'agent'),
+    /agent\.triggers\.slack\[0\]\.paths\[0\] must match/
+  );
+  assert.throws(
+    () => assertSchema({ triggers: { slack: [{ on: 'message.created', paths: ['/slack/** '] }] } }, schema, schema, 'agent'),
+    /agent\.triggers\.slack\[0\]\.paths\[0\] must match/
+  );
+  assert.throws(
+    () => assertSchema({ watch: [{ paths: [], events: ['created'] }] }, schema, schema, 'agent'),
+    /agent\.watch\[0\]\.paths must have at least 1 item/
+  );
+  assert.throws(
+    () => assertSchema({ watch: [{ paths: ['watch/**'], events: ['created'] }] }, schema, schema, 'agent'),
+    /agent\.watch\[0\]\.paths\[0\] must match/
+  );
+  assert.throws(
+    () => assertSchema({ watch: [{ paths: [' /watch/**'], events: ['created'] }] }, schema, schema, 'agent'),
+    /agent\.watch\[0\]\.paths\[0\] must match/
+  );
+  assert.throws(
+    () => assertSchema({ watch: [{ paths: ['/watch/** '], events: ['created'] }] }, schema, schema, 'agent'),
+    /agent\.watch\[0\]\.paths\[0\] must match/
+  );
+  for (const separator of ['\r', '\n', '\u2028', '\u2029']) {
+    assert.throws(
+      () => assertSchema({
+        triggers: { slack: [{ on: 'message.created', paths: [`/slack/${separator}channels/**`] }] }
+      }, schema, schema, 'agent'),
+      /agent\.triggers\.slack\[0\]\.paths\[0\] must match/
+    );
+    assert.throws(
+      () => assertSchema({
+        watch: [{ paths: [`/github/${separator}issues/**`], events: ['created'] }]
+      }, schema, schema, 'agent'),
+      /agent\.watch\[0\]\.paths\[0\] must match/
+    );
+  }
+  assert.throws(
+    () => assertSchema({ triggers: { slack: [{ on: 'message.created', maxConcurrency: 0 }] } }, schema, schema, 'agent'),
+    /agent\.triggers\.slack\[0\]\.maxConcurrency must be >= 1/
+  );
+  assert.throws(
+    () => assertSchema({ triggers: { slack: [{ on: 'message.created', maxConcurrency: 1.5 }] } }, schema, schema, 'agent'),
+    /agent\.triggers\.slack\[0\]\.maxConcurrency must be integer/
+  );
 });
 
 type SchemaNode = Record<string, unknown> & {
@@ -86,6 +301,10 @@ type SchemaNode = Record<string, unknown> & {
   enum?: unknown[];
   const?: unknown;
   type?: string | string[];
+  minimum?: number;
+  minItems?: number;
+  minLength?: number;
+  pattern?: string;
   properties?: Record<string, SchemaNode | boolean>;
   additionalProperties?: SchemaNode | boolean;
   required?: string[];
@@ -125,6 +344,15 @@ function assertSchema(value: unknown, schema: SchemaNode, root: SchemaNode, path
   if (schema.type) {
     assertType(value, schema.type, path);
   }
+  if (typeof schema.minimum === 'number' && typeof value === 'number' && value < schema.minimum) {
+    throw new Error(`${path} must be >= ${schema.minimum}`);
+  }
+  if (typeof schema.minLength === 'number' && typeof value === 'string' && value.length < schema.minLength) {
+    throw new Error(`${path} must have at least ${schema.minLength} character(s)`);
+  }
+  if (schema.pattern && typeof value === 'string' && !new RegExp(schema.pattern).test(value)) {
+    throw new Error(`${path} must match ${schema.pattern}`);
+  }
   if (schema.type === 'object' || schema.properties || schema.additionalProperties || schema.required) {
     if (!isObject(value)) {
       throw new Error(`${path} must be an object`);
@@ -148,6 +376,9 @@ function assertSchema(value: unknown, schema: SchemaNode, root: SchemaNode, path
   if (schema.type === 'array' || schema.items) {
     if (!Array.isArray(value)) {
       throw new Error(`${path} must be an array`);
+    }
+    if (typeof schema.minItems === 'number' && value.length < schema.minItems) {
+      throw new Error(`${path} must have at least ${schema.minItems} item(s)`);
     }
     if (schema.items) {
       value.forEach((item, index) =>

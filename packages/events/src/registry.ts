@@ -1,0 +1,326 @@
+import { redactEventValue } from './redact.js';
+import { validateJsonSchema, withoutSchemaIdentifiers } from './json-schema.js';
+import { EVENT_FRAME_V1_SCHEMA, EVENT_SUMMARY_SCHEMA } from './schemas.js';
+import type { EventContract, EventFrameV1, JsonSchema, ValidationIssue, ValidationResult } from './types.js';
+import { validateEventFrameV1 } from './validate.js';
+import { COMPOSIO_TRIGGER_COORDINATES_KEYWORD } from './contract-schema-keywords.js';
+
+const OPEN_PAYLOAD_SCHEMA = Object.freeze({}) satisfies JsonSchema;
+const COMPOSIO_TRIGGER_MESSAGE_PAYLOAD_SCHEMA = Object.freeze({
+  type: 'object',
+  required: ['id', 'type', 'metadata', 'data', 'timestamp'],
+  properties: {
+    id: { type: 'string', minLength: 1 },
+    type: { const: 'composio.trigger.message' },
+    metadata: {
+      type: 'object',
+      required: ['trigger_slug', 'trigger_id', 'connected_account_id'],
+      properties: {
+        trigger_slug: { type: 'string', minLength: 1 },
+        trigger_id: { type: 'string', minLength: 1 },
+        connected_account_id: { type: 'string', minLength: 1 }
+      },
+      additionalProperties: true
+    },
+    data: {
+      type: 'object',
+      additionalProperties: true
+    },
+    timestamp: { type: 'string', format: 'date-time' }
+  },
+  additionalProperties: true
+}) satisfies JsonSchema;
+
+function example(
+  id: string,
+  provider: string,
+  trigger: string,
+  resourceKind: string,
+  overrides: Partial<EventFrameV1> = {}
+): EventFrameV1 {
+  return {
+    schemaVersion: 1,
+    id: `evt_${id.replaceAll('.', '_')}`,
+    workspace: 'ws_example',
+    type: id,
+    contractVersion: 1,
+    occurredAt: '2026-07-15T09:00:00.000Z',
+    attempt: 1,
+    resource: {
+      path: `/${provider}/${resourceKind.slice(provider.length + 1).replaceAll('.', 's/')}/example`,
+      kind: resourceKind,
+      id: 'example',
+      provider
+    },
+    summary: { title: `${id} example` },
+    payload: { action: trigger.split('.').at(-1) },
+    ...overrides
+  };
+}
+
+function contract<TPayload = unknown>(config: {
+  id: string;
+  provider: string;
+  trigger: string;
+  resourceKind: string;
+  fixture: EventFrameV1;
+  payloadSchema?: JsonSchema;
+  payloadRequired?: boolean;
+  validateFrame?: (frame: EventFrameV1) => readonly ValidationIssue[];
+}): EventContract<TPayload> {
+  return Object.freeze({
+    id: config.id,
+    version: 1,
+    provider: config.provider,
+    trigger: config.trigger,
+    resourceKind: config.resourceKind,
+    summarySchema: EVENT_SUMMARY_SCHEMA,
+    payloadSchema: config.payloadSchema ?? OPEN_PAYLOAD_SCHEMA,
+    fixtureExamples: Object.freeze([config.fixture]),
+    redact: (payload: TPayload) => redactEventValue(payload),
+    validate(frame: EventFrameV1): ValidationResult {
+      const base = validateEventFrameV1(frame);
+      if (!base.valid) return base;
+      const errors: ValidationIssue[] = [];
+      if (frame.type !== config.id) errors.push({ path: '$.type', message: `must equal ${config.id}`, keyword: 'const' });
+      if (frame.contractVersion !== 1) errors.push({ path: '$.contractVersion', message: 'must equal 1', keyword: 'const' });
+      if (frame.resource.provider !== config.provider) errors.push({ path: '$.resource.provider', message: `must equal ${config.provider}`, keyword: 'const' });
+      if (frame.resource.kind !== config.resourceKind) errors.push({ path: '$.resource.kind', message: `must equal ${config.resourceKind}`, keyword: 'const' });
+      const summary = validateJsonSchema(EVENT_SUMMARY_SCHEMA, frame.summary, '$.summary');
+      if (!summary.valid) errors.push(...summary.errors);
+      if (config.payloadRequired && frame.payload === undefined) {
+        errors.push({ path: '$.payload', message: 'is required', keyword: 'required' });
+      } else if (frame.payload !== undefined) {
+        const payload = validateJsonSchema(config.payloadSchema ?? OPEN_PAYLOAD_SCHEMA, frame.payload, '$.payload');
+        if (!payload.valid) errors.push(...payload.errors);
+      }
+      if (config.validateFrame) errors.push(...config.validateFrame(frame));
+      return errors.length === 0 ? { valid: true, errors: [] } : { valid: false, errors };
+    }
+  });
+}
+
+export const EVENT_CONTRACTS = Object.freeze([
+  contract({
+    id: 'startup',
+    provider: 'runtime',
+    trigger: 'startup',
+    resourceKind: 'runtime.startup',
+    fixture: example('startup', 'runtime', 'startup', 'runtime.startup', {
+      resource: { path: '/runtime/startups/evt_startup', kind: 'runtime.startup', id: 'evt_startup', provider: 'runtime' },
+      summary: { title: 'Agent runtime started' },
+      payload: undefined
+    })
+  }),
+  contract({
+    id: 'cron.tick',
+    provider: 'cron',
+    trigger: 'tick',
+    resourceKind: 'cron.schedule',
+    fixture: example('cron.tick', 'cron', 'tick', 'cron.schedule', {
+      resource: { path: '/cron/schedules/scan', kind: 'cron.schedule', id: 'scan', provider: 'cron' },
+      summary: { title: 'Scheduled scan' },
+      schedule: { name: 'scan', cron: '0 9 * * *', timezone: 'UTC', scheduledFor: '2026-07-15T09:00:00.000Z' },
+      payload: undefined
+    })
+  }),
+  contract({
+    id: 'github.issues.labeled',
+    provider: 'github',
+    trigger: 'issues.labeled',
+    resourceKind: 'github.issue',
+    fixture: example('github.issues.labeled', 'github', 'issues.labeled', 'github.issue', {
+      resource: { path: '/github/repos/acme/app/issues/42.json', kind: 'github.issue', id: '42', provider: 'github' },
+      summary: { title: 'Issue #42 labeled bug', actor: 'octocat' },
+      payload: { action: 'labeled', issue: { number: 42 }, label: { name: 'bug' } }
+    })
+  }),
+  contract({
+    id: 'github.pull_request.opened',
+    provider: 'github',
+    trigger: 'pull_request.opened',
+    resourceKind: 'github.pull_request',
+    fixture: example('github.pull_request.opened', 'github', 'pull_request.opened', 'github.pull_request', {
+      resource: { path: '/github/repos/acme/app/pulls/7.json', kind: 'github.pull_request', id: '7', provider: 'github' },
+      summary: { title: 'PR #7 opened', actor: 'octocat' },
+      payload: { action: 'opened', pull_request: { number: 7 } }
+    })
+  }),
+  contract({
+    id: 'slack.message.created',
+    provider: 'slack',
+    trigger: 'message.created',
+    resourceKind: 'slack.message',
+    fixture: example('slack.message.created', 'slack', 'message.created', 'slack.message', {
+      resource: { path: '/slack/channels/C123/messages/171.json', kind: 'slack.message', id: '171', provider: 'slack' },
+      summary: { title: 'New Slack message', actor: 'U123' },
+      message: { channel: 'C123', messageId: '171' },
+      payload: { channel: 'C123', user: 'U123', text: 'hello' }
+    })
+  }),
+  contract({
+    id: 'linear.issue.created',
+    provider: 'linear',
+    trigger: 'issue.created',
+    resourceKind: 'linear.issue',
+    fixture: example('linear.issue.created', 'linear', 'issue.created', 'linear.issue', {
+      resource: { path: '/linear/issues/ENG-1.json', kind: 'linear.issue', id: 'ENG-1', provider: 'linear' },
+      summary: { title: 'ENG-1 created', actor: 'user@example.com' },
+      payload: { action: 'create', issue: { identifier: 'ENG-1', title: 'Ship it' } }
+    })
+  }),
+  contract({
+    id: 'composio.trigger.message',
+    provider: 'composio',
+    trigger: 'trigger.message',
+    resourceKind: 'composio.trigger',
+    payloadSchema: COMPOSIO_TRIGGER_MESSAGE_PAYLOAD_SCHEMA,
+    payloadRequired: true,
+    validateFrame: validateComposioTriggerCoordinates,
+    fixture: example('composio.trigger.message', 'composio', 'trigger.message', 'composio.trigger', {
+      id: '018f4b16-52f9-7d33-a7d6-8f9a324db8c1',
+      occurredAt: '2026-07-15T09:00:00.000Z',
+      resource: {
+        path: '/composio/triggers/trg%2Fgithub%2Fissue',
+        kind: 'composio.trigger',
+        id: 'trg/github/issue',
+        provider: 'composio'
+      },
+      summary: { title: 'Composio trigger GITHUB_ISSUE_CREATED' },
+      delivery: {
+        id: 'delivery_composio_1',
+        dedupeKey: 'delivery_composio_1'
+      },
+      payload: {
+        id: 'delivery_composio_1',
+        type: 'composio.trigger.message',
+        metadata: {
+          trigger_slug: 'GITHUB_ISSUE_CREATED',
+          trigger_id: 'trg/github/issue',
+          connected_account_id: 'ca_composio_123',
+          log_id: 'log_123',
+          auth_config_id: 'ac_123',
+          user_id: 'untrusted_vendor_user'
+        },
+        data: {
+          action: 'opened',
+          issue: { number: 42, title: 'Canonical Composio delivery' }
+        },
+        timestamp: '2026-07-15T09:00:00.000Z',
+        vendor_extension: { retained: true }
+      }
+    })
+  }),
+  contract({
+    id: 'relaycast.message',
+    provider: 'relaycast',
+    trigger: 'message',
+    resourceKind: 'relaycast.message',
+    fixture: example('relaycast.message', 'relaycast', 'message', 'relaycast.message', {
+      resource: { path: '/relaycast/general/messages/msg_1', kind: 'relaycast.message', id: 'msg_1', provider: 'relaycast' },
+      summary: { title: 'Can you take a look?' },
+      message: { channel: 'general', messageId: 'msg_1', threadId: 'thread_1' },
+      payload: { text: 'Can you take a look?' }
+    })
+  })
+] as const satisfies readonly EventContract[]);
+
+const BY_KEY = new Map(EVENT_CONTRACTS.map((entry) => [`${entry.id}@${entry.version}`, entry]));
+
+export function getEventContract(id: string, version = 1): EventContract | undefined {
+  return BY_KEY.get(`${id}@${version}`);
+}
+
+export function requireEventContract(id: string, version = 1): EventContract {
+  const entry = getEventContract(id, version);
+  if (!entry) throw new Error(`Unknown Event contract: ${id}@${version}`);
+  return entry;
+}
+
+export const EVENT_CONTRACT_JSON_SCHEMAS = Object.freeze(Object.fromEntries(
+  EVENT_CONTRACTS.map((entry) => [
+    `${entry.id}@${entry.version}`,
+    {
+      $schema: 'https://json-schema.org/draft/2020-12/schema',
+      $id: `https://agentworkforce.dev/schemas/events/${entry.id}/v${entry.version}.json`,
+      allOf: [
+        withoutSchemaIdentifiers(EVENT_FRAME_V1_SCHEMA),
+        {
+          type: 'object',
+          ...(entry.id === 'composio.trigger.message'
+            ? {
+                required: ['payload', 'delivery'],
+                [COMPOSIO_TRIGGER_COORDINATES_KEYWORD]: true
+              }
+            : {}),
+          properties: {
+            type: { const: entry.id },
+            contractVersion: { const: entry.version },
+            resource: {
+              type: 'object',
+              properties: {
+                provider: { const: entry.provider },
+                kind: { const: entry.resourceKind }
+              }
+            },
+            ...(entry.id === 'composio.trigger.message'
+              ? {
+                  delivery: {
+                    type: 'object',
+                    required: ['id', 'dedupeKey'],
+                    properties: {
+                      id: { type: 'string', minLength: 1 },
+                      dedupeKey: { type: 'string', minLength: 1 }
+                    }
+                  }
+                }
+              : {}),
+            summary: entry.summarySchema,
+            ...(entry.payloadSchema ? { payload: entry.payloadSchema } : {})
+          }
+        }
+      ]
+    } satisfies JsonSchema
+  ])
+));
+
+function validateComposioTriggerCoordinates(frame: EventFrameV1): readonly ValidationIssue[] {
+  const payload = isRecord(frame.payload) ? frame.payload : undefined;
+  const metadata = payload && isRecord(payload.metadata) ? payload.metadata : undefined;
+  const triggerId = nonEmptyString(metadata?.trigger_id);
+  const payloadId = nonEmptyString(payload?.id);
+  const timestamp = nonEmptyString(payload?.timestamp);
+  const errors: ValidationIssue[] = [];
+
+  if (triggerId) {
+    if (frame.resource.id !== triggerId) {
+      errors.push({ path: '$.resource.id', message: 'must equal $.payload.metadata.trigger_id', keyword: 'coordinates' });
+    }
+    const expectedPath = `/composio/triggers/${encodeURIComponent(triggerId)}`;
+    if (frame.resource.path !== expectedPath) {
+      errors.push({ path: '$.resource.path', message: 'must be the canonical path for $.payload.metadata.trigger_id', keyword: 'coordinates' });
+    }
+  }
+  if (timestamp && frame.occurredAt !== timestamp) {
+    errors.push({ path: '$.occurredAt', message: 'must equal $.payload.timestamp', keyword: 'coordinates' });
+  }
+  if (!frame.delivery) {
+    errors.push({ path: '$.delivery', message: 'is required', keyword: 'required' });
+  } else if (payloadId) {
+    if (frame.delivery.id !== payloadId) {
+      errors.push({ path: '$.delivery.id', message: 'must equal $.payload.id', keyword: 'coordinates' });
+    }
+    if (frame.delivery.dedupeKey !== payloadId) {
+      errors.push({ path: '$.delivery.dedupeKey', message: 'must equal $.payload.id', keyword: 'coordinates' });
+    }
+  }
+  return errors;
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === 'object' && value !== null && !Array.isArray(value);
+}
+
+function nonEmptyString(value: unknown): string | undefined {
+  return typeof value === 'string' && value.length > 0 ? value : undefined;
+}

@@ -92,7 +92,7 @@ Source spec: `docs/plans/deploy-v1-credentials-and-runtime-spec.md`
 - [x] Compute markup only for `relay_managed`.
 - [x] Emit monthly soft-cap warning over $100.
 - [x] Wire CLI `--harness-source byok --byok-key` to BYOK route before deploy.
-- [x] Wire CLI `--harness-source plan` to managed credential route before deploy.
+- [x] Wire CLI `--harness-source managed` to managed credential route before deploy (`plan` remains a legacy alias).
 - [x] Preserve CLI `--harness-source oauth` behavior.
 - [x] Add cloud BYOK route tests.
 - [x] Add cloud managed route tests.

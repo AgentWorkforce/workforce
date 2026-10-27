@@ -1,8 +1,14 @@
+import { existsSync } from 'node:fs';
 import { homedir } from 'node:os';
 
 import { makeEnvRefResolver } from './env-refs.js';
-import { buildInteractiveSpec, type InteractiveConfigFile } from './interactive-spec.js';
+import {
+  buildInteractiveSpec,
+  type AiHistMcpConfig,
+  type InteractiveConfigFile
+} from './interactive-spec.js';
 import { resolvePersonaInputs, renderPersonaInputs } from './inputs.js';
+import { resolveAiMemory } from './parse.js';
 import { materializeSkills } from './skills.js';
 import type {
   Harness,
@@ -59,7 +65,7 @@ export interface ResolvedMountPolicy {
  * JSON-serializable; the executor reads the file at write time.
  */
 export type ResolvedSidecarWrite = {
-  /** Filename inside the cwd: `CLAUDE.md` (claude) or `AGENTS.md` (opencode/codex). */
+  /** Filename inside the cwd: `CLAUDE.md` (claude) or `AGENTS.md` (opencode/codex/grok). */
   filename: 'CLAUDE.md' | 'AGENTS.md';
   /**
    * `overwrite` writes verbatim; `extend` appends a `\n\n---\n\n`-joined
@@ -90,7 +96,7 @@ export interface ResolvedInputBinding {
 export interface PersonaSpawnPlan {
   /** The fully resolved persona this plan was built from. */
   persona: ResolvedPersona;
-  /** Which CLI to spawn (`claude` | `codex` | `opencode`). */
+  /** Which CLI to spawn (`claude` | `codex` | `opencode` | `grok`). */
   cli: Harness;
   /** argv (excluding the cli itself) that the harness should be spawned with. */
   args: string[];
@@ -146,6 +152,15 @@ export interface PlanOptions {
   inputValues?: Record<string, string | number | boolean | null | undefined>;
 }
 
+function resolveAiHistConfig(env: NodeJS.ProcessEnv, dbPathOverride?: string): AiHistMcpConfig {
+  const trajectoryRoot = env.TRAJECTORY_ROOT?.trim();
+  const dbPath = dbPathOverride?.trim() || env.AI_HIST_DB?.trim();
+  return {
+    ...(trajectoryRoot ? { trajectoryRoot } : {}),
+    ...(dbPath ? { dbPath } : {})
+  };
+}
+
 function resolvedInputBindings(
   inputs: Record<string, PersonaInputSpec> | undefined,
   values: Record<string, string>
@@ -185,7 +200,7 @@ function resolveSidecarWrite(
     }
     return [];
   }
-  if (harness === 'opencode' || harness === 'codex') {
+  if (harness === 'opencode' || harness === 'codex' || harness === 'grok') {
     if (selection.agentsMdContent !== undefined) {
       return [
         {
@@ -241,6 +256,11 @@ function resolveMountRoot(
   const withHome = expandHome(expanded);
   if (!withHome.startsWith('/') && !/^[A-Za-z]:[\\/]/.test(withHome)) {
     const message = `${context}.path resolved to "${withHome}" which is not an absolute path`;
+    if (root.optional) return { kind: 'skip', reason: message };
+    throw new Error(message);
+  }
+  if (!existsSync(withHome)) {
+    const message = `${context}.path resolved to "${withHome}" but does not exist on disk`;
     if (root.optional) return { kind: 'skip', reason: message };
     throw new Error(message);
   }
@@ -303,6 +323,7 @@ function resolveMountPolicy(
   context: string
 ): ResolvedMountPolicy | undefined {
   if (!mount) return undefined;
+  if (mount.enabled === false) return undefined;
   const ignored = mount.ignoredPatterns ?? [];
   const readonly = mount.readonlyPatterns ?? [];
   // resolveMountRoots returns undefined when (a) no roots declared, or (b)
@@ -359,6 +380,8 @@ export function buildPersonaSpawnPlan(
     persona.systemPrompt,
     inputResolution.values
   );
+  const aiMemory = resolveAiMemory(persona.memory);
+  const aiHist = aiMemory.enabled ? resolveAiHistConfig(processEnv, aiMemory.dbPath) : false;
   const skills = materializeSkills(
     persona.skills,
     harness,
@@ -371,6 +394,7 @@ export function buildPersonaSpawnPlan(
     model: persona.model,
     systemPrompt: renderedSystemPrompt,
     ...(persona.mcpServers ? { mcpServers: persona.mcpServers } : {}),
+    ...(aiHist ? { aiHist } : {}),
     ...(persona.permissions ? { permissions: persona.permissions } : {}),
     ...(persona.harnessSettings
       ? { harnessSettings: persona.harnessSettings }

@@ -1,4 +1,3 @@
-import { spawn } from 'node:child_process';
 import { constants } from 'node:fs';
 import { accessSync, statSync } from 'node:fs';
 import { access, mkdir, readFile, stat, writeFile } from 'node:fs/promises';
@@ -6,29 +5,60 @@ import path from 'node:path';
 import {
   buildNonInteractiveSpec,
   renderPersonaInputs,
+  resolveAiMemory,
   resolveMcpServersLenient,
   resolvePersonaInputs,
   resolveStringMapLenient,
-  type PersonaSpec
+  type AiHistMcpConfig,
+  type PersonaSpec,
+  type RelayMcpConfig
 } from '@agentworkforce/persona-kit';
-import { createGithubClient } from './clients/github.js';
+import {
+  claudeMcpConfigHasRelayOverride,
+  codexExistingArgs,
+  injectClaudeAgentRelayMcpConfig,
+  injectCodexSubcommandArgs,
+  relayOverrideServerNames,
+  resolveAgentRelayBrokerMcpArgs,
+  resolveRelayMcpFromEnv
+} from './relay-mcp.js';
+import { createDefaultLlm } from './cloud-llm.js';
+import { createDefaultCloudScheduleContext } from './cloud-schedule.js';
+import { SandboxNotAvailableError } from './errors.js';
+import { spawnAndCapture, spawnNonInteractiveAndCapture } from './harness-process.js';
+import { appendNoReplyPromptContract } from './no-reply.js';
 import type {
   FilesContext,
   HarnessRunArgs,
   HarnessRunResult,
   HarnessUsage,
+  LlmContext,
+  ManagedScheduleContext,
   SandboxContext,
   WorkforceAgentContext,
   WorkforceCtx,
-  WorkforceDeploymentContext
+  WorkforceDeploymentContext,
+  WorkflowContext
 } from './types.js';
 
 type AgentInputValue = string | number | boolean | null | undefined;
 const USAGE_REPORT_TIMEOUT_MS = 5_000;
+const WORKFLOW_COMPLETION_POLL_MS = 1_000;
+const WORKFLOW_COMPLETION_TIMEOUT_MS = 90 * 60_000;
+const WORKFLOW_FETCH_TIMEOUT_MS = 15_000;
+const WORKFLOW_COMPLETION_MAX_TRANSIENT_ERRORS = 3;
+const WORKFLOW_INVOCATION_HEADER = 'x-agentworkforce-workspace-workflow-invocation';
 
 interface AgentRowContext extends WorkforceAgentContext {
   input_values?: Record<string, AgentInputValue>;
   inputValues?: Record<string, AgentInputValue>;
+}
+
+class WorkflowRequestError extends Error {
+  constructor(message: string, readonly retryable: boolean) {
+    super(message);
+    this.name = 'WorkflowRequestError';
+  }
 }
 
 export interface CloudDefaultOptions {
@@ -43,31 +73,84 @@ export interface CloudDefaultOptions {
 export interface CloudRuntimeDefaults {
   sandbox: SandboxContext;
   files: FilesContext;
-  integrations?: Record<string, unknown>;
+  workflow?: WorkflowContext;
+  llm?: LlmContext;
+  schedule?: ManagedScheduleContext;
   harnessRunner: (args: HarnessRunArgs) => Promise<HarnessRunResult>;
+  /**
+   * Resolved trajectory root for this deployment, or `undefined` when there is
+   * no cloud workspace and `TRAJECTORY_ROOT` is unset (local/tests stay opt-in,
+   * so the runtime never writes to a developer's cwd). The runner threads this
+   * into `buildCtx` as the recorder write-root; the harness spec passes the
+   * same value to the ai-hist MCP — that single source keeps write-root and
+   * MCP-root identical.
+   */
+  trajectoryRoot?: string;
 }
 
 export function createCloudRuntimeDefaults(options: CloudDefaultOptions): CloudRuntimeDefaults {
   const env = options.env ?? process.env;
   const root = resolveCloudWorkspaceRoot(env);
-  const sandbox = createProcessSandbox(root, env);
-  const files = filesFromSandbox(sandbox);
-  const integrations = createDefaultIntegrations({
-    persona: options.persona,
-    workspaceId: options.workspaceId,
+  // Single source of truth for the trajectory root, computed once. Both the
+  // recorder write-root (threaded into buildCtx by the runner) and the ai-hist
+  // MCP env (in the harness spec) consume this exact value.
+  const trajectoryRoot = resolveCloudTrajectoryRoot(env, root);
+  const isSandboxOptional = options.persona.sandbox === false;
+  const baseSandbox = createProcessSandbox(root, env);
+  const sandbox = isSandboxOptional
+    ? createSandboxOptionalSandbox(baseSandbox)
+    : baseSandbox;
+  const files = filesFromSandbox(baseSandbox);
+  const workflow = createDefaultWorkflow({
     workspaceRoot: root,
     env
+  });
+  // ctx.llm from sandbox credentials — without this, no cloud persona ever
+  // gets a working ctx.llm (buildCtx falls back to a throwing stub).
+  const llm = createDefaultLlm({
+    persona: options.persona,
+    env,
+    log: options.log
+  });
+  const schedule = createDefaultCloudScheduleContext({
+    env,
+    workspaceId: options.workspaceId,
+    agentId: options.agent.id
   });
   return {
     sandbox,
     files,
-    ...(integrations ? { integrations } : {}),
+    ...(workflow ? { workflow } : {}),
+    ...(llm ? { llm } : {}),
+    ...(schedule ? { schedule } : {}),
+    ...(trajectoryRoot ? { trajectoryRoot } : {}),
     harnessRunner: createProcessHarnessRunner({
       ...options,
       workspaceRoot: root,
-      env
+      env,
+      trajectoryRoot
     })
   };
+}
+
+/**
+ * Resolve the trajectory root for a cloud deployment. An explicit
+ * `TRAJECTORY_ROOT` always wins. Otherwise it defaults to
+ * `<workspaceRoot>/.trajectories` — but ONLY in a real cloud workspace
+ * (configured mount or an accessible `/workspace`), so local/test runs stay
+ * opt-in via env and never write to a developer's cwd.
+ */
+function resolveCloudTrajectoryRoot(env: NodeJS.ProcessEnv, workspaceRoot: string): string | undefined {
+  const explicit = env.TRAJECTORY_ROOT?.trim();
+  if (explicit) return explicit;
+  const hasCloudWorkspace =
+    firstNonEmpty(
+      env.WORKFORCE_SANDBOX_ROOT,
+      env.WORKFORCE_WORKSPACE_DIR,
+      env.RELAYFILE_MOUNT_ROOT,
+      env.RELAYFILE_ROOT
+    ) !== undefined || canAccessSync('/workspace');
+  return hasCloudWorkspace ? path.join(workspaceRoot, '.trajectories') : undefined;
 }
 
 function resolveCloudWorkspaceRoot(env: NodeJS.ProcessEnv): string {
@@ -121,6 +204,27 @@ function createProcessSandbox(root: string, env: NodeJS.ProcessEnv): SandboxCont
   };
 }
 
+/**
+ * Wraps a base SandboxContext for personas that declared `sandbox: false`.
+ * `exec()` rejects with `SandboxNotAvailableError` so `.catch(...)` chains
+ * see it; `readFile`/`writeFile` delegate to the base sandbox so VFS reads
+ * and writes still work without modification.
+ */
+function createSandboxOptionalSandbox(base: SandboxContext): SandboxContext {
+  return {
+    cwd: base.cwd,
+    async exec() {
+      throw new SandboxNotAvailableError();
+    },
+    readFile(filePath) {
+      return base.readFile(filePath);
+    },
+    writeFile(filePath, contents) {
+      return base.writeFile(filePath, contents);
+    }
+  };
+}
+
 function filesFromSandbox(sandbox: SandboxContext): FilesContext {
   return {
     read(path) {
@@ -132,34 +236,262 @@ function filesFromSandbox(sandbox: SandboxContext): FilesContext {
   };
 }
 
-function createDefaultIntegrations(args: {
-  persona: PersonaSpec;
-  workspaceId: string;
+function createDefaultWorkflow(args: {
   workspaceRoot: string;
   env: NodeJS.ProcessEnv;
-}): Record<string, unknown> | undefined {
-  const integrations: Record<string, unknown> = {};
-  if (args.persona.integrations?.github) {
-    integrations.github = createGithubClient({
-      relayfileMountRoot: firstNonEmpty(args.env.RELAYFILE_MOUNT_ROOT, args.env.RELAYFILE_ROOT) ?? args.workspaceRoot,
-      workspaceCwd: args.workspaceRoot,
-      workspaceId: args.workspaceId,
-      writebackTimeoutMs: numberFromEnv(args.env.WORKFORCE_RELAYFILE_WRITEBACK_TIMEOUT_MS),
-      writebackPollMs: numberFromEnv(args.env.WORKFORCE_RELAYFILE_WRITEBACK_POLL_MS),
-      connectionId: args.env.WORKFORCE_INTEGRATION_GITHUB_CONNECTION_ID,
-      relayfileBaseUrl: args.env.RELAYFILE_BASE_URL,
-      relayfileApiToken: args.env.RELAYFILE_TOKEN,
-      cloudApiToken: firstNonEmpty(args.env.WORKFORCE_AGENT_TOKEN, args.env.WORKFORCE_WORKSPACE_TOKEN)
-    });
+}): WorkflowContext | undefined {
+  const token = firstNonEmpty(args.env.WORKFORCE_WORKSPACE_TOKEN);
+  const baseUrl = firstNonEmpty(args.env.WORKFORCE_CLOUD_BASE_URL);
+  if (!token || !baseUrl) return undefined;
+  const base = normalizeBaseUrl(baseUrl);
+  return {
+    async run(name, runArgs) {
+      const workflowSource = await readBundledWorkflowSource(args.workspaceRoot, name);
+      const response = await fetchWorkflow(`${base}/api/v1/workflows/run`, {
+        method: 'POST',
+        headers: workflowHeaders(token, true),
+        body: JSON.stringify({
+          workflow: workflowSource,
+          fileType: 'ts',
+          sourceFileType: 'workflow',
+          runtime: { id: 'daytona' },
+          metadata: {
+            invocationSlug: name,
+            invocationArgs: JSON.stringify(runArgs ?? {})
+          }
+        })
+      });
+      if (!response.ok) {
+        throw await workflowError(response, `ctx.workflow.run("${name}")`);
+      }
+      const payload = await response.json().catch(() => ({})) as { runId?: unknown };
+      if (typeof payload.runId !== 'string' || payload.runId.trim().length === 0) {
+        throw new Error(`ctx.workflow.run("${name}"): cloud response missing runId`);
+      }
+      const runId = payload.runId;
+      return {
+        runId,
+        completion: () => pollWorkflowCompletion({ base, token, runId })
+      };
+    },
+    status(runId) {
+      return fetchWorkflowStatus({ base, token, runId });
+    }
+  };
+}
+
+async function readBundledWorkflowSource(workspaceRoot: string, name: string): Promise<string> {
+  const workflowFile = normalizeWorkflowName(name);
+  const roots = uniqueStrings([process.cwd(), workspaceRoot]);
+  const candidates = roots.flatMap((root) => [
+    path.resolve(root, 'workflows', workflowFile),
+    path.resolve(root, workflowFile)
+  ]);
+  for (const candidate of candidates) {
+    try {
+      return await readFile(candidate, 'utf8');
+    } catch (err) {
+      if (!isNoEntry(err)) throw err;
+    }
   }
-  return Object.keys(integrations).length > 0 ? integrations : undefined;
+  throw new Error(
+    `ctx.workflow.run("${name}") could not find bundled workflow source; expected ${candidates.join(' or ')}`
+  );
+}
+
+function normalizeWorkflowName(name: string): string {
+  const trimmed = name.trim();
+  if (!trimmed) {
+    throw new Error('ctx.workflow.run() requires a non-empty workflow name');
+  }
+  if (path.isAbsolute(trimmed) || trimmed.split(/[\\/]/).some((segment) => segment === '..' || segment === '')) {
+    throw new Error(`ctx.workflow.run("${name}") workflow name must be a safe relative path`);
+  }
+  return trimmed.endsWith('.ts') ? trimmed : `${trimmed}.ts`;
+}
+
+async function pollWorkflowCompletion(args: {
+  base: string;
+  token: string;
+  runId: string;
+}): Promise<{ output: unknown; status: 'success' | 'failure' }> {
+  const deadline = Date.now() + WORKFLOW_COMPLETION_TIMEOUT_MS;
+  let transientErrors = 0;
+  let lastTransientError: unknown;
+  while (Date.now() < deadline) {
+    let status: Awaited<ReturnType<typeof fetchWorkflowStatus>>;
+    try {
+      status = await fetchWorkflowStatus(args);
+      transientErrors = 0;
+      lastTransientError = undefined;
+    } catch (err) {
+      if (err instanceof WorkflowRequestError && err.retryable && transientErrors < WORKFLOW_COMPLETION_MAX_TRANSIENT_ERRORS) {
+        transientErrors += 1;
+        lastTransientError = err;
+        await delay(WORKFLOW_COMPLETION_POLL_MS);
+        continue;
+      }
+      throw err;
+    }
+    if (status.status === 'success') {
+      return { status: 'success', output: status.output };
+    }
+    if (status.status === 'failure') {
+      return { status: 'failure', output: status.output ?? status.error };
+    }
+    await delay(WORKFLOW_COMPLETION_POLL_MS);
+  }
+  if (lastTransientError instanceof Error) {
+    throw new Error(
+      `ctx.workflow.run("${args.runId}").completion(): timed out after ${WORKFLOW_COMPLETION_TIMEOUT_MS}ms; last status poll error: ${lastTransientError.message}`
+    );
+  }
+  throw new Error(`ctx.workflow.run("${args.runId}").completion(): timed out after ${WORKFLOW_COMPLETION_TIMEOUT_MS}ms`);
+}
+
+async function fetchWorkflowStatus(args: {
+  base: string;
+  token: string;
+  runId: string;
+}): Promise<{ status: 'pending' | 'running' | 'success' | 'failure'; output?: unknown; error?: string; patches?: unknown }> {
+  const runId = args.runId.trim();
+  if (!runId) {
+    throw new Error('ctx.workflow.status() requires a non-empty runId');
+  }
+  const response = await fetchWorkflow(`${args.base}/api/v1/workflows/runs/${encodeURIComponent(runId)}`, {
+    method: 'GET',
+    headers: workflowHeaders(args.token, false)
+  });
+  if (!response.ok) {
+    throw await workflowError(response, `ctx.workflow.status("${runId}")`);
+  }
+  const body = await response.json().catch(() => ({})) as Record<string, unknown>;
+  const status = normalizeWorkflowStatus(body.status);
+  const output = normalizeWorkflowOutput(body);
+  return {
+    status,
+    ...(output !== undefined ? { output } : {}),
+    ...(body.patches !== undefined ? { patches: body.patches } : {}),
+    ...(typeof body.error === 'string' ? { error: body.error } : {})
+  };
+}
+
+function normalizeWorkflowStatus(value: unknown): 'pending' | 'running' | 'success' | 'failure' {
+  switch (value) {
+    case 'pending':
+    case 'queued':
+    case 'starting':
+    case 'created':
+    case 'submitted':
+    case 'dispatching':
+      return 'pending';
+    case 'running':
+    case 'in_progress':
+    case 'in-progress':
+      return 'running';
+    case 'success':
+    case 'succeeded':
+    case 'completed':
+    case 'complete':
+      return 'success';
+    case 'failure':
+    case 'failed':
+    case 'cancelled':
+    case 'canceled':
+    case 'timed_out':
+    case 'timeout':
+    case 'timed-out':
+      return 'failure';
+    default:
+      return 'pending';
+  }
+}
+
+function normalizeWorkflowOutput(body: Record<string, unknown>): unknown {
+  if (body.output !== undefined) return body.output;
+  if (body.result !== undefined && body.patches !== undefined) {
+    return { result: body.result, patches: body.patches };
+  }
+  if (body.result !== undefined) return body.result;
+  if (body.patches !== undefined) return { patches: body.patches };
+  return undefined;
+}
+
+function workflowHeaders(token: string, delegated: boolean): Record<string, string> {
+  return {
+    accept: 'application/json',
+    'content-type': 'application/json',
+    authorization: `Bearer ${token}`,
+    ...(delegated ? { [WORKFLOW_INVOCATION_HEADER]: 'true' } : {})
+  };
+}
+
+async function workflowError(response: Response, label: string): Promise<Error> {
+  const body = await response.text().catch(() => '');
+  const excerpt = body.length > 400 ? `${body.slice(0, 400)}...` : body;
+  return new WorkflowRequestError(
+    `${label}: ${response.status} ${response.statusText}${excerpt ? ` - ${excerpt}` : ''}`,
+    // Cloud workflow routes use 401 for missing/invalid/not-yet-propagated
+    // tokens, and 403 only for valid tokens that lack scope or workspace
+    // access. Retry 401 briefly for post-mint propagation; fail 403 fast so
+    // scope/tenant misconfiguration is not hidden behind retry noise.
+    response.status === 401 || response.status === 429 || response.status >= 500
+  );
+}
+
+async function fetchWorkflow(input: string, init: RequestInit): Promise<Response> {
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), WORKFLOW_FETCH_TIMEOUT_MS);
+  try {
+    return await fetch(input, { ...init, signal: controller.signal });
+  } catch (err) {
+    const message = err instanceof Error && err.name === 'AbortError'
+      ? `timeout after ${WORKFLOW_FETCH_TIMEOUT_MS}ms`
+      : err instanceof Error ? err.message : String(err);
+    throw new WorkflowRequestError(`workflow request failed: ${message}`, true);
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
+function normalizeBaseUrl(value: string): string {
+  return value.replace(/\/+$/, '');
+}
+
+function uniqueStrings(values: string[]): string[] {
+  return [...new Set(values)];
+}
+
+function delay(ms: number): Promise<void> {
+  return new Promise((resolve) => setTimeout(resolve, ms));
 }
 
 function createProcessHarnessRunner(args: CloudDefaultOptions & {
   workspaceRoot: string;
   env: NodeJS.ProcessEnv;
+  trajectoryRoot?: string;
 }): (run: HarnessRunArgs) => Promise<HarnessRunResult> {
   return async (run) => {
+    // harness/model/systemPrompt are optional on the persona spec (pure
+    // orchestrator handlers omit them). But a handler that actually calls
+    // ctx.harness.run() needs all three to spawn the session — fail with a
+    // pointed error rather than passing `undefined` into the spec builder.
+    if (!args.persona.harness || !args.persona.model || args.persona.systemPrompt === undefined) {
+      throw new Error(
+        `ctx.harness.run() requires the persona to declare harness, model, and systemPrompt — ` +
+          `persona "${args.persona.id}" omits ${[
+            !args.persona.harness && 'harness',
+            !args.persona.model && 'model',
+            args.persona.systemPrompt === undefined && 'systemPrompt'
+          ]
+            .filter(Boolean)
+            .join(', ')}. Add them to persona.json, or remove the ctx.harness.run() call.`
+      );
+    }
+    const harness = args.persona.harness;
+    const personaModel = args.persona.model;
+    const personaSystemPrompt = args.persona.systemPrompt;
+
     const inputValues = resolveAgentInputValues(args.agent);
     const inputResolution = resolvePersonaInputs(args.persona.inputs, inputValues, args.env);
     const callerEnv = { ...args.env, ...inputResolution.values };
@@ -175,34 +507,105 @@ function createProcessHarnessRunner(args: CloudDefaultOptions & {
       args.log('warn', 'harness.config.dropped', { warning });
     }
 
-    const renderedSystemPrompt = renderPersonaInputs(args.persona.systemPrompt, inputResolution.values);
+    const renderedSystemPrompt = appendNoReplyPromptContract(
+      renderPersonaInputs(personaSystemPrompt, inputResolution.values)
+    );
     const cwd = resolveWorkspacePath(args.workspaceRoot, run.cwd ?? args.workspaceRoot);
     await assertDirectory(cwd);
-    await materializeSidecar({
-      persona: args.persona,
-      inputValues: inputResolution.values,
-      cwd,
-      log: args.log
-    });
     const task = run.prompt;
-    const spec = buildNonInteractiveSpec({
-      harness: args.persona.harness,
+    const relayMcp = resolveRelayMcpFromEnv(args.env);
+    // Inject the ai-hist MCP (the "why" + "how" retrieval surface) only when the
+    // persona opts into recall via `memory.aiMemory` (off by default).
+    // resolveAiHistFromEnv keys off the SAME TRAJECTORY_ROOT the runtime recorder
+    // writes to, so the MCP reads back exactly what this deployment wrote.
+    const aiMemory = resolveAiMemory(args.persona.memory);
+    const aiHist = aiMemory.enabled
+      ? resolveAiHistFromEnv(args.env, args.trajectoryRoot, aiMemory.dbPath)
+      : undefined;
+    const specInput = {
+      harness,
       personaId: args.persona.id,
-      model: args.persona.model,
+      model: personaModel,
       systemPrompt: renderedSystemPrompt,
       harnessSettings: args.persona.harnessSettings,
       mcpServers: mcpResolution.servers,
       permissions: args.persona.permissions,
       task,
       name: args.persona.id,
-      workingDirectory: cwd
+      workingDirectory: cwd,
+      ...(aiHist ? { aiHist } : {})
+    };
+    const brokerRelayHarness = relayMcp && (harness === 'claude' || harness === 'codex');
+    let spec = buildNonInteractiveSpec({
+      ...specInput,
+      ...(relayMcp && !brokerRelayHarness ? { relayMcp } : {})
     });
+    let spawnArgs = [...spec.args];
+    if (relayMcp && harness === 'codex') {
+      const brokerMcpArgs = await resolveAgentRelayBrokerMcpArgs({
+        cli: 'codex',
+        env: args.env,
+        relayMcp,
+        cwd,
+        existingArgs: codexExistingArgs(spawnArgs),
+        log: args.log
+      });
+      if (brokerMcpArgs) {
+        spawnArgs = injectCodexSubcommandArgs(spawnArgs, brokerMcpArgs);
+      } else {
+        // Legacy compatibility fallback. The broker's `agent-relay` MCP server
+        // is preferred for Codex because `mcp-args --register` pre-mints
+        // RELAY_AGENT_TOKEN and sets RELAY_SKIP_BOOTSTRAP=1; the older
+        // `@relaycast/mcp` server self-registers during MCP initialize.
+        spec = buildNonInteractiveSpec({ ...specInput, relayMcp });
+        spawnArgs = [...spec.args];
+      }
+    } else if (relayMcp && harness === 'claude') {
+      if (claudeMcpConfigHasRelayOverride(spawnArgs)) {
+        args.log('debug', 'harness.relay_mcp.persona_override', {
+          harness,
+          serverNames: relayOverrideServerNames(spawnArgs)
+        });
+      } else {
+        const brokerMcpArgs = await resolveAgentRelayBrokerMcpArgs({
+          cli: 'claude',
+          env: args.env,
+          relayMcp,
+          cwd,
+          // Claude persona specs already contain --mcp-config; the broker
+          // treats that as user-managed MCP and returns no injection args.
+          // Ask for the canonical broker payload, then merge agent-relay into
+          // the persona's strict config below.
+          existingArgs: [],
+          log: args.log
+        });
+        const mergedArgs = brokerMcpArgs
+          ? injectClaudeAgentRelayMcpConfig(spawnArgs, brokerMcpArgs, args.log)
+          : undefined;
+        if (mergedArgs) {
+          spawnArgs = mergedArgs;
+        } else {
+          // Legacy compatibility fallback. The broker-generated `agent-relay`
+          // MCP server is preferred because it comes from the Relay SDK broker
+          // helper and carries the pre-registered token fast path; the older
+          // `@relaycast/mcp` server self-registers during MCP initialize.
+          spec = buildNonInteractiveSpec({ ...specInput, relayMcp });
+          spawnArgs = [...spec.args];
+        }
+      }
+    }
     for (const warning of spec.warnings) {
       args.log('warn', 'harness.spec.warning', { warning });
     }
     for (const file of spec.configFiles) {
       await writeWorkspaceRelativeFile(cwd, file.path, file.contents);
     }
+    await materializeSidecar({
+      persona: args.persona,
+      inputValues: inputResolution.values,
+      cwd,
+      log: args.log
+    });
     const startedAt = Date.now();
     const childEnv = {
       ...callerEnv,
@@ -215,9 +618,10 @@ function createProcessHarnessRunner(args: CloudDefaultOptions & {
       WORKFORCE_DEPLOYMENT_ID: args.deployment.id,
       WORKFORCE_WORKSPACE_ID: args.workspaceId
     };
-    const result = await spawnAndCapture({
+    const result = await spawnNonInteractiveAndCapture({
       bin: spec.bin,
-      args: [...spec.args],
+      args: spawnArgs,
+      prompt: spec.prompt,
       cwd,
       env: childEnv,
       timeoutMs: args.persona.harnessSettings.timeoutSeconds
@@ -225,10 +629,16 @@ function createProcessHarnessRunner(args: CloudDefaultOptions & {
         : undefined
     });
     const parsed = extractUsage(result.output, result.stderr);
+    const trimmedStderr = result.stderr.trim();
     const harnessResult: HarnessRunResult = {
-      output: parsed.output.trimEnd(),
+      output: foldHarnessFailureOutput({
+        output: parsed.output,
+        stderr: result.stderr,
+        exitCode: result.exitCode
+      }),
       exitCode: result.exitCode,
       durationMs: Date.now() - startedAt,
+      ...(trimmedStderr ? { stderr: trimmedStderr } : {}),
       ...(parsed.usage ? { usage: parsed.usage } : {})
     };
     await reportHarnessUsage({
@@ -241,6 +651,28 @@ function createProcessHarnessRunner(args: CloudDefaultOptions & {
       log: args.log
     });
     return harnessResult;
+  };
+}
+
+/**
+ * Resolve the ai-hist MCP config. Only called when the persona opts into recall
+ * via `memory.aiMemory`. The "why" read-root mirrors the runtime recorder's
+ * write-root (env `TRAJECTORY_ROOT` wins, else the deployment default), so the
+ * MCP reads back exactly what the recorder wrote. The "how" DB comes from the
+ * persona's `memory.aiMemory.dbPath` override, else `AI_HIST_DB` env.
+ */
+function resolveAiHistFromEnv(
+  env: NodeJS.ProcessEnv,
+  defaultTrajectoryRoot?: string,
+  dbPathOverride?: string
+): AiHistMcpConfig | undefined {
+  // env.TRAJECTORY_ROOT wins; otherwise the deployment default (same value the
+  // recorder writes to) — keeps the MCP read-root identical to the write-root.
+  const trajectoryRoot = env.TRAJECTORY_ROOT?.trim() || defaultTrajectoryRoot;
+  const dbPath = dbPathOverride?.trim() || env.AI_HIST_DB?.trim();
+  return {
+    ...(trajectoryRoot ? { trajectoryRoot } : {}),
+    ...(dbPath ? { dbPath } : {})
   };
 }
 
@@ -277,7 +709,10 @@ function sidecarForPersona(
       mode: persona.claudeMdMode ?? 'overwrite'
     };
   }
-  if ((persona.harness === 'codex' || persona.harness === 'opencode') && persona.agentsMdContent) {
+  if (
+    (persona.harness === 'codex' || persona.harness === 'opencode' || persona.harness === 'grok') &&
+    persona.agentsMdContent
+  ) {
     return {
       file: 'AGENTS.md',
       content: renderPersonaInputs(persona.agentsMdContent, inputValues),
@@ -287,81 +722,26 @@ function sidecarForPersona(
   return undefined;
 }
 
-async function spawnAndCapture(args: {
-  bin: string;
-  args: string[];
-  cwd: string;
-  env: NodeJS.ProcessEnv;
-  timeoutMs?: number;
-}): Promise<{ output: string; stderr: string; exitCode: number }> {
-  return new Promise((resolve) => {
-    const child = spawn(args.bin, args.args, {
-      cwd: args.cwd,
-      env: args.env,
-      stdio: ['ignore', 'pipe', 'pipe'],
-      shell: false
-    });
-    let stdout = '';
-    let stderr = '';
-    let forceKillTimeout: NodeJS.Timeout | undefined;
-    child.stdout?.setEncoding('utf8');
-    child.stderr?.setEncoding('utf8');
-    child.stdout?.on('data', (chunk: string) => {
-      stdout += chunk;
-    });
-    child.stderr?.on('data', (chunk: string) => {
-      stderr += chunk;
-    });
-    const timeout =
-      args.timeoutMs !== undefined
-        ? setTimeout(() => {
-            child.kill('SIGTERM');
-            forceKillTimeout = setTimeout(() => child.kill('SIGKILL'), 1000);
-          }, args.timeoutMs)
-        : undefined;
-    const clearTimers = () => {
-      if (timeout) clearTimeout(timeout);
-      if (forceKillTimeout) clearTimeout(forceKillTimeout);
-    };
-    child.on('error', (err) => {
-      clearTimers();
-      resolve({ output: stdout, stderr: `${stderr}${err.message}\n`, exitCode: 1 });
-    });
-    child.on('close', (code, signal) => {
-      clearTimers();
-      resolve({
-        output: stdout,
-        stderr,
-        exitCode: typeof code === 'number' ? code : signal ? signalExitCode(signal) : 1
-      });
-    });
-  });
-}
-
-function signalExitCode(signal: NodeJS.Signals): number {
-  const code = signal.startsWith('SIG') ? signalCode(signal.slice(3)) : undefined;
-  return code ? 128 + code : 1;
-}
-
-function signalCode(name: string): number | undefined {
-  const signals: Record<string, number> = {
-    HUP: 1,
-    INT: 2,
-    QUIT: 3,
-    ILL: 4,
-    TRAP: 5,
-    ABRT: 6,
-    BUS: 7,
-    FPE: 8,
-    KILL: 9,
-    USR1: 10,
-    SEGV: 11,
-    USR2: 12,
-    PIPE: 13,
-    ALRM: 14,
-    TERM: 15
-  };
-  return signals[name];
+/**
+ * Build the caller-facing `output` for a harness run. On a non-zero exit the
+ * failure reason almost always lands on stderr — CLI auth/usage errors, and
+ * spawn failures like `spawn grok ENOENT`, which leave stdout empty. Since
+ * `HarnessRunResult.output` carries only stdout, a caller that builds an error
+ * from `run.output` (e.g. `grok harness failed (exit 1): ${run.output}`) would
+ * otherwise see nothing. Fold trimmed stderr into the output on failure so the
+ * cause is visible; on success, stderr is left out and the output stays clean.
+ */
+export function foldHarnessFailureOutput(args: {
+  output: string;
+  stderr: string;
+  exitCode: number;
+}): string {
+  const base = args.output.trimEnd();
+  const err = args.stderr.trim();
+  if (args.exitCode !== 0 && err) {
+    return [base, err].filter(Boolean).join('\n');
+  }
+  return base;
 }
 
 function extractUsage(output: string, stderr: string): { output: string; usage?: HarnessUsage } {

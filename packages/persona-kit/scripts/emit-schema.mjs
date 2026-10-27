@@ -9,6 +9,7 @@ const { createGenerator } = require('ts-json-schema-generator');
 
 const packageRoot = resolve(dirname(fileURLToPath(import.meta.url)), '..');
 const schemaPath = resolve(packageRoot, 'schemas/persona.schema.json');
+const agentSchemaPath = resolve(packageRoot, 'schemas/agent.schema.json');
 const tsconfigPath = resolve(packageRoot, 'tsconfig.json');
 const typesPath = resolve(packageRoot, 'src/types.ts');
 
@@ -80,6 +81,17 @@ function tightenWorkspaceServiceAccountName(node) {
 }
 tightenWorkspaceServiceAccountName(schema);
 
+// httpRead grants live network access during local preview, so it is the
+// deliberately closed exception to the otherwise extension-safe persona
+// records. Keep the generated contract aligned with parse.ts's allowlists.
+for (const definitionName of [
+  'PersonaHttpReadCapability',
+  'PersonaHttpReadRule'
+]) {
+  const definition = schema.definitions?.[definitionName];
+  if (definition) definition.additionalProperties = false;
+}
+
 // Post-process: tighten the persona `tags[]` items to match parseTags
 // (non-empty, ≤64 chars). The TS type widens to `readonly string[]` after
 // cloud#553 — the generator emits a bare `{ "type": "string" }` because
@@ -100,6 +112,34 @@ if (
   };
 }
 
+// Parser rejects empty `mount.roots` and aliases outside
+// `^[a-z0-9](?:[a-z0-9_-]*[a-z0-9])?$` (≤32). The TS types stay wide so
+// consumer index signatures still typecheck; the schema is what deploy
+// validation sees.
+const MOUNT_ROOT_ALIAS_PATTERN = '^[a-z0-9](?:[a-z0-9_-]*[a-z0-9])?$';
+const mountRoot = schema.definitions?.PersonaMountRoot;
+if (mountRoot?.properties?.alias?.type === 'string') {
+  mountRoot.properties.alias = {
+    ...mountRoot.properties.alias,
+    minLength: 1,
+    maxLength: 32,
+    pattern: MOUNT_ROOT_ALIAS_PATTERN
+  };
+}
+if (mountRoot?.properties?.path?.type === 'string') {
+  mountRoot.properties.path = {
+    ...mountRoot.properties.path,
+    minLength: 1
+  };
+}
+const personaMount = schema.definitions?.PersonaMount;
+if (personaMount?.properties?.roots?.type === 'array') {
+  personaMount.properties.roots = {
+    ...personaMount.properties.roots,
+    minItems: 1
+  };
+}
+
 const serialized = `${JSON.stringify(schema, null, 2)}\n`;
 await mkdir(dirname(schemaPath), { recursive: true });
 
@@ -112,4 +152,64 @@ try {
 
 if (existing !== serialized) {
   await writeFile(schemaPath, serialized);
+}
+
+// Emit the agent (`defineAgent`) schema from AgentSpec — the listener half of
+// a deployed agent (triggers/schedules/watch) that travels to cloud as the
+// deploy `agent` block.
+const agentGenerator = createGenerator({
+  path: typesPath,
+  tsconfig: tsconfigPath,
+  type: 'AgentSpec',
+  expose: 'export',
+  topRef: true,
+  jsDoc: 'extended',
+  additionalProperties: true,
+  sortProps: true,
+  skipTypeCheck: true
+});
+
+const agentSchema = agentGenerator.createSchema('AgentSpec');
+agentSchema.$schema = 'https://json-schema.org/draft/2020-12/schema';
+agentSchema.$id = 'https://agentworkforce.dev/schemas/agent.schema.json';
+
+const agentTrigger = agentSchema.definitions?.PersonaIntegrationTrigger;
+if (
+  agentTrigger &&
+  agentTrigger.properties?.maxConcurrency?.type === 'number'
+) {
+  agentTrigger.properties.maxConcurrency = {
+    ...agentTrigger.properties.maxConcurrency,
+    type: 'integer',
+    minimum: 1
+  };
+}
+
+const absolutePathArrayConstraint = {
+  minItems: 1,
+  items: {
+    type: 'string',
+    minLength: 1,
+    pattern: '^/(?:[^\\r\\n\\u2028\\u2029]*\\S)?$'
+  }
+};
+
+function applyAbsolutePathArrayConstraint(pathsSchema) {
+  if (pathsSchema?.type !== 'array') return;
+  Object.assign(pathsSchema, absolutePathArrayConstraint);
+}
+
+applyAbsolutePathArrayConstraint(agentTrigger?.properties?.paths);
+applyAbsolutePathArrayConstraint(agentSchema.definitions?.WatchRule?.properties?.paths);
+
+const agentSerialized = `${JSON.stringify(agentSchema, null, 2)}\n`;
+let existingAgent = '';
+try {
+  existingAgent = await readFile(agentSchemaPath, 'utf8');
+} catch {
+  // First emission.
+}
+
+if (existingAgent !== agentSerialized) {
+  await writeFile(agentSchemaPath, agentSerialized);
 }

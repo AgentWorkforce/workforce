@@ -8,6 +8,8 @@ import {
   SIDECAR_MD_MODES
 } from './constants.js';
 import type {
+  AgentSpec,
+  CapabilityValue,
   CodexApprovalPolicy,
   CodexSandboxMode,
   Harness,
@@ -19,18 +21,27 @@ import type {
   PersonaIntegrationConfig,
   PersonaIntegrationTrigger,
   PersonaIntent,
+  PersonaAiMemoryConfig,
+  PersonaHttpReadCapability,
+  PersonaHttpReadRule,
   PersonaMemory,
   PersonaMemoryConfig,
   PersonaMemoryScope,
+  PersonaRelay,
+  PersonaRelayConfig,
   PersonaMount,
   PersonaMountRoot,
+  PersonaTrajectoryConfig,
   PersonaPermissions,
   PersonaSchedule,
   PersonaSelection,
   PersonaSkill,
   PersonaSpec,
   PersonaTag,
-  SidecarMdMode
+  ProactiveCapabilities,
+  SidecarMdMode,
+  WatchEvent,
+  WatchRule
 } from './types.js';
 
 /**
@@ -39,9 +50,48 @@ import type {
  * stay short enough to render in list/table UIs without truncation.
  */
 const PERSONA_TAG_MAX_LEN = 64;
+const IMPLICIT_INTEGRATION_SOURCE = '__agentworkforceImplicitSource';
 
 export function isObject(value: unknown): value is Record<string, unknown> {
   return typeof value === 'object' && value !== null;
+}
+
+export function isPlainObject(value: unknown): value is Record<string, unknown> {
+  if (!isObject(value) || Array.isArray(value)) return false;
+  const proto = Object.getPrototypeOf(value);
+  return proto === Object.prototype || proto === null;
+}
+
+/**
+ * Whether an integration is using the backwards-compatible implicit source.
+ *
+ * Persona-kit exposes the effective `deployer_user` source to in-memory
+ * consumers, but serializes an implicit source as an omission. That omission is
+ * the durable JSON representation: reparsing it restores both the effective
+ * default and this distinction without leaking private metadata into a persona
+ * artifact.
+ */
+export function isImplicitIntegrationSource(value: unknown): boolean {
+  if (!isObject(value) || Array.isArray(value)) return false;
+  const marker = Object.getOwnPropertyDescriptor(value, IMPLICIT_INTEGRATION_SOURCE);
+  return value.source === undefined
+    || (marker?.value === true && marker.enumerable === false);
+}
+
+/**
+ * Copy fields this parser does not own so downstream runtimes can extend the
+ * portable spec without waiting for a persona-kit release. Callers validate
+ * and project their known fields after this copy, ensuring normalized known
+ * values always win over the raw input.
+ */
+function preserveUnknownFields(
+  value: Record<string, unknown>,
+  knownFields: readonly string[]
+): Record<string, unknown> {
+  const known = new Set(knownFields);
+  return Object.fromEntries(
+    Object.entries(value).filter(([key]) => !known.has(key))
+  );
 }
 
 export function isHarness(value: unknown): value is Harness {
@@ -70,10 +120,12 @@ export function isSidecarMode(value: unknown): value is SidecarMdMode {
 }
 
 /**
- * Parse the persona-level `tags` field. Tags are denormalized catalog
- * metadata (mirroring `tags text[]` in cloud#553), not a closed enum —
- * authors are free to label personas with provider names, intents, or
- * project codes (`["proactive", "notion", "github"]`).
+ * Parse the persona-level `tags` field. Tags are catalog metadata that the
+ * cloud validates against the closed {@link PERSONA_TAGS} vocabulary — an
+ * off-vocabulary tag is rejected at deploy with `400 invalid_persona`.
+ * `definePersona` types `tags` against that vocabulary so typed authors get a
+ * compile error first; this runtime parse stays lenient (accepts any
+ * `string[]`) for forward-compatibility, but unknown tags will not deploy.
  *
  * Shape rules:
  *  - `undefined` / `null` → `undefined` (tags are optional)
@@ -151,10 +203,19 @@ export function parseHarnessSettings(value: unknown, context: string): HarnessSe
     throw new Error(`${context}.timeoutSeconds must be a positive number`);
   }
 
-  const out: HarnessSettings = {
+  const out = {
+    ...preserveUnknownFields(value, [
+      'reasoning',
+      'timeoutSeconds',
+      'sandboxMode',
+      'approvalPolicy',
+      'workspaceWriteNetworkAccess',
+      'webSearch',
+      'dangerouslyBypassApprovalsAndSandbox'
+    ]),
     reasoning: reasoning as HarnessSettings['reasoning'],
     timeoutSeconds
-  };
+  } as HarnessSettings;
   if (sandboxMode !== undefined) {
     if (!CODEX_SANDBOX_MODES.includes(sandboxMode as CodexSandboxMode)) {
       throw new Error(`${context}.sandboxMode must be one of: ${CODEX_SANDBOX_MODES.join(', ')}`);
@@ -225,7 +286,12 @@ export function parseSkills(value: unknown, context: string): PersonaSkill[] {
     if (typeof description !== 'string' || !description.trim()) {
       throw new Error(`${entryContext}.description must be a non-empty string`);
     }
-    return { id, source, description };
+    return {
+      ...preserveUnknownFields(entry, ['id', 'source', 'description']),
+      id,
+      source,
+      description
+    };
   });
 }
 
@@ -336,13 +402,52 @@ export function parseMount(
       return parsed;
     });
   }
-  return ignoredPatterns || readonlyPatterns || roots
-    ? {
-        ...(ignoredPatterns ? { ignoredPatterns } : {}),
-        ...(readonlyPatterns ? { readonlyPatterns } : {}),
-        ...(roots ? { roots } : {})
-      }
-    : undefined;
+  const enabled = value.enabled;
+  if (enabled !== undefined && typeof enabled !== 'boolean') {
+    throw new Error(`${context}.enabled must be a boolean if provided`);
+  }
+  const hasPatterns = Boolean(ignoredPatterns || readonlyPatterns);
+  const finalEnabled = typeof enabled === 'boolean'
+    ? enabled
+    : hasPatterns
+      ? true
+      : undefined;
+  const unknownFields = preserveUnknownFields(value, [
+    'enabled',
+    'ignoredPatterns',
+    'readonlyPatterns',
+    'roots'
+  ]);
+  if (
+    !hasPatterns &&
+    !roots &&
+    finalEnabled === undefined &&
+    Object.keys(unknownFields).length === 0
+  ) {
+    return undefined;
+  }
+  return {
+    ...unknownFields,
+    ...(finalEnabled !== undefined ? { enabled: finalEnabled } : {}),
+    ...(ignoredPatterns ? { ignoredPatterns } : {}),
+    ...(readonlyPatterns ? { readonlyPatterns } : {}),
+    ...(roots ? { roots } : {})
+  };
+}
+
+/**
+ * Parse the sandbox field from a persona spec.
+ * Valid values: `true`, `false`. Missing/undefined means default (sandbox always booted).
+ */
+function parseSandbox(
+  value: unknown,
+  context: string
+): boolean | undefined {
+  if (value === undefined) return undefined;
+  if (value === true || value === false) return value;
+  throw new Error(
+    `${context} must be true or false (got ${JSON.stringify(value)})`
+  );
 }
 
 export const INPUT_NAME_RE = /^[A-Z_][A-Z0-9_]*$/;
@@ -375,8 +480,14 @@ export function parseInputs(
     if (!isObject(raw)) {
       throw new Error(`${context}.${name} must be a string default or an object`);
     }
-    const { description, env, default: defaultValue, optional } = raw;
-    const parsed: PersonaInputSpec = {};
+    const { description, env, default: defaultValue, optional, picker } = raw;
+    const parsed = preserveUnknownFields(raw, [
+      'description',
+      'env',
+      'default',
+      'optional',
+      'picker'
+    ]) as PersonaInputSpec;
     if (description !== undefined) {
       if (typeof description !== 'string' || !description.trim()) {
         throw new Error(`${context}.${name}.description must be a non-empty string if provided`);
@@ -407,6 +518,23 @@ export function parseInputs(
       }
       parsed.optional = optional;
     }
+    if (picker !== undefined) {
+      if (!isObject(picker)) {
+        throw new Error(`${context}.${name}.picker must be an object if provided`);
+      }
+      const { provider, resource } = picker;
+      if (typeof provider !== 'string' || !provider.trim()) {
+        throw new Error(`${context}.${name}.picker.provider must be a non-empty string`);
+      }
+      if (typeof resource !== 'string' || !resource.trim()) {
+        throw new Error(`${context}.${name}.picker.resource must be a non-empty string`);
+      }
+      parsed.picker = {
+        ...preserveUnknownFields(picker, ['provider', 'resource']),
+        provider,
+        resource
+      };
+    }
     out[name] = parsed;
   }
 
@@ -421,7 +549,7 @@ export function parsePermissions(
   if (!isObject(value)) {
     throw new Error(`${context} must be an object if provided`);
   }
-  const out: PersonaPermissions = {};
+  const out = preserveUnknownFields(value, ['allow', 'deny', 'mode']) as PersonaPermissions;
   const { allow, deny, mode } = value;
   if (allow !== undefined) {
     if (!Array.isArray(allow) || allow.some((s) => typeof s !== 'string' || !s.trim())) {
@@ -483,7 +611,12 @@ export function parseMcpServers(
         throw new Error(`${context}.${name}.url must be a non-empty string for type=${type}`);
       }
       const headers = parseStringMap(raw.headers, `${context}.${name}.headers`);
-      out[name] = { type, url: raw.url, ...(headers ? { headers } : {}) };
+      out[name] = {
+        ...preserveUnknownFields(raw, ['type', 'url', 'headers']),
+        type,
+        url: raw.url,
+        ...(headers ? { headers } : {})
+      };
     } else if (type === 'stdio') {
       if (typeof raw.command !== 'string' || !raw.command.trim()) {
         throw new Error(`${context}.${name}.command must be a non-empty string for type=stdio`);
@@ -494,6 +627,7 @@ export function parseMcpServers(
       }
       const env = parseStringMap(raw.env, `${context}.${name}.env`);
       out[name] = {
+        ...preserveUnknownFields(raw, ['type', 'command', 'args', 'env']),
         type: 'stdio',
         command: raw.command,
         ...(args ? { args: args as string[] } : {}),
@@ -561,6 +695,28 @@ function assertCronExpression(value: string, context: string): void {
   }
 }
 
+function parseAbsolutePathList(value: unknown, context: string): string[] {
+  if (!Array.isArray(value) || value.length === 0) {
+    throw new Error(`${context} must be a non-empty array`);
+  }
+  return value.map((path, pathIdx) => {
+    const pathContext = `${context}[${pathIdx}]`;
+    if (typeof path !== 'string' || !path.trim()) {
+      throw new Error(`${pathContext} must be a non-empty string`);
+    }
+    if (path !== path.trim()) {
+      throw new Error(`${pathContext} must not have leading or trailing whitespace`);
+    }
+    if (/[\r\n\u2028\u2029]/u.test(path)) {
+      throw new Error(`${pathContext} must not contain line separators`);
+    }
+    if (!path.startsWith('/')) {
+      throw new Error(`${pathContext} must start with /`);
+    }
+    return path;
+  });
+}
+
 export function parseIntegrationTrigger(
   value: unknown,
   context: string
@@ -568,7 +724,7 @@ export function parseIntegrationTrigger(
   if (!isObject(value)) {
     throw new Error(`${context} must be an object`);
   }
-  const { on, match, where } = value;
+  const { on, match, where, paths, maxConcurrency } = value;
   if (typeof on !== 'string' || !on.trim()) {
     throw new Error(`${context}.on must be a non-empty string`);
   }
@@ -578,10 +734,32 @@ export function parseIntegrationTrigger(
   if (where !== undefined && (typeof where !== 'string' || !where.trim())) {
     throw new Error(`${context}.where must be a non-empty string if provided`);
   }
+  const parsedPaths = paths === undefined
+    ? undefined
+    : parseAbsolutePathList(paths, `${context}.paths`);
+  // Intentionally lenient: Cloud derives this as an optional backpressure hint,
+  // so invalid values mean "unset" rather than a parse failure.
+  const parsedMaxConcurrency =
+    typeof maxConcurrency === 'number' &&
+    Number.isInteger(maxConcurrency) &&
+    maxConcurrency >= 1
+      ? maxConcurrency
+      : undefined;
   return {
+    ...preserveUnknownFields(value, [
+      'on',
+      'match',
+      'where',
+      'paths',
+      'maxConcurrency'
+    ]),
     on,
     ...(typeof match === 'string' ? { match } : {}),
-    ...(typeof where === 'string' ? { where } : {})
+    ...(typeof where === 'string' ? { where } : {}),
+    ...(parsedPaths ? { paths: parsedPaths } : {}),
+    ...(parsedMaxConcurrency !== undefined
+      ? { maxConcurrency: parsedMaxConcurrency }
+      : {})
   };
 }
 
@@ -621,6 +799,7 @@ export function parseIntegrationSource(
       `${context}.kind must be one of: ${INTEGRATION_SOURCE_KINDS.join(', ')}`
     );
   }
+  const unknownFields = preserveUnknownFields(value, ['kind', 'name']);
   if (kind === 'workspace_service_account') {
     if (typeof name !== 'string' || !name) {
       throw new Error(
@@ -637,14 +816,14 @@ export function parseIntegrationSource(
         `${context}.name must be kebab-case matching ${INTEGRATION_SOURCE_NAME_RE.source}`
       );
     }
-    return { kind, name };
+    return { ...unknownFields, kind, name };
   }
   if (name !== undefined) {
     throw new Error(
       `${context}.name is only allowed when kind="workspace_service_account"`
     );
   }
-  return { kind };
+  return { ...unknownFields, kind };
 }
 
 export function parseIntegrationConfig(
@@ -654,17 +833,53 @@ export function parseIntegrationConfig(
   if (!isObject(value)) {
     throw new Error(`${context} must be an object`);
   }
-  const { source, scope, triggers } = value;
+  const { source, scope, config, optional, enabledByInput } = value;
 
-  const out: PersonaIntegrationConfig = {};
+  // Hard cut: triggers moved from the persona to the agent. A persona
+  // integration is connection-config only (source + scope). Fail loudly so
+  // un-migrated personas surface the move instead of silently dropping events.
+  if ('triggers' in value) {
+    throw new Error(
+      `${context}.triggers is no longer allowed — event triggers moved to the agent. ` +
+        `Declare them in agent.ts via defineAgent({ triggers: { ${context.split('.').pop()}: [...] } }).`
+    );
+  }
+
+  const out = preserveUnknownFields(value, [
+    'source',
+    'scope',
+    'config',
+    'optional',
+    'enabledByInput',
+    'triggers',
+    IMPLICIT_INTEGRATION_SOURCE
+  ]) as PersonaIntegrationConfig;
 
   // Default-inject `deployer_user` when the persona omits `source` so
-  // pre-discriminator personas keep parsing unchanged. The cloud-side
-  // resolver can then trust `source` is always present on parsed specs.
+  // pre-discriminator personas keep parsing unchanged. Preserve the omission
+  // across JSON serialization, though: deploy uses it to distinguish legacy
+  // workspace-compatible defaults from an explicitly authored deployer-user
+  // source. A private enumerable marker would leak into persona.json; a private
+  // non-enumerable marker alone would disappear and lose the behavior.
+  const sourceWasImplicit = isImplicitIntegrationSource(value);
   out.source =
-    source === undefined
+    sourceWasImplicit
       ? { kind: 'deployer_user' }
       : parseIntegrationSource(source, `${context}.source`);
+  if (sourceWasImplicit) {
+    Object.defineProperty(out, IMPLICIT_INTEGRATION_SOURCE, {
+      value: true,
+      enumerable: false
+    });
+    Object.defineProperty(out, 'toJSON', {
+      enumerable: false,
+      value(this: PersonaIntegrationConfig) {
+        const serialized = { ...this };
+        delete serialized.source;
+        return serialized;
+      }
+    });
+  }
 
   if (scope !== undefined) {
     const parsedScope = parseStringMap(scope, `${context}.scope`);
@@ -673,18 +888,33 @@ export function parseIntegrationConfig(
     }
   }
 
-  if (triggers !== undefined) {
-    if (!Array.isArray(triggers)) {
-      throw new Error(`${context}.triggers must be an array if provided`);
+  if (config !== undefined) {
+    if (!isPlainObject(config)) {
+      throw new Error(`${context}.config must be a plain object if provided`);
     }
-    if (triggers.length === 0) {
-      throw new Error(
-        `${context}.triggers must contain at least one entry if provided (omit the field to declare an integration with no event triggers)`
-      );
+    out.config = config;
+  }
+
+  if (optional !== undefined) {
+    if (typeof optional !== 'boolean') {
+      throw new Error(`${context}.optional must be a boolean if provided`);
     }
-    out.triggers = triggers.map((entry, idx) =>
-      parseIntegrationTrigger(entry, `${context}.triggers[${idx}]`)
-    );
+    out.optional = optional;
+  }
+
+  if (enabledByInput !== undefined) {
+    if (typeof enabledByInput !== 'string' || !enabledByInput.trim()) {
+      throw new Error(`${context}.enabledByInput must be a non-empty string if provided`);
+    }
+    assertInputName(enabledByInput, `${context}.enabledByInput`);
+    out.enabledByInput = enabledByInput;
+  }
+
+  if (out.optional === true && out.enabledByInput === undefined) {
+    throw new Error(`${context}.enabledByInput is required when optional is true`);
+  }
+  if (out.enabledByInput !== undefined && out.optional !== true) {
+    throw new Error(`${context}.optional must be true when enabledByInput is set`);
   }
 
   return out;
@@ -748,11 +978,129 @@ export function parseSchedules(
       throw new Error(`${entryContext}.tz must be a non-empty string if provided`);
     }
     out.push({
+      ...preserveUnknownFields(entry, ['name', 'cron', 'tz']),
       name: trimmedName,
       cron: trimmedCron,
       ...(typeof tz === 'string' ? { tz: tz.trim() } : {})
     });
   }
+  return out;
+}
+
+const WATCH_EVENT_VALUES: readonly WatchEvent[] = ['created', 'updated', 'deleted'];
+
+function isWatchEvent(value: unknown): value is WatchEvent {
+  return (
+    typeof value === 'string' &&
+    WATCH_EVENT_VALUES.includes(value as WatchEvent)
+  );
+}
+
+export function parseWatch(value: unknown, context: string): WatchRule[] | undefined {
+  if (value === undefined) return undefined;
+  if (!Array.isArray(value)) {
+    throw new Error(`${context} must be an array if provided`);
+  }
+  if (value.length === 0) return undefined;
+
+  return value.map((entry, idx) => {
+    const entryContext = `${context}[${idx}]`;
+    if (!isObject(entry)) {
+      throw new Error(`${entryContext} must be an object`);
+    }
+    const { paths, events, debounceMs, match } = entry;
+    const parsedPaths = parseAbsolutePathList(paths, `${entryContext}.paths`);
+
+    if (!Array.isArray(events) || events.length === 0) {
+      throw new Error(`${entryContext}.events must be a non-empty array`);
+    }
+    const parsedEvents: WatchEvent[] = [];
+    for (const [eventIdx, event] of events.entries()) {
+      if (!isWatchEvent(event)) {
+        throw new Error(
+          `${entryContext}.events[${eventIdx}] must be one of: ${WATCH_EVENT_VALUES.join(', ')}`
+        );
+      }
+      if (!parsedEvents.includes(event)) parsedEvents.push(event);
+    }
+
+    if (
+      debounceMs !== undefined &&
+      (typeof debounceMs !== 'number' || !Number.isFinite(debounceMs) || debounceMs < 0)
+    ) {
+      throw new Error(`${entryContext}.debounceMs must be a non-negative number if provided`);
+    }
+    if (match !== undefined && (typeof match !== 'string' || !match.trim())) {
+      throw new Error(`${entryContext}.match must be a non-empty string if provided`);
+    }
+
+    return {
+      ...preserveUnknownFields(entry, ['paths', 'events', 'debounceMs', 'match']),
+      paths: parsedPaths,
+      events: parsedEvents,
+      ...(typeof debounceMs === 'number' ? { debounceMs } : {}),
+      ...(typeof match === 'string' ? { match } : {})
+    };
+  });
+}
+
+/**
+ * Validate an **agent** spec (the `defineAgent(...)` shape the deploy CLI
+ * extracts from `agent.ts`). The handler itself is not validated here — only
+ * the listener declarations that travel to the cloud as the deploy `agent`
+ * block: a provider-keyed `triggers` map, cron `schedules`, and relayfile
+ * `watch` rules. Reuses {@link parseIntegrationTrigger} / {@link parseSchedules}
+ * / {@link parseWatch} so trigger/schedule/watch validation stays identical to
+ * the pre-move persona path.
+ */
+export function parseAgentSpec(value: unknown, context = 'agent'): AgentSpec {
+  if (!isObject(value)) {
+    throw new Error(`${context} must be an object`);
+  }
+  const { launchedBy, triggers, schedules, watch } = value;
+  const out = preserveUnknownFields(value, [
+    'launchedBy',
+    'triggers',
+    'schedules',
+    'watch'
+  ]) as AgentSpec;
+
+  if (launchedBy !== undefined) {
+    if (launchedBy !== 'team-dispatcher') {
+      throw new Error(`${context}.launchedBy must be one of: team-dispatcher`);
+    }
+    out.launchedBy = launchedBy;
+  }
+
+  if (triggers !== undefined) {
+    if (!isObject(triggers) || Array.isArray(triggers)) {
+      throw new Error(
+        `${context}.triggers must be an object keyed by provider slug (e.g. { github: [{ on: 'pull_request.opened' }] })`
+      );
+    }
+    const parsed: Record<string, PersonaIntegrationTrigger[]> = {};
+    for (const [provider, raw] of Object.entries(triggers)) {
+      if (!provider.trim()) {
+        throw new Error(`${context}.triggers keys must be non-empty provider slugs`);
+      }
+      if (!Array.isArray(raw) || raw.length === 0) {
+        throw new Error(
+          `${context}.triggers.${provider} must be a non-empty array of triggers`
+        );
+      }
+      parsed[provider] = raw.map((entry, idx) =>
+        parseIntegrationTrigger(entry, `${context}.triggers.${provider}[${idx}]`)
+      );
+    }
+    if (Object.keys(parsed).length > 0) out.triggers = parsed;
+  }
+
+  const parsedSchedules = parseSchedules(schedules, `${context}.schedules`);
+  if (parsedSchedules) out.schedules = parsedSchedules;
+
+  const parsedWatch = parseWatch(watch, `${context}.watch`);
+  if (parsedWatch) out.watch = parsedWatch;
+
   return out;
 }
 
@@ -762,8 +1110,16 @@ export function parseMemory(value: unknown, context: string): PersonaMemory | un
   if (!isObject(value)) {
     throw new Error(`${context} must be a boolean or an object if provided`);
   }
-  const { enabled, scopes, ttlDays, autoPromote, dedupMs } = value;
-  const out: PersonaMemoryConfig = {};
+  const { enabled, scopes, ttlDays, autoPromote, dedupMs, trajectories, aiMemory } = value;
+  const out = preserveUnknownFields(value, [
+    'enabled',
+    'scopes',
+    'ttlDays',
+    'autoPromote',
+    'dedupMs',
+    'trajectories',
+    'aiMemory'
+  ]) as PersonaMemoryConfig;
   if (enabled !== undefined) {
     if (typeof enabled !== 'boolean') {
       throw new Error(`${context}.enabled must be a boolean if provided`);
@@ -806,7 +1162,249 @@ export function parseMemory(value: unknown, context: string): PersonaMemory | un
     }
     out.dedupMs = dedupMs;
   }
+  if (trajectories !== undefined) {
+    out.trajectories = parseTrajectoryConfig(trajectories, `${context}.trajectories`);
+  }
+  if (aiMemory !== undefined) {
+    out.aiMemory = parseAiMemoryConfig(aiMemory, `${context}.aiMemory`);
+  }
   return out;
+}
+
+export function parseRelay(value: unknown, context: string): PersonaRelay | undefined {
+  if (value === undefined) return undefined;
+  if (typeof value === 'boolean') return value;
+  if (!isObject(value)) {
+    throw new Error(`${context} must be a boolean or an object if provided`);
+  }
+  const { enabled, agentName, channels, inbox, defaultWorkspace } = value;
+  const out = preserveUnknownFields(value, [
+    'enabled',
+    'agentName',
+    'channels',
+    'inbox',
+    'defaultWorkspace'
+  ]) as PersonaRelayConfig;
+  if (enabled !== undefined) {
+    if (typeof enabled !== 'boolean') {
+      throw new Error(`${context}.enabled must be a boolean if provided`);
+    }
+    out.enabled = enabled;
+  }
+  if (agentName !== undefined) {
+    if (typeof agentName !== 'string' || !agentName.trim()) {
+      throw new Error(`${context}.agentName must be a non-empty string if provided`);
+    }
+    out.agentName = agentName.trim();
+  }
+  if (channels !== undefined) {
+    out.channels = parseRelayStringList(channels, `${context}.channels`);
+  }
+  if (inbox !== undefined) {
+    out.inbox = parseRelayStringList(inbox, `${context}.inbox`);
+  }
+  if (defaultWorkspace !== undefined) {
+    if (typeof defaultWorkspace !== 'string' || !defaultWorkspace.trim()) {
+      throw new Error(`${context}.defaultWorkspace must be a non-empty string if provided`);
+    }
+    out.defaultWorkspace = defaultWorkspace.trim();
+  }
+  return out;
+}
+
+function parseRelayStringList(value: unknown, context: string): string[] {
+  if (!Array.isArray(value)) {
+    throw new Error(`${context} must be an array of strings if provided`);
+  }
+  const out: string[] = [];
+  for (const [idx, entry] of value.entries()) {
+    if (typeof entry !== 'string' || !entry.trim()) {
+      throw new Error(`${context}[${idx}] must be a non-empty string`);
+    }
+    const normalized = entry.trim();
+    if (!out.includes(normalized)) out.push(normalized);
+  }
+  return out;
+}
+
+function parseTrajectoryConfig(
+  value: unknown,
+  context: string
+): boolean | PersonaTrajectoryConfig {
+  if (typeof value === 'boolean') return value;
+  if (!isObject(value)) {
+    throw new Error(`${context} must be a boolean or an object if provided`);
+  }
+  const out = preserveUnknownFields(value, [
+    'enabled',
+    'autoCompact'
+  ]) as PersonaTrajectoryConfig;
+  if (value.enabled !== undefined) {
+    if (typeof value.enabled !== 'boolean') {
+      throw new Error(`${context}.enabled must be a boolean if provided`);
+    }
+    out.enabled = value.enabled;
+  }
+  if (value.autoCompact !== undefined) {
+    if (typeof value.autoCompact !== 'boolean') {
+      throw new Error(`${context}.autoCompact must be a boolean if provided`);
+    }
+    out.autoCompact = value.autoCompact;
+  }
+  return out;
+}
+
+function parseAiMemoryConfig(
+  value: unknown,
+  context: string
+): boolean | PersonaAiMemoryConfig {
+  if (typeof value === 'boolean') return value;
+  if (!isObject(value)) {
+    throw new Error(`${context} must be a boolean or an object if provided`);
+  }
+  const out = preserveUnknownFields(value, [
+    'enabled',
+    'dbPath'
+  ]) as PersonaAiMemoryConfig;
+  if (value.enabled !== undefined) {
+    if (typeof value.enabled !== 'boolean') {
+      throw new Error(`${context}.enabled must be a boolean if provided`);
+    }
+    out.enabled = value.enabled;
+  }
+  if (value.dbPath !== undefined) {
+    if (typeof value.dbPath !== 'string' || !value.dbPath.trim()) {
+      throw new Error(`${context}.dbPath must be a non-empty string if provided`);
+    }
+    out.dbPath = value.dbPath;
+  }
+  return out;
+}
+
+/**
+ * Resolve the opt-in `memory.trajectories` facet (the "why" write side).
+ * Off unless the persona declares it: `true`, or an object whose
+ * `enabled !== false`. The boolean `memory: true` shorthand does NOT enable it.
+ */
+export function resolveTrajectoryRecording(memory: PersonaMemory | undefined): {
+  enabled: boolean;
+  autoCompact?: boolean;
+} {
+  if (!memory || typeof memory === 'boolean') return { enabled: false };
+  const value = memory.trajectories;
+  if (value === undefined) return { enabled: false };
+  if (typeof value === 'boolean') return { enabled: value };
+  return {
+    enabled: value.enabled !== false,
+    ...(value.autoCompact !== undefined ? { autoCompact: value.autoCompact } : {})
+  };
+}
+
+/**
+ * Resolve the opt-in `memory.aiMemory` facet (the "how"+"why" recall side that
+ * loads the ai-hist MCP). Off unless declared; `memory: true` does NOT enable it.
+ */
+export function resolveAiMemory(memory: PersonaMemory | undefined): {
+  enabled: boolean;
+  dbPath?: string;
+} {
+  if (!memory || typeof memory === 'boolean') return { enabled: false };
+  const value = memory.aiMemory;
+  if (value === undefined) return { enabled: false };
+  if (typeof value === 'boolean') return { enabled: value };
+  return {
+    enabled: value.enabled !== false,
+    ...(value.dbPath ? { dbPath: value.dbPath } : {})
+  };
+}
+
+function parseCapabilityValue(value: unknown, context: string): CapabilityValue {
+  if (typeof value === 'boolean') return value;
+  if (!isObject(value) || Array.isArray(value)) {
+    throw new Error(`${context} must be a boolean or object if provided`);
+  }
+  if (value.enabled !== undefined && typeof value.enabled !== 'boolean') {
+    throw new Error(`${context}.enabled must be a boolean if provided`);
+  }
+  return { ...value } as CapabilityValue;
+}
+
+function parseHttpReadRule(value: unknown, context: string): PersonaHttpReadRule {
+  if (!isObject(value) || Array.isArray(value)) {
+    throw new Error(`${context} must be an object`);
+  }
+  const entry = value as Record<string, unknown>;
+  for (const key of Object.keys(entry)) {
+    if (!['method', 'urlGlob'].includes(key)) {
+      throw new Error(`${context}.${key} is not allowed`);
+    }
+  }
+  if (entry.method !== 'GET' && entry.method !== 'HEAD') {
+    throw new Error(`${context}.method must be "GET" or "HEAD"`);
+  }
+  if (typeof entry.urlGlob !== 'string' || !entry.urlGlob.trim()) {
+    throw new Error(`${context}.urlGlob must be a non-empty string`);
+  }
+  return {
+    method: entry.method,
+    urlGlob: entry.urlGlob
+  };
+}
+
+function parseHttpReadCapability(value: unknown, context: string): PersonaHttpReadCapability {
+  if (!isObject(value) || Array.isArray(value)) {
+    throw new Error(`${context} must be an object if provided`);
+  }
+  const entry = value as Record<string, unknown>;
+  for (const key of Object.keys(entry)) {
+    if (!['enabled', 'allow'].includes(key)) {
+      throw new Error(`${context}.${key} is not allowed`);
+    }
+  }
+  if (entry.enabled !== undefined && typeof entry.enabled !== 'boolean') {
+    throw new Error(`${context}.enabled must be a boolean if provided`);
+  }
+  if (entry.allow !== undefined && !Array.isArray(entry.allow)) {
+    throw new Error(`${context}.allow must be an array if provided`);
+  }
+  return {
+    ...(entry.enabled !== undefined ? { enabled: entry.enabled } : {}),
+    ...(entry.allow !== undefined
+      ? {
+          allow: entry.allow.map((rule, index) =>
+            parseHttpReadRule(rule, `${context}.allow[${index}]`)
+          )
+        }
+      : {})
+  };
+}
+
+export function parseCapabilities(
+  value: unknown,
+  context: string
+): ProactiveCapabilities | undefined {
+  if (value === undefined) return undefined;
+  if (!isObject(value) || Array.isArray(value)) {
+    throw new Error(`${context} must be an object if provided`);
+  }
+
+  const out: ProactiveCapabilities = {};
+  // Preserve every declared capability, including consumer-defined cloud-only
+  // capabilities (e.g. `teamSolve`) that persona-kit does not model directly.
+  // Dropping unknown keys here silently strips them from the deployed persona
+  // spec - the cause of the cloud team-launch regression where the CLI
+  // preflight parse ran client-side before upload, so the cloud never received
+  // `teamSolve` and its `isTeamLaunchN1` gate stayed false
+  // (workforce#182 / cloud#1732). persona-kit is platform-agnostic; it must not
+  // drop capability keys it happens not to recognize.
+  for (const [key, raw] of Object.entries(value)) {
+    if (raw === undefined) continue;
+    out[key] = key === 'httpRead'
+      ? parseHttpReadCapability(raw, `${context}.${key}`)
+      : parseCapabilityValue(raw, `${context}.${key}`);
+  }
+
+  return Object.keys(out).length > 0 ? out : undefined;
 }
 
 export function parseOnEvent(value: unknown, context: string): string | undefined {
@@ -823,9 +1421,17 @@ export function parsePersonaSpec(value: unknown, expectedIntent: PersonaIntent):
       'traits was removed in v1; personality is handled by the persona-personality-builder tool (out of scope for v1). See docs/plans/deploy-v1.md'
     );
   }
-  if ('sandbox' in value) {
+  // Hard cut: schedules and watch moved from the persona to the agent.
+  if ('schedules' in value) {
     throw new Error(
-      "sandbox was removed in v1; sandbox is on by default at deploy time. Use 'workforce deploy --no-sandbox' or runtime config to opt out. See docs/plans/deploy-v1.md"
+      `persona[${expectedIntent}].schedules is no longer allowed — cron schedules moved to the agent. ` +
+        'Declare them in agent.ts via defineAgent({ schedules: [...] }).'
+    );
+  }
+  if ('watch' in value) {
+    throw new Error(
+      `persona[${expectedIntent}].watch is no longer allowed — relayfile watch rules moved to the agent. ` +
+        'Declare them in agent.ts via defineAgent({ watch: [...] }).'
     );
   }
 
@@ -844,6 +1450,7 @@ export function parsePersonaSpec(value: unknown, expectedIntent: PersonaIntent):
     mcpServers,
     permissions,
     mount,
+    sandbox,
     claudeMd,
     claudeMdMode,
     agentsMd,
@@ -853,8 +1460,9 @@ export function parsePersonaSpec(value: unknown, expectedIntent: PersonaIntent):
     cloud,
     useSubscription,
     integrations,
-    schedules,
+    capabilities,
     memory,
+    relay,
     onEvent
   } = value;
 
@@ -872,16 +1480,39 @@ export function parsePersonaSpec(value: unknown, expectedIntent: PersonaIntent):
     throw new Error(`persona[${expectedIntent}].description must be a non-empty string`);
   }
 
-  if (!isHarness(harness)) {
+  // Handler-style personas (`onEvent` set) run a bundled handler that
+  // controls the flow itself; `harness` / `model` / `systemPrompt` are only
+  // consumed when the handler calls `ctx.harness.run(...)`, so they're
+  // optional here. A pure orchestrator (e.g. one that only fans out to
+  // `ctx.workflow.run`) needs none of them and shouldn't have to carry stub
+  // values to pass validation. Interactive personas (no `onEvent`) still
+  // require all three — that's the harness session the CLI spawns.
+  const isHandlerPersona = typeof onEvent === 'string' && onEvent.trim().length > 0;
+
+  if (harness !== undefined) {
+    if (!isHarness(harness)) {
+      throw new Error(
+        `persona[${expectedIntent}].harness must be one of: ${HARNESS_VALUES.join(', ')}`
+      );
+    }
+  } else if (!isHandlerPersona) {
     throw new Error(
       `persona[${expectedIntent}].harness must be one of: ${HARNESS_VALUES.join(', ')}`
     );
   }
-  if (typeof model !== 'string' || !model.trim()) {
+  if (model !== undefined) {
+    if (typeof model !== 'string' || !model.trim()) {
+      throw new Error(`persona[${expectedIntent}].model must be a non-empty string`);
+    }
+  } else if (!isHandlerPersona) {
     throw new Error(`persona[${expectedIntent}].model must be a non-empty string`);
   }
-  const trimmedModel = model.trim();
-  if (typeof systemPrompt !== 'string' || !systemPrompt.trim()) {
+  const trimmedModel = typeof model === 'string' ? model.trim() : undefined;
+  if (systemPrompt !== undefined) {
+    if (typeof systemPrompt !== 'string' || !systemPrompt.trim()) {
+      throw new Error(`persona[${expectedIntent}].systemPrompt must be a non-empty string`);
+    }
+  } else if (!isHandlerPersona) {
     throw new Error(`persona[${expectedIntent}].systemPrompt must be a non-empty string`);
   }
   const parsedHarnessSettings = parseHarnessSettings(
@@ -934,25 +1565,65 @@ export function parsePersonaSpec(value: unknown, expectedIntent: PersonaIntent):
     integrations,
     `persona[${expectedIntent}].integrations`
   );
-  const parsedSchedules = parseSchedules(schedules, `persona[${expectedIntent}].schedules`);
+  const parsedCapabilities = parseCapabilities(
+    capabilities,
+    `persona[${expectedIntent}].capabilities`
+  );
   const parsedMemory = parseMemory(memory, `persona[${expectedIntent}].memory`);
+  const parsedRelay = parseRelay(relay, `persona[${expectedIntent}].relay`);
   const parsedOnEvent = parseOnEvent(onEvent, `persona[${expectedIntent}].onEvent`);
+  const parsedSandbox = parseSandbox(sandbox, `persona[${expectedIntent}].sandbox`);
 
   return {
+    ...preserveUnknownFields(value, [
+      'id',
+      'intent',
+      'tags',
+      'description',
+      'harness',
+      'model',
+      'systemPrompt',
+      'harnessSettings',
+      'skills',
+      'inputs',
+      'env',
+      'mcpServers',
+      'permissions',
+      'mount',
+      'sandbox',
+      'claudeMd',
+      'claudeMdMode',
+      'agentsMd',
+      'agentsMdMode',
+      'claudeMdContent',
+      'agentsMdContent',
+      'cloud',
+      'useSubscription',
+      'integrations',
+      'capabilities',
+      'memory',
+      'relay',
+      'onEvent',
+      // Explicit hard cuts above remain rejected rather than passed through.
+      'traits',
+      'schedules',
+      'watch'
+    ]),
     id,
     intent,
     ...(parsedTags ? { tags: parsedTags } : {}),
     description,
     skills: parsedSkills,
     ...(parsedInputs ? { inputs: parsedInputs } : {}),
-    harness,
-    model: trimmedModel,
-    systemPrompt,
+    ...(harness !== undefined ? { harness: harness as Harness } : {}),
+    ...(trimmedModel !== undefined ? { model: trimmedModel } : {}),
+    ...(systemPrompt !== undefined ? { systemPrompt: systemPrompt as string } : {}),
     harnessSettings: parsedHarnessSettings,
     ...(parsedEnv ? { env: parsedEnv } : {}),
     ...(parsedMcpServers ? { mcpServers: parsedMcpServers } : {}),
     ...(parsedPermissions ? { permissions: parsedPermissions } : {}),
     ...(parsedMount ? { mount: parsedMount } : {}),
+    ...(parsedSandbox !== undefined ? { sandbox: parsedSandbox } : {}),
     ...(typeof claudeMd === 'string' ? { claudeMd } : {}),
     ...(claudeMdMode ? { claudeMdMode: claudeMdMode as SidecarMdMode } : {}),
     ...(typeof agentsMd === 'string' ? { agentsMd } : {}),
@@ -962,8 +1633,9 @@ export function parsePersonaSpec(value: unknown, expectedIntent: PersonaIntent):
     ...(typeof cloud === 'boolean' ? { cloud } : {}),
     ...(typeof useSubscription === 'boolean' ? { useSubscription } : {}),
     ...(parsedIntegrations ? { integrations: parsedIntegrations } : {}),
-    ...(parsedSchedules ? { schedules: parsedSchedules } : {}),
+    ...(parsedCapabilities ? { capabilities: parsedCapabilities } : {}),
     ...(parsedMemory !== undefined ? { memory: parsedMemory } : {}),
+    ...(parsedRelay !== undefined ? { relay: parsedRelay } : {}),
     ...(parsedOnEvent !== undefined ? { onEvent: parsedOnEvent } : {})
   };
 }

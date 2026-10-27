@@ -1,0 +1,6 @@
+A	.relay/workspaces.json
+A	.trajectories/active/traj_mdb27kev6r8e/trajectory.json
+A	tsconfig.json
+A	workflows/generated/ricky-spec-agentworkforce-integrations-integration-tri.ts
+D	.trajectories/index.json
+M	package.json

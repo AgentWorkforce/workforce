@@ -84,25 +84,20 @@ All new fields are optional. A persona that does not set any of them continues t
 ```jsonc
 "integrations": {
   "github": {
-    "scope": { "repo": "AgentWorkforce/workforce" },          // optional; provider-specific filter
-    "triggers": [
-      { "on": "pull_request.opened" },
-      { "on": "issue_comment.created", "match": "@mention" }, // match is a sugar lint, see §3.7
-      { "on": "pull_request_review_comment.created" },
-      { "on": "check_run.completed", "where": "conclusion=failure" }
-    ]
+    "scope": { "repo": "AgentWorkforce/workforce" }           // optional; provider-specific filter
   },
-  "linear": { "triggers": [{ "on": "issue.created" }] },
-  "slack":  { "triggers": [{ "on": "app_mention" }] },
-  "notion": { "scope": { "database": "..." }, "triggers": [{ "on": "page.updated" }] }
+  "linear": {},
+  "slack":  { "optional": true, "enabledByInput": "SLACK_CHANNEL" },
+  "notion": { "scope": { "database": "..." } }
 }
 ```
 
 Key choices:
 - **Key is the Relayfile provider slug.** `github`, `linear`, `slack`, `notion`, `jira`. The deploy step calls `RelayfileSetup.connectIntegration({ allowedIntegrations: [key] })` for any provider not yet connected to the user's workspace.
-- **`triggers[]` is a flat list per provider** — multiple events from the same provider all fan into the same `onEvent`. The handler discriminates on `event.source` + `event.type`.
+- **Triggers live on the agent spec, not the persona integration config.** The persona declares connection setup; `agent.ts` declares which provider events fire the deployed agent.
 - **`match` and `where` are sugars** — `match: "@mention"` is shorthand for "filter to events that mention the deployed agent." The deploy CLI lints them against a known set; unknown values warn but don't fail. We can always upgrade the runtime to enforce them later.
 - **`scope` is optional and provider-specific.** Validated by the deploy CLI against a small provider-schema map. For v1, supported keys are documented per provider in the examples.
+- **Optional integrations are enabled by persona inputs.** Set `optional: true` and `enabledByInput: "SLACK_CHANNEL"` to skip connection and provider trigger registration unless that declared input resolves to a non-empty value.
 
 The act of stacking integrations is just declaring multiple keys. The act of linking them ("when GitHub fires, post to Slack") is code in `onEvent`. We considered a declarative `links:` block — see §11.4 for why we deferred it.
 

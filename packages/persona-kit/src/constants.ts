@@ -1,10 +1,12 @@
 import type { Harness, HarnessSkillTarget } from './types.js';
 
-export const HARNESS_VALUES = ['opencode', 'codex', 'claude'] as const;
+export const HARNESS_VALUES = ['opencode', 'codex', 'claude', 'grok'] as const;
 /**
- * Suggested persona tags used by built-in personas. Tags are free-form
- * (`tags text[]` in cloud#553) — this tuple is kept only as a UX hint for
- * built-in catalog filtering. New personas may use any string.
+ * The closed persona-tag vocabulary. The cloud deploy endpoint validates
+ * `tags` against exactly this set and rejects anything else with
+ * `400 invalid_persona` ("tags[n] must be one of: …"). Keep this in sync with
+ * the cloud; `definePersona` types `tags` against it so a bad tag is a compile
+ * error instead of a deploy-time 400.
  */
 export const PERSONA_TAGS = [
   'planning',
@@ -17,6 +19,14 @@ export const PERSONA_TAGS = [
   'discovery',
   'analytics'
 ] as const;
+
+/**
+ * The closed authoring vocabulary as a union (one of {@link PERSONA_TAGS}).
+ * Distinct from the runtime `PersonaTag` (= `string`) in types.ts, which stays
+ * open for catalog filtering/legacy data — this is the strict type
+ * `definePersona` holds authors to so a bad tag is a compile error.
+ */
+export type KnownPersonaTag = (typeof PERSONA_TAGS)[number];
 export const PERSONA_INTENTS = [
   'implement-frontend',
   'review',
@@ -87,5 +97,6 @@ export const SKILL_SOURCE_KINDS = ['prpm', 'skill.sh', 'local'] as const;
 export const HARNESS_SKILL_TARGETS: Record<Harness, HarnessSkillTarget> = {
   claude: { asFlag: 'claude', dir: '.claude/skills' },
   codex: { asFlag: 'codex', dir: '.agents/skills' },
-  opencode: { asFlag: 'opencode', dir: '.skills' }
+  opencode: { asFlag: 'opencode', dir: '.skills' },
+  grok: { asFlag: 'grok', dir: '.grok/skills' }
 };

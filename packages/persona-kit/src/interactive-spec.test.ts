@@ -1,7 +1,16 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 
-import { buildInteractiveSpec } from './interactive-spec.js';
+import { buildInteractiveSpec, buildNonInteractiveSpec } from './interactive-spec.js';
+
+function assertAiHistServer(server: unknown, env: Record<string, string>): void {
+  assert.deepEqual(server, {
+    type: 'stdio',
+    command: 'npx',
+    args: ['-y', 'ai-hist-mcp'],
+    env
+  });
+}
 
 test('claude branch always emits --mcp-config + --strict-mcp-config', () => {
   const result = buildInteractiveSpec({
@@ -114,17 +123,20 @@ test('codex translates sandbox harness settings to launch flags', () => {
       webSearch: true
     }
   });
+  // approvalPolicy emits a warning but no flag (--ask-for-approval was removed in codex 0.1.77+)
   assert.deepEqual(result.args, [
     '-m',
     'gpt-5.3-codex',
     '--sandbox',
     'workspace-write',
-    '--ask-for-approval',
-    'on-request',
     '-c',
     'sandbox_workspace_write.network_access=true',
     '--search'
   ]);
+  assert.ok(
+    result.warnings.some((w) => w.includes('approvalPolicy') && w.includes('not supported')),
+    'expected a deprecation warning for approvalPolicy'
+  );
 });
 
 test('codex emits the single bypass flag when dangerouslyBypassApprovalsAndSandbox is set', () => {
@@ -146,6 +158,28 @@ test('codex emits the single bypass flag when dangerouslyBypassApprovalsAndSandb
     '--dangerously-bypass-approvals-and-sandbox',
     '--search'
   ]);
+});
+
+test('codex warns for approvalPolicy even when dangerouslyBypassApprovalsAndSandbox is also set', () => {
+  const result = buildInteractiveSpec({
+    harness: 'codex',
+    personaId: 'test-persona',
+    model: 'openai-codex/gpt-5.3-codex',
+    systemPrompt: 'x',
+    harnessSettings: {
+      reasoning: 'high',
+      timeoutSeconds: 1200,
+      dangerouslyBypassApprovalsAndSandbox: true,
+      approvalPolicy: 'on-request',
+    }
+  });
+  // bypass flag is still emitted
+  assert.ok(result.args.includes('--dangerously-bypass-approvals-and-sandbox'));
+  // approvalPolicy warning fires even though dangerouslyBypassApprovalsAndSandbox masked it
+  assert.ok(
+    result.warnings.some((w) => w.includes('approvalPolicy') && w.includes('not supported')),
+    'expected deprecation warning for approvalPolicy even when bypass flag is set'
+  );
 });
 
 test('codex translates http mcpServers into --config mcp_servers.* args', () => {
@@ -290,7 +324,164 @@ test('opencode configFiles carries a well-formed opencode.json with the agent de
   });
 });
 
-test('claude and codex emit an empty configFiles array', () => {
+test('opencode non-interactive spec execs through a shell, omits cwd/model flags, and normalizes the agent model', () => {
+  const result = buildNonInteractiveSpec({
+    harness: 'opencode',
+    personaId: 'daily-ship',
+    model: 'deepseek-v4-flash-free',
+    systemPrompt: 'Reply pong.',
+    task: 'say pong',
+    name: 'daily-ship',
+    workingDirectory: '/tmp/project'
+  });
+
+  // workforce#330: opencode is spawned through `sh -c 'exec "$0" "$@"'`.
+  // Spawned directly by the runtime it fails in ~1.2s with an opaque
+  // `UnknownError: Unexpected server error`; with one shell in between the
+  // identical invocation runs normally. `exec` means the shell is replaced, so
+  // the caller still waits on the real opencode process.
+  // Windows has no /bin/sh, so the wrapper is POSIX-only (see the spec builder).
+  const expectShell = process.platform !== 'win32';
+  assert.equal(result.bin, expectShell ? '/bin/sh' : 'opencode');
+  assert.deepEqual(result.args, [
+    ...(expectShell ? ['-c', 'exec "$0" "$@"', 'opencode'] : []),
+    'run',
+    '--agent',
+    'daily-ship',
+    '--format',
+    'default',
+    '--title',
+    'daily-ship'
+  ]);
+  assert.deepEqual(result.prompt, { mode: 'stdin', contents: 'say pong' });
+  assert.ok(!result.args.includes('--dir'));
+  assert.ok(!result.args.includes('--model'));
+
+  const [file] = result.configFiles;
+  const parsed = JSON.parse(file.contents);
+  assert.equal(parsed.agent['daily-ship'].model, 'opencode/deepseek-v4-flash-free');
+});
+
+test('grok launches the Grok Build CLI and writes systemPrompt to AGENTS.md', () => {
+  const result = buildInteractiveSpec({
+    harness: 'grok',
+    personaId: 'test-persona',
+    model: 'grok-build-0.1',
+    systemPrompt: 'you are a test'
+  });
+  assert.equal(result.bin, 'grok');
+  assert.deepEqual(result.args, ['--no-auto-update', '--model', 'grok-build-0.1']);
+  assert.equal(result.initialPrompt, null);
+  assert.deepEqual(result.configFiles, [
+    { path: 'AGENTS.md', contents: 'you are a test\n' }
+  ]);
+  assert.deepEqual(result.warnings, []);
+});
+
+test('grok maps bypassPermissions to always-approve and wires plugin dirs', () => {
+  const result = buildInteractiveSpec({
+    harness: 'grok',
+    personaId: 'test-persona',
+    model: 'grok-build-0.1',
+    systemPrompt: 'x',
+    permissions: { mode: 'bypassPermissions' },
+    pluginDirs: ['/tmp/session/grok/plugin']
+  });
+  assert.deepEqual(result.args, [
+    '--no-auto-update',
+    '--model',
+    'grok-build-0.1',
+    '--always-approve',
+    '--plugin-dir',
+    '/tmp/session/grok/plugin'
+  ]);
+  assert.deepEqual(result.warnings, []);
+});
+
+test('grok warns for unsupported permission fields', () => {
+  const result = buildInteractiveSpec({
+    harness: 'grok',
+    personaId: 'test-persona',
+    model: 'grok-build-0.1',
+    systemPrompt: 'x',
+    permissions: {
+      allow: ['Bash(git *)'],
+      deny: ['Bash(rm -rf *)'],
+      mode: 'acceptEdits'
+    }
+  });
+  assert.deepEqual(result.args, [
+    '--no-auto-update',
+    '--model',
+    'grok-build-0.1',
+  ]);
+  assert.deepEqual(result.warnings, [
+    'persona declares permission allow/deny lists but the grok harness is not wired for allow/deny injection; proceeding without allow/deny rules.',
+    'persona declares permissions.mode "acceptEdits" but the grok harness only supports bypassPermissions via --always-approve; proceeding with Grok defaults.'
+  ]);
+});
+
+test('grok non-interactive spec uses a prompt file with cwd and always-approve', () => {
+  const result = buildNonInteractiveSpec({
+    harness: 'grok',
+    personaId: 'daily-ship',
+    model: 'grok-build-0.1',
+    systemPrompt: 'Reply pong.',
+    task: 'say pong',
+    workingDirectory: '/tmp/project'
+  });
+
+  assert.equal(result.bin, 'grok');
+  assert.deepEqual(result.args, [
+    '--no-auto-update',
+    '--model',
+    'grok-build-0.1',
+    '--output-format',
+    'plain',
+    '--cwd',
+    '/tmp/project',
+    '--always-approve'
+  ]);
+  assert.deepEqual(result.prompt, {
+    mode: 'file',
+    contents: 'Reply pong.\n\nUser task:\nsay pong',
+    flag: '--prompt-file'
+  });
+  assert.deepEqual(result.configFiles, [
+    { path: 'AGENTS.md', contents: 'Reply pong.\n' }
+  ]);
+  assert.deepEqual(result.warnings, []);
+});
+
+test('grok non-interactive spec still adds always-approve for unsupported permission modes', () => {
+  const result = buildNonInteractiveSpec({
+    harness: 'grok',
+    personaId: 'daily-ship',
+    model: 'grok-build-0.1',
+    systemPrompt: '',
+    task: 'say pong',
+    permissions: { mode: 'plan' }
+  });
+
+  assert.deepEqual(result.args, [
+    '--no-auto-update',
+    '--model',
+    'grok-build-0.1',
+    '--output-format',
+    'plain',
+    '--always-approve'
+  ]);
+  assert.deepEqual(result.prompt, {
+    mode: 'file',
+    contents: 'say pong',
+    flag: '--prompt-file'
+  });
+  assert.deepEqual(result.warnings, [
+    'persona declares permissions.mode "plan" but the grok harness only supports bypassPermissions via --always-approve; proceeding with Grok defaults.'
+  ]);
+});
+
+test('claude and codex emit an empty configFiles array; grok does so only with an empty systemPrompt', () => {
   const claude = buildInteractiveSpec({
     harness: 'claude',
     personaId: 'test-persona',
@@ -306,6 +497,14 @@ test('claude and codex emit an empty configFiles array', () => {
     systemPrompt: 'x'
   });
   assert.deepEqual(codex.configFiles, []);
+
+  const grok = buildInteractiveSpec({
+    harness: 'grok',
+    personaId: 'test-persona',
+    model: 'grok-build-0.1',
+    systemPrompt: ''
+  });
+  assert.deepEqual(grok.configFiles, []);
 });
 
 test('claude branch omits --append-system-prompt when systemPrompt is empty', () => {
@@ -323,6 +522,70 @@ test('claude branch omits --append-system-prompt when systemPrompt is empty', ()
   assert.ok(!result.args.includes('--append-system-prompt'));
   // strict-mcp still emitted — that's about isolation, not the prompt.
   assert.ok(result.args.includes('--strict-mcp-config'));
+});
+
+test('claude non-interactive spec omits unsupported --name while preserving run flags', () => {
+  const result = buildNonInteractiveSpec({
+    harness: 'claude',
+    personaId: 'daily-ship',
+    model: 'claude-sonnet-4-6',
+    systemPrompt: 'Reply pong.',
+    task: 'say pong',
+    name: 'daily-ship'
+  });
+
+  const args = result.args;
+  const modelIdx = args.indexOf('--model');
+  const promptIdx = args.indexOf('--append-system-prompt');
+  const outputIdx = args.indexOf('--output-format');
+
+  assert.equal(result.bin, 'claude');
+  assert.ok(!args.includes('--name'));
+  assert.ok(modelIdx >= 0);
+  assert.equal(args[modelIdx + 1], 'claude-sonnet-4-6');
+  assert.ok(args.includes('--print'));
+  assert.ok(outputIdx >= 0);
+  assert.equal(args[outputIdx + 1], 'text');
+  assert.ok(promptIdx >= 0);
+  assert.equal(args[promptIdx + 1], 'Reply pong.');
+  assert.ok(!args.includes('say pong'));
+  assert.deepEqual(result.prompt, { mode: 'stdin', contents: 'say pong' });
+});
+
+test('non-interactive tasks stay off argv and argv remains below Linux per-argument limits', () => {
+  const marker = 'TASK_CANARY_d7e9b9b0';
+  const task = `${marker}\n${'x'.repeat(200_000)}`;
+  const cases = [
+    { harness: 'claude' as const, model: 'claude-sonnet-4-6', promptMode: 'stdin' },
+    { harness: 'codex' as const, model: 'openai-codex/gpt-5.3-codex', promptMode: 'stdin' },
+    { harness: 'opencode' as const, model: 'opencode/minimax-m2.5', promptMode: 'stdin' },
+    { harness: 'grok' as const, model: 'grok-build-0.1', promptMode: 'file' }
+  ];
+
+  for (const entry of cases) {
+    const result = buildNonInteractiveSpec({
+      harness: entry.harness,
+      personaId: 'argv-budget-test',
+      model: entry.model,
+      systemPrompt: 'short system prompt',
+      task,
+      name: 'argv-budget-test',
+      workingDirectory: '/tmp/project'
+    });
+    const argvBytes = [result.bin, ...result.args].reduce(
+      (total, arg) => total + Buffer.byteLength(arg) + 1,
+      0
+    );
+    const largestArgBytes = Math.max(...result.args.map((arg) => Buffer.byteLength(arg)));
+
+    assert.equal(result.prompt.mode, entry.promptMode, entry.harness);
+    assert.ok(result.prompt.contents.includes(marker), entry.harness);
+    assert.ok(result.args.every((arg) => !arg.includes(marker)), entry.harness);
+    // Linux rejects any single argv element at 128 KiB (MAX_ARG_STRLEN),
+    // independently of the larger combined argv + env budget.
+    assert.ok(largestArgBytes < 128 * 1024, `${entry.harness}: largest arg=${largestArgBytes}`);
+    assert.ok(argvBytes < 128 * 1024, `${entry.harness}: argv total=${argvBytes}`);
+  }
 });
 
 test('opencode omits agent.prompt when systemPrompt is empty', () => {
@@ -388,7 +651,7 @@ test('claude branch omits --plugin-dir when pluginDirs is empty or absent', () =
   assert.ok(!without.args.includes('--plugin-dir'));
 });
 
-test('non-claude harnesses warn and ignore pluginDirs', () => {
+test('codex and opencode warn and ignore pluginDirs', () => {
   const codex = buildInteractiveSpec({
     harness: 'codex',
     personaId: 'test-persona',
@@ -397,7 +660,7 @@ test('non-claude harnesses warn and ignore pluginDirs', () => {
     pluginDirs: ['/tmp/session/plugin']
   });
   assert.ok(!codex.args.includes('--plugin-dir'));
-  assert.ok(codex.warnings.some((w) => /pluginDirs is currently claude-only/.test(w)));
+  assert.ok(codex.warnings.some((w) => /supported only for claude and grok/.test(w)));
 
   const opencode = buildInteractiveSpec({
     harness: 'opencode',
@@ -407,7 +670,7 @@ test('non-claude harnesses warn and ignore pluginDirs', () => {
     pluginDirs: ['/tmp/session/plugin']
   });
   assert.ok(!opencode.args.includes('--plugin-dir'));
-  assert.ok(opencode.warnings.some((w) => /pluginDirs is currently claude-only/.test(w)));
+  assert.ok(opencode.warnings.some((w) => /supported only for claude and grok/.test(w)));
 });
 
 test('warnings are returned, not printed — library consumers route I/O themselves', () => {
@@ -422,4 +685,232 @@ test('warnings are returned, not printed — library consumers route I/O themsel
   });
   assert.ok(Array.isArray(result.warnings));
   assert.equal(result.warnings.length, 1);
+});
+
+test('relayMcp injects a relaycast server into the claude --mcp-config payload', () => {
+  const result = buildInteractiveSpec({
+    harness: 'claude',
+    personaId: 'test-persona',
+    model: 'claude-sonnet-4-6',
+    systemPrompt: 'x',
+    relayMcp: {
+      apiKey: 'wk_live_abc',
+      agentName: 'Reviewer2',
+      baseUrl: 'https://api.relaycast.dev',
+      defaultWorkspace: 'ws_1'
+    }
+  });
+  const mcpIdx = result.args.indexOf('--mcp-config');
+  const payload = JSON.parse(result.args[mcpIdx + 1]);
+  assert.deepEqual(payload.mcpServers.relaycast, {
+    type: 'stdio',
+    command: 'npx',
+    args: ['-y', '@relaycast/mcp'],
+    env: {
+      RELAY_API_KEY: 'wk_live_abc',
+      RELAY_AGENT_NAME: 'Reviewer2',
+      RELAY_AGENT_TYPE: 'agent',
+      RELAY_STRICT_AGENT_NAME: '1',
+      RELAY_BASE_URL: 'https://api.relaycast.dev',
+      RELAY_DEFAULT_WORKSPACE: 'ws_1'
+    }
+  });
+  // --strict-mcp-config still present: relaycast rides inside the strict payload.
+  assert.ok(result.args.includes('--strict-mcp-config'));
+  assert.equal(result.mcpServers?.relaycast?.type, 'stdio');
+});
+
+test('relayMcp omits RELAY_BASE_URL / RELAY_DEFAULT_WORKSPACE when not provided', () => {
+  const result = buildInteractiveSpec({
+    harness: 'claude',
+    personaId: 'p',
+    model: 'm',
+    systemPrompt: 'x',
+    relayMcp: { apiKey: 'wk_live_abc', agentName: 'Solo1' }
+  });
+  const mcpIdx = result.args.indexOf('--mcp-config');
+  const env = JSON.parse(result.args[mcpIdx + 1]).mcpServers.relaycast.env;
+  assert.deepEqual(env, {
+    RELAY_API_KEY: 'wk_live_abc',
+    RELAY_AGENT_NAME: 'Solo1',
+    RELAY_AGENT_TYPE: 'agent',
+    RELAY_STRICT_AGENT_NAME: '1'
+  });
+});
+
+test('relayMcp merges alongside persona-declared servers; a persona relaycast wins', () => {
+  const result = buildInteractiveSpec({
+    harness: 'claude',
+    personaId: 'p',
+    model: 'm',
+    systemPrompt: 'x',
+    mcpServers: {
+      posthog: { type: 'http', url: 'https://mcp.posthog.com/mcp' },
+      relaycast: { type: 'stdio', command: 'custom-relaycast' }
+    },
+    relayMcp: { apiKey: 'wk_live_abc', agentName: 'Solo1' }
+  });
+  const mcpIdx = result.args.indexOf('--mcp-config');
+  const payload = JSON.parse(result.args[mcpIdx + 1]);
+  // Persona's own server set is preserved...
+  assert.ok(payload.mcpServers.posthog);
+  // ...and a persona-declared `relaycast` overrides the injected one.
+  assert.deepEqual(payload.mcpServers.relaycast, {
+    type: 'stdio',
+    command: 'custom-relaycast'
+  });
+  assert.deepEqual(result.mcpServers?.relaycast, {
+    type: 'stdio',
+    command: 'custom-relaycast'
+  });
+});
+
+test('aiHist injects an ai-hist server into the claude --mcp-config payload', () => {
+  const result = buildInteractiveSpec({
+    harness: 'claude',
+    personaId: 'test-persona',
+    model: 'claude-sonnet-4-6',
+    systemPrompt: 'x',
+    aiHist: { trajectoryRoot: '/repo/.trajectories', dbPath: '/db/ai-history.db' }
+  });
+  const mcpIdx = result.args.indexOf('--mcp-config');
+  const payload = JSON.parse(result.args[mcpIdx + 1]);
+  assertAiHistServer(payload.mcpServers['ai-hist'], {
+    TRAJECTORY_ROOT: '/repo/.trajectories',
+    AI_HIST_DB: '/db/ai-history.db'
+  });
+  assert.ok(result.args.includes('--strict-mcp-config'));
+  assert.equal(result.mcpServers?.['ai-hist']?.type, 'stdio');
+});
+
+test('aiHist omits TRAJECTORY_ROOT / AI_HIST_DB env when not provided', () => {
+  const result = buildInteractiveSpec({
+    harness: 'claude',
+    personaId: 'p',
+    model: 'm',
+    systemPrompt: 'x',
+    aiHist: {}
+  });
+  const mcpIdx = result.args.indexOf('--mcp-config');
+  const server = JSON.parse(result.args[mcpIdx + 1]).mcpServers['ai-hist'];
+  assertAiHistServer(server, {});
+});
+
+test('aiHist merges alongside relaycast + persona servers; a persona ai-hist wins', () => {
+  const result = buildInteractiveSpec({
+    harness: 'claude',
+    personaId: 'p',
+    model: 'm',
+    systemPrompt: 'x',
+    mcpServers: {
+      posthog: { type: 'http', url: 'https://mcp.posthog.com/mcp' },
+      'ai-hist': { type: 'stdio', command: 'custom-ai-hist' }
+    },
+    relayMcp: { apiKey: 'wk_live_abc', agentName: 'Solo1' },
+    aiHist: { trajectoryRoot: '/repo/.trajectories' }
+  });
+  const mcpIdx = result.args.indexOf('--mcp-config');
+  const payload = JSON.parse(result.args[mcpIdx + 1]);
+  // relaycast still injected, persona servers preserved...
+  assert.equal(payload.mcpServers.relaycast?.command, 'npx');
+  assert.ok(payload.mcpServers.posthog);
+  // ...and a persona-declared `ai-hist` overrides the injected one.
+  assert.deepEqual(payload.mcpServers['ai-hist'], { type: 'stdio', command: 'custom-ai-hist' });
+});
+
+test('without aiHist the claude payload carries no ai-hist server', () => {
+  const result = buildInteractiveSpec({
+    harness: 'claude',
+    personaId: 'p',
+    model: 'm',
+    systemPrompt: 'x'
+  });
+  const mcpIdx = result.args.indexOf('--mcp-config');
+  const payload = JSON.parse(result.args[mcpIdx + 1]);
+  assert.equal(payload.mcpServers['ai-hist'], undefined);
+});
+
+test('without relayMcp the claude payload carries no relaycast server', () => {
+  const result = buildInteractiveSpec({
+    harness: 'claude',
+    personaId: 'p',
+    model: 'm',
+    systemPrompt: 'x'
+  });
+  const mcpIdx = result.args.indexOf('--mcp-config');
+  const payload = JSON.parse(result.args[mcpIdx + 1]);
+  assert.equal(payload.mcpServers.relaycast, undefined);
+});
+
+test('relayMcp wires relaycast into codex --config args', () => {
+  const result = buildInteractiveSpec({
+    harness: 'codex',
+    personaId: 'p',
+    model: 'm',
+    systemPrompt: 'x',
+    relayMcp: { apiKey: 'wk_live_abc', agentName: 'Coder1' }
+  });
+  const joined = result.args.join(' ');
+  assert.ok(joined.includes('mcp_servers.relaycast.command'));
+  assert.ok(joined.includes('RELAY_AGENT_NAME'));
+});
+
+test('relayMcp under opencode warns that MCP injection is unsupported', () => {
+  const result = buildInteractiveSpec({
+    harness: 'opencode',
+    personaId: 'p',
+    model: 'opencode/gpt-5',
+    systemPrompt: 'x',
+    relayMcp: { apiKey: 'wk_live_abc', agentName: 'Op1' }
+  });
+  assert.deepEqual(result.warnings, [
+    'default relaycast MCP injection was requested but the opencode harness is not yet wired for runtime MCP injection; proceeding without MCP.'
+  ]);
+  assert.equal(result.mcpServers?.relaycast?.type, 'stdio');
+});
+
+test('relayMcp under grok warns that MCP injection is unsupported', () => {
+  const result = buildInteractiveSpec({
+    harness: 'grok',
+    personaId: 'p',
+    model: 'grok-build-0.1',
+    systemPrompt: 'x',
+    relayMcp: { apiKey: 'wk_live_abc', agentName: 'Grok1' }
+  });
+  assert.deepEqual(result.warnings, [
+    'broker requested relaycast MCP injection but the grok harness is not yet wired for runtime MCP injection; proceeding without MCP.'
+  ]);
+  assert.equal(result.mcpServers?.relaycast?.type, 'stdio');
+});
+
+test('opencode warning names both persona and broker MCP sources when both are present', () => {
+  const result = buildInteractiveSpec({
+    harness: 'opencode',
+    personaId: 'p',
+    model: 'opencode/gpt-5',
+    systemPrompt: 'x',
+    mcpServers: {
+      posthog: { type: 'http', url: 'https://mcp.posthog.com/mcp' }
+    },
+    relayMcp: { apiKey: 'wk_live_abc', agentName: 'Op1' }
+  });
+  assert.deepEqual(result.warnings, [
+    'persona declares mcpServers and default relaycast MCP injection was requested, but the opencode harness is not yet wired for runtime MCP injection; proceeding without MCP.'
+  ]);
+});
+
+test('grok warning names both persona and broker MCP sources when both are present', () => {
+  const result = buildInteractiveSpec({
+    harness: 'grok',
+    personaId: 'p',
+    model: 'grok-build-0.1',
+    systemPrompt: 'x',
+    mcpServers: {
+      posthog: { type: 'http', url: 'https://mcp.posthog.com/mcp' }
+    },
+    relayMcp: { apiKey: 'wk_live_abc', agentName: 'Grok1' }
+  });
+  assert.deepEqual(result.warnings, [
+    'persona declares mcpServers and broker requested relaycast MCP injection, but the grok harness is not yet wired for runtime MCP injection; proceeding without MCP.'
+  ]);
 });

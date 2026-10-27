@@ -5,3 +5,5 @@ packages/*/dist/
 .agent-relay
 # workforce deploy bundle output (staged per-persona by `workforce deploy`)
 **/.workforce/
+# RelayFile workspace sync sidecar state (regenerated per-tick in sandbox)
+**/.relay/

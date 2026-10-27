@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import { mkdtemp, rm, writeFile } from 'node:fs/promises';
 import path from 'node:path';
 import os from 'node:os';
-import { createProxySandboxClient, SANDBOX_BUNDLE_DIR } from './sandbox-client.js';
+import { createByoSandboxClient, createProxySandboxClient, SANDBOX_BUNDLE_DIR } from './sandbox-client.js';
 import type { BundleResult } from '../types.js';
 
 interface RecordedCall {
@@ -55,7 +55,16 @@ async function fixtureBundle(dir: string): Promise<BundleResult> {
     writeFile(runnerPath, 'runner', 'utf8'),
     writeFile(bundlePath, 'bundle', 'utf8'),
     writeFile(personaCopyPath, '{"id":"demo"}', 'utf8'),
-    writeFile(packageJsonPath, '{}', 'utf8')
+    writeFile(
+      packageJsonPath,
+      JSON.stringify({
+        bundleManifest: {
+          schemaVersion: 1,
+          packages: [{ name: '@relayfile/relay-helpers', version: '0.4.9' }]
+        }
+      }),
+      'utf8'
+    )
   ]);
   return { runnerPath, bundlePath, personaCopyPath, packageJsonPath, sizeBytes: 13 };
 }
@@ -96,7 +105,10 @@ test('proxy client mints, uploads, execs, and destroys against cloud sandboxes e
 
     const handle = await client.mint({
       label: 'wf-demo',
-      env: { WORKFORCE_WORKSPACE_ID: 'ws' }
+      env: { WORKFORCE_WORKSPACE_ID: 'ws' },
+      integrations: {
+        github: {}
+      }
     });
     assert.equal(handle.mode, 'proxy');
     assert.equal(handle.sandboxId, 'sbx_test');
@@ -118,6 +130,9 @@ test('proxy client mints, uploads, execs, and destroys against cloud sandboxes e
     assert.equal(calls[0].headers.authorization, 'Bearer tok-secret');
     assert.equal((calls[0].body as { purpose: string }).purpose, 'workforce-deploy');
     assert.equal((calls[0].body as { personaId: string }).personaId, 'demo');
+    assert.deepEqual((calls[0].body as { integrations: unknown }).integrations, {
+      github: {}
+    });
 
     // Upload PUT carries base64 file entries.
     assert.equal(calls[1].method, 'PUT');
@@ -126,6 +141,13 @@ test('proxy client mints, uploads, execs, and destroys against cloud sandboxes e
     assert.equal(uploadBody.entries.length, 4);
     const runnerEntry = uploadBody.entries.find((e) => e.destination.endsWith('/runner.mjs'));
     assert.ok(runnerEntry);
+    const packageEntry = uploadBody.entries.find((e) => e.destination.endsWith('/package.json'));
+    assert.ok(packageEntry);
+    const uploadedPackageJson = JSON.parse(Buffer.from(packageEntry.source, 'base64').toString('utf8'));
+    assert.deepEqual(uploadedPackageJson.bundleManifest, {
+      schemaVersion: 1,
+      packages: [{ name: '@relayfile/relay-helpers', version: '0.4.9' }]
+    });
     assert.equal(Buffer.from(runnerEntry!.source, 'base64').toString('utf8'), 'runner');
 
     // Install exec.
@@ -159,6 +181,32 @@ test('proxy client surfaces non-2xx mint responses with the cloud status + excer
     () => client.mint({ label: 'wf-demo' }),
     /sandbox\(proxy\)\.mint: 429 Too Many Requests/
   );
+});
+
+test('proxy client omits empty integrations from mint requests', async () => {
+  const { fetch: impl, calls } = fakeFetch([
+    () =>
+      new Response(
+        JSON.stringify({
+          sandboxId: 'sbx_test',
+          authMode: 'proxy',
+          execUrl: 'https://cloud.example.com/api/v1/workspaces/ws/sandboxes/sbx_test/exec',
+          filesUrl: 'https://cloud.example.com/api/v1/workspaces/ws/sandboxes/sbx_test/files'
+        }),
+        { status: 201 }
+      )
+  ]);
+  const client = createProxySandboxClient({
+    cloudUrl: 'https://cloud.example.com',
+    workspaceId: 'ws',
+    workspaceToken: 'tok',
+    personaId: 'demo',
+    fetchImpl: impl
+  });
+
+  await client.mint({ label: 'wf-demo', integrations: {} });
+
+  assert.equal('integrations' in (calls[0].body as Record<string, unknown>), false);
 });
 
 test('proxy client tolerates 404 on destroy (already deleted)', async () => {
@@ -206,4 +254,34 @@ test('proxy client throws when npm install in the sandbox fails', async () => {
   } finally {
     await rm(dir, { recursive: true, force: true });
   }
+});
+
+test('createByoSandboxClient builds a client from Daytona credentials', () => {
+  const client = createByoSandboxClient({ apiKey: 'sk_byo' });
+
+  assert.equal(typeof client.mint, 'function');
+  assert.equal(typeof client.exec, 'function');
+});
+
+test('createByoSandboxClient rejects missing Daytona credentials up front', () => {
+  assert.throws(
+    () => createByoSandboxClient({}),
+    /BYO sandbox client requires DAYTONA_API_KEY/
+  );
+});
+
+// A JWT token is only usable with an organization id. The SDK enforces that in
+// its constructor, which runs eagerly here — so an incomplete JWT config fails
+// while building the client rather than at the first mint().
+test('createByoSandboxClient rejects a JWT token with no organization id', () => {
+  assert.throws(
+    () => createByoSandboxClient({ jwtToken: 'jwt_probe' }),
+    /DAYTONA_ORGANIZATION_ID is required/
+  );
+});
+
+test('createByoSandboxClient accepts a JWT token paired with an organization id', () => {
+  const client = createByoSandboxClient({ jwtToken: 'jwt_probe', organizationId: 'org_1' });
+
+  assert.equal(typeof client.mint, 'function');
 });

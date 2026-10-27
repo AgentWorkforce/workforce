@@ -1,13 +1,13 @@
 {
   "id": "linear-shipper",
   "intent": "implement-frontend",
-  "tags": ["implementation"],
+  "tags": [
+    "implementation"
+  ],
   "description": "Turns a new Linear issue into an implementation attempt and links the resulting GitHub work back to Linear.",
   "cloud": true,
   "integrations": {
-    "linear": {
-      "triggers": [{ "on": "issue.created" }]
-    },
+    "linear": {},
     "github": {
       "scope": {
         "repo": "AgentWorkforce/workforce"

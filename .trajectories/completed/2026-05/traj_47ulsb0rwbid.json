@@ -1,0 +1,144 @@
+{
+  "id": "traj_47ulsb0rwbid",
+  "version": 1,
+  "task": {
+    "title": "Persistent skill cache + upstream drift detection"
+  },
+  "status": "completed",
+  "startedAt": "2026-05-15T20:47:56.786Z",
+  "agents": [
+    {
+      "name": "claude-skill-cache",
+      "role": "lead",
+      "joinedAt": "2026-05-15T20:47:56.808Z"
+    }
+  ],
+  "chapters": [
+    {
+      "id": "chap_p2cn73gpqanw",
+      "title": "Initial work",
+      "agentName": "claude-skill-cache",
+      "startedAt": "2026-05-15T20:47:56.808Z",
+      "events": [
+        {
+          "ts": 1778878092151,
+          "type": "decision",
+          "content": "Content-addressed cache keyed by (harness, sorted skill sources, local-file SHA) under ~/.agentworkforce/workforce/cache/plugins/<fp>/: Content-addressed cache keyed by (harness, sorted skill sources, local-file SHA) under ~/.agentworkforce/workforce/cache/plugins/<fp>/",
+          "raw": {
+            "question": "Content-addressed cache keyed by (harness, sorted skill sources, local-file SHA) under ~/.agentworkforce/workforce/cache/plugins/<fp>/",
+            "chosen": "Content-addressed cache keyed by (harness, sorted skill sources, local-file SHA) under ~/.agentworkforce/workforce/cache/plugins/<fp>/",
+            "alternatives": [
+              {
+                "option": "Per-session install (status quo",
+                "reason": ""
+              },
+              {
+                "option": "slow); global shared plugin dir (skill collisions across personas); TTL-only cache (still pays install on expiry)",
+                "reason": ""
+              }
+            ],
+            "reasoning": "The reported slowness was npx prpm install / npx skills add re-running every launch. A persistent dir keyed by a stable fingerprint lets repeat launches skip the install entirely. Local .md sources fold their content hash in so edits auto-invalidate without a version bump."
+          },
+          "significance": "high"
+        },
+        {
+          "ts": 1778878092386,
+          "type": "decision",
+          "content": "Never auto-invalidate on the source-key fingerprint; cover all three harnesses: Never auto-invalidate on the source-key fingerprint; cover all three harnesses",
+          "raw": {
+            "question": "Never auto-invalidate on the source-key fingerprint; cover all three harnesses",
+            "chosen": "Never auto-invalidate on the source-key fingerprint; cover all three harnesses",
+            "alternatives": [
+              {
+                "option": "Daily TTL on the fingerprint; claude-only scope with mount harnesses as follow-up",
+                "reason": ""
+              }
+            ],
+            "reasoning": "User explicitly chose 'never auto-invalidate' for the fingerprint layer and 'all harnesses now' when asked. Claude reuses the cache dir as --plugin-dir; opencode/codex mirror it into the relayfile mount before launch (mount-ignored patterns stop syncback)."
+          },
+          "significance": "high"
+        },
+        {
+          "ts": 1778878111454,
+          "type": "decision",
+          "content": "Add opt-in upstream drift detection: prpm registry GET + GitHub Contents API blob SHA, TTL-gated (24h default), fail-open: Add opt-in upstream drift detection: prpm registry GET + GitHub Contents API blob SHA, TTL-gated (24h default), fail-open",
+          "raw": {
+            "question": "Add opt-in upstream drift detection: prpm registry GET + GitHub Contents API blob SHA, TTL-gated (24h default), fail-open",
+            "chosen": "Add opt-in upstream drift detection: prpm registry GET + GitHub Contents API blob SHA, TTL-gated (24h default), fail-open",
+            "alternatives": [
+              {
+                "option": "Manual --refresh-skills only (user must remember); always-check (slows every launch); coarse repo-HEAD commit SHA for github (over-invalidates monorepos)",
+                "reason": ""
+              }
+            ],
+            "reasoning": "User asked how a new upstream skill version is consumed when the source string is unchanged. Explored prpm info / registry HTTP API (latest_version.version) and skill.sh — both expose cheap version probes. A 24h TTL keeps most launches network-free; only the daily check launch pays ~150-500ms parallel probes. Fail-open so a flaky registry never blocks a launch."
+          },
+          "significance": "high"
+        },
+        {
+          "ts": 1778878111681,
+          "type": "decision",
+          "content": "Precise per-file GitHub blob SHA via skills-lock.json skillPath, not coarse repo-HEAD; conditional GET with If-None-Match: Precise per-file GitHub blob SHA via skills-lock.json skillPath, not coarse repo-HEAD; conditional GET with If-None-Match",
+          "raw": {
+            "question": "Precise per-file GitHub blob SHA via skills-lock.json skillPath, not coarse repo-HEAD; conditional GET with If-None-Match",
+            "chosen": "Precise per-file GitHub blob SHA via skills-lock.json skillPath, not coarse repo-HEAD; conditional GET with If-None-Match",
+            "alternatives": [
+              {
+                "option": "repos/<o>/<r>/commits?per_page=1 repo-HEAD (1 call",
+                "reason": ""
+              },
+              {
+                "option": "but any push invalidates); re-download SKILL.md and hash (heavier",
+                "reason": ""
+              },
+              {
+                "option": "needs path anyway)",
+                "reason": ""
+              }
+            ],
+            "reasoning": "skill.sh writes skills-lock.json with skillPath + computedHash per skill. Building the Contents API URL from skillPath gives per-file drift (a monorepo of 50 skills doesn't invalidate on an unrelated commit). The blob SHA is also the ETag, so If-None-Match returns 304 with no body — cheapest possible check."
+          },
+          "significance": "high"
+        },
+        {
+          "ts": 1778878111884,
+          "type": "decision",
+          "content": "Marker schema v2, v1 read-compatible; fingerprint content-version pinned to 1 independent of marker version: Marker schema v2, v1 read-compatible; fingerprint content-version pinned to 1 independent of marker version",
+          "raw": {
+            "question": "Marker schema v2, v1 read-compatible; fingerprint content-version pinned to 1 independent of marker version",
+            "chosen": "Marker schema v2, v1 read-compatible; fingerprint content-version pinned to 1 independent of marker version",
+            "alternatives": [
+              {
+                "option": "Hard v2 cutover (invalidates all caches); separate sidecar file for upstream metadata (more files to keep consistent)",
+                "reason": ""
+              }
+            ],
+            "reasoning": "Bumping the marker schema must not invalidate every cache entry in the wild. readSkillCacheMarker accepts v1+v2 and upgrades v1 in place with no upstream records (next drift pass captures identity). The fingerprint's internal 'v' stays 1 so existing dirs keep resolving."
+          },
+          "significance": "high"
+        },
+        {
+          "ts": 1778878613570,
+          "type": "reflection",
+          "content": "Verified end-to-end against live prpm.dev + api.github.com: cache miss records resolved version; in-TTL launches skip probing; --check-upstream detects a tampered stale version (1.0.0→1.1.3) and reinstalls; marker self-heals; --no-check-upstream bypasses. GitHub 304 If-None-Match path confirmed.",
+          "significance": "high"
+        }
+      ],
+      "endedAt": "2026-05-15T20:58:19.304Z"
+    }
+  ],
+  "commits": [],
+  "filesChanged": [],
+  "projectId": "/Users/khaliqgant/Projects/AgentWorkforce/workforce",
+  "tags": [],
+  "_trace": {
+    "startRef": "09caf5b8db32f9d1c2c71735b7e231a7efc7ff8e",
+    "endRef": "09caf5b8db32f9d1c2c71735b7e231a7efc7ff8e"
+  },
+  "completedAt": "2026-05-15T20:58:19.304Z",
+  "retrospective": {
+    "summary": "Extended the persistent skill-cache PR with opt-in upstream drift detection. Marker bumped to schema v2 (v1 read-compatible) recording per-skill upstream identity (prpm resolved version / GitHub blob SHA). TTL-gated (24h default) parallel probes on launch flip a cache hit to a reinstall when upstream moved; fail-open on any probe error. Added --check-upstream/--no-check-upstream + AGENTWORKFORCE_SKILL_CACHE_CHECK_INTERVAL. 22 new unit tests (mocked HTTP) + verified end-to-end against live prpm.dev and api.github.com.",
+    "approach": "Reused installer lockfiles (prpm.lock version, skills-lock.json skillPath) for precise per-file identity; conditional GET (If-None-Match) for the cheapest GitHub check; mutable cache-hit flag downgraded by an awaited drift probe before the install decision.",
+    "confidence": 0.86
+  }
+}

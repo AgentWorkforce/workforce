@@ -10,8 +10,10 @@ import type {
   BundleStager,
   CloudAuthRecoveryResolver,
   IntegrationConnectResolver,
+  IntegrationOptionsResolver,
   ModeLaunchInput,
   ModeLauncher,
+  ProviderConfigKeyResolver,
   WorkspaceAuth
 } from './index.js';
 
@@ -26,20 +28,105 @@ function basePersonaJson(overrides: Record<string, unknown> = {}): Record<string
     systemPrompt: 'be helpful',
     harnessSettings: { reasoning: 'medium', timeoutSeconds: 300 },
     cloud: true,
-    schedules: [{ name: 'weekly', cron: '0 9 * * 6' }],
     onEvent: './agent.ts',
     ...overrides
   };
 }
 
+// Agent (`agent.ts`) sources. Triggers/schedules live here now, not on the
+// persona. extractAgentSpec stubs `@agentworkforce/runtime`, so these compile
+// without the runtime being installed in the temp dir.
+const SCHEDULE_AGENT_SRC = `import { defineAgent } from '@agentworkforce/runtime';
+export default defineAgent({
+  schedules: [{ name: 'weekly', cron: '0 9 * * 6' }],
+  handler: async () => {}
+});
+`;
+
+const NO_LISTENER_AGENT_SRC = `import { defineAgent } from '@agentworkforce/runtime';
+export default defineAgent({ handler: async () => {} });
+`;
+
+const TEAM_DISPATCHER_AGENT_SRC = `import { defineAgent } from '@agentworkforce/runtime';
+export default defineAgent({
+  launchedBy: 'team-dispatcher',
+  handler: async () => {}
+});
+`;
+
+const INVALID_LAUNCHED_BY_AGENT_SRC = `import { defineAgent } from '@agentworkforce/runtime';
+export default defineAgent({
+  launchedBy: '',
+  schedules: [{ name: 'weekly', cron: '0 9 * * 6' }],
+  handler: async () => {}
+});
+`;
+
+const MISSING_HANDLER_AGENT_SRC = `import { defineAgent } from '@agentworkforce/runtime';
+export default defineAgent({
+  schedules: [{ name: 'weekly', cron: '0 9 * * 6' }]
+});
+`;
+
+function githubAgentSrc(on = 'pull_request.opened'): string {
+  return `import { defineAgent } from '@agentworkforce/runtime';
+export default defineAgent({
+  triggers: { github: [{ on: '${on}' }] },
+  handler: async () => {}
+});
+`;
+}
+
+const SLACK_TELEGRAM_AGENT_SRC = `import { defineAgent } from '@agentworkforce/runtime';
+export default defineAgent({
+  triggers: {
+    slack: [{ on: 'message.created' }],
+    telegram: [{ on: 'message.created' }]
+  },
+  handler: async () => {}
+});
+`;
+
+const GMAIL_ALIAS_COLLISION_AGENT_SRC = `import { defineAgent } from '@agentworkforce/runtime';
+export default defineAgent({
+  triggers: {
+    'google-mail': [{ on: 'file.created', match: 'from-alias' }],
+    gmail: [{ on: 'file.created', match: 'from-canonical' }]
+  },
+  handler: async () => {}
+});
+`;
+
 async function withTempPersona(
   persona: Record<string, unknown>,
-  agentSource = 'export default async () => {};'
+  agentSource = SCHEDULE_AGENT_SRC
 ): Promise<{ dir: string; personaPath: string; cleanup: () => Promise<void> }> {
   const dir = await mkdtemp(path.join(os.tmpdir(), 'wf-deploy-test-'));
   const personaPath = path.join(dir, 'persona.json');
   await writeFile(personaPath, JSON.stringify(persona, null, 2), 'utf8');
   await writeFile(path.join(dir, 'agent.ts'), agentSource, 'utf8');
+  return {
+    dir,
+    personaPath,
+    cleanup: () => rm(dir, { recursive: true, force: true })
+  };
+}
+
+async function withTempPersonaSource(
+  source: string,
+  extraFiles: Record<string, string> = {}
+): Promise<{ dir: string; personaPath: string; cleanup: () => Promise<void> }> {
+  const dir = await mkdtemp(path.join(os.tmpdir(), 'wf-deploy-source-test-'));
+  const personaPath = path.join(dir, 'persona.ts');
+  await writeFile(personaPath, source, 'utf8');
+  await writeFile(path.join(dir, 'agent.ts'), SCHEDULE_AGENT_SRC, 'utf8');
+  await Promise.all(
+    Object.entries(extraFiles).map(async ([name, content]) => {
+      const target = path.join(dir, name);
+      await mkdir(path.dirname(target), { recursive: true });
+      await writeFile(target, content, 'utf8');
+    })
+  );
   return {
     dir,
     personaPath,
@@ -77,6 +164,74 @@ async function withWorkspaceEnv<T>(
     } else {
       process.env.WORKFORCE_WORKSPACE_TOKEN = previousToken;
     }
+  }
+}
+
+async function withProcessEnv<T>(
+  env: Record<string, string | undefined>,
+  fn: () => Promise<T>
+): Promise<T> {
+  const previous = new Map<string, string | undefined>();
+  for (const key of Object.keys(env)) {
+    previous.set(key, process.env[key]);
+    const next = env[key];
+    if (next === undefined) {
+      delete process.env[key];
+    } else {
+      process.env[key] = next;
+    }
+  }
+
+  try {
+    return await fn();
+  } finally {
+    for (const [key, value] of previous) {
+      if (value === undefined) {
+        delete process.env[key];
+      } else {
+        process.env[key] = value;
+      }
+    }
+  }
+}
+
+async function withCloudSessionEnv<T>(fn: () => Promise<T>): Promise<T> {
+  const previous = {
+    CLOUD_API_URL: process.env.CLOUD_API_URL,
+    CLOUD_API_ACCESS_TOKEN: process.env.CLOUD_API_ACCESS_TOKEN,
+    CLOUD_API_REFRESH_TOKEN: process.env.CLOUD_API_REFRESH_TOKEN,
+    CLOUD_API_ACCESS_TOKEN_EXPIRES_AT: process.env.CLOUD_API_ACCESS_TOKEN_EXPIRES_AT
+  };
+  process.env.CLOUD_API_URL = 'https://cloud.example.test';
+  process.env.CLOUD_API_ACCESS_TOKEN = 'cloud-access';
+  process.env.CLOUD_API_REFRESH_TOKEN = 'cloud-refresh';
+  process.env.CLOUD_API_ACCESS_TOKEN_EXPIRES_AT = '2999-01-01T00:00:00.000Z';
+  try {
+    return await fn();
+  } finally {
+    for (const [key, value] of Object.entries(previous)) {
+      if (value === undefined) {
+        delete process.env[key as keyof typeof previous];
+      } else {
+        process.env[key as keyof typeof previous] = value;
+      }
+    }
+  }
+}
+
+async function withAgentRelayHome<T>(fn: () => Promise<T>): Promise<T> {
+  const previous = process.env.AGENT_RELAY_HOME;
+  const dir = await mkdtemp(path.join(os.tmpdir(), 'wf-agent-relay-home-'));
+  process.env.AGENT_RELAY_HOME = dir;
+  try {
+    return await fn();
+  } finally {
+    if (previous === undefined) {
+      delete process.env.AGENT_RELAY_HOME;
+    } else {
+      process.env.AGENT_RELAY_HOME = previous;
+    }
+    await rm(dir, { recursive: true, force: true });
   }
 }
 
@@ -140,6 +295,44 @@ test('preflightPersona accepts a valid deploy-shaped persona', async () => {
   }
 });
 
+test('preflightPersona accepts authored persona.ts and preserves sibling import.meta.url reads', async () => {
+  const { personaPath, cleanup } = await withTempPersonaSource(
+    `import { description } from './helpers/description';
+import { definePersona } from '@agentworkforce/persona-kit';
+
+export default definePersona({
+  id: 'typed-demo',
+  intent: 'documentation',
+  tags: ['documentation'],
+  description,
+  cloud: true,
+  onEvent: './agent.ts',
+  harnessSettings: { reasoning: 'medium', timeoutSeconds: 300 }
+});
+`,
+    {
+      'helpers/description.ts': `import { readFileSync } from 'node:fs';
+import { fileURLToPath } from 'node:url';
+
+export const description = readFileSync(
+  fileURLToPath(new URL('./description.txt', import.meta.url)),
+  'utf8'
+).trim();
+`,
+      'helpers/description.txt': 'Compiled beside the helper file.\n'
+    }
+  );
+  try {
+    const pre = await preflightPersona(personaPath);
+    assert.equal(pre.persona.id, 'typed-demo');
+    assert.equal(pre.persona.description, 'Compiled beside the helper file.');
+    assert.equal(pre.personaPath, personaPath);
+    assert.deepEqual(pre.schedules, ['weekly']);
+  } finally {
+    await cleanup();
+  }
+});
+
 test('preflightPersona refuses when cloud is not true', async () => {
   const { personaPath, cleanup } = await withTempPersona(basePersonaJson({ cloud: false }));
   try {
@@ -149,12 +342,109 @@ test('preflightPersona refuses when cloud is not true', async () => {
   }
 });
 
-test('preflightPersona refuses when no triggers are declared', async () => {
+test('preflightPersona accepts a cloud persona that opts into memory facets', async () => {
   const { personaPath, cleanup } = await withTempPersona(
-    basePersonaJson({ schedules: undefined, integrations: undefined })
+    basePersonaJson({ memory: { trajectories: true, aiMemory: true } })
   );
   try {
-    await assert.rejects(preflightPersona(personaPath), /has no triggers/);
+    const pre = await preflightPersona(personaPath);
+    assert.deepEqual(pre.persona.memory, { trajectories: true, aiMemory: true });
+  } finally {
+    await cleanup();
+  }
+});
+
+test('preflightPersona refuses when the agent declares no listeners', async () => {
+  const { personaPath, cleanup } = await withTempPersona(
+    basePersonaJson({ integrations: undefined }),
+    NO_LISTENER_AGENT_SRC
+  );
+  try {
+    await assert.rejects(preflightPersona(personaPath), /declares no listeners/);
+  } finally {
+    await cleanup();
+  }
+});
+
+test('preflightPersona accepts listener-free agents launched by the team dispatcher', async () => {
+  const { personaPath, cleanup } = await withTempPersona(
+    basePersonaJson({ integrations: undefined }),
+    TEAM_DISPATCHER_AGENT_SRC
+  );
+  try {
+    const pre = await preflightPersona(personaPath);
+    assert.deepEqual(pre.schedules, []);
+    assert.equal(pre.agent.launchedBy, 'team-dispatcher');
+  } finally {
+    await cleanup();
+  }
+});
+
+test('preflightPersona rejects unsupported launchedBy values even when listeners exist', async () => {
+  const { personaPath, cleanup } = await withTempPersona(
+    basePersonaJson({ integrations: undefined }),
+    INVALID_LAUNCHED_BY_AGENT_SRC
+  );
+  try {
+    await assert.rejects(preflightPersona(personaPath), /launchedBy must be one of: team-dispatcher/);
+  } finally {
+    await cleanup();
+  }
+});
+
+test('preflightPersona refuses when defineAgent omits handler', async () => {
+  const { personaPath, cleanup } = await withTempPersona(basePersonaJson(), MISSING_HANDLER_AGENT_SRC);
+  try {
+    await assert.rejects(preflightPersona(personaPath), /must default-export defineAgent/);
+  } finally {
+    await cleanup();
+  }
+});
+
+test('preflightPersona refuses when the agent triggers a provider the persona does not connect', async () => {
+  const { personaPath, cleanup } = await withTempPersona(
+    basePersonaJson({ integrations: undefined }),
+    githubAgentSrc()
+  );
+  try {
+    await assert.rejects(preflightPersona(personaPath), /does not connect/);
+  } finally {
+    await cleanup();
+  }
+});
+
+test('preflightPersona merges trigger lists when an alias collides with its canonical provider', async () => {
+  const { personaPath, cleanup } = await withTempPersona(
+    basePersonaJson({ integrations: { 'google-mail': {}, gmail: {} } }),
+    GMAIL_ALIAS_COLLISION_AGENT_SRC
+  );
+  try {
+    const pre = await preflightPersona(personaPath);
+    assert.deepEqual(pre.agent.triggers, {
+      gmail: [
+        { on: 'file.created', match: 'from-alias' },
+        { on: 'file.created', match: 'from-canonical' }
+      ]
+    });
+    assert.deepEqual(pre.warnings, []);
+  } finally {
+    await cleanup();
+  }
+});
+
+test('preflightPersona refuses optional integrations enabled by undeclared inputs', async () => {
+  const { personaPath, cleanup } = await withTempPersona(
+    basePersonaJson({
+      integrations: {
+        slack: { optional: true, enabledByInput: 'SLACK_CHANNEL' }
+      }
+    })
+  );
+  try {
+    await assert.rejects(
+      preflightPersona(personaPath),
+      /integration "slack" is enabled by input "SLACK_CHANNEL".*persona\.inputs does not declare SLACK_CHANNEL/
+    );
   } finally {
     await cleanup();
   }
@@ -171,12 +461,8 @@ test('preflightPersona refuses when onEvent file is missing', async () => {
 
 test('preflightPersona warns on unknown triggers but does not fail', async () => {
   const { personaPath, cleanup } = await withTempPersona(
-    basePersonaJson({
-      schedules: undefined,
-      integrations: {
-        github: { triggers: [{ on: 'pull_request.imagined_event' }] }
-      }
-    })
+    basePersonaJson({ integrations: { github: {} } }),
+    githubAgentSrc('pull_request.imagined_event')
   );
   try {
     const pre = await preflightPersona(personaPath);
@@ -202,9 +488,185 @@ test('deploy --dry-run validates persona and exits before side effects', async (
   }
 });
 
+test('deploy --dry-run accepts useSubscription personas in cloud mode', async () => {
+  const { personaPath, cleanup } = await withTempPersona(
+    basePersonaJson({ useSubscription: true })
+  );
+  const io = createBufferedIO();
+  try {
+    const result = await deploy({ personaPath, mode: 'cloud', dryRun: true, io });
+    assert.equal(result.deploymentId, 'demo');
+    assert.equal(result.mode, 'cloud');
+    assert.ok(io.messages.find((m) => m.message.includes('--dry-run')));
+    assert.ok(!io.messages.find((m) => m.message.startsWith('workspace:')));
+  } finally {
+    await cleanup();
+  }
+});
+
+test('deploy --dry-run rejects useSubscription when cloud mode is not selected', async () => {
+  const { personaPath, cleanup } = await withTempPersona(
+    basePersonaJson({ useSubscription: true })
+  );
+  const io = createBufferedIO();
+  try {
+    await assert.rejects(
+      deploy({ personaPath, mode: 'dev', dryRun: true, io }),
+      /requires --mode cloud/
+    );
+    assert.ok(!io.messages.find((m) => m.message.startsWith('workspace:')));
+  } finally {
+    await cleanup();
+  }
+});
+
+test('deploy --dry-run rejects useSubscription with workforce managed credentials', async () => {
+  const { personaPath, cleanup } = await withTempPersona(
+    basePersonaJson({ useSubscription: true })
+  );
+  const io = createBufferedIO();
+  try {
+    await assert.rejects(
+      deploy({ personaPath, mode: 'cloud', dryRun: true, harnessSource: 'managed', io }),
+      /use --harness-source oauth/
+    );
+    assert.ok(!io.messages.find((m) => m.message.startsWith('workspace:')));
+  } finally {
+    await cleanup();
+  }
+});
+
+test('deploy --dry-run rejects useSubscription with legacy plan alias', async () => {
+  const { personaPath, cleanup } = await withTempPersona(
+    basePersonaJson({ useSubscription: true })
+  );
+  const io = createBufferedIO();
+  try {
+    await assert.rejects(
+      deploy({ personaPath, mode: 'cloud', dryRun: true, harnessSource: 'plan', io }),
+      /use --harness-source oauth/
+    );
+    assert.ok(!io.messages.find((m) => m.message.startsWith('workspace:')));
+  } finally {
+    await cleanup();
+  }
+});
+
+test('deploy accepts useSubscription when a subscription resolver is supplied', async () => {
+  const { personaPath, cleanup } = await withTempPersona(
+    basePersonaJson({ useSubscription: true })
+  );
+  const io = createBufferedIO();
+  try {
+    const result = await deploy(
+      { personaPath, dryRun: true, io },
+      {
+        subscription: {
+          async isConnected() {
+            throw new Error('dry-run should not check subscription status');
+          },
+          async connect() {
+            throw new Error('dry-run should not connect subscriptions');
+          }
+        }
+      }
+    );
+    assert.equal(result.deploymentId, 'demo');
+    assert.ok(io.messages.find((m) => m.message.includes('--dry-run')));
+  } finally {
+    await cleanup();
+  }
+});
+
+test('deploy prepares useSubscription BYOK credentials before integration side effects', async () => {
+  const { personaPath, cleanup } = await withTempPersona(
+    basePersonaJson({
+      useSubscription: true,
+      integrations: { github: {} }
+    })
+  );
+  const io = createBufferedIO();
+  const originalFetch = globalThis.fetch;
+  const order: string[] = [];
+  let launchedSelections: Record<string, string> | undefined;
+  try {
+    globalThis.fetch = (async (input, init) => {
+      const url = String(input);
+      if (url.endsWith('/provider-credentials/byok')) {
+        order.push('subscription-byok');
+        assert.equal(init?.method, 'POST');
+        assert.deepEqual(JSON.parse(String(init?.body)), {
+          modelProvider: 'anthropic',
+          model_provider: 'anthropic',
+          key: 'sk-test',
+          api_key: 'sk-test'
+        });
+        return jsonResponse({ providerCredentialId: 'cred-byok' }, 201);
+      }
+      throw new Error(`unexpected URL ${url}`);
+    }) as typeof fetch;
+
+    const result = await deploy(
+      {
+        personaPath,
+        mode: 'cloud',
+        harnessSource: 'byok',
+        byokKey: 'sk-test',
+        cloudUrl: 'https://cloud.example.test',
+        io
+      },
+      {
+        workspaceAuth: {
+          async resolveWorkspace() {
+            order.push('workspace');
+            return { workspace: 'ws-test', token: 'tok' };
+          }
+        },
+        providerConfigKeys: {
+          async resolve() {
+            return undefined;
+          }
+        },
+        integrations: {
+          async isConnected() {
+            order.push('integration-check');
+            return true;
+          },
+          async connect() {
+            order.push('integration-connect');
+            return { connectionId: 'conn-github' };
+          }
+        },
+        bundle: successfulBundleStager(),
+        modes: {
+          cloud: {
+            async launch(input) {
+              order.push('launch');
+              launchedSelections = input.credentialSelections;
+              return {
+                id: 'cloud-1',
+                async stop() {
+                  /* no-op */
+                },
+                done: Promise.resolve({ code: 0 })
+              };
+            }
+          }
+        }
+      }
+    );
+    assert.equal(result.deploymentId, 'demo');
+    assert.deepEqual(order, ['workspace', 'subscription-byok', 'integration-check', 'launch']);
+    assert.deepEqual(launchedSelections, { anthropic: 'cred-byok' });
+  } finally {
+    globalThis.fetch = originalFetch;
+    await cleanup();
+  }
+});
+
 test('deploy fails clearly when integration is not connected and --no-connect is set', async () => {
   const { personaPath, cleanup } = await withTempPersona(
-    basePersonaJson({ integrations: { github: { triggers: [{ on: 'pull_request.opened' }] } } })
+    basePersonaJson({ integrations: { github: {} } })
   );
   const io = createBufferedIO();
   const workspaceAuth: WorkspaceAuth = {
@@ -278,6 +740,1225 @@ test('deploy connects each missing persona integration before launch', async () 
     assert.deepEqual(result.connectedIntegrations, ['github', 'notion']);
     assert.equal(launched, true);
   } finally {
+    await cleanup();
+  }
+});
+
+test('deploy forwards the Supabase project ref into the OAuth connect flow', async () => {
+  const { personaPath, cleanup } = await withTempPersona(
+    basePersonaJson({ integrations: { 'supabase-mcp': {} } })
+  );
+  const io = createBufferedIO();
+  let connectedProjectRef: string | undefined;
+  const workspaceAuth: WorkspaceAuth = {
+    async resolveWorkspace() {
+      return { workspace: 'ws-test', token: 'tok' };
+    }
+  };
+  const integrations: IntegrationConnectResolver = {
+    async isConnected() {
+      return false;
+    },
+    async connect({ supabaseMcpProjectRef }) {
+      connectedProjectRef = supabaseMcpProjectRef;
+      return { connectionId: 'conn-supabase' };
+    }
+  };
+
+  try {
+    await deploy(
+      {
+        personaPath,
+        mode: 'dev',
+        io,
+        supabaseMcpProjectRef: 'BVZZCAFZOYSEZUMRDVIF'
+      },
+      {
+        workspaceAuth,
+        integrations,
+        bundle: successfulBundleStager(),
+        modes: { dev: successfulDevLauncher() }
+      }
+    );
+
+    assert.equal(connectedProjectRef, 'bvzzcafzoysezumrdvif');
+  } finally {
+    await cleanup();
+  }
+});
+
+test('cloud deploy retries transient catalog and status fetch failures before launch', async () => {
+  const { personaPath, cleanup } = await withTempPersona(
+    basePersonaJson({ integrations: { github: {} } }),
+    githubAgentSrc()
+  );
+  const io = createBufferedIO();
+  const originalFetch = globalThis.fetch;
+  let catalogCalls = 0;
+  let statusCalls = 0;
+  let launched = false;
+  const delays: number[] = [];
+  globalThis.fetch = (async (input: string | URL | Request) => {
+    const url = String(input);
+    if (url.includes('/api/v1/integrations/catalog')) {
+      catalogCalls += 1;
+      if (catalogCalls === 1) throw new TypeError('fetch failed');
+      return new Response(JSON.stringify({
+        providers: [{ id: 'github', configKey: 'github-relay' }]
+      }), { status: 200, headers: { 'content-type': 'application/json' } });
+    }
+    if (url.includes('/integrations/github/status')) {
+      statusCalls += 1;
+      if (statusCalls === 1) throw new TypeError('fetch failed');
+      return new Response(JSON.stringify({
+        provider: 'github',
+        configKey: 'github-relay',
+        status: 'ready'
+      }), { status: 200, headers: { 'content-type': 'application/json' } });
+    }
+    throw new Error(`unexpected fetch: ${url}`);
+  }) as typeof fetch;
+
+  try {
+    const result = await deploy(
+      {
+        personaPath,
+        mode: 'cloud',
+        noConnect: true,
+        cloudUrl: 'https://cloud.example.test',
+        io
+      },
+      {
+        workspaceAuth: {
+          async resolveWorkspace() {
+            return { workspace: 'ws-test', token: 'tok' };
+          }
+        },
+        networkRetrySleep: async (ms) => { delays.push(ms); },
+        bundle: successfulBundleStager(),
+        modes: {
+          cloud: {
+            async launch() {
+              launched = true;
+              return {
+                id: 'cloud-retry',
+                async stop() { /* no-op */ },
+                done: Promise.resolve({ code: 0 })
+              };
+            }
+          }
+        }
+      }
+    );
+
+    assert.equal(launched, true);
+    assert.deepEqual(result.connectedIntegrations, ['github']);
+    assert.equal(catalogCalls, 2);
+    assert.equal(statusCalls, 2);
+    assert.deepEqual(delays, [100, 100]);
+  } finally {
+    globalThis.fetch = originalFetch;
+    await cleanup();
+  }
+});
+
+test('deploy activates optional integrations from supplied persona inputs', async () => {
+  const { personaPath, cleanup } = await withTempPersona(
+    basePersonaJson({
+      integrations: {
+        slack: { optional: true, enabledByInput: 'SLACK_CHANNEL' },
+        telegram: { optional: true, enabledByInput: 'TELEGRAM_CHAT' }
+      },
+      inputs: {
+        SLACK_CHANNEL: { description: 'Slack channel', optional: true },
+        TELEGRAM_CHAT: { description: 'Telegram chat', optional: true }
+      }
+    }),
+    SLACK_TELEGRAM_AGENT_SRC
+  );
+  const io = createBufferedIO();
+  const checked: string[] = [];
+  const connected: string[] = [];
+  let stagedIntegrationKeys: string[] = [];
+  let launchedTriggerKeys: string[] = [];
+  const workspaceAuth: WorkspaceAuth = {
+    async resolveWorkspace() {
+      return { workspace: 'ws-test', token: 'tok' };
+    }
+  };
+  const integrations: IntegrationConnectResolver = {
+    async isConnected({ provider }) {
+      checked.push(provider);
+      return false;
+    },
+    async connect({ provider }) {
+      connected.push(provider);
+      return { connectionId: `conn-${provider}` };
+    }
+  };
+  const bundle: BundleStager = {
+    async stage(input) {
+      stagedIntegrationKeys = Object.keys(input.persona.integrations ?? {});
+      return successfulBundleStager().stage(input);
+    }
+  };
+  const devLauncher: ModeLauncher = {
+    async launch(input: ModeLaunchInput) {
+      launchedTriggerKeys = Object.keys(input.agent.triggers ?? {});
+      return {
+        id: 'pid-optional',
+        async stop() {
+          /* no-op */
+        },
+        done: Promise.resolve({ code: 0 })
+      };
+    }
+  };
+
+  try {
+    await withProcessEnv({ TELEGRAM_CHAT: undefined }, async () => {
+      const result = await deploy(
+        {
+          personaPath,
+          mode: 'dev',
+          io,
+          inputs: { SLACK_CHANNEL: 'C1' }
+        },
+        {
+          workspaceAuth,
+          integrations,
+          bundle,
+          modes: { dev: devLauncher }
+        }
+      );
+
+      assert.deepEqual(checked, ['slack']);
+      assert.deepEqual(connected, ['slack']);
+      assert.deepEqual(result.connectedIntegrations, ['slack']);
+      assert.deepEqual(stagedIntegrationKeys, ['slack']);
+      assert.deepEqual(launchedTriggerKeys, ['slack']);
+      assert.ok(
+        io.messages.find((m) => m.message.includes('integrations.telegram: optional; skipped'))
+      );
+    });
+  } finally {
+    await cleanup();
+  }
+});
+
+test('deploy collects picker-backed input before pruning an optional integration', async () => {
+  const { personaPath, cleanup } = await withTempPersona(
+    basePersonaJson({
+      integrations: {
+        slack: { optional: true, enabledByInput: 'SLACK_CHANNEL' },
+        telegram: { optional: true, enabledByInput: 'TELEGRAM_CHAT' }
+      },
+      inputs: {
+        SLACK_CHANNEL: {
+          description: 'Slack channel',
+          optional: true,
+          picker: { provider: 'slack', resource: 'channels' }
+        },
+        TELEGRAM_CHAT: { description: 'Telegram chat', optional: true }
+      }
+    }),
+    SLACK_TELEGRAM_AGENT_SRC
+  );
+  const io = createBufferedIO();
+  io.scriptAnswers(['1']);
+  const checked: string[] = [];
+  const connected: string[] = [];
+  let stagedIntegrationKeys: string[] = [];
+  let launchedTriggerKeys: string[] = [];
+  let launchedInputs: Record<string, string> | undefined;
+  let launchedEnv: Record<string, string> | undefined;
+  const workspaceAuth: WorkspaceAuth = {
+    async resolveWorkspace() {
+      return { workspace: 'ws-test', token: 'tok' };
+    }
+  };
+  const integrations: IntegrationConnectResolver = {
+    async isConnected({ provider }) {
+      checked.push(provider);
+      return false;
+    },
+    async connect({ provider }) {
+      connected.push(provider);
+      return { connectionId: `conn-${provider}` };
+    }
+  };
+  const integrationOptions: IntegrationOptionsResolver = {
+    async list({ provider, resource }) {
+      assert.equal(provider, 'slack');
+      assert.equal(resource, 'channels');
+      return [
+        { value: 'C1', label: 'general' },
+        { value: 'C2', label: 'deploys' }
+      ];
+    }
+  };
+  const bundle: BundleStager = {
+    async stage(input) {
+      stagedIntegrationKeys = Object.keys(input.persona.integrations ?? {});
+      return successfulBundleStager().stage(input);
+    }
+  };
+  const devLauncher: ModeLauncher = {
+    async launch(input: ModeLaunchInput) {
+      launchedTriggerKeys = Object.keys(input.agent.triggers ?? {});
+      launchedInputs = input.inputs;
+      launchedEnv = input.env;
+      return {
+        id: 'pid-optional-picker',
+        async stop() {
+          /* no-op */
+        },
+        done: Promise.resolve({ code: 0 })
+      };
+    }
+  };
+
+  try {
+    await withProcessEnv({ SLACK_CHANNEL: undefined, TELEGRAM_CHAT: undefined }, async () => {
+      const result = await deploy(
+        { personaPath, mode: 'dev', io },
+        {
+          workspaceAuth,
+          integrations,
+          integrationOptions,
+          bundle,
+          modes: { dev: devLauncher }
+        }
+      );
+
+      assert.deepEqual(checked, ['slack']);
+      assert.deepEqual(connected, ['slack']);
+      assert.deepEqual(result.connectedIntegrations, ['slack']);
+      assert.deepEqual(stagedIntegrationKeys, ['slack']);
+      assert.deepEqual(launchedTriggerKeys, ['slack']);
+      assert.deepEqual(launchedInputs, { SLACK_CHANNEL: 'C1' });
+      assert.equal(launchedEnv?.WORKFORCE_INPUT_SLACK_CHANNEL, 'C1');
+      assert.ok(
+        io.messages.find((m) => m.message.includes('integrations.telegram: optional; skipped'))
+      );
+    });
+  } finally {
+    await cleanup();
+  }
+});
+
+test('deploy forwards env-resolved optional activation input values to launchers', async () => {
+  const { personaPath, cleanup } = await withTempPersona(
+    basePersonaJson({
+      integrations: {
+        slack: { optional: true, enabledByInput: 'SLACK_CHANNEL' }
+      },
+      inputs: {
+        SLACK_CHANNEL: {
+          description: 'Slack channel',
+          optional: true,
+          env: 'AW_SLACK_CHANNEL'
+        }
+      }
+    }),
+    `import { defineAgent } from '@agentworkforce/runtime';
+export default defineAgent({
+  triggers: { slack: [{ on: 'message.created' }] },
+  handler: async () => {}
+});
+`
+  );
+  const io = createBufferedIO();
+  const checked: string[] = [];
+  let launchedInputs: Record<string, string> | undefined;
+  let launchedEnv: Record<string, string> | undefined;
+  const workspaceAuth: WorkspaceAuth = {
+    async resolveWorkspace() {
+      return { workspace: 'ws-test', token: 'tok' };
+    }
+  };
+  const integrations: IntegrationConnectResolver = {
+    async isConnected({ provider }) {
+      checked.push(provider);
+      return true;
+    },
+    async connect() {
+      throw new Error('should not connect when already connected');
+    }
+  };
+
+  try {
+    await withProcessEnv({ AW_SLACK_CHANNEL: 'C-env' }, async () => {
+      const result = await deploy(
+        { personaPath, mode: 'cloud', io },
+        {
+          workspaceAuth,
+          integrations,
+          providerConfigKeys: {
+            async resolve() {
+              return undefined;
+            }
+          },
+          bundle: successfulBundleStager(),
+          modes: {
+            cloud: {
+              async launch(input: ModeLaunchInput) {
+                launchedInputs = input.inputs;
+                launchedEnv = input.env;
+                return {
+                  id: 'cloud-env-input',
+                  async stop() {
+                    /* no-op */
+                  },
+                  done: Promise.resolve({ code: 0 })
+                };
+              }
+            }
+          }
+        }
+      );
+
+      assert.deepEqual(checked, ['slack']);
+      assert.deepEqual(result.connectedIntegrations, ['slack']);
+      assert.deepEqual(launchedInputs, { SLACK_CHANNEL: 'C-env' });
+      assert.equal(launchedEnv?.WORKFORCE_INPUT_SLACK_CHANNEL, 'C-env');
+    });
+  } finally {
+    await cleanup();
+  }
+});
+
+test('deploy refuses an agent whose optional integration inputs leave no active listeners', async () => {
+  const { personaPath, cleanup } = await withTempPersona(
+    basePersonaJson({
+      integrations: {
+        slack: { optional: true, enabledByInput: 'SLACK_CHANNEL' },
+        telegram: { optional: true, enabledByInput: 'TELEGRAM_CHAT' }
+      },
+      inputs: {
+        SLACK_CHANNEL: { description: 'Slack channel', optional: true },
+        TELEGRAM_CHAT: { description: 'Telegram chat', optional: true }
+      }
+    }),
+    SLACK_TELEGRAM_AGENT_SRC
+  );
+  try {
+    await withProcessEnv({ SLACK_CHANNEL: undefined, TELEGRAM_CHAT: undefined }, async () =>
+      assert.rejects(
+        deploy({ personaPath, mode: 'dev', io: createBufferedIO() }),
+        /no active listeners after optional integrations were applied/
+      )
+    );
+  } finally {
+    await cleanup();
+  }
+});
+
+test('deploy dev mode injects runtime credentials for a detected writeback trigger without provider-token leakage', async () => {
+  const providerTokenSentinel = 'WORKFORCE_PROVIDER_TOKEN_SHOULD_NOT_LEAK';
+  const integrations = {
+    github: {}
+  };
+  const { personaPath, cleanup } = await withTempPersona(
+    basePersonaJson({ integrations }),
+    githubAgentSrc()
+  );
+  const io = createBufferedIO();
+  const originalFetch = globalThis.fetch;
+  const originalProviderToken = process.env.WORKFORCE_INTEGRATION_GITHUB_TOKEN;
+  const calls: Array<{ url: string; method: string; body?: unknown }> = [];
+  let launchedEnv: Record<string, string> | undefined;
+  let launched = false;
+
+  process.env.WORKFORCE_INTEGRATION_GITHUB_TOKEN = providerTokenSentinel;
+  globalThis.fetch = (async (input, init) => {
+    const url = String(input);
+    const method = init?.method ?? 'GET';
+    const body = init?.body ? JSON.parse(String(init.body)) : undefined;
+    calls.push({ url, method, ...(body !== undefined ? { body } : {}) });
+
+    if (url.includes('/api/v1/workspaces/ws-test/integrations/github/status')) {
+      return jsonResponse({ provider: 'github', status: 'ready' });
+    }
+    if (url.includes('/api/v1/workspaces/ws-test/runtime-credentials')) {
+      assert.equal(method, 'POST');
+      assert.equal(new Headers(init?.headers).get('authorization'), 'Bearer relay_ws_workspace');
+      assert.deepEqual(body, {
+        personaId: 'demo',
+        agentId: 'demo',
+        integrations: {
+          github: {
+            source: { kind: 'deployer_user' },
+            triggers: [{ on: 'pull_request.opened' }]
+          }
+        },
+        ttlSeconds: 3600
+      });
+      return jsonResponse({
+        relayfileUrl: 'https://relayfile.test',
+        relayfileWorkspaceId: 'ws-test',
+        relayfileToken: 'relay_pa_scoped',
+        relayfileMountPaths: ['/github/repos/**/**/pulls/**']
+      });
+    }
+    throw new Error(`unexpected URL ${url}`);
+  }) as typeof fetch;
+
+  try {
+    const result = await deploy(
+      {
+        personaPath,
+        mode: 'dev',
+        noPrompt: true,
+        cloudUrl: 'https://cloud.example.test',
+        io
+      },
+      {
+        workspaceAuth: {
+          async resolveWorkspace() {
+            return { workspace: 'ws-test', token: 'relay_ws_workspace' };
+          }
+        },
+        bundle: successfulBundleStager(),
+        modes: {
+          dev: {
+            async launch(input) {
+              launched = true;
+              launchedEnv = input.env;
+              return {
+                id: 'dev-1',
+                async stop() {
+                  /* no-op */
+                },
+                done: Promise.resolve({ code: 0 })
+              };
+            }
+          }
+        }
+      }
+    );
+
+    assert.equal(result.deploymentId, 'demo');
+    assert.equal(launched, true);
+    assert.equal(launchedEnv?.RELAYFILE_URL, 'https://relayfile.test');
+    assert.equal(launchedEnv?.RELAYFILE_WORKSPACE_ID, 'ws-test');
+    assert.equal(launchedEnv?.RELAYFILE_TOKEN, 'relay_pa_scoped');
+    assert.equal(
+      launchedEnv?.RELAYFILE_MOUNT_PATHS,
+      JSON.stringify(['/github/repos/**/**/pulls/**'])
+    );
+    assert.equal(launchedEnv?.WORKFORCE_INTEGRATION_GITHUB_TOKEN, '');
+    assert.doesNotMatch(JSON.stringify(launchedEnv), new RegExp(providerTokenSentinel));
+    assert.doesNotMatch(JSON.stringify(calls), new RegExp(providerTokenSentinel));
+    assert.doesNotMatch(JSON.stringify(io.messages), new RegExp(providerTokenSentinel));
+  } finally {
+    if (originalProviderToken === undefined) {
+      delete process.env.WORKFORCE_INTEGRATION_GITHUB_TOKEN;
+    } else {
+      process.env.WORKFORCE_INTEGRATION_GITHUB_TOKEN = originalProviderToken;
+    }
+    globalThis.fetch = originalFetch;
+    await cleanup();
+  }
+});
+
+test('deploy dev mode preserves no-trigger null-token runtime credentials', async () => {
+  const { personaPath, cleanup } = await withTempPersona(
+    basePersonaJson({ integrations: { github: {} } })
+  );
+  const io = createBufferedIO();
+  const originalFetch = globalThis.fetch;
+  let launchedEnv: Record<string, string> | undefined;
+
+  globalThis.fetch = (async (input, init) => {
+    const url = String(input);
+    const method = init?.method ?? 'GET';
+    const body = init?.body ? JSON.parse(String(init.body)) : undefined;
+
+    if (url.includes('/api/v1/workspaces/ws-test/integrations/github/status')) {
+      return jsonResponse({ provider: 'github', status: 'ready' });
+    }
+    if (url.includes('/api/v1/workspaces/ws-test/runtime-credentials')) {
+      assert.equal(method, 'POST');
+      assert.deepEqual(body, {
+        personaId: 'demo',
+        agentId: 'demo',
+        integrations: {
+          github: { source: { kind: 'deployer_user' } }
+        },
+        ttlSeconds: 3600
+      });
+      return jsonResponse({
+        relayfileUrl: 'https://relayfile.test',
+        relayfileWorkspaceId: 'ws-test',
+        relayfileToken: null,
+        relayfileMountPaths: []
+      });
+    }
+    throw new Error(`unexpected URL ${url}`);
+  }) as typeof fetch;
+
+  try {
+    await deploy(
+      {
+        personaPath,
+        mode: 'dev',
+        noPrompt: true,
+        cloudUrl: 'https://cloud.example.test',
+        io
+      },
+      {
+        workspaceAuth: {
+          async resolveWorkspace() {
+            return { workspace: 'ws-test', token: 'relay_ws_workspace' };
+          }
+        },
+        bundle: successfulBundleStager(),
+        modes: {
+          dev: {
+            async launch(input) {
+              launchedEnv = input.env;
+              return {
+                id: 'dev-1',
+                async stop() {
+                  /* no-op */
+                },
+                done: Promise.resolve({ code: 0 })
+              };
+            }
+          }
+        }
+      }
+    );
+
+    assert.equal(launchedEnv?.RELAYFILE_URL, 'https://relayfile.test');
+    assert.equal(launchedEnv?.RELAYFILE_WORKSPACE_ID, 'ws-test');
+    assert.equal(launchedEnv?.RELAYFILE_TOKEN, '');
+    assert.equal(launchedEnv?.RELAYFILE_MOUNT_PATHS, '[]');
+  } finally {
+    globalThis.fetch = originalFetch;
+    await cleanup();
+  }
+});
+
+test('deploy dev mode preserves env-only provider token fallback without runtime credential masking', async () => {
+  const providerTokenSentinel = 'WORKFORCE_ENV_ONLY_PROVIDER_TOKEN';
+  const { personaPath, cleanup } = await withTempPersona(
+    basePersonaJson({
+      integrations: {
+        github: {}
+      }
+    })
+  );
+  const io = createBufferedIO();
+  const originalFetch = globalThis.fetch;
+  const originalProviderToken = process.env.WORKFORCE_INTEGRATION_GITHUB_TOKEN;
+  const urls: string[] = [];
+  let launched = false;
+  let launchedEnv: Record<string, string> | undefined;
+  let launchedProcessProviderToken: string | undefined;
+
+  process.env.WORKFORCE_INTEGRATION_GITHUB_TOKEN = providerTokenSentinel;
+  globalThis.fetch = (async (input) => {
+    const url = String(input);
+    urls.push(url);
+    if (url.includes('/api/v1/workspaces/ws-test/integrations/github/status')) {
+      return jsonResponse({ provider: 'github', status: 'pending' });
+    }
+    throw new Error(`unexpected URL ${url}`);
+  }) as typeof fetch;
+
+  try {
+    await deploy(
+      {
+        personaPath,
+        mode: 'dev',
+        noPrompt: true,
+        cloudUrl: 'https://cloud.example.test',
+        io
+      },
+      {
+        workspaceAuth: {
+          async resolveWorkspace() {
+            return { workspace: 'ws-test', token: 'relay_ws_workspace' };
+          }
+        },
+        bundle: successfulBundleStager(),
+        modes: {
+          dev: {
+            async launch(input) {
+              launched = true;
+              launchedEnv = input.env;
+              launchedProcessProviderToken = process.env.WORKFORCE_INTEGRATION_GITHUB_TOKEN;
+              return {
+                id: 'dev-1',
+                async stop() {
+                  /* no-op */
+                },
+                done: Promise.resolve({ code: 0 })
+              };
+            }
+          }
+        }
+      }
+    );
+
+    assert.equal(launched, true);
+    assert.equal(launchedEnv, undefined);
+    assert.equal(launchedProcessProviderToken, providerTokenSentinel);
+    assert.ok(!urls.find((url) => url.endsWith('/runtime-credentials')));
+  } finally {
+    if (originalProviderToken === undefined) {
+      delete process.env.WORKFORCE_INTEGRATION_GITHUB_TOKEN;
+    } else {
+      process.env.WORKFORCE_INTEGRATION_GITHUB_TOKEN = originalProviderToken;
+    }
+    globalThis.fetch = originalFetch;
+    await cleanup();
+  }
+});
+
+test('deploy dev mode runtime credential eligibility preserves legacy workspace fallback semantics', async () => {
+  const { personaPath, cleanup } = await withTempPersona(
+    basePersonaJson({
+      integrations: {
+        github: {}
+      }
+    })
+  );
+  const io = createBufferedIO();
+  const originalFetch = globalThis.fetch;
+  const urls: string[] = [];
+  let launchedEnv: Record<string, string> | undefined;
+
+  globalThis.fetch = (async (input, init) => {
+    const url = String(input);
+    urls.push(url);
+    if (url.includes('/api/v1/workspaces/ws-test/integrations/github/status')) {
+      const parsed = new URL(url);
+      return jsonResponse({
+        provider: 'github',
+        status: parsed.searchParams.get('scope') === 'workspace' ? 'ready' : 'pending'
+      });
+    }
+    if (url.includes('/api/v1/workspaces/ws-test/runtime-credentials')) {
+      return jsonResponse({
+        relayfileUrl: 'https://relayfile.test',
+        relayfileWorkspaceId: 'ws-test',
+        relayfileToken: 'relay_pa_workspace_fallback',
+        relayfileMountPaths: ['/github/repos/**/**/pulls/**']
+      });
+    }
+    throw new Error(`unexpected URL ${url}`);
+  }) as typeof fetch;
+
+  try {
+    await deploy(
+      {
+        personaPath,
+        mode: 'dev',
+        noPrompt: true,
+        cloudUrl: 'https://cloud.example.test',
+        io
+      },
+      {
+        workspaceAuth: {
+          async resolveWorkspace() {
+            return { workspace: 'ws-test', token: 'relay_ws_workspace' };
+          }
+        },
+        bundle: successfulBundleStager(),
+        modes: {
+          dev: {
+            async launch(input) {
+              launchedEnv = input.env;
+              return {
+                id: 'dev-1',
+                async stop() {
+                  /* no-op */
+                },
+                done: Promise.resolve({ code: 0 })
+              };
+            }
+          }
+        }
+      }
+    );
+
+    assert.equal(launchedEnv?.RELAYFILE_TOKEN, 'relay_pa_workspace_fallback');
+    assert.deepEqual(
+      urls.filter((url) => url.includes('/integrations/github/status')),
+      [
+        'https://cloud.example.test/api/v1/workspaces/ws-test/integrations/github/status?scope=deployer_user',
+        'https://cloud.example.test/api/v1/workspaces/ws-test/integrations/github/status?scope=workspace',
+        'https://cloud.example.test/api/v1/workspaces/ws-test/integrations/github/status?scope=deployer_user',
+        'https://cloud.example.test/api/v1/workspaces/ws-test/integrations/github/status?scope=workspace'
+      ]
+    );
+    assert.ok(urls.find((url) => url.endsWith('/runtime-credentials')));
+  } finally {
+    globalThis.fetch = originalFetch;
+    await cleanup();
+  }
+});
+
+test('deploy dev mode runtime credential eligibility preserves expected provider config key semantics', async () => {
+  const providerTokenSentinel = 'WORKFORCE_ENV_CONFIG_MISMATCH_TOKEN';
+  const { personaPath, cleanup } = await withTempPersona(
+    basePersonaJson({
+      integrations: {
+        github: {}
+      }
+    })
+  );
+  const io = createBufferedIO();
+  const originalFetch = globalThis.fetch;
+  const originalProviderToken = process.env.WORKFORCE_INTEGRATION_GITHUB_TOKEN;
+  const urls: string[] = [];
+  let launchedEnv: Record<string, string> | undefined;
+  let launchedProcessProviderToken: string | undefined;
+
+  process.env.WORKFORCE_INTEGRATION_GITHUB_TOKEN = providerTokenSentinel;
+  globalThis.fetch = (async (input) => {
+    const url = String(input);
+    urls.push(url);
+    if (url.includes('/api/v1/workspaces/ws-test/integrations/github/status')) {
+      return jsonResponse({
+        provider: 'github',
+        providerConfigKey: 'github-other',
+        status: 'ready'
+      });
+    }
+    throw new Error(`unexpected URL ${url}`);
+  }) as typeof fetch;
+
+  try {
+    await deploy(
+      {
+        personaPath,
+        mode: 'dev',
+        noPrompt: true,
+        cloudUrl: 'https://cloud.example.test',
+        io
+      },
+      {
+        workspaceAuth: {
+          async resolveWorkspace() {
+            return { workspace: 'ws-test', token: 'relay_ws_workspace' };
+          }
+        },
+        providerConfigKeys: {
+          async resolve(provider) {
+            assert.equal(provider, 'github');
+            return 'github-relay';
+          }
+        },
+        bundle: successfulBundleStager(),
+        modes: {
+          dev: {
+            async launch(input) {
+              launchedEnv = input.env;
+              launchedProcessProviderToken = process.env.WORKFORCE_INTEGRATION_GITHUB_TOKEN;
+              return {
+                id: 'dev-1',
+                async stop() {
+                  /* no-op */
+                },
+                done: Promise.resolve({ code: 0 })
+              };
+            }
+          }
+        }
+      }
+    );
+
+    assert.equal(launchedEnv, undefined);
+    assert.equal(launchedProcessProviderToken, providerTokenSentinel);
+    assert.ok(!urls.find((url) => url.endsWith('/runtime-credentials')));
+  } finally {
+    if (originalProviderToken === undefined) {
+      delete process.env.WORKFORCE_INTEGRATION_GITHUB_TOKEN;
+    } else {
+      process.env.WORKFORCE_INTEGRATION_GITHUB_TOKEN = originalProviderToken;
+    }
+    globalThis.fetch = originalFetch;
+    await cleanup();
+  }
+});
+
+test('deploy dev mode ignores catalog config keys for CLI-captured daytona runtime credentials', async () => {
+  const { personaPath, cleanup } = await withTempPersona(
+    basePersonaJson({
+      integrations: {
+        daytona: {}
+      }
+    })
+  );
+  const io = createBufferedIO();
+  const originalFetch = globalThis.fetch;
+  const originalProviderToken = process.env.WORKFORCE_INTEGRATION_DAYTONA_TOKEN;
+  const urls: string[] = [];
+  let catalogLookupCount = 0;
+  let launchedEnv: Record<string, string> | undefined;
+
+  process.env.WORKFORCE_INTEGRATION_DAYTONA_TOKEN = 'WORKFORCE_DAYTONA_CONNECT_SENTINEL';
+  globalThis.fetch = (async (input, init) => {
+    const url = String(input);
+    urls.push(url);
+    if (url.includes('/api/v1/workspaces/ws-test/integrations/daytona/status')) {
+      return jsonResponse({
+        provider: 'daytona',
+        configKey: 'daytona',
+        backend: 'provider-credential',
+        ready: true,
+        connectionMatched: true,
+        oauth: { connected: true }
+      });
+    }
+    if (url.includes('/api/v1/workspaces/ws-test/runtime-credentials')) {
+      const body = init?.body ? JSON.parse(String(init.body)) : undefined;
+      assert.deepEqual(body, {
+        personaId: 'demo',
+        agentId: 'demo',
+        integrations: {
+          daytona: { source: { kind: 'deployer_user' } }
+        },
+        ttlSeconds: 3600
+      });
+      return jsonResponse({
+        relayfileUrl: 'https://relayfile.test',
+        relayfileWorkspaceId: 'ws-test',
+        relayfileToken: 'relay_pa_daytona',
+        relayfileMountPaths: ['/daytona/sandboxes/**']
+      });
+    }
+    throw new Error(`unexpected URL ${url}`);
+  }) as typeof fetch;
+
+  try {
+    await deploy(
+      {
+        personaPath,
+        mode: 'dev',
+        noPrompt: true,
+        cloudUrl: 'https://cloud.example.test',
+        io
+      },
+      {
+        workspaceAuth: {
+          async resolveWorkspace() {
+            return { workspace: 'ws-test', token: 'relay_ws_workspace' };
+          }
+        },
+        providerConfigKeys: {
+          async resolve(provider) {
+            catalogLookupCount += 1;
+            assert.equal(provider, 'daytona');
+            return 'daytona-relay';
+          }
+        },
+        bundle: successfulBundleStager(),
+        modes: {
+          dev: {
+            async launch(input) {
+              launchedEnv = input.env;
+              return {
+                id: 'dev-1',
+                async stop() {
+                  /* no-op */
+                },
+                done: Promise.resolve({ code: 0 })
+              };
+            }
+          }
+        }
+      }
+    );
+
+    assert.equal(catalogLookupCount, 0);
+    assert.equal(launchedEnv?.RELAYFILE_TOKEN, 'relay_pa_daytona');
+    assert.equal(launchedEnv?.WORKFORCE_INTEGRATION_DAYTONA_TOKEN, '');
+    assert.ok(urls.find((url) => url.includes('/integrations/daytona/status')));
+    assert.ok(urls.find((url) => url.endsWith('/runtime-credentials')));
+  } finally {
+    if (originalProviderToken === undefined) {
+      delete process.env.WORKFORCE_INTEGRATION_DAYTONA_TOKEN;
+    } else {
+      process.env.WORKFORCE_INTEGRATION_DAYTONA_TOKEN = originalProviderToken;
+    }
+    globalThis.fetch = originalFetch;
+    await cleanup();
+  }
+});
+
+test('deploy dev mode rejects malformed runtime credential tokens before launch', async () => {
+  const { personaPath, cleanup } = await withTempPersona(
+    basePersonaJson({
+      integrations: {
+        github: {}
+      }
+    })
+  );
+  const io = createBufferedIO();
+  const originalFetch = globalThis.fetch;
+  let launched = false;
+
+  globalThis.fetch = (async (input) => {
+    const url = String(input);
+    if (url.includes('/api/v1/workspaces/ws-test/integrations/github/status')) {
+      return jsonResponse({ provider: 'github', status: 'ready' });
+    }
+    if (url.includes('/api/v1/workspaces/ws-test/runtime-credentials')) {
+      return jsonResponse({
+        relayfileUrl: 'https://relayfile.test',
+        relayfileWorkspaceId: 'ws-test',
+        relayfileToken: 'not_relay_pa',
+        relayfileMountPaths: ['/github/repos/**/**/pulls/**']
+      });
+    }
+    throw new Error(`unexpected URL ${url}`);
+  }) as typeof fetch;
+
+  try {
+    await assert.rejects(
+      deploy(
+        {
+          personaPath,
+          mode: 'dev',
+          noPrompt: true,
+          cloudUrl: 'https://cloud.example.test',
+          io
+        },
+        {
+          workspaceAuth: {
+            async resolveWorkspace() {
+              return { workspace: 'ws-test', token: 'relay_ws_workspace' };
+            }
+          },
+          bundle: successfulBundleStager(),
+          modes: { dev: successfulDevLauncher(() => { launched = true; }) }
+        }
+      ),
+      /runtime-credentials returned a token without expected relay_pa_ prefix/
+    );
+    assert.equal(launched, false);
+  } finally {
+    globalThis.fetch = originalFetch;
+    await cleanup();
+  }
+});
+
+test('deploy dev mode rejects mismatched relayfile workspace ids before launch', async () => {
+  const { personaPath, cleanup } = await withTempPersona(
+    basePersonaJson({
+      integrations: {
+        github: {}
+      }
+    })
+  );
+  const io = createBufferedIO();
+  const originalFetch = globalThis.fetch;
+  let launched = false;
+
+  globalThis.fetch = (async (input) => {
+    const url = String(input);
+    if (url.includes('/api/v1/workspaces/rw-test/integrations/github/status')) {
+      return jsonResponse({ provider: 'github', status: 'ready' });
+    }
+    if (url.includes('/api/v1/workspaces/rw-test/runtime-credentials')) {
+      return jsonResponse({
+        relayfileUrl: 'https://relayfile.test',
+        relayfileWorkspaceId: 'rf-stale',
+        relayfileToken: 'relay_pa_scoped',
+        relayfileMountPaths: ['/github/repos/**/**/pulls/**']
+      });
+    }
+    throw new Error(`unexpected URL ${url}`);
+  }) as typeof fetch;
+
+  try {
+    await assert.rejects(
+      deploy(
+        {
+          personaPath,
+          mode: 'dev',
+          noPrompt: true,
+          cloudUrl: 'https://cloud.example.test',
+          io
+        },
+        {
+          workspaceAuth: {
+            async resolveWorkspace() {
+              return {
+                workspace: 'rw-test',
+                relayfileWorkspaceId: 'rf-canonical',
+                token: 'relay_ws_workspace'
+              };
+            }
+          },
+          bundle: successfulBundleStager(),
+          modes: { dev: successfulDevLauncher(() => { launched = true; }) }
+        }
+      ),
+      /runtime-credentials returned relayfile workspace rf-stale, expected rf-canonical/
+    );
+    assert.equal(launched, false);
+  } finally {
+    globalThis.fetch = originalFetch;
+    await cleanup();
+  }
+});
+
+test('deploy dev mode rejects runtime credential tokens without mount paths before launch', async () => {
+  const { personaPath, cleanup } = await withTempPersona(
+    basePersonaJson({
+      integrations: {
+        github: {}
+      }
+    })
+  );
+  const io = createBufferedIO();
+  const originalFetch = globalThis.fetch;
+  let launched = false;
+
+  globalThis.fetch = (async (input) => {
+    const url = String(input);
+    if (url.includes('/api/v1/workspaces/ws-test/integrations/github/status')) {
+      return jsonResponse({ provider: 'github', status: 'ready' });
+    }
+    if (url.includes('/api/v1/workspaces/ws-test/runtime-credentials')) {
+      return jsonResponse({
+        relayfileUrl: 'https://relayfile.test',
+        relayfileWorkspaceId: 'ws-test',
+        relayfileToken: 'relay_pa_missing_scope',
+        relayfileMountPaths: []
+      });
+    }
+    throw new Error(`unexpected URL ${url}`);
+  }) as typeof fetch;
+
+  try {
+    await assert.rejects(
+      deploy(
+        {
+          personaPath,
+          mode: 'dev',
+          noPrompt: true,
+          cloudUrl: 'https://cloud.example.test',
+          io
+        },
+        {
+          workspaceAuth: {
+            async resolveWorkspace() {
+              return { workspace: 'ws-test', token: 'relay_ws_workspace' };
+            }
+          },
+          bundle: successfulBundleStager(),
+          modes: { dev: successfulDevLauncher(() => { launched = true; }) }
+        }
+      ),
+      /runtime-credentials returned a token without relayfile mount paths/
+    );
+    assert.equal(launched, false);
+  } finally {
+    globalThis.fetch = originalFetch;
+    await cleanup();
+  }
+});
+
+test('deploy dev mode fails closed before runtime credentials when workspace token is missing', async () => {
+  const { personaPath, cleanup } = await withTempPersona(
+    basePersonaJson({
+      integrations: {
+        github: {}
+      }
+    })
+  );
+  const originalFetch = globalThis.fetch;
+  let fetchCalled = false;
+  globalThis.fetch = (async () => {
+    fetchCalled = true;
+    throw new Error('runtime credentials should not be requested without a workspace token');
+  }) as typeof fetch;
+
+  try {
+    await assert.rejects(
+      deploy(
+        {
+          personaPath,
+          mode: 'dev',
+          noPrompt: true,
+          cloudUrl: 'https://cloud.example.test',
+          io: createBufferedIO()
+        },
+        {
+          workspaceAuth: {
+            async resolveWorkspace() {
+              return { workspace: 'ws-test', token: undefined } as unknown as {
+                workspace: string;
+                token: string;
+              };
+            }
+          },
+          bundle: successfulBundleStager(),
+          modes: { dev: successfulDevLauncher() }
+        }
+      ),
+      /workspace token is required for deploy/
+    );
+    assert.equal(fetchCalled, false);
+  } finally {
+    globalThis.fetch = originalFetch;
+    await cleanup();
+  }
+});
+
+test('deploy dev mode still fails fast for genuinely unconnected workspace integrations with --no-prompt', async () => {
+  const { personaPath, cleanup } = await withTempPersona(
+    basePersonaJson({
+      integrations: {
+        github: {}
+      }
+    })
+  );
+  const io = createBufferedIO();
+  const originalFetch = globalThis.fetch;
+  const urls: string[] = [];
+
+  globalThis.fetch = (async (input) => {
+    const url = String(input);
+    urls.push(url);
+    if (url.includes('/api/v1/workspaces/ws-test/integrations/github/status')) {
+      return jsonResponse({ provider: 'github', status: 'pending' });
+    }
+    throw new Error(`unexpected URL ${url}`);
+  }) as typeof fetch;
+
+  try {
+    await assert.rejects(
+      deploy(
+        {
+          personaPath,
+          mode: 'dev',
+          noPrompt: true,
+          cloudUrl: 'https://cloud.example.test',
+          io
+        },
+        {
+          workspaceAuth: {
+            async resolveWorkspace() {
+              return { workspace: 'ws-test', token: 'relay_ws_workspace' };
+            }
+          },
+          bundle: successfulBundleStager(),
+          modes: { dev: successfulDevLauncher() }
+        }
+      ),
+      /deploy aborted: 1 integration\(s\) failed to connect: github/
+    );
+    assert.ok(!urls.find((url) => url.endsWith('/runtime-credentials')));
+  } finally {
+    globalThis.fetch = originalFetch;
     await cleanup();
   }
 });
@@ -398,14 +2079,19 @@ test('deploy can recover cloud integration auth by logging in and retrying with 
       return { token: 'fresh-token' };
     }
   };
-  globalThis.fetch = (async (_input, init) => {
-    authHeaders.push(String(new Headers(init?.headers).get('authorization')));
-    if (authHeaders.length === 1) {
+  globalThis.fetch = (async (input, init) => {
+    const url = String(input);
+    const auth = String(new Headers(init?.headers).get('authorization'));
+    // Catalog fetch is best-effort: don't drive auth recovery from it.
+    // Return an empty providers list so the resolver caches that and moves on.
+    if (url.includes('/api/v1/integrations/catalog')) {
+      return jsonResponse({ providers: [] });
+    }
+    authHeaders.push(auth);
+    if (auth === 'Bearer stale-token') {
       return jsonResponse({ error: 'Unauthorized' }, 401);
     }
-    return jsonResponse([
-      { provider: 'notion', status: 'ready', connectionId: 'conn-notion' }
-    ]);
+    return jsonResponse({ provider: 'notion', configKey: 'notion-relay', status: 'ready' });
   }) as typeof fetch;
 
   try {
@@ -714,8 +2400,8 @@ test('deploy: default auth resolver honors env credentials without a workspaceAu
   // previous default (`envWorkspaceAuth()`) only consulted env vars and a
   // long-dead keychain; the new default delegates to `resolveWorkspaceToken`,
   // which still honors WORKFORCE_WORKSPACE_TOKEN + WORKFORCE_WORKSPACE_ID
-  // as Tier 1 but additionally falls through to the shared cloud-auth +
-  // active.json pointer. This test exercises the Tier 1 path end-to-end
+  // as Tier 1 but additionally falls through to the shared cloud session and
+  // canonical Agent Relay workspace store. This test exercises the Tier 1 path end-to-end
   // through `deploy()` with no resolver injection — proving the wiring is
   // intact for CI users while the filesystem-fallback paths stay covered
   // by `login.test.ts`.
@@ -741,48 +2427,181 @@ test('deploy: default auth resolver honors env credentials without a workspaceAu
 
 test('deploy: clear error when nothing resolves and noPrompt is set', async () => {
   // Without env or an explicit resolver, the orchestrator must surface
-  // an actionable error rather than wedging in a prompt loop. Setting
-  // `noPrompt` forces `resolveWorkspaceToken` to throw at Tier 3 instead
-  // of opening a browser, so we get a deterministic error path to assert.
+  // an actionable error rather than wedging in a prompt loop. The temp
+  // AGENT_RELAY_HOME gives the SDK an empty canonical workspace store.
   const { personaPath, cleanup } = await withTempPersona(
     basePersonaJson({ integrations: {} })
   );
 
   await withWorkspaceEnv({ workspace: undefined, token: undefined }, async () => {
-    // Point filesystem-backed auth at definitely-missing/disabled paths so the
-    // test doesn't accidentally pick up host credentials.
-    const previousActiveFile = process.env.WORKFORCE_ACTIVE_WORKSPACE_FILE;
-    const previousLoginFile = process.env.WORKFORCE_LOGIN_FILE;
-    const previousDisableShared = process.env.WORKFORCE_DISABLE_SHARED_AUTH;
-    process.env.WORKFORCE_ACTIVE_WORKSPACE_FILE = path.join(os.tmpdir(), 'wf-deploy-test-missing-active.json');
-    process.env.WORKFORCE_LOGIN_FILE = path.join(os.tmpdir(), 'wf-deploy-test-missing-login.json');
-    process.env.WORKFORCE_DISABLE_SHARED_AUTH = '1';
-    try {
+    await withCloudSessionEnv(async () => {
+      await withAgentRelayHome(async () => {
       await assert.rejects(
         deploy(
           { personaPath, mode: 'dev', noConnect: true, noPrompt: true, io: createBufferedIO() },
           { bundle: successfulBundleStager(), modes: { dev: successfulDevLauncher() } }
         ),
-        /no workspace credentials resolved|workspace is required for deploy/
+        /No active Agent Relay workspace found/
       );
-    } finally {
-      if (previousActiveFile === undefined) {
-        delete process.env.WORKFORCE_ACTIVE_WORKSPACE_FILE;
-      } else {
-        process.env.WORKFORCE_ACTIVE_WORKSPACE_FILE = previousActiveFile;
-      }
-      if (previousLoginFile === undefined) {
-        delete process.env.WORKFORCE_LOGIN_FILE;
-      } else {
-        process.env.WORKFORCE_LOGIN_FILE = previousLoginFile;
-      }
-      if (previousDisableShared === undefined) {
-        delete process.env.WORKFORCE_DISABLE_SHARED_AUTH;
-      } else {
-        process.env.WORKFORCE_DISABLE_SHARED_AUTH = previousDisableShared;
-      }
-    }
+      });
+    });
   });
 
   await cleanup();
+});
+
+test('deploy merges explicit --input with picker-collected values for the launcher', async () => {
+  // Regression: when the operator passes any --input, the public deploy()
+  // wrapper used to overwrite the launcher inputs with the CLI set only,
+  // dropping picker-collected picks. Assert both reach the launcher.
+  const { personaPath, cleanup } = await withTempPersona(
+    basePersonaJson({
+      integrations: { slack: {} },
+      inputs: {
+        EXPLICIT: { description: 'set via --input', optional: true },
+        BENJAMIN: {
+          description: 'picked from slack users',
+          optional: true,
+          picker: { provider: 'slack', resource: 'users' }
+        }
+      }
+    })
+  );
+  const io = createBufferedIO();
+  io.scriptAnswers(['1']); // numbered-prompt fallback: pick the first user
+
+  const workspaceAuth: WorkspaceAuth = {
+    async resolveWorkspace() {
+      return { workspace: 'ws-test', token: 'tok' };
+    }
+  };
+  const integrations: IntegrationConnectResolver = {
+    async isConnected() {
+      return true; // slack already connected → picker fires
+    },
+    async connect() {
+      return { connectionId: 'conn-slack' };
+    }
+  };
+  // Stub so cloud mode doesn't reach for the live catalog endpoint.
+  const providerConfigKeys: ProviderConfigKeyResolver = {
+    async resolve() {
+      return undefined;
+    }
+  };
+  const integrationOptions: IntegrationOptionsResolver = {
+    async list({ provider, resource }) {
+      assert.equal(provider, 'slack');
+      assert.equal(resource, 'users');
+      return [
+        { value: 'U1', label: 'Benjamin', hint: 'ben@watchdog.no' },
+        { value: 'U2', label: 'Amy' }
+      ];
+    }
+  };
+
+  let launchedInputs: Record<string, string> | undefined;
+  try {
+    await deploy(
+      { personaPath, mode: 'cloud', io, inputs: { EXPLICIT: 'explicit-val' } },
+      {
+        workspaceAuth,
+        integrations,
+        providerConfigKeys,
+        integrationOptions,
+        bundle: successfulBundleStager(),
+        modes: {
+          cloud: {
+            async launch(input: ModeLaunchInput) {
+              launchedInputs = input.inputs;
+              return {
+                id: 'cloud-1',
+                async stop() {
+                  /* no-op */
+                },
+                done: Promise.resolve({ code: 0 })
+              };
+            }
+          }
+        }
+      }
+    );
+
+    assert.deepEqual(launchedInputs, { EXPLICIT: 'explicit-val', BENJAMIN: 'U1' });
+  } finally {
+    await cleanup();
+  }
+});
+
+test('cloud deploy advertises the trigger URL in both addressing forms', async () => {
+  // The whole point of printing this is that a user hand-copies it into their
+  // app, so the exact path is load-bearing: a future change to the route shape
+  // must not silently mis-advertise it.
+  const { personaPath, cleanup } = await withTempPersona(basePersonaJson());
+  const io = createBufferedIO();
+  try {
+    await deploy(
+      {
+        personaPath,
+        mode: 'cloud',
+        cloudUrl: 'https://cloud.example.test/',
+        io
+      },
+      {
+        workspaceAuth: {
+          async resolveWorkspace() {
+            return { workspace: 'ws-test', token: 'tok' };
+          }
+        },
+        providerConfigKeys: { async resolve() { return undefined; } },
+        integrations: {
+          async isConnected() { return true; },
+          async connect() { return { connectionId: 'conn-github' }; }
+        },
+        bundle: successfulBundleStager(),
+        modes: {
+          cloud: {
+            async launch() {
+              return {
+                id: 'agent-uuid-1',
+                async stop() { /* no-op */ },
+                done: Promise.resolve({ code: 0 })
+              };
+            }
+          }
+        }
+      }
+    );
+
+    const base = 'https://cloud.example.test/api/v1/workspaces/ws-test/deployments';
+    const lines = io.messages.map((m) => m.message);
+
+    // Name form leads: unique per workspace and stable across a redeploy.
+    assert.ok(
+      lines.includes(`trigger from your app: POST ${base}/demo/trigger`),
+      `missing name-form trigger URL in:\n${lines.join('\n')}`
+    );
+    // Id form is the portable fallback for a compatible backend that only
+    // implements the original uuid-keyed route.
+    assert.ok(
+      lines.includes(`  by id (portable): POST ${base}/agent-uuid-1/trigger`),
+      `missing id-form trigger URL in:\n${lines.join('\n')}`
+    );
+    // The auth and body lines are part of the same copied instructions: a URL
+    // without them is not actually usable, so regressions there matter too.
+    assert.ok(
+      lines.includes(
+        '  auth: Bearer <deployment API token>  (dashboard \u2192 Workspace \u2192 Deployment API tokens)'
+      ),
+      `missing auth guidance in:\n${lines.join('\n')}`
+    );
+    assert.ok(
+      lines.includes('  body: any JSON object; it reaches the handler as the event payload'),
+      `missing body guidance in:\n${lines.join('\n')}`
+    );
+    // The trailing slash on cloudUrl must not produce a double slash.
+    assert.ok(!lines.some((line) => line.includes('test//api')));
+  } finally {
+    await cleanup();
+  }
 });

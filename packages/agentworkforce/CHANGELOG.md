@@ -7,6 +7,56 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [4.1.54] - 2026-09-03
+
+### Added
+
+- Expose the CLI's workspace-scoped `env set`, `env list`, and `env unset`
+  commands through the top-level `agentworkforce` binary.
+
+## [4.1.51] - 2026-08-31
+
+### Added
+
+- `agentworkforce --version` surfaces the update notice from the
+  `@agentworkforce/cli` build it validated, and suggests `npm install
+  agentworkforce@latest` without `-g` when a project-local install is what ran —
+  including when the project's own launcher is the one invoked, via `npx`,
+  `node_modules/.bin`, or an npm script.
+
+## [4.1.50] - 2026-08-24
+
+### Released
+
+- v4.1.50
+
+## [4.1.41] - 2026-08-14
+
+### Released
+
+- v4.1.41
+
+## [4.1.29] - 2026-07-17
+
+### Fixed
+
+- Select a newer coherent project-local `agentworkforce` installation ahead of
+  an older global one, while refusing partial or version-skewed wrapper/CLI
+  pairs. Version output now validates the exact implementation it represents
+  (#163).
+
+## [4.1.18] - 2026-07-15
+
+### Added
+
+- **Add reusable cron and Slack delivery helpers** (#261)
+
+## [3.0.31] - 2026-05-28
+
+### Released
+
+- v3.0.31
+
 ## [0.15.1] - 2026-05-08
 
 ### Added

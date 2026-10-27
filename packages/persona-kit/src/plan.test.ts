@@ -1,6 +1,8 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { homedir } from 'node:os';
+import { mkdtempSync, mkdirSync, rmSync } from 'node:fs';
+import { tmpdir, homedir } from 'node:os';
+import { join } from 'node:path';
 
 import {
   buildPersonaSpawnPlan,
@@ -24,6 +26,15 @@ function persona(over: Partial<ResolvedPersona> = {}): ResolvedPersona {
 
 const cleanEnv: NodeJS.ProcessEnv = Object.freeze({}) as NodeJS.ProcessEnv;
 
+function assertAiHistServer(server: unknown, env: Record<string, string>): void {
+  assert.deepEqual(server, {
+    type: 'stdio',
+    command: 'npx',
+    args: ['-y', 'ai-hist-mcp'],
+    env
+  });
+}
+
 test('buildPersonaSpawnPlan returns the persona, cli, and args for claude', () => {
   const plan = buildPersonaSpawnPlan(persona(), { processEnv: cleanEnv });
   assert.equal(plan.cli, 'claude');
@@ -34,6 +45,59 @@ test('buildPersonaSpawnPlan returns the persona, cli, and args for claude', () =
   assert.equal(plan.mount, undefined);
   assert.deepEqual(plan.inputs, []);
   assert.equal(plan.initialPrompt, undefined);
+});
+
+test('buildPersonaSpawnPlan injects ai-hist when memory.aiMemory is opted in', () => {
+  const plan = buildPersonaSpawnPlan(persona({ memory: { aiMemory: true } }), {
+    processEnv: cleanEnv
+  });
+  const mcpIdx = plan.args.indexOf('--mcp-config');
+  assert.ok(mcpIdx >= 0, 'expected --mcp-config');
+  const payload = JSON.parse(plan.args[mcpIdx + 1]);
+  assertAiHistServer(payload.mcpServers['ai-hist'], {});
+});
+
+test('buildPersonaSpawnPlan threads ai-hist env overrides when aiMemory is on', () => {
+  const plan = buildPersonaSpawnPlan(persona({ memory: { aiMemory: true } }), {
+    processEnv: {
+      TRAJECTORY_ROOT: '/repo/.trajectories',
+      AI_HIST_DB: '/tmp/ai-history.db'
+    } as NodeJS.ProcessEnv
+  });
+  const mcpIdx = plan.args.indexOf('--mcp-config');
+  const payload = JSON.parse(plan.args[mcpIdx + 1]);
+  assert.deepEqual(payload.mcpServers['ai-hist'].env, {
+    TRAJECTORY_ROOT: '/repo/.trajectories',
+    AI_HIST_DB: '/tmp/ai-history.db'
+  });
+});
+
+test('buildPersonaSpawnPlan: memory.aiMemory.dbPath overrides the history DB', () => {
+  const plan = buildPersonaSpawnPlan(persona({ memory: { aiMemory: { dbPath: '/custom/hist.db' } } }), {
+    processEnv: cleanEnv
+  });
+  const mcpIdx = plan.args.indexOf('--mcp-config');
+  const payload = JSON.parse(plan.args[mcpIdx + 1]);
+  assert.deepEqual(payload.mcpServers['ai-hist'].env, { AI_HIST_DB: '/custom/hist.db' });
+});
+
+test('buildPersonaSpawnPlan omits ai-hist when memory.aiMemory is not opted in', () => {
+  // Default (no memory) — off.
+  const off = buildPersonaSpawnPlan(persona(), { processEnv: cleanEnv });
+  const offIdx = off.args.indexOf('--mcp-config');
+  assert.equal(JSON.parse(off.args[offIdx + 1]).mcpServers['ai-hist'], undefined);
+
+  // `memory: true` enables long-form memory only, NOT the aiMemory facet.
+  const longFormOnly = buildPersonaSpawnPlan(persona({ memory: true }), { processEnv: cleanEnv });
+  const lfIdx = longFormOnly.args.indexOf('--mcp-config');
+  assert.equal(JSON.parse(longFormOnly.args[lfIdx + 1]).mcpServers['ai-hist'], undefined);
+
+  // Explicit opt-out.
+  const explicitOff = buildPersonaSpawnPlan(persona({ memory: { aiMemory: false } }), {
+    processEnv: cleanEnv
+  });
+  const eoIdx = explicitOff.args.indexOf('--mcp-config');
+  assert.equal(JSON.parse(explicitOff.args[eoIdx + 1]).mcpServers['ai-hist'], undefined);
 });
 
 test('buildPersonaSpawnPlan emits initialPrompt for codex', () => {
@@ -65,6 +129,22 @@ test('buildPersonaSpawnPlan emits configFiles for opencode', () => {
   );
 });
 
+test('buildPersonaSpawnPlan emits AGENTS.md configFile for grok systemPrompt', () => {
+  const plan = buildPersonaSpawnPlan(
+    persona({
+      personaId: 'sample',
+      harness: 'grok',
+      model: 'grok-build-0.1',
+      systemPrompt: 'grok prompt'
+    }),
+    { processEnv: cleanEnv }
+  );
+  assert.equal(plan.cli, 'grok');
+  assert.deepEqual(plan.configFiles, [
+    { path: 'AGENTS.md', contents: 'grok prompt\n' }
+  ]);
+});
+
 test('buildPersonaSpawnPlan resolves sidecars from claudeMdContent / agentsMdContent', () => {
   const claudePlan = buildPersonaSpawnPlan(
     persona({
@@ -88,6 +168,18 @@ test('buildPersonaSpawnPlan resolves sidecars from claudeMdContent / agentsMdCon
   assert.equal(opencodePlan.sidecars.length, 1);
   assert.equal(opencodePlan.sidecars[0].filename, 'AGENTS.md');
   assert.equal(opencodePlan.sidecars[0].mode, 'extend');
+
+  const grokPlan = buildPersonaSpawnPlan(
+    persona({
+      agentsMdContent: '# grok agents sidecar',
+      harness: 'grok',
+      model: 'grok-build-0.1'
+    }),
+    { processEnv: cleanEnv }
+  );
+  assert.equal(grokPlan.sidecars.length, 1);
+  assert.equal(grokPlan.sidecars[0].filename, 'AGENTS.md');
+  assert.equal(grokPlan.sidecars[0].contents, '# grok agents sidecar');
 });
 
 test('buildPersonaSpawnPlan threads mount policy through when patterns present', () => {
@@ -101,57 +193,101 @@ test('buildPersonaSpawnPlan threads mount policy through when patterns present',
   assert.deepEqual(plan.mount?.readonlyPatterns, ['vendor/**']);
 });
 
+test('buildPersonaSpawnPlan suppresses mount policy when explicitly disabled', () => {
+  const plan = buildPersonaSpawnPlan(
+    persona({
+      mount: { enabled: false, ignoredPatterns: ['secrets/**'] }
+    }),
+    { processEnv: cleanEnv }
+  );
+  assert.equal(plan.mount, undefined);
+});
+
 test('buildPersonaSpawnPlan drops empty mount policy', () => {
   const plan = buildPersonaSpawnPlan(persona({ mount: {} }), { processEnv: cleanEnv });
   assert.equal(plan.mount, undefined);
 });
 
 test('buildPersonaSpawnPlan resolves mount.roots via inputs + processEnv', () => {
-  const plan = buildPersonaSpawnPlan(
-    persona({
-      inputs: { ACME_API_DIR: { env: 'ACME_API_DIR' } },
-      mount: {
-        roots: [
-          { alias: 'api', path: '$ACME_API_DIR', readonly: true },
-          { alias: 'web', path: '/tmp/web' }
-        ]
+  const root = mkdtempSync(join(tmpdir(), 'aw-plan-roots-'));
+  const apiDir = join(root, 'api');
+  const webDir = join(root, 'web');
+  mkdirSync(apiDir);
+  mkdirSync(webDir);
+  try {
+    const plan = buildPersonaSpawnPlan(
+      persona({
+        inputs: { ACME_API_DIR: { env: 'ACME_API_DIR' } },
+        mount: {
+          roots: [
+            { alias: 'api', path: '$ACME_API_DIR', readonly: true },
+            { alias: 'web', path: webDir }
+          ]
+        }
+      }),
+      {
+        processEnv: { ACME_API_DIR: apiDir } as NodeJS.ProcessEnv,
+        includeProcessEnv: false
       }
-    }),
-    {
-      processEnv: { ACME_API_DIR: '/tmp/api' } as NodeJS.ProcessEnv,
-      includeProcessEnv: false
-    }
-  );
-  assert.deepEqual(plan.mount?.roots, [
-    {
-      alias: 'api',
-      path: '/tmp/api',
-      readonly: true,
-      ignoredPatterns: [],
-      readonlyPatterns: ['**']
-    },
-    {
-      alias: 'web',
-      path: '/tmp/web',
-      readonly: false,
-      ignoredPatterns: [],
-      readonlyPatterns: []
-    }
-  ]);
+    );
+    assert.deepEqual(plan.mount?.roots, [
+      {
+        alias: 'api',
+        path: apiDir,
+        readonly: true,
+        ignoredPatterns: [],
+        readonlyPatterns: ['**']
+      },
+      {
+        alias: 'web',
+        path: webDir,
+        readonly: false,
+        ignoredPatterns: [],
+        readonlyPatterns: []
+      }
+    ]);
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test('buildPersonaSpawnPlan resolves mount.roots from persona env', () => {
+  const root = mkdtempSync(join(tmpdir(), 'aw-plan-env-root-'));
+  try {
+    const plan = buildPersonaSpawnPlan(
+      persona({
+        env: { WORKTREE: root },
+        mount: { roots: [{ alias: 'repo', path: '$WORKTREE' }] }
+      }),
+      { processEnv: cleanEnv }
+    );
+    assert.equal(plan.mount?.roots?.[0]?.path, root);
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
 });
 
 test('resolveMountRoots expands ~ and $VAR in root paths', () => {
-  const mount: PersonaMount = {
-    roots: [
-      { alias: 'home', path: '~/work' },
-      { alias: 'absolute', path: '${REPO_PATH}' }
-    ]
-  };
-  const roots = resolveMountRoots(mount, { REPO_PATH: '/tmp/repo' } as NodeJS.ProcessEnv);
-  assert.equal(roots?.length, 2);
-  assert.equal(roots?.[0].alias, 'home');
-  assert.ok(roots?.[0].path.startsWith(homedir()), 'home root expands ~');
-  assert.equal(roots?.[1].path, '/tmp/repo');
+  const repo = mkdtempSync(join(tmpdir(), 'aw-plan-repo-'));
+  const homeLeaf = `.aw-mount-roots-${process.pid}-${Date.now().toString(36)}`;
+  const homeDir = join(homedir(), homeLeaf);
+  mkdirSync(homeDir);
+  try {
+    const mount: PersonaMount = {
+      roots: [
+        { alias: 'home', path: `~/${homeLeaf}` },
+        { alias: 'absolute', path: '${REPO_PATH}' }
+      ]
+    };
+    const roots = resolveMountRoots(mount, { REPO_PATH: repo } as NodeJS.ProcessEnv);
+    assert.equal(roots?.length, 2);
+    assert.equal(roots?.[0].alias, 'home');
+    assert.equal(roots?.[0].path, homeDir);
+    assert.equal(roots?.[1].path, repo);
+  } finally {
+    rmSync(homeDir, { recursive: true, force: true });
+    rmSync(repo, { recursive: true, force: true });
+  }
 });
 
 test('resolveMountRoots throws on non-optional missing env ref', () => {
@@ -165,15 +301,58 @@ test('resolveMountRoots throws on non-optional missing env ref', () => {
 });
 
 test('resolveMountRoots drops optional roots whose env ref is missing', () => {
+  const present = mkdtempSync(join(tmpdir(), 'aw-plan-present-'));
+  try {
+    const mount: PersonaMount = {
+      roots: [
+        { alias: 'web', path: present },
+        { alias: 'api', path: '$MISSING_VAR', optional: true }
+      ]
+    };
+    const roots = resolveMountRoots(mount, {} as NodeJS.ProcessEnv);
+    assert.equal(roots?.length, 1);
+    assert.equal(roots?.[0].alias, 'web');
+  } finally {
+    rmSync(present, { recursive: true, force: true });
+  }
+});
+
+test('resolveMountRoots drops optional roots whose absolute path does not exist', () => {
+  const present = mkdtempSync(join(tmpdir(), 'aw-plan-present-abs-'));
+  try {
+    const mount: PersonaMount = {
+      roots: [
+        { alias: 'web', path: present },
+        { alias: 'api', path: '/nonexistent/whatever', optional: true }
+      ]
+    };
+    const roots = resolveMountRoots(mount, {} as NodeJS.ProcessEnv);
+    assert.equal(roots?.length, 1);
+    assert.equal(roots?.[0].alias, 'web');
+    assert.equal(roots?.[0].path, present);
+  } finally {
+    rmSync(present, { recursive: true, force: true });
+  }
+});
+
+test('resolveMountRoots returns undefined when every optional absolute path is missing', () => {
   const mount: PersonaMount = {
     roots: [
-      { alias: 'web', path: '/tmp/present' },
-      { alias: 'api', path: '$MISSING_VAR', optional: true }
+      { alias: 'a', path: '/nonexistent/a', optional: true },
+      { alias: 'b', path: '/nonexistent/b', optional: true }
     ]
   };
-  const roots = resolveMountRoots(mount, {} as NodeJS.ProcessEnv);
-  assert.equal(roots?.length, 1);
-  assert.equal(roots?.[0].alias, 'web');
+  assert.equal(resolveMountRoots(mount, {} as NodeJS.ProcessEnv), undefined);
+});
+
+test('resolveMountRoots throws when a non-optional absolute path is missing', () => {
+  const mount: PersonaMount = {
+    roots: [{ alias: 'api', path: '/nonexistent/api-root' }]
+  };
+  assert.throws(
+    () => resolveMountRoots(mount, {} as NodeJS.ProcessEnv),
+    /does not exist on disk/
+  );
 });
 
 test('resolveMountRoots returns undefined when every optional root is missing', () => {
@@ -188,16 +367,21 @@ test('resolveMountRoots returns undefined when every optional root is missing', 
 });
 
 test('resolveMountRoots rejects two roots that resolve to the same absolute path', () => {
-  const mount: PersonaMount = {
-    roots: [
-      { alias: 'a', path: '/tmp/repo' },
-      { alias: 'b', path: '/tmp/repo' }
-    ]
-  };
-  assert.throws(
-    () => resolveMountRoots(mount, {} as NodeJS.ProcessEnv),
-    /already used by another root/
-  );
+  const repo = mkdtempSync(join(tmpdir(), 'aw-plan-dup-'));
+  try {
+    const mount: PersonaMount = {
+      roots: [
+        { alias: 'a', path: repo },
+        { alias: 'b', path: repo }
+      ]
+    };
+    assert.throws(
+      () => resolveMountRoots(mount, {} as NodeJS.ProcessEnv),
+      /already used by another root/
+    );
+  } finally {
+    rmSync(repo, { recursive: true, force: true });
+  }
 });
 
 test('resolveMountRoots rejects relative paths after expansion', () => {
@@ -301,7 +485,7 @@ test('buildPersonaSpawnPlan emits sourcePath when only claudeMd path is set', ()
   assert.equal(plan.sidecars[0].mode, 'extend');
 });
 
-test('buildPersonaSpawnPlan emits sourcePath for opencode/codex agentsMd path', () => {
+test('buildPersonaSpawnPlan emits sourcePath for AGENTS.md harness agentsMd path', () => {
   const plan = buildPersonaSpawnPlan(
     persona({
       harness: 'opencode',
@@ -313,6 +497,18 @@ test('buildPersonaSpawnPlan emits sourcePath for opencode/codex agentsMd path', 
   );
   assert.equal(plan.sidecars.length, 1);
   assert.equal(plan.sidecars[0].sourcePath, '/abs/path/to/AGENTS.md');
+
+  const grokPlan = buildPersonaSpawnPlan(
+    persona({
+      harness: 'grok',
+      model: 'grok-build-0.1',
+      systemPrompt: 's',
+      agentsMd: '/abs/path/to/AGENTS.md'
+    }),
+    { processEnv: cleanEnv }
+  );
+  assert.equal(grokPlan.sidecars.length, 1);
+  assert.equal(grokPlan.sidecars[0].sourcePath, '/abs/path/to/AGENTS.md');
 });
 
 test('buildPersonaSpawnPlan does not capture ambient env by default', () => {
@@ -333,7 +529,7 @@ test('buildPersonaSpawnPlan opt-in includeProcessEnv captures process.env', () =
 });
 
 test('buildPersonaSpawnPlan empty-skills case keeps installs empty', () => {
-  for (const harness of ['claude', 'codex', 'opencode'] as Harness[]) {
+  for (const harness of ['claude', 'codex', 'opencode', 'grok'] as Harness[]) {
     const plan = buildPersonaSpawnPlan(
       persona({
         harness,

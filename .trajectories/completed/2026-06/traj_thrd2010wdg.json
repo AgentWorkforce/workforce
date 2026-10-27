@@ -1,0 +1,38 @@
+{
+  "id": "traj_thrd2010wdg",
+  "version": 1,
+  "task": { "title": "Diagnose Slack threads read-down wedge (bare-vs-suffixed fs/events)" },
+  "status": "completed",
+  "startedAt": "2026-06-08T13:05:00.000Z",
+  "completedAt": "2026-06-08T13:40:00.000Z",
+  "agents": [ { "name": "default", "role": "lead", "joinedAt": "2026-06-08T13:05:00.000Z" } ],
+  "chapters": [ {
+    "id": "chap_thrd2010wdg",
+    "title": "Work",
+    "agentName": "default",
+    "startedAt": "2026-06-08T13:05:00.000Z",
+    "endedAt": "2026-06-08T13:40:00.000Z",
+    "events": [ {
+      "ts": 1780925400000,
+      "type": "decision",
+      "content": "Root cause of threads not reading down: daemon literal-prefix isUnderRemoteRoot dropped bare-channel reply events; fix at the fs/events emit site (cloud#2010)",
+      "raw": {
+        "question": "Why do Slack thread replies never materialize under the suffixed mount root?",
+        "chosen": "fs/events must emit the SUFFIXED channel path; fix at the emit site (cloud#2010), verified live with no Pear restart",
+        "alternatives": ["treat as a v0.8.19 Pear regression", "widen daemon isUnderRemoteRoot to also accept bare channel ids", "Pear restart / remount"],
+        "reasoning": "fs/events emitted the BARE channel id while the mount root is suffixed <id>__<slug>. The daemon's literal-prefix isUnderRemoteRoot check rejected the bare-rooted reply events as outside the remote root, so replies were dropped before materializing. This is NOT a v0.8.19 Pear regression. Fix: emit the suffixed path at the event source (cloud#2010). Verified live in prod, no Pear restart needed. Required fast-follow: a channelName-absent no-bare fallback so events without a resolvable slug still route."
+      },
+      "significance": "high"
+    } ]
+  } ],
+  "retrospective": {
+    "summary": "Resolved Slack thread read-down in prod via cloud#2010: fs/events were emitting the bare channel id against a suffixed mount root, so the daemon's literal-prefix filter dropped reply events. Fix emits the suffixed path at the source. Verified live, no restart. Not a Pear regression.",
+    "approach": "Trace the event from emit -> daemon filter -> mount; compare emitted path root against mount root; fix at the earliest layer that owns the canonical path.",
+    "confidence": 0.95
+  },
+  "commits": [],
+  "filesChanged": [],
+  "projectId": "/Users/khaliqgant/Projects/AgentWorkforce/pear",
+  "tags": ["slack", "relayfile", "threads", "mount", "bare-vs-suffixed", "bug"],
+  "_trace": { "startRef": "4f3a28e", "endRef": "4f3a28e" }
+}

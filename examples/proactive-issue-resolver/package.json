@@ -1,0 +1,10 @@
+{
+  "name": "@agentworkforce/example-proactive-issue-resolver",
+  "private": true,
+  "version": "0.0.0",
+  "type": "module",
+  "description": "Local proactive agent: GitHub issues → spec → Ricky → PR → Slack.",
+  "dependencies": {
+    "@agentworkforce/ricky": "^0.1.74"
+  }
+}

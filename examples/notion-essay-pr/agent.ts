@@ -1,7 +1,12 @@
 import {
-  handler,
+  defineAgent,
+  draftFile,
+  encodeSegment,
+  resolveMountRoot,
+  writeJsonFile,
+  type IntegrationClientOptions,
   type WorkforceCtx,
-  type WorkforceProviderEvent
+  type WorkforceEvent
 } from '@agentworkforce/runtime';
 
 interface NotionPageCreatedPayload {
@@ -20,20 +25,25 @@ interface RepoTarget {
   repo: string;
 }
 
-export default handler(async (ctx, event) => {
-  if (event.source !== 'notion' || event.type !== 'page.created') {
+function vfsClient(): IntegrationClientOptions {
+  return { relayfileMountRoot: resolveMountRoot({}) };
+}
+
+export default defineAgent({
+  triggers: { notion: [{ on: 'page.created' }] },
+  handler: async (ctx, event) => {
+  if (event.type !== 'notion.page.created') {
     ctx.log('debug', 'notion-essay-pr.ignored', {
-      source: event.source,
-      type: event.source === 'cron' ? 'cron.tick' : event.type
+      type: event.type
     });
     return;
   }
   await handleNotionPageCreated(ctx, event);
+  }
 });
 
-async function handleNotionPageCreated(ctx: WorkforceCtx, event: WorkforceProviderEvent): Promise<void> {
-  if (!ctx.github) throw new Error('notion-essay-pr requires the github integration');
-  const payload = readPayload(event.payload);
+async function handleNotionPageCreated(ctx: WorkforceCtx, event: WorkforceEvent): Promise<void> {
+  const payload = readPayload((await event.expand('full')).data);
   const pageId = pageIdFrom(payload);
   const pageTitle = pageTitleFrom(payload, event.summary?.title);
   const pagePath = `/notion/pages/${encodeURIComponent(pageId)}.md`;
@@ -50,18 +60,37 @@ async function handleNotionPageCreated(ctx: WorkforceCtx, event: WorkforceProvid
 
   await ctx.files.write(outputPath, essay);
   const branch = `essay/${safeBranchSegment(pageId)}`;
-  const pr = await ctx.github.createPullRequest({
-    ...repoTarget,
-    title: `Essay: ${pageTitle}`,
-    body: `Drafted from Notion page ${pageId}.\n\nOutput: ${outputPath}`,
-    head: branch,
-    base: 'main',
-    files: {
-      [`output/${safeFileSegment(pageId)}.md`]: essay
+  const pr = await writeJsonFile(
+    vfsClient(),
+    'github',
+    'createPullRequest',
+    `/github/repos/${encodeSegment(repoTarget.owner)}/${encodeSegment(repoTarget.repo)}/pulls/${draftFile('create pr')}`,
+    {
+      title: `Essay: ${pageTitle}`,
+      body: `Drafted from Notion page ${pageId}.\n\nOutput: ${outputPath}`,
+      head: branch,
+      base: 'main',
+      files: {
+        [`output/${safeFileSegment(pageId)}.md`]: essay
+      }
     }
-  });
+  );
 
-  await ctx.memory.save(`Notion essay PR opened for ${pageTitle}: ${pr.url}`, {
+  // Only treat the PR as "opened" when the writeback worker returned a
+  // receipt with a real GitHub URL — `pr.path` is the in-mount draft and
+  // would mislead anyone who saw it in memory or logs.
+  const prUrl = pr.receipt?.url;
+  if (!prUrl) {
+    ctx.log('warn', 'notion-essay-pr.pr-pending', {
+      pageId,
+      pageTitle,
+      outputPath,
+      draftPath: pr.path
+    });
+    return;
+  }
+
+  await ctx.memory.save(`Notion essay PR opened for ${pageTitle}: ${prUrl}`, {
     scope: 'workspace',
     tags: ['notion-essay-pr', `page:${pageId}`]
   });
@@ -70,7 +99,7 @@ async function handleNotionPageCreated(ctx: WorkforceCtx, event: WorkforceProvid
     pageId,
     pageTitle,
     outputPath,
-    prUrl: pr.url
+    prUrl
   });
 }
 

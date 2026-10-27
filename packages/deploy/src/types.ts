@@ -1,9 +1,10 @@
-import type { PersonaSpec } from '@agentworkforce/persona-kit';
+import type { AgentSpec, PersonaSpec } from '@agentworkforce/persona-kit';
+import type { CompiledAgentV1 } from '@agentworkforce/runtime';
 
 export type DeployMode = 'dev' | 'sandbox' | 'cloud';
 
 export interface DeployOptions {
-  /** Absolute path to the persona JSON file. Required. */
+  /** Path to the persona JSON file or authored persona source module. Required. */
   personaPath: string;
   /** Run mode. Defaults to `sandbox` if Daytona creds resolve, else `dev`. */
   mode?: DeployMode;
@@ -11,10 +12,22 @@ export interface DeployOptions {
   workspace?: string;
   /** Skip the integration-connect prompts; fail if any declared integration is missing. */
   noConnect?: boolean;
+  /** Force a fresh OAuth/connect flow for specific providers, even if status is ready. */
+  reconnectProviders?: string[];
+  /** Supabase project selected for a project-scoped, read-only MCP OAuth connection. */
+  supabaseMcpProjectRef?: string;
   /** Force BYO Daytona even when workforce-managed sandbox issuance is available. */
   byoSandbox?: boolean;
   /** Background the runner instead of streaming logs in the foreground. */
   detach?: boolean;
+  /**
+   * The caller drives the runner's envelope stdin itself via the returned
+   * `ModeLaunchHandle.write()`, instead of the runner's stdin passing
+   * through this process's own stdin (`dev` mode only; ignored otherwise).
+   * Set this when calling `deploy()` from a long-lived host process (e.g. a
+   * fleet-node bridge) whose own stdin lifecycle must not end the runner's.
+   */
+  bridged?: boolean;
   /** Emit the bundle to this directory and exit (no launch). */
   bundleOut?: string;
   /** Validate-only: parse + lint + check connection status, no side effects. */
@@ -24,7 +37,7 @@ export interface DeployOptions {
   /** Fail instead of prompting for cloud auth/integration setup. */
   noPrompt?: boolean;
   /** Cloud harness credential source. */
-  harnessSource?: 'plan' | 'byok' | 'oauth';
+  harnessSource?: 'managed' | 'plan' | 'byok' | 'oauth';
   /** BYOK API key used when `harnessSource` is `byok`. */
   byokKey?: string;
   /** Existing cloud persona behavior. Defaults to `cancel`. */
@@ -48,6 +61,15 @@ export interface DeployIO {
   prompt(question: string, opts?: { defaultValue?: string }): Promise<string>;
   /** Confirmation prompt; resolves to true/false. */
   confirm(question: string, opts?: { defaultValue?: boolean }): Promise<boolean>;
+  /**
+   * Single-choice picker; resolves to the chosen option's `value`. Optional:
+   * the onboarding picker falls back to a numbered `prompt` when an IO does
+   * not implement it, so existing IOs keep working unchanged.
+   */
+  select?(
+    question: string,
+    options: Array<{ value: string; label: string; hint?: string }>
+  ): Promise<string>;
 }
 
 /** The result returned by a successful `deploy(...)` call. */
@@ -98,7 +120,7 @@ export interface BundleResult {
 /**
  * Contract each run-mode launcher implements. The defaults live next
  * to this file: `modes/dev.ts` (local child_process), `modes/sandbox.ts`
- * (Daytona), and `modes/cloud.ts` (workforce-cloud hosted, opt-in once
+ * (Daytona), and `modes/cloud/index.ts` (workforce-cloud hosted, opt-in once
  * the cloud deployments endpoint ships). Callers swap individual modes
  * via `DeployResolvers.modes` — useful for tests and custom runtimes.
  */
@@ -108,11 +130,23 @@ export interface ModeLauncher {
 
 export interface ModeLaunchInput {
   persona: PersonaSpec;
+  /**
+   * Agent listener spec (triggers/schedules/watch) extracted from the
+   * `defineAgent(...)` default export. Cloud mode sends this as the top-level
+   * `agent` block in the deploy request so the cloud sets up subscriptions.
+   */
+  agent: AgentSpec;
   bundle: BundleResult;
   workspace: string;
   env?: Record<string, string>;
   io: DeployIO;
   detach?: boolean;
+  /**
+   * The caller drives the runner's envelope stdin itself via the returned
+   * `ModeLaunchHandle.write()`. `dev` mode only — see `DeployOptions.bridged`;
+   * other modes ignore.
+   */
+  bridged?: boolean;
   /**
    * Force BYO Daytona auth even when the user is logged in to workforce
    * cloud. Mode-specific (sandbox launcher only); other modes ignore.
@@ -125,13 +159,22 @@ export interface ModeLaunchInput {
   /** Fail instead of prompting for cloud setup. */
   noPrompt?: boolean;
   /** Cloud harness credential source. */
-  harnessSource?: 'plan' | 'byok' | 'oauth';
+  harnessSource?: 'managed' | 'plan' | 'byok' | 'oauth';
   /** BYOK API key used when `harnessSource` is `byok`. */
   byokKey?: string;
+  /**
+   * Force a fresh OAuth connect flow for specific providers even when cloud
+   * already reports one connected. Covers the harness LLM credential (matched
+   * by model provider or harness name), so a revoked harness token can be
+   * refreshed without first disconnecting it in the dashboard.
+   */
+  reconnectProviders?: string[];
   /** Existing cloud persona behavior. Defaults to `cancel`. */
   onExists?: 'update' | 'destroy' | 'cancel';
   /** Runtime inputs forwarded to launchers that support them. */
   inputs?: Record<string, string>;
+  /** Provider credential selections resolved before launch. Cloud mode includes these in the deploy request. */
+  credentialSelections?: Record<string, string>;
   /** Runtime log streaming hook. */
   onLog?: (line: string) => void;
 }
@@ -146,6 +189,14 @@ export interface ModeLaunchHandle {
    * resolves only when the user invokes `stop()`.
    */
   done: Promise<{ code: number }>;
+  /**
+   * Write a raw line directly to the runner's envelope stdin, bypassing the
+   * `process.stdin` passthrough. Only `dev` mode implements this today — it
+   * lets a long-lived host process (e.g. a fleet-node bridge) that owns the
+   * `deploy()` call feed one `RawGatewayEnvelope` per message without a real
+   * piped parent stdin. Absent when the mode has no addressable stdin.
+   */
+  write?(line: string): void;
 }
 
 export interface IntegrationConnectOutcome {
@@ -157,9 +208,15 @@ export interface IntegrationConnectOutcome {
 /** Surface a parsed persona only after we know it passed the deploy preflight. */
 export interface DeployPreflight {
   persona: PersonaSpec;
-  /** Persona JSON path resolved to absolute. */
+  /**
+   * Listener spec (triggers/schedules/watch) extracted from the agent's
+   * `defineAgent(...)` default export. Travels to the cloud as the deploy
+   * `agent` block.
+   */
+  agent: AgentSpec;
+  /** Persona path resolved to absolute. */
   personaPath: string;
-  /** Absolute path to the directory containing the persona JSON. */
+  /** Absolute path to the directory containing the persona file. */
   personaDir: string;
   /** Absolute path to the resolved `onEvent` file. */
   onEventPath: string;
@@ -168,4 +225,6 @@ export interface DeployPreflight {
   integrations: string[];
   /** Non-fatal warnings (unknown triggers, etc). */
   warnings: string[];
+  /** Present when the deploy input used the single-file compiler path. */
+  compiledAgent?: CompiledAgentV1;
 }

@@ -1,32 +1,53 @@
 import path from 'node:path';
 import { mkdir } from 'node:fs/promises';
 import { defaultApiUrl } from '@agent-relay/cloud';
+import type {
+  AgentSpec,
+  IntegrationSource,
+  PersonaInputSpec,
+  PersonaIntegrationTrigger,
+  PersonaSpec
+} from '@agentworkforce/persona-kit';
+import {
+  isImplicitIntegrationSource,
+  KNOWN_TRIGGER_PROVIDER_ALIASES as TRIGGER_PROVIDER_ALIASES
+} from '@agentworkforce/persona-kit';
 import { bundleStager } from './bundle.js';
 import { resolveCloudUrl } from './cloud-url.js';
 import {
+  collectPickerInputs,
   connectIntegrations,
   envIntegrationResolver,
+  relayfileCatalogConfigKeyResolver,
   relayfileIntegrationResolver,
+  relayfileOptionsResolver,
+  resolveExpectedProviderConfigKey,
   type ConnectAllInput,
   type IntegrationAuthRecoveryResolver,
   type IntegrationConnectResolver,
+  type IntegrationOptionsResolver,
+  type ProviderConfigKeyResolver,
   type ProviderSubscriptionResolver
 } from './connect.js';
 import { createTerminalIO } from './io.js';
 import {
-  readActiveWorkspace,
   resolveWorkspaceToken,
   type WorkspaceAuth
 } from './login.js';
 import { devLauncher } from './modes/dev.js';
 import { sandboxLauncher } from './modes/sandbox.js';
-import { cloudLauncher } from './modes/cloud.js';
+import {
+  cloudLauncher,
+  ensureCloudSubscriptionReady,
+  validateCloudSubscriptionSupport
+} from './modes/cloud/index.js';
 import { preflightPersona } from './preflight.js';
 import type {
   BundleStager,
   DeployIO,
   DeployMode,
   DeployOptions,
+  DeployPreflight,
   DeployResult,
   ModeLauncher
 } from './types.js';
@@ -44,8 +65,17 @@ export interface DeployResolvers {
   integrations?: IntegrationConnectResolver;
   authRecovery?: CloudAuthRecoveryResolver;
   subscription?: ProviderSubscriptionResolver;
+  providerConfigKeys?: ProviderConfigKeyResolver;
+  /**
+   * Resolves candidate lists for picker-annotated inputs. Defaults to a
+   * cloud-backed resolver in `cloud` mode; supply your own (or a fake) to
+   * drive the onboarding pickers in tests or non-cloud flows.
+   */
+  integrationOptions?: IntegrationOptionsResolver;
   bundle?: BundleStager;
   modes?: Partial<Record<DeployMode, ModeLauncher>>;
+  /** Deterministic override for transient integration GET retry delays. */
+  networkRetrySleep?: (ms: number) => Promise<void>;
 }
 
 export interface CloudAuthRecoveryResolver {
@@ -104,22 +134,39 @@ export async function deploy(opts: DeployOptions, resolvers: DeployResolvers = {
   io.info(`workforce deploy → ${opts.personaPath}`);
 
   const preflight = await preflightPersona(opts.personaPath);
+  const mode: DeployMode = opts.mode ?? pickMode(opts);
   warnings.push(...preflight.warnings);
   for (const w of preflight.warnings) io.warn(w);
+  const canCollectPickerInputs =
+    opts.dryRun !== true
+    && !opts.bundleOut
+    && opts.noPrompt !== true
+    && (mode === 'cloud' || resolvers.integrationOptions !== undefined);
+  let activePreflight = selectActiveOptionalIntegrations(preflight, opts.inputs ?? {}, process.env, {
+    deferPickerBacked: canCollectPickerInputs
+  });
 
   io.info(
-    `persona ${preflight.persona.id}: ${preflight.integrations.length} integration(s), ${preflight.schedules.length} schedule(s)`
+    `persona ${activePreflight.persona.id}: ${activePreflight.integrations.length} integration(s), ${activePreflight.schedules.length} schedule(s)`
   );
+
+  validateActiveAgent(activePreflight);
+
+  validateSubscriptionSupport(activePreflight.persona, {
+    mode,
+    subscription: resolvers.subscription,
+    ...(opts.harnessSource ? { harnessSource: opts.harnessSource } : {})
+  });
 
   if (opts.dryRun) {
     io.info('--dry-run: persona validated; exiting before any side effects');
     return {
-      deploymentId: preflight.persona.id,
-      mode: opts.mode ?? pickMode(opts),
+      deploymentId: activePreflight.persona.id,
+      mode,
       workspace: opts.workspace ?? '(dry-run)',
       bundleDir: '(dry-run)',
       connectedIntegrations: [],
-      schedules: preflight.schedules,
+      schedules: activePreflight.schedules,
       warnings
     };
   }
@@ -132,39 +179,32 @@ export async function deploy(opts: DeployOptions, resolvers: DeployResolvers = {
     await mkdir(bundleDir, { recursive: true });
     const stager = resolvers.bundle ?? bundleStager;
     const bundle = await stager.stage({
-      personaPath: preflight.personaPath,
-      persona: preflight.persona,
+      personaPath: activePreflight.personaPath,
+      persona: activePreflight.persona,
       outDir: bundleDir
     });
     io.info(`bundle: staged to ${bundle.runnerPath} (${formatBytes(bundle.sizeBytes)})`);
     io.info(`--bundle-out: bundle ready at ${bundleDir}; skipping launch`);
     return {
-      deploymentId: preflight.persona.id,
-      mode: opts.mode ?? pickMode(opts),
+      deploymentId: activePreflight.persona.id,
+      mode,
       workspace: opts.workspace ?? '(bundle-only)',
       bundleDir,
       connectedIntegrations: [],
-      schedules: preflight.schedules,
+      schedules: activePreflight.schedules,
       warnings
     };
   }
 
-  const mode: DeployMode = opts.mode ?? pickMode(opts);
-  const active = await readActiveWorkspace().catch(() => null);
   const cloudUrl = resolveCloudUrl({
-    ...(opts.cloudUrl ? { flag: opts.cloudUrl } : {}),
-    active
+    ...(opts.cloudUrl ? { flag: opts.cloudUrl } : {})
   });
 
   // Auth resolution: an explicit `resolvers.workspaceAuth` (used by tests
-  // and bespoke harnesses) wins. Otherwise consult the shared resolver
-  // that walks env → cloud-auth.json → active.json → legacy keychain,
-  // which is the same path `list`/`destroy` and the cloud launcher use.
-  // The orchestrator historically called `envWorkspaceAuth()` directly,
-  // which only honoured WORKFORCE_WORKSPACE_TOKEN + a long-dead keychain —
-  // a user who freshly ran `agentworkforce login` would hit "no workspace
-  // resolved" because that flow only writes the shared accessToken and
-  // active.json pointer.
+  // and bespoke harnesses) wins. Otherwise use the canonical agent-relay
+  // cloud session and active workspace descriptor. The only non-SDK
+  // credential path left here is the complete WORKFORCE_WORKSPACE_ID +
+  // WORKFORCE_WORKSPACE_TOKEN env override for CI.
   const resolvedAuth = resolvers.workspaceAuth
     ? await resolvers.workspaceAuth.resolveWorkspace({ override: opts.workspace, io })
     : await resolveWorkspaceToken({
@@ -180,20 +220,55 @@ export async function deploy(opts: DeployOptions, resolvers: DeployResolvers = {
     );
   }
   io.info(`workspace: ${workspace}`);
-  let activeToken = resolvedAuth.token;
+  let activeToken = (resolvedAuth.token ?? '').trim();
+  if (!activeToken) {
+    throw new Error('workspace token is required for deploy: run `agentworkforce login` or set WORKFORCE_WORKSPACE_TOKEN');
+  }
+  let subscription = resolvers.subscription;
+  let credentialSelections: Record<string, string> | undefined;
+  const providerConfigKeys = resolvers.providerConfigKeys
+    ?? (mode === 'cloud'
+      ? relayfileCatalogConfigKeyResolver({
+          apiUrl: normalizeCloudUrl(cloudUrl ?? defaultApiUrl()),
+          workspaceToken: () => activeToken,
+          io,
+          ...(resolvers.networkRetrySleep ? { sleep: resolvers.networkRetrySleep } : {})
+        })
+      : undefined);
+
+  if (activePreflight.persona.useSubscription && !subscription) {
+    const result = await ensureCloudSubscriptionReady({
+      cloudUrl: normalizeCloudUrl(cloudUrl ?? defaultApiUrl()),
+      workspaceId: workspace,
+      token: activeToken,
+      persona: activePreflight.persona,
+      io,
+      noPrompt: opts.noPrompt === true || opts.noConnect === true,
+      ...(opts.harnessSource ? { harnessSource: opts.harnessSource } : {}),
+      ...(opts.byokKey ? { byokKey: opts.byokKey } : {}),
+      ...(opts.reconnectProviders ? { reconnectProviders: opts.reconnectProviders } : {})
+    });
+    credentialSelections = result.credentialSelections;
+    subscription = alreadyConnectedSubscriptionResolver(result.provider);
+  }
 
   const connectedIntegrations = await connectAndCollectIntegrations({
-    persona: preflight.persona,
+    persona: activePreflight.persona,
     workspace,
     noConnect: opts.noConnect === true,
     ...(opts.noPrompt ? { noPrompt: true } : {}),
+    ...(opts.reconnectProviders ? { reconnectProviders: opts.reconnectProviders } : {}),
+    ...(opts.supabaseMcpProjectRef
+      ? { supabaseMcpProjectRef: opts.supabaseMcpProjectRef }
+      : {}),
     io,
     integrations: resolvers.integrations ?? defaultIntegrationResolver({
       mode,
       workspace,
       token: () => activeToken,
       cloudUrl,
-      io
+      io,
+      ...(resolvers.networkRetrySleep ? { sleep: resolvers.networkRetrySleep } : {})
     }),
     ...(resolvers.authRecovery
       ? {
@@ -206,51 +281,281 @@ export async function deploy(opts: DeployOptions, resolvers: DeployResolvers = {
           )
         }
       : {}),
-    ...(resolvers.subscription ? { subscription: resolvers.subscription } : {})
+    ...(subscription ? { subscription } : {}),
+    ...(providerConfigKeys ? { providerConfigKeys } : {})
   });
 
+  // Onboarding pickers: turn picker-annotated inputs the operator hasn't set
+  // into a choose-from-a-list prompt, now that the backing integrations are
+  // connected. Cloud mode gets a cloud-backed resolver by default; callers can
+  // inject their own (or a fake for tests) via `resolvers.integrationOptions`.
+  let resolvedInputs: Record<string, string> = {
+    ...(opts.inputs ?? {}),
+    ...activePreflight.resolvedInputValues
+  };
+  const optionsResolver =
+    resolvers.integrationOptions ??
+    (mode === 'cloud'
+      ? relayfileOptionsResolver({
+          apiUrl: normalizeCloudUrl(cloudUrl ?? defaultApiUrl()),
+          workspaceToken: () => activeToken
+        })
+      : undefined);
+  if (optionsResolver && opts.noPrompt !== true && (activePreflight.persona.inputs !== undefined)) {
+    resolvedInputs = await collectPickerInputs({
+      persona: activePreflight.persona,
+      workspace,
+      io,
+      resolver: optionsResolver,
+      inputs: resolvedInputs,
+      connectedProviders: connectedIntegrations,
+      ...(opts.noPrompt ? { noPrompt: true } : {})
+    });
+  }
+  activePreflight = selectActiveOptionalIntegrations(preflight, resolvedInputs);
+  for (const skipped of activePreflight.skippedOptionalIntegrations) {
+    io.info(
+      `integrations.${skipped.provider}: optional; skipped because input ${skipped.enabledByInput} is unset`
+    );
+  }
+  validateActiveAgent(activePreflight);
+  resolvedInputs = {
+    ...resolvedInputs,
+    ...activePreflight.resolvedInputValues
+  };
+  const activeConnectedIntegrations = connectedIntegrations.filter((provider) =>
+    activePreflight.integrations.includes(provider)
+  );
+
   const bundleDir = path.resolve(
-    path.join(preflight.personaDir, '.workforce', 'build', preflight.persona.id)
+    path.join(activePreflight.personaDir, '.workforce', 'build', activePreflight.persona.id)
   );
   await mkdir(bundleDir, { recursive: true });
   const stager = resolvers.bundle ?? bundleStager;
   const bundle = await stager.stage({
-    personaPath: preflight.personaPath,
-    persona: preflight.persona,
+    personaPath: activePreflight.personaPath,
+    persona: activePreflight.persona,
     outDir: bundleDir
   });
   io.info(`bundle: staged to ${bundle.runnerPath} (${formatBytes(bundle.sizeBytes)})`);
 
+  const runtimeEnv = await resolveRuntimeCredentialEnv({
+    mode,
+    persona: activePreflight.persona,
+    agent: activePreflight.agent,
+    workspace,
+    workspaceToken: activeToken,
+    ...(resolvedAuth.relayfileWorkspaceId ? { relayfileWorkspaceId: resolvedAuth.relayfileWorkspaceId } : {}),
+    cloudUrl,
+    byoSandbox: opts.byoSandbox === true,
+    enabled: resolvers.integrations === undefined,
+    ...(providerConfigKeys ? { providerConfigKeys } : {})
+  });
+  const inputEnv = toInputEnv(resolvedInputs);
+  const launchEnv = {
+    ...(runtimeEnv ?? {}),
+    ...inputEnv
+  };
+
   io.info(`mode: ${mode}`);
   const launcher = resolveLauncher(mode, resolvers);
   const handle = await launcher.launch({
-    persona: preflight.persona,
+    persona: activePreflight.persona,
+    agent: activePreflight.agent,
     bundle,
     workspace,
     io,
+    ...(Object.keys(launchEnv).length > 0 ? { env: launchEnv } : {}),
     ...(activeToken ? { workspaceToken: activeToken } : {}),
     ...(opts.detach ? { detach: true } : {}),
+    ...(opts.bridged ? { bridged: true } : {}),
     ...(opts.byoSandbox ? { byoSandbox: true } : {}),
     ...(cloudUrl ? { cloudUrl } : {}),
     ...(opts.noPrompt ? { noPrompt: true } : {}),
     ...(opts.harnessSource ? { harnessSource: opts.harnessSource } : {}),
     ...(opts.byokKey ? { byokKey: opts.byokKey } : {}),
+    ...(opts.reconnectProviders ? { reconnectProviders: opts.reconnectProviders } : {}),
     ...(opts.onExists ? { onExists: opts.onExists } : {}),
-    ...(opts.inputs ? { inputs: opts.inputs } : {}),
+    ...(Object.keys(resolvedInputs).length > 0 ? { inputs: resolvedInputs } : {}),
+    ...(credentialSelections ? { credentialSelections } : {}),
     ...(opts.onLog ? { onLog: opts.onLog } : {})
   });
   io.info(`launched: ${mode}/${handle.id}`);
 
+  // Print the URL an external app POSTs to in order to wake this agent.
+  //
+  // Deploy is the moment someone is wiring the agent up, so it is the moment
+  // the URL is worth knowing. Without this, the only way to learn it was to be
+  // told the shape by hand — the endpoint is not otherwise advertised anywhere
+  // the deploying user looks.
+  //
+  // Prints BOTH addressing forms, because which one works depends on the
+  // backend. Agent Workforce cloud resolves an agent by its deployed NAME, and
+  // that is the better thing for an app to hard-code: it is unique per
+  // workspace and survives a destroy/redeploy that changes the uuid. But
+  // `--cloud-url` may point at any compatible runtime (see modes/cloud), and a
+  // backend that only implements the original uuid-keyed route would 404 on the
+  // name form. Printing one URL means printing one that is wrong for somebody;
+  // the id line is the portable fallback.
+  if (mode === 'cloud' && cloudUrl && workspace) {
+    const base =
+      `${cloudUrl.replace(/\/+$/, '')}/api/v1/workspaces/${encodeURIComponent(workspace)}/deployments`;
+    io.info(
+      `trigger from your app: POST ${base}/${encodeURIComponent(activePreflight.persona.id)}/trigger`,
+    );
+    io.info(`  by id (portable): POST ${base}/${encodeURIComponent(handle.id)}/trigger`);
+    io.info('  auth: Bearer <deployment API token>  (dashboard → Workspace → Deployment API tokens)');
+    io.info('  body: any JSON object; it reaches the handler as the event payload');
+  }
+
   return {
-    deploymentId: preflight.persona.id,
+    deploymentId: activePreflight.persona.id,
     mode,
     workspace,
     bundleDir,
-    connectedIntegrations,
-    schedules: preflight.schedules,
+    connectedIntegrations: activeConnectedIntegrations,
+    schedules: activePreflight.schedules,
     runHandle: handle,
     warnings
   };
+}
+
+type ActiveDeployPreflight = DeployPreflight & {
+  skippedOptionalIntegrations: Array<{ provider: string; enabledByInput: string }>;
+  resolvedInputValues: Record<string, string>;
+};
+
+function selectActiveOptionalIntegrations(
+  preflight: DeployPreflight,
+  inputs: Record<string, string>,
+  env: NodeJS.ProcessEnv = process.env,
+  options: { deferPickerBacked?: boolean } = {}
+): ActiveDeployPreflight {
+  const integrations = preflight.persona.integrations ?? {};
+  const entries = Object.entries(integrations);
+  if (!entries.some(([, cfg]) => cfg?.optional === true)) {
+    return { ...preflight, skippedOptionalIntegrations: [], resolvedInputValues: {} };
+  }
+
+  const activeIntegrations: NonNullable<PersonaSpec['integrations']> = {};
+  const inactiveTriggerProviders = new Set<string>();
+  const skippedOptionalIntegrations: ActiveDeployPreflight['skippedOptionalIntegrations'] = [];
+  const resolvedInputValues: Record<string, string> = {};
+
+  for (const [provider, cfg] of entries) {
+    if (cfg?.optional !== true) {
+      activeIntegrations[provider] = cfg;
+      continue;
+    }
+
+    const enabledByInput = cfg.enabledByInput;
+    const inputSpec = enabledByInput ? preflight.persona.inputs?.[enabledByInput] : undefined;
+    const resolved = enabledByInput
+      ? resolvePersonaInputValue(inputSpec, enabledByInput, inputs, env)
+      : undefined;
+    if (enabledByInput && resolved !== undefined) {
+      activeIntegrations[provider] = cfg;
+      if (!Object.prototype.hasOwnProperty.call(inputs, enabledByInput)) {
+        resolvedInputValues[enabledByInput] = resolved;
+      }
+      continue;
+    }
+    if (options.deferPickerBacked && enabledByInput && isPickerBackedByProvider(inputSpec, provider)) {
+      activeIntegrations[provider] = cfg;
+      continue;
+    }
+
+    inactiveTriggerProviders.add(provider);
+    const alias = triggerProviderAlias(provider);
+    if (alias) inactiveTriggerProviders.add(alias);
+    skippedOptionalIntegrations.push({
+      provider,
+      enabledByInput: enabledByInput ?? '(missing)'
+    });
+  }
+
+  const activeIntegrationKeys = Object.keys(activeIntegrations);
+  const persona: PersonaSpec = {
+    ...preflight.persona,
+    ...(activeIntegrationKeys.length > 0
+      ? { integrations: activeIntegrations }
+      : { integrations: undefined })
+  };
+  const agent = filterInactiveTriggers(preflight.agent, inactiveTriggerProviders);
+
+  return {
+    ...preflight,
+    persona,
+    agent,
+    integrations: activeIntegrationKeys,
+    skippedOptionalIntegrations,
+    resolvedInputValues
+  };
+}
+
+function resolvePersonaInputValue(
+  spec: PersonaInputSpec | undefined,
+  inputName: string,
+  inputs: Record<string, string>,
+  env: NodeJS.ProcessEnv
+): string | undefined {
+  const explicit = inputs[inputName];
+  if (typeof explicit === 'string') return explicit.trim().length > 0 ? explicit : undefined;
+
+  const envName = spec?.env ?? inputName;
+  const envValue = env[envName];
+  if (typeof envValue === 'string' && envValue.trim().length > 0) return envValue;
+
+  return typeof spec?.default === 'string' && spec.default.trim().length > 0
+    ? spec.default
+    : undefined;
+}
+
+function isPickerBackedByProvider(spec: PersonaInputSpec | undefined, provider: string): boolean {
+  return spec?.picker?.provider === provider;
+}
+
+const INPUT_ENV_PREFIX = 'WORKFORCE_INPUT_';
+
+function toInputEnv(inputs: Record<string, string>): Record<string, string> {
+  return Object.fromEntries(
+    Object.entries(inputs).map(([key, value]) => [`${INPUT_ENV_PREFIX}${key}`, value])
+  );
+}
+
+function filterInactiveTriggers(
+  agent: AgentSpec,
+  inactiveProviders: ReadonlySet<string>
+): AgentSpec {
+  if (!agent.triggers || inactiveProviders.size === 0) return agent;
+
+  const nextTriggers: NonNullable<AgentSpec['triggers']> = {};
+  for (const [provider, triggers] of Object.entries(agent.triggers)) {
+    if (!inactiveProviders.has(provider)) {
+      nextTriggers[provider] = triggers;
+    }
+  }
+
+  return {
+    ...agent,
+    ...(Object.keys(nextTriggers).length > 0 ? { triggers: nextTriggers } : { triggers: undefined })
+  };
+}
+
+function triggerProviderAlias(provider: string): string | undefined {
+  return (TRIGGER_PROVIDER_ALIASES as Record<string, string>)[provider];
+}
+
+function validateActiveAgent(preflight: ActiveDeployPreflight): void {
+  const hasTriggers = !!preflight.agent.triggers && Object.values(preflight.agent.triggers).some((t) => (t?.length ?? 0) > 0);
+  const hasSchedules = (preflight.agent.schedules?.length ?? 0) > 0;
+  const hasWatch = (preflight.agent.watch?.length ?? 0) > 0;
+  const hasDispatcherLaunch = preflight.agent.launchedBy === 'team-dispatcher';
+  if (hasTriggers || hasSchedules || hasWatch || hasDispatcherLaunch) return;
+
+  throw new Error(
+    `agent "${preflight.persona.id}" has no active listeners after optional integrations were applied`
+  );
 }
 
 function resolveLauncher(mode: DeployMode, resolvers: DeployResolvers): ModeLauncher {
@@ -291,14 +596,270 @@ function defaultIntegrationResolver(args: {
   token: string | (() => string | Promise<string>);
   cloudUrl?: string;
   io: DeployIO;
+  sleep?: (ms: number) => Promise<void>;
 }): IntegrationConnectResolver {
-  if (args.mode !== 'cloud') return envIntegrationResolver();
-  return relayfileIntegrationResolver({
+  const relayfile = relayfileIntegrationResolver({
     apiUrl: normalizeCloudUrl(args.cloudUrl ?? defaultApiUrl()),
     workspaceId: args.workspace,
     workspaceToken: args.token,
-    io: args.io
+    io: args.io,
+    ...(args.sleep ? { sleep: args.sleep } : {})
   });
+  if (args.mode === 'cloud') return relayfile;
+
+  const env = envIntegrationResolver();
+  return {
+    async isConnected(input) {
+      if (await relayfile.isConnected(input).catch(() => false)) return true;
+      return env.isConnected(input);
+    },
+    async listConnectionSources(input) {
+      return await relayfile.listConnectionSources?.(input) ?? [];
+    },
+    async connect(input) {
+      return relayfile.connect(input);
+    }
+  };
+}
+
+type RuntimeCredentialsResponse = {
+  relayfileUrl?: unknown;
+  relayfileWorkspaceId?: unknown;
+  relayfileToken?: unknown;
+  relayfileMountPaths?: unknown;
+};
+
+type RuntimeCredentials = {
+  relayfileUrl: string;
+  relayfileWorkspaceId: string;
+  relayfileToken: string | null;
+  relayfileMountPaths: string[];
+};
+
+async function resolveRuntimeCredentialEnv(args: {
+  mode: DeployMode;
+  persona: PersonaSpec;
+  agent: AgentSpec;
+  workspace: string;
+  workspaceToken: string;
+  relayfileWorkspaceId?: string;
+  cloudUrl?: string;
+  byoSandbox: boolean;
+  enabled: boolean;
+  providerConfigKeys?: ProviderConfigKeyResolver;
+}): Promise<Record<string, string> | undefined> {
+  if (!args.enabled || !shouldRequestRuntimeCredentials(args)) {
+    return undefined;
+  }
+  const integrations = args.persona.integrations ?? {};
+  if (Object.keys(integrations).length === 0) {
+    return undefined;
+  }
+  // The runtime-credentials endpoint scopes the relayfile writeback token by
+  // the events the agent listens for. Triggers now live on the agent, so merge
+  // them back onto the per-provider integration config the cloud expects.
+  const credentialIntegrations = buildCredentialIntegrations(integrations, args.agent.triggers);
+  const relayfile = relayfileIntegrationResolver({
+    apiUrl: normalizeCloudUrl(args.cloudUrl ?? defaultApiUrl()),
+    workspaceId: args.workspace,
+    workspaceToken: args.workspaceToken
+  });
+  for (const [provider, integration] of Object.entries(integrations)) {
+    const expectedConfigKey = await resolveExpectedProviderConfigKey(
+      provider,
+      args.providerConfigKeys
+    );
+    const connected = await relayfile
+      .isConnected({
+        workspace: args.workspace,
+        provider,
+        source: integration?.source ?? { kind: 'deployer_user' },
+        allowWorkspaceFallback: integrationAllowsWorkspaceFallback(integration),
+        ...(expectedConfigKey ? { expectedConfigKey } : {})
+      })
+      .catch(() => false);
+    if (!connected) {
+      return undefined;
+    }
+  }
+
+  const credentials = await requestRuntimeCredentials({
+    cloudUrl: normalizeCloudUrl(args.cloudUrl ?? defaultApiUrl()),
+    workspace: args.workspace,
+    workspaceToken: args.workspaceToken,
+    personaId: args.persona.id,
+    integrations: credentialIntegrations
+  });
+  if (credentials.relayfileToken !== null && !credentials.relayfileToken.startsWith('relay_pa_')) {
+    throw new Error('runtime-credentials returned a token without expected relay_pa_ prefix');
+  }
+  if (
+    args.relayfileWorkspaceId
+    && credentials.relayfileWorkspaceId !== args.relayfileWorkspaceId
+  ) {
+    throw new Error(
+      `runtime-credentials returned relayfile workspace ${credentials.relayfileWorkspaceId}, expected ${args.relayfileWorkspaceId}`
+    );
+  }
+  if (credentials.relayfileToken !== null && credentials.relayfileMountPaths.length === 0) {
+    throw new Error('runtime-credentials returned a token without relayfile mount paths');
+  }
+
+  return runtimeCredentialEnv(credentials, credentialIntegrations);
+}
+
+/**
+ * Integration config shape sent to the runtime-credentials endpoint: the
+ * persona's per-provider connection config (source/scope) merged with the
+ * agent's triggers for that provider. Triggers no longer live on the persona,
+ * so this is the join point that preserves the endpoint's existing contract.
+ */
+type CredentialIntegrations = Record<
+  string,
+  {
+    source?: IntegrationSource;
+    scope?: Record<string, string>;
+    triggers?: readonly PersonaIntegrationTrigger[];
+  }
+>;
+
+function buildCredentialIntegrations(
+  integrations: NonNullable<PersonaSpec['integrations']>,
+  triggers: AgentSpec['triggers']
+): CredentialIntegrations {
+  const out: CredentialIntegrations = {};
+  for (const [provider, cfg] of Object.entries(integrations)) {
+    const providerTriggers = triggers?.[provider];
+    out[provider] = {
+      ...(cfg?.source ? { source: cfg.source } : {}),
+      ...(cfg?.scope ? { scope: cfg.scope } : {}),
+      ...(providerTriggers && providerTriggers.length > 0 ? { triggers: providerTriggers } : {})
+    };
+  }
+  return out;
+}
+
+function shouldRequestRuntimeCredentials(args: {
+  mode: DeployMode;
+  byoSandbox: boolean;
+}): boolean {
+  if (args.mode === 'cloud') return false;
+  if (args.mode === 'dev') return true;
+  return args.byoSandbox || hasByoSandboxEnv();
+}
+
+function integrationAllowsWorkspaceFallback(value: unknown): boolean {
+  return isImplicitIntegrationSource(value);
+}
+
+function hasByoSandboxEnv(): boolean {
+  return Boolean(process.env.DAYTONA_API_KEY?.trim() || process.env.DAYTONA_JWT_TOKEN?.trim());
+}
+
+async function requestRuntimeCredentials(args: {
+  cloudUrl: string;
+  workspace: string;
+  workspaceToken: string;
+  personaId: string;
+  integrations: CredentialIntegrations;
+}): Promise<RuntimeCredentials> {
+  const response = await fetch(
+    `${args.cloudUrl}/api/v1/workspaces/${encodeURIComponent(args.workspace)}/runtime-credentials`,
+    {
+      method: 'POST',
+      headers: {
+        authorization: `Bearer ${args.workspaceToken}`,
+        'content-type': 'application/json',
+        'user-agent': 'workforce-deploy'
+      },
+      body: JSON.stringify({
+        personaId: args.personaId,
+        agentId: args.personaId,
+        integrations: args.integrations,
+        ttlSeconds: 3600
+      })
+    }
+  );
+  if (!response.ok) {
+    const text = await response.text().catch(() => '');
+    throw new Error(`runtime-credentials request failed: ${response.status} ${text}`.trim());
+  }
+  return parseRuntimeCredentials(await response.json());
+}
+
+function parseRuntimeCredentials(body: RuntimeCredentialsResponse): RuntimeCredentials {
+  const relayfileUrl = typeof body.relayfileUrl === 'string' ? body.relayfileUrl.trim() : '';
+  const relayfileWorkspaceId = typeof body.relayfileWorkspaceId === 'string'
+    ? body.relayfileWorkspaceId.trim()
+    : '';
+  const relayfileToken = body.relayfileToken === null
+    ? null
+    : typeof body.relayfileToken === 'string'
+      ? body.relayfileToken.trim()
+      : '';
+  const relayfileMountPaths = Array.isArray(body.relayfileMountPaths)
+    ? body.relayfileMountPaths.filter((entry): entry is string => typeof entry === 'string')
+    : [];
+  if (!relayfileUrl || !relayfileWorkspaceId || relayfileToken === '') {
+    throw new Error(
+      `runtime-credentials response missing relayfileUrl/relayfileWorkspaceId/relayfileToken: ${JSON.stringify(body)}`
+    );
+  }
+  return {
+    relayfileUrl,
+    relayfileWorkspaceId,
+    relayfileToken,
+    relayfileMountPaths
+  };
+}
+
+function runtimeCredentialEnv(
+  credentials: RuntimeCredentials,
+  integrations: CredentialIntegrations
+): Record<string, string> {
+  const env: Record<string, string> = {
+    RELAYFILE_URL: credentials.relayfileUrl,
+    RELAYFILE_WORKSPACE_ID: credentials.relayfileWorkspaceId,
+    RELAYFILE_TOKEN: credentials.relayfileToken ?? '',
+    RELAYFILE_MOUNT_PATHS: JSON.stringify(credentials.relayfileMountPaths)
+  };
+  for (const provider of Object.keys(integrations)) {
+    env[`WORKFORCE_INTEGRATION_${provider.toUpperCase()}_TOKEN`] = '';
+    env[`WORKFORCE_INTEGRATION_${provider.toUpperCase()}_CONNECTION_ID`] = '';
+  }
+  return env;
+}
+
+function validateSubscriptionSupport(
+  persona: PersonaSpec,
+  args: {
+    mode: DeployMode;
+    subscription?: ProviderSubscriptionResolver;
+    harnessSource?: 'managed' | 'plan' | 'byok' | 'oauth';
+  }
+): void {
+  if (!persona.useSubscription || args.subscription) return;
+  if (args.mode !== 'cloud') {
+    throw new Error(
+      `persona "${persona.id}" sets useSubscription:true, which requires --mode cloud so the deploy CLI can connect an LLM provider. ` +
+        'Use --mode cloud with --harness-source oauth or byok, or remove useSubscription to use workforce-billed inference.'
+    );
+  }
+  validateCloudSubscriptionSupport({
+    persona,
+    ...(args.harnessSource ? { harnessSource: args.harnessSource } : {})
+  });
+}
+
+function alreadyConnectedSubscriptionResolver(provider: string): ProviderSubscriptionResolver {
+  return {
+    async isConnected() {
+      return true;
+    },
+    async connect() {
+      return { provider };
+    }
+  };
 }
 
 function authRecoveryForIntegrations(

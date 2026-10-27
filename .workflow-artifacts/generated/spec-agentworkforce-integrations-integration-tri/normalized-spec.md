@@ -1,0 +1,181 @@
+# Normalized Spec
+
+# Spec: `agentworkforce integrations` — integration & trigger discoverability (CLI + mcp-workforce tool)
+
+Status: **accepted** — all decisions in [§7](#7-decisions-settled) are final.
+Tracking: supersedes issue #190 (filed first as an issue, converted to this spec PR).
+Siblings: #189 / cloud#1841 (fixture/envelope discoverability for `invoke`), #141 (provider-id gotcha history), cloud#1783 (run observability).
+
+---
+
+## 1. Problem
+
+A user (or a persona-authoring agent) building a persona today has no way to ask the system two basic questions:
+
+1. **What integrations and trigger events are available?** The trigger catalog (`KNOWN_TRIGGER_CATALOG` from `@relayfile/adapter-core/triggers`, re-exported by persona-kit) is import-only — no CLI surface. The cloud integration catalog (`GET /api/v1/integrations/catalog`) is only consumed internally by deploy's config-key resolver (`packages/deploy/src/connect.ts`).
+2. **Which integrations are connected in my workspace?** The endpoints exist and deploy already calls them (`packages/deploy/src/connect.ts`, integration listing + per-provider status), but the only way a user discovers connection state is by attempting a deploy and watching preflight.
+
+Authoring is therefore guess-and-check: write `agent.triggers`, deploy, read `lintTriggers` warnings / 409s. The `google-mail`-vs-`gmail` provider-id split (#141) makes the guessing actively hostile. Agents (persona-maker) have it worse — they have no programmatic surface at all.
+
+## 2. Solution shape
+
+One catalog module, four faces:
+
+| Face | Surface | Status |
+|---|---|---|
+| Typed authoring autocomplete | `defineAgent` / persona-kit trigger types | exists |
+| Authoring-time validation | `lintTriggers` warnings in deploy preflight | exists |
+| Human discovery | **`agentworkforce integrations` CLI command** | **this spec** |
+| Agent discovery | **mcp-workforce `list_integrations` tool** | **this spec** |
+
+## 3. CLI design
+
+```bash
+agentworkforce integrations              # connection status for the active workspace (requires login)
+agentworkforce integrations --all        # full catalog when the cloud catalog is reachable; logged-out offline fallback is trigger-catalog partial with a warning
+agentworkforce integrations github       # one provider: full trigger list + connection detail
+agentworkforce integrations --json       # machine-readable; composes with all of the above
+```
+
+### 3.1 Default (status) view
+
+```
+PROVIDER             CONNECTED  SCOPE            TRIGGERS
+github               ✓          workspace        14 known (issues.opened, pull_request.opened, …)
+google-mail (gmail)  ✓          deployer_user    5 known (message.received, file.created, …)
+linear               —                           9 known
+slack                —                           7 known
+acme-internal        —                           no known triggers (connect-only)
+```
+
+### 3.2 Single-provider view
+
+`agentworkforce integrations google-mail` prints:
+
+- the full trigger list, one per line (verbatim adapter-namespace event names — these are what `agent.triggers` consumes);
+- every connection: `connectionId`, scope (`deployer_user` | `workspace` | `workspace_service_account`), `serviceAccountName` when present, status;
+- a copy-pasteable persona snippet:
+
+```jsonc
+// persona.json
+"integrations": { "google-mail": {} }
+
+// agent.ts
+triggers: { "google-mail": [{ "on": "message.received" }] }
+```
+
+### 3.3 `--all` view
+
+Same table as the status view. When the cloud catalog is reachable, rows are the full union catalog (see §5). When logged out and the cloud catalog is unreachable, the command still succeeds but emits a warning and shows a trigger-catalog-only partial catalog; cloud-only/connect-only providers are omitted because no cache or bundled cloud catalog exists in v1. In logged-out output, the CONNECTED column renders `?` (unknown ≠ disconnected).
+
+## 4. Data sources
+
+All existing — this command is composition, not new platform surface:
+
+| Question | Source |
+|---|---|
+| Integrations that exist | `GET /api/v1/integrations/catalog` (live truth for availability) |
+| Trigger events per provider | `KNOWN_TRIGGER_CATALOG` + `KNOWN_TRIGGER_ALIAS_CATALOG` + `ADAPTERS_WITHOUT_KNOWN_TRIGGERS` from `@relayfile/adapter-core/triggers` (compile-time truth for event names; offline) |
+| Connected state | `GET /api/v1/workspaces/{id}/integrations`, `GET /api/v1/me/integrations`, `GET …/integrations/{provider}/status` (the calls deploy preflight already makes) |
+| Auth/workspace | `readActiveWorkspace()` / `CloudApiClient` — identical to the `deployments` command; same env precedence (`WORKFORCE_DEPLOY_CLOUD_URL` → `WORKFORCE_CLOUD_URL` → default, `WORKFORCE_WORKSPACE_ID`) |
+
+**Explicitly NOT via the relayfile SDK directly.** `@relayfile/sdk`'s `WorkspaceHandle` is the connect-flow layer with a hardcoded provider list (`WORKSPACE_INTEGRATION_PROVIDERS`, already missing `google-mail`); cloud's API fronts relayfile with workspace scoping and is the surface workforce already authenticates against. The SDK is reached transitively through cloud.
+
+## 5. Row construction
+
+When the cloud catalog is reachable, rows are the **union** of cloud-catalog entries and trigger-catalog providers (after alias mapping via `KNOWN_TRIGGER_PROVIDER_ALIASES` in persona-kit). If an unauthenticated caller cannot reach the cloud catalog, rows are the trigger catalog only and the document must include a warning that the catalog is partial and cloud-only/connect-only providers are omitted. Provenance is kept per row:
+
+- In cloud catalog, no known triggers → `no known triggers (connect-only)` (via `ADAPTERS_WITHOUT_KNOWN_TRIGGERS` or absence from the trigger catalog).
+- In trigger catalog, missing from cloud catalog → row shown with warning marker `not in cloud catalog`. This is a drift *signal*, not an error — the two catalogs evolving independently is expected; surfacing the seam is the point.
+- **Cloud provider id is the row key**; adapter slug shown in parens when it differs: `google-mail (gmail)`. This bakes the #141 409 trap into the UX everywhere a provider is displayed.
+
+## 6. `--json` contract
+
+Shared **verbatim** by the CLI and the MCP tool — byte-identical for the same inputs.
+
+```json
+{
+  "workspaceId": "ws-… | null",
+  "auth": "authenticated | unauthenticated",
+  "integrations": [
+    {
+      "id": "google-mail",
+      "adapterSlug": "gmail",
+      "inCloudCatalog": true,
+      "connected": true,
+      "connections": [
+        {
+          "connectionId": "conn_…",
+          "scope": "deployer_user",
+          "serviceAccountName": null,
+          "status": "connected"
+        }
+      ],
+      "triggers": ["message.received", "file.created"],
+      "triggerSource": "catalog"
+    }
+  ],
+  "warnings": ["linear: in trigger catalog but not in cloud catalog"]
+}
+```
+
+Contract rules:
+
+- `connected`/`connections` are `null` (not `false`/`[]`) when `auth: "unauthenticated"` — unknown is not disconnected.
+- `adapterSlug` equals `id` when there is no alias.
+- `triggerSource`: `"catalog" | "none"`.
+- Evolution is **additive-only**; field removal or rename is a breaking change to both the CLI `--json` output and the MCP tool.
+
+## 7. Decisions (settled)
+
+Every item below is a final decision for v1.
+
+1. **Flat subcommand** `integrations` with optional positional provider — matches `deployments`/`sources` style; no nested `integrations list|status` split.
+2. **Default mode requires login**; logged-out it exits 1 with a two-line hint: run `agentworkforce login`, or use `--all` for the catalog. `--all` and a positional provider work logged-out (CONNECTED rendered as `?`). If logged out and the cloud catalog is unreachable, they emit a partial-catalog warning and show trigger-catalog rows only.
+3. **No `--scope` filter in v1.** All scopes are listed; scope is a display column. The merge order mirrors deploy's existing fallback (workspace listing, then `/me/integrations`).
+4. **No caching in v1.** Every invocation hits the live endpoints; the trigger catalog is a static import.
+5. **Sorting**: alphabetical by cloud provider id; stable; connected rows are not floated.
+6. **Exit codes**: 0 on success (including "nothing connected"); 1 on usage error, auth-required-but-missing, or any endpoint failure. Endpoint failures are loud (message + HTTP status), never silently degraded to an empty table — a wrong answer about connection state is worse than no answer.
+7. **Streams**: data (table or JSON) → stdout; warnings/hints → stderr. `--json` output is the document only, parseable with no fencing.
+8. **Unknown positional provider** → exit 1, with the same suggest-valid-ids behavior the connect 409 path has, reusing alias mapping in both directions (`gmail` → "did you mean `google-mail`").
+9. **Security**: render connection ids and statuses only — never tokens, config keys, or session URLs. The catalog endpoint's `configKey` field is excluded from both outputs.
+10. **Module placement**: core logic in `packages/deploy/src/integrations-list.ts` (deploy owns the cloud client + endpoint knowledge today); `packages/cli/src/integrations-command.ts` and the mcp-workforce tool are thin presenters over it. persona-kit stays presentation-free.
+11. **Trigger names render verbatim** from the catalog (adapter-slug namespace) — they are what `agent.triggers` consumes; no cloud-id rewriting of event names.
+12. **Process exit discipline**: set `process.exitCode`, never call `process.exit()` — same rationale as `invoke` (#188): streams flush, tests drive the command directly.
+
+## 8. mcp-workforce tool
+
+`list_integrations` in `packages/mcp-workforce`, backed by the same `packages/deploy` module:
+
+- **Input**: `{ "provider?": string, "includeTriggers?": boolean }` (default `includeTriggers: true`).
+- **Output**: the §6 JSON contract, filtered to `provider` when given.
+- **Unauthenticated**: returns the catalog document with `auth: "unauthenticated"` — never throws for missing login. If the cloud catalog is unreachable, the document is trigger-catalog-only and includes the partial-catalog warning. An authoring agent can still enumerate triggers and tell the user what to connect.
+- The persona-maker guidance (personas/skills) gets one line pointing at the tool as the authoritative way to enumerate providers/triggers before writing `agent.triggers`.
+
+## 9. Implementation plan
+
+Three PRs, P1 → P2 → P3; P3 depends only on P1.
+
+- **P1 — deploy core.** `packages/deploy/src/integrations-list.ts`: `listIntegrations({ client?, workspaceId? }) → IntegrationsDocument`. Union/alias/provenance logic + endpoint calls. Unit tests with mocked fetch covering merge, alias display, unauthenticated nulls, endpoint-failure loudness.
+- **P2 — CLI.** `packages/cli/src/integrations-command.ts` + `cli.ts` dispatch + USAGE block + README section ("Discover integrations and triggers"). Tests: table rendering, `--json` document shape, logged-out `--all`, unknown-provider suggestion, exit codes.
+- **P3 — MCP tool.** mcp-workforce `list_integrations` + tests (authenticated, unauthenticated, provider filter); persona-maker skill pointer.
+
+## 10. Acceptance criteria
+
+- [ ] `agentworkforce integrations` shows per-provider connected state for the active workspace, with scope, matching what deploy preflight would conclude.
+- [ ] `agentworkforce integrations --all` works with no login; it lists the full union when the cloud catalog is reachable, or succeeds with an explicit partial-catalog warning and trigger-catalog-only rows when the cloud catalog is unreachable.
+- [ ] `agentworkforce integrations <provider>` prints the full trigger list and a copy-pasteable persona snippet; misspelled/aliased ids get a suggestion.
+- [ ] `--json` emits the documented contract; CLI and MCP tool outputs are byte-identical for the same inputs.
+- [ ] `list_integrations` is callable from mcp-workforce and never throws on missing auth.
+- [ ] No token/configKey/session-URL material in any output.
+- [ ] Full workspace `pnpm run check` green.
+
+## 11. Out of scope
+
+- A `--scope` filter, caching, and connected-first sorting (all deferred; see §7).
+- Trigger **payload** shapes — that is the sibling track (#189 / cloud#1841): #190-this-spec tells you what you can subscribe to; #189 tells you what the events look like when they arrive.
+- Connect/disconnect actions from this command — `deploy` owns the connect flow; this command is read-only.
+
+## Target Context
+
+See .workflow-artifacts/generated/spec-agentworkforce-integrations-integration-tri/target-context.txt.

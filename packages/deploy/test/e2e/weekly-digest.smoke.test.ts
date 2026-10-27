@@ -5,7 +5,7 @@ import path from 'node:path';
 import test from 'node:test';
 import { pathToFileURL } from 'node:url';
 
-const DEFAULT_STAGING_URL = 'https://staging.agentrelay.com';
+const DEFAULT_STAGING_URL = 'https://staging.agentrelay.cloud/cloud';
 const FIXTURE_REPO = envValue('WORKFORCE_E2E_FIXTURE_REPO') ?? 'AgentWorkforce/deploy-e2e-fixtures';
 const ISSUE_TITLE_RE = /^Weekly digest\s+—\s+/u;
 const POLL_TIMEOUT_MS = 90_000;

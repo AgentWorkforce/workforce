@@ -17,7 +17,7 @@ const LAUNCH_METADATA_BACKEND_CALL_TIMEOUT_MS = 5_000;
  */
 const LAUNCH_METADATA_INGEST_FAILURE_WARN_AFTER = 3;
 
-export type LaunchMetadataIngestHarness = 'claude-code' | 'codex' | 'opencode';
+export type LaunchMetadataIngestHarness = 'claude-code' | 'codex' | 'opencode' | 'grok';
 export type LaunchMetadataPendingStampHarness = Harness;
 
 export interface LaunchMetadataPendingStampOptions {
@@ -122,6 +122,8 @@ export function launchMetadataSessionDirHint(harness: Harness): string | undefin
       return join(home, '.codex', 'sessions');
     case 'opencode':
       return join(home, '.local', 'share', 'opencode', 'storage', 'session');
+    case 'grok':
+      return undefined;
     default: {
       const _exhaustive: never = harness;
       return _exhaustive;

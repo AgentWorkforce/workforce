@@ -1,6 +1,6 @@
 import { after, before, describe, it } from 'node:test';
 import assert from 'node:assert/strict';
-import { Daytona } from '@daytonaio/sdk';
+import { Daytona } from '@daytona/sdk';
 
 import * as pkg from './index.js';
 import { DaytonaRuntime, applyDaytonaAuthEnv, resolveDaytonaAuthCredentials } from './index.js';

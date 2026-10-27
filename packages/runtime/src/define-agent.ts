@@ -1,0 +1,217 @@
+import type {
+  AgentSpec,
+  Harness,
+  PersonaDefinitionBase,
+  PersonaSchedule,
+  TypedTriggerMap,
+  WatchRule
+} from '@agentworkforce/persona-kit';
+import { handler as brandHandler } from './handler.js';
+import type { AgentEvent, BaseAgentEvent, EventType } from '@agent-relay/events';
+import type {
+  WorkforceCtx,
+  WorkforceHandler,
+  WorkforceHandlerExport
+} from './types.js';
+
+// ---------------------------------------------------------------------------
+// Event-type narrowing
+//
+// `defineAgent` flows the literal triggers/schedules an author declares into
+// the handler's `event` parameter so `event.type` autocompletes to exactly the
+// fully-qualified event types the agent fires on (e.g. a `github` trigger with
+// `on: 'pull_request.opened'` narrows `event.type` to
+// `github.pull_request.opened` — the relay SDK / cloud envelope form). When
+// nothing narrowable is declared, the handler falls back to the full relay SDK
+// {@link AgentEvent}. The payload is read via `await event.expand('full')`.
+// ---------------------------------------------------------------------------
+
+/** Distributive union of every `on` literal declared across a triggers map. */
+type OnLiteralsOf<A> = A extends readonly (infer E)[]
+  ? E extends { on: infer O }
+    ? Extract<O, string>
+    : never
+  : never;
+
+type TriggerOnUnion<Tr> = OnLiteralsOf<NonNullable<Tr[keyof Tr]>>;
+
+// A provider trigger `{ github: [{ on: 'pull_request.opened' }] }` narrows to
+// the SDK event whose `type` is the provider-qualified `github.pull_request.opened`.
+// Uses BaseAgentEvent so `event.type` is the exact declared literal and works
+// for any provider event shape — including 2-segment types like
+// `slack.app_mention` that aren't valid `EventType`s (those collapse to `never`
+// under `AgentEvent<...>`).
+//
+// When `O` is the wide `string` (a persona that declares no concrete trigger
+// literals — e.g. team members launched by a dispatcher), fall back to the full
+// `AgentEvent` so a `(event: AgentEvent)` handler stays assignable. Without this
+// the wide case narrows to `BaseAgentEvent<\`${string}.${string}\`>`, which is
+// narrower than `AgentEvent` and rejects an `AgentEvent`-typed handler.
+type ProviderEventFor<P extends string, O extends string> = string extends O
+  ? AgentEvent
+  : BaseAgentEvent<`${P}.${O}`>;
+
+type TriggerProviderEvents<Tr> = {
+  [P in keyof Tr]: P extends string
+    ? OnLiteralsOf<NonNullable<Tr[P]>> extends infer O
+      ? O extends string
+        ? ProviderEventFor<P, O>
+        : never
+      : never
+    : never;
+}[keyof Tr];
+
+type NarrowedProviderEvent<Tr> = [TriggerOnUnion<Tr>] extends [never]
+  ? never
+  : TriggerProviderEvents<Tr>;
+
+/** Distributive union of every schedule `name` literal. */
+type ScheduleNameUnion<S> = S extends readonly (infer E)[]
+  ? E extends { name: infer N }
+    ? Extract<N, string>
+    : never
+  : never;
+
+// Any declared schedule fires `cron.tick` events.
+type NarrowedCronEvent<S> = [ScheduleNameUnion<S>] extends [never]
+  ? never
+  : AgentEvent & { type: 'cron.tick' };
+
+/**
+ * The event a `defineAgent` handler receives, narrowed by `event.type` to the
+ * declared triggers/schedules. Falls back to the full relay SDK
+ * {@link AgentEvent} when nothing narrowable is declared. (Renamed from the
+ * pre-v4 `AgentEvent<Tr,S>` to avoid colliding with the SDK's `AgentEvent`.)
+ */
+export type WorkforceEventFor<Tr, S> = [
+  NarrowedProviderEvent<Tr> | NarrowedCronEvent<S>
+] extends [never]
+  ? AgentEvent
+  : NarrowedProviderEvent<Tr> | NarrowedCronEvent<S>;
+
+/**
+ * Authoring shape of an agent (`agent.ts`). The persona says *what the agent
+ * is* (model, harness, skills, mcp, integration connections); the agent says
+ * *when/how it fires* (triggers, schedules, watch) and *what it does* (the
+ * handler).
+ *
+ * `triggers` is a provider-keyed map (`{ github: [{ on: '...' }], … }`) whose
+ * keys mirror `persona.integrations` so the deploy CLI joins events→connection.
+ */
+export interface AgentDefinition<
+  Tr extends TypedTriggerMap = TypedTriggerMap,
+  S extends readonly PersonaSchedule[] = readonly PersonaSchedule[]
+> {
+  /**
+   * Alternate launch path for agents without direct listeners. Team members are
+   * spawned by a dispatcher agent, so they intentionally declare no triggers,
+   * schedules, or watch rules.
+   */
+  launchedBy?: AgentSpec['launchedBy'];
+  /** Radio listeners: provider-keyed map of typed event triggers. */
+  triggers?: Tr;
+  /** Clock listeners: cron schedules. */
+  schedules?: S;
+  /** Relayfile-change listeners. */
+  watch?: readonly WatchRule[];
+  /** Event handler. `event` is narrowed to the declared triggers/schedules. */
+  handler: (ctx: WorkforceCtx, event: WorkforceEventFor<Tr, S>) => Promise<void> | void;
+  /** Forward-compatible downstream agent extensions. */
+  [key: string]: unknown;
+}
+
+/** Common-case one-file Agent: persona identity/runtime plus listeners and handler. */
+export type SingleFileAgentDefinition<
+  Tr extends TypedTriggerMap = TypedTriggerMap,
+  S extends readonly PersonaSchedule[] = readonly PersonaSchedule[]
+> = PersonaDefinitionBase &
+  Omit<AgentDefinition<Tr, S>, 'handler'> & {
+    harness?: Harness;
+    model?: string;
+    systemPrompt?: string;
+    handler: (ctx: WorkforceCtx, event: WorkforceEventFor<Tr, S>) => Promise<void> | void;
+  };
+
+/**
+ * Branded object returned by {@link defineAgent}. The deploy CLI reads
+ * `triggers`/`schedules`/`watch` off this default export to build the cloud
+ * `agent` block, and the runner invokes `handler`.
+ */
+export interface WorkforceAgentExport {
+  readonly __workforceAgent: true;
+  readonly launchedBy?: AgentSpec['launchedBy'];
+  readonly triggers?: TypedTriggerMap;
+  readonly schedules?: readonly PersonaSchedule[];
+  readonly watch?: readonly WatchRule[];
+  readonly handler: WorkforceHandlerExport;
+  /** Preset persona fields are retained on single-file exports for the compiler. */
+  readonly [field: string]: unknown;
+}
+
+/**
+ * Define a workforce agent. Default-export the result from `agent.ts`:
+ *
+ * ```ts
+ * import { defineAgent } from '@agentworkforce/runtime';
+ *
+ * export default defineAgent({
+ *   triggers: {
+ *     github: [{ on: 'pull_request.opened' }, { on: 'issue_comment.created', match: '@mention' }],
+ *     slack: [{ on: 'app_mention' }],
+ *   },
+ *   schedules: [{ name: 'nightly', cron: '0 2 * * *' }],
+ *   handler: async (ctx, event) => {
+ *     // event.type narrows to the declared trigger `on` values
+ *   },
+ * });
+ * ```
+ *
+ * Identity-ish at runtime: returns the same listener declarations plus a
+ * branded, `handler()`-wrapped handler. The `const` type params preserve the
+ * authored literals so the handler's `event` can be narrowed.
+ */
+export function defineAgent<
+  const Tr extends TypedTriggerMap = Record<string, never>,
+  const S extends readonly PersonaSchedule[] = []
+>(input: SingleFileAgentDefinition<Tr, S>): WorkforceAgentExport & Omit<SingleFileAgentDefinition<Tr, S>, 'handler'>;
+export function defineAgent<
+  const Tr extends TypedTriggerMap = Record<string, never>,
+  const S extends readonly PersonaSchedule[] = []
+>(input: AgentDefinition<Tr, S>): WorkforceAgentExport;
+export function defineAgent(
+  input: AgentDefinition<TypedTriggerMap, readonly PersonaSchedule[]> | SingleFileAgentDefinition<TypedTriggerMap, readonly PersonaSchedule[]>
+): WorkforceAgentExport {
+  if (!input || typeof input !== 'object') {
+    throw new TypeError('defineAgent() expects an object');
+  }
+  if (typeof input.handler !== 'function') {
+    throw new TypeError('defineAgent({ handler }) — handler must be a function');
+  }
+  // Preserve the authored object. The single-file compiler removes handler and
+  // listener fields to form the existing persona block; whitelisting here
+  // would recreate the silent field-loss failure class from #1732.
+  const agent = {
+    ...input,
+    handler: brandHandler(input.handler as WorkforceHandler)
+  };
+  Object.defineProperty(agent, '__workforceAgent', {
+    value: true,
+    writable: false,
+    enumerable: false,
+    configurable: false
+  });
+  return agent as WorkforceAgentExport;
+}
+
+/**
+ * Detect whether a bundle's default export is a branded {@link defineAgent}
+ * object. Used by the runner to extract the handler before invoking it.
+ */
+export function isWorkforceAgent(value: unknown): value is WorkforceAgentExport {
+  return (
+    typeof value === 'object' &&
+    value !== null &&
+    (value as { __workforceAgent?: unknown }).__workforceAgent === true &&
+    typeof (value as { handler?: unknown }).handler === 'function'
+  );
+}

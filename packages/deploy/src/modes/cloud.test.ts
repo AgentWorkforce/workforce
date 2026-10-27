@@ -3,14 +3,14 @@ import assert from 'node:assert/strict';
 import { mkdtemp, rm, writeFile } from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
-import type { PersonaSpec } from '@agentworkforce/persona-kit';
+import type { PersonaSpec, WatchRule } from '@agentworkforce/persona-kit';
 import { createBufferedIO } from '../io.js';
 import type { BundleResult, ModeLaunchInput } from '../types.js';
 import {
   cloudLauncher,
   configureCloudCredentialDepsForTest,
   type CloudRunHandle
-} from './cloud.js';
+} from './cloud/index.js';
 
 type FetchCall = {
   url: string;
@@ -43,11 +43,14 @@ function persona(overrides: Partial<PersonaSpec> = {}): PersonaSpec {
     systemPrompt: 'help',
     harnessSettings: { reasoning: 'medium', timeoutSeconds: 300 },
     cloud: true,
-    schedules: [{ name: 'daily', cron: '0 9 * * *' }],
     onEvent: './agent.ts',
     ...overrides
   };
 }
+
+const agentSpec: import('@agentworkforce/persona-kit').AgentSpec = {
+  schedules: [{ name: 'daily', cron: '0 9 * * *' }]
+};
 
 async function withBundle(): Promise<{ bundle: BundleResult; cleanup: () => Promise<void> }> {
   const dir = await mkdtemp(path.join(os.tmpdir(), 'wf-cloud-test-'));
@@ -59,7 +62,17 @@ async function withBundle(): Promise<{ bundle: BundleResult; cleanup: () => Prom
     writeFile(runnerPath, 'export {};', 'utf8'),
     writeFile(bundlePath, 'export default {};', 'utf8'),
     writeFile(personaCopyPath, '{}', 'utf8'),
-    writeFile(packageJsonPath, '{"type":"module"}', 'utf8')
+    writeFile(
+      packageJsonPath,
+      JSON.stringify({
+        type: 'module',
+        bundleManifest: {
+          schemaVersion: 1,
+          packages: [{ name: '@relayfile/relay-helpers', version: '0.4.9' }]
+        }
+      }),
+      'utf8'
+    )
   ]);
   return {
     bundle: {
@@ -128,13 +141,13 @@ async function launch(overrides: {
   persona?: PersonaSpec;
   env?: Partial<Record<(typeof ENV_KEYS)[number], string | undefined>>;
   input?: Partial<ModeLaunchInput>;
-  defaultPlanCredential?: boolean;
+  defaultManagedCredential?: boolean;
   fetch: (url: string, init: RequestInit | undefined, calls: FetchCall[]) => Response | Promise<Response>;
 }) {
   const { bundle, cleanup } = await withBundle();
   const io = createBufferedIO();
   const fetchMock = installFetch((url, init, calls) => {
-    if (overrides.defaultPlanCredential !== false && url.includes('/provider-credentials/managed')) {
+    if (overrides.defaultManagedCredential !== false && url.includes('/provider-credentials/managed')) {
       assert.equal(init?.method, 'POST');
       return okJson({ providerCredentialId: 'cred-1' });
     }
@@ -143,13 +156,14 @@ async function launch(overrides: {
   try {
     const handle = await withEnv({
       WORKFORCE_WORKSPACE_TOKEN: 'tok',
-      WORKFORCE_DEPLOY_HARNESS_SOURCE: 'plan',
+      WORKFORCE_DEPLOY_HARNESS_SOURCE: 'managed',
       WORKFORCE_DEPLOY_POLL_INTERVAL_MS: '0',
       WORKFORCE_DEPLOY_POLL_TIMEOUT_MS: '50',
       WORKFORCE_DEPLOY_RETRY_BACKOFF_MS: '0',
       ...overrides.env
     }, () => cloudLauncher.launch({
       persona: overrides.persona ?? persona(),
+      agent: agentSpec,
       bundle,
       workspace: 'ws-test',
       io,
@@ -163,11 +177,15 @@ async function launch(overrides: {
 }
 
 test('cloud launcher POSTs a deploy bundle and returns the cloud handle', async () => {
+  const dispatcherAgentSpec: import('@agentworkforce/persona-kit').AgentSpec = {
+    ...agentSpec,
+    launchedBy: 'team-dispatcher'
+  };
   const { handle, calls } = await launch({
     env: {
       WORKFORCE_DEPLOY_CLOUD_URL: 'https://cloud.example.test'
     },
-    input: { inputs: { topic: 'AI' } },
+    input: { inputs: { topic: 'AI' }, agent: dispatcherAgentSpec },
     fetch(url, init) {
       if (init?.method === 'GET' && url.endsWith('/deployments')) {
         return okJson({ agents: [] });
@@ -176,8 +194,17 @@ test('cloud launcher POSTs a deploy bundle and returns the cloud handle', async 
       assert.equal(init?.method, 'POST');
       const body = JSON.parse(String(init?.body)) as Record<string, unknown>;
       assert.equal((body.persona as { id: string }).id, 'demo');
+      // Listeners travel as the top-level `agent` block, not on the persona.
+      assert.deepEqual(body.agent, dispatcherAgentSpec);
+      assert.equal((body.persona as { schedules?: unknown }).schedules, undefined);
       assert.deepEqual(body.inputs, { topic: 'AI' });
-      assert.deepEqual((body.bundle as { packageJson: unknown }).packageJson, { type: 'module' });
+      assert.deepEqual((body.bundle as { packageJson: unknown }).packageJson, {
+        type: 'module',
+        bundleManifest: {
+          schemaVersion: 1,
+          packages: [{ name: '@relayfile/relay-helpers', version: '0.4.9' }]
+        }
+      });
       return okJson({ agentId: 'agent-1', deploymentId: 'dep-1', status: 'active' }, 201);
     }
   });
@@ -186,6 +213,92 @@ test('cloud launcher POSTs a deploy bundle and returns the cloud handle', async 
   assert.equal(handle.deploymentId, 'dep-1');
   assert.equal((await handle.done).code, 0);
   assert.equal(calls.filter((call) => call.url.includes('/provider-credentials/managed')).length, 1);
+});
+
+test('cloud launcher sends proactive agent watch rules through the deployments endpoint', async () => {
+  // Consolidation: proactive agents now flow through the same /deployments
+  // POST as regular agents. Listener declarations, including watch[], travel
+  // inside the top-level agent block; the persona stays connection/runtime
+  // config only. No separate /proactive-personas surface.
+  const watch: WatchRule[] = [{ paths: ['/i/x/**'], events: ['created'], debounceMs: 1000 }];
+  const proactivePersona = persona({
+    mount: { enabled: false }
+  });
+
+  const { handle, calls } = await launch({
+    persona: proactivePersona,
+    input: { agent: { watch } },
+    env: {
+      WORKFORCE_DEPLOY_CLOUD_URL: 'https://cloud.example.test'
+    },
+    fetch(url, init) {
+      if (init?.method === 'GET' && url.endsWith('/deployments')) {
+        return okJson({ agents: [] });
+      }
+      assert.equal(url, 'https://cloud.example.test/api/v1/workspaces/ws-test/deployments');
+      assert.equal(init?.method, 'POST');
+      const body = JSON.parse(String(init?.body)) as Record<string, unknown>;
+      assert.equal((body.persona as Record<string, unknown>).watch, undefined);
+      assert.deepEqual((body.agent as Record<string, unknown>).watch, watch);
+      assert.equal(body.watch, undefined);
+      assert.equal(body.mount, undefined);
+      return okJson({ agentId: 'agent-1', deploymentId: 'dep-1', status: 'ready' }, 201);
+    }
+  });
+
+  assert.equal(handle.id, 'agent-1');
+  assert.equal(handle.agentId, 'agent-1');
+  assert.equal(handle.deploymentId, 'dep-1');
+  assert.equal(handle.status, 'ready');
+  assert.equal((await handle.done).code, 0);
+  assert.equal(callsForUrl(calls, '/proactive-personas'), 0);
+});
+
+test('cloud launcher keeps non-proactive personas on the deployments endpoint', async () => {
+  const { handle, calls } = await launch({
+    persona: persona(),
+    input: { agent: {} },
+    env: {
+      WORKFORCE_DEPLOY_CLOUD_URL: 'https://cloud.example.test'
+    },
+    fetch(url, init) {
+      if (init?.method === 'GET' && url.endsWith('/deployments')) {
+        return okJson({ agents: [] });
+      }
+      assert.equal(url, 'https://cloud.example.test/api/v1/workspaces/ws-test/deployments');
+      assert.equal(init?.method, 'POST');
+      return okJson({ agentId: 'agent-1', deploymentId: 'dep-1', status: 'active' }, 201);
+    }
+  });
+
+  assert.equal(handle.id, 'agent-1');
+  assert.equal(callsForUrl(calls, '/deployments'), 2);
+  assert.equal(callsForUrl(calls, '/proactive-personas'), 0);
+});
+
+test('cloud launcher maps proactive failed deployment responses to a failed handle', async () => {
+  const watch: WatchRule[] = [{ paths: ['/i/x/**'], events: ['updated'], debounceMs: 1000 }];
+
+  const { handle } = await launch({
+    persona: persona(),
+    input: { agent: { watch } },
+    env: {
+      WORKFORCE_DEPLOY_CLOUD_URL: 'https://cloud.example.test'
+    },
+    fetch(url, init) {
+      if (init?.method === 'GET' && url.endsWith('/deployments')) {
+        return okJson({ agents: [] });
+      }
+      assert.equal(url, 'https://cloud.example.test/api/v1/workspaces/ws-test/deployments');
+      assert.equal(init?.method, 'POST');
+      return okJson({ agentId: 'agent-1', deploymentId: 'dep-1', status: 'failed' }, 201);
+    }
+  });
+
+  assert.equal(handle.id, 'agent-1');
+  assert.equal(handle.deploymentId, 'dep-1');
+  assert.equal(handle.status, 'failed');
+  assert.equal((await handle.done).code, 1);
 });
 
 test('cloud URL precedence is flag env, cloud env, persona deployUrl, then default', async () => {
@@ -224,28 +337,28 @@ test('cloud URL precedence is flag env, cloud env, persona deployUrl, then defau
   );
 });
 
-test('cloud harness plan and BYOK save provider credentials through the cloud contract', async () => {
-  const plan = await launch({
-    defaultPlanCredential: false,
+test('cloud harness managed and BYOK save provider credentials through the cloud contract', async () => {
+  const managed = await launch({
+    defaultManagedCredential: false,
     env: { WORKFORCE_DEPLOY_CLOUD_URL: 'https://cloud.example.test' },
-    input: { harnessSource: 'plan' },
+    input: { harnessSource: 'managed' },
     fetch(url, init) {
       if (url.endsWith('/provider-credentials/managed?provider=openai')) {
         assert.equal(init?.method, 'POST');
         assert.equal(init?.body, undefined);
-        return okJson({ providerCredentialId: 'cred-plan' });
+        return okJson({ providerCredentialId: 'cred-managed' });
       }
       if (init?.method === 'GET' && url.endsWith('/deployments')) return okJson({ agents: [] });
       if (url.endsWith('/deployments')) {
-        return okJson({ agentId: 'agent-plan', deploymentId: 'dep-plan', status: 'active' }, 201);
+        return okJson({ agentId: 'agent-managed', deploymentId: 'dep-managed', status: 'active' }, 201);
       }
       throw new Error(`unexpected URL ${url}`);
     }
   });
-  assert.equal(plan.handle.id, 'agent-plan');
+  assert.equal(managed.handle.id, 'agent-managed');
 
   const byok = await launch({
-    defaultPlanCredential: false,
+    defaultManagedCredential: false,
     env: { WORKFORCE_DEPLOY_CLOUD_URL: 'https://cloud.example.test' },
     input: { harnessSource: 'byok', byokKey: 'sk-test' },
     fetch(url, init) {
@@ -269,15 +382,134 @@ test('cloud harness plan and BYOK save provider credentials through the cloud co
   assert.equal(byok.handle.id, 'agent-byok');
 });
 
+test('cloud harness legacy plan alias maps to managed provider credentials', async () => {
+  const planAlias = await launch({
+    defaultManagedCredential: false,
+    env: { WORKFORCE_DEPLOY_CLOUD_URL: 'https://cloud.example.test' },
+    input: { harnessSource: 'plan' },
+    fetch(url, init) {
+      if (url.endsWith('/provider-credentials/managed?provider=openai')) {
+        assert.equal(init?.method, 'POST');
+        assert.equal(init?.body, undefined);
+        return okJson({ providerCredentialId: 'cred-managed' });
+      }
+      if (init?.method === 'GET' && url.endsWith('/deployments')) return okJson({ agents: [] });
+      if (url.endsWith('/deployments')) {
+        const body = JSON.parse(String(init?.body));
+        assert.deepEqual(body.credentialSelections, { openai: 'cred-managed' });
+        return okJson({ agentId: 'agent-managed', deploymentId: 'dep-managed', status: 'active' }, 201);
+      }
+      throw new Error(`unexpected URL ${url}`);
+    }
+  });
+
+  assert.equal(planAlias.handle.id, 'agent-managed');
+});
+
+test('cloud harness legacy plan env alias maps to managed provider credentials', async () => {
+  const planAlias = await launch({
+    defaultManagedCredential: false,
+    env: {
+      WORKFORCE_DEPLOY_CLOUD_URL: 'https://cloud.example.test',
+      WORKFORCE_DEPLOY_HARNESS_SOURCE: 'plan'
+    },
+    fetch(url, init) {
+      if (url.endsWith('/provider-credentials/managed?provider=openai')) {
+        assert.equal(init?.method, 'POST');
+        return okJson({ providerCredentialId: 'cred-managed-env' });
+      }
+      if (init?.method === 'GET' && url.endsWith('/deployments')) return okJson({ agents: [] });
+      if (url.endsWith('/deployments')) {
+        const body = JSON.parse(String(init?.body));
+        assert.deepEqual(body.credentialSelections, { openai: 'cred-managed-env' });
+        return okJson({ agentId: 'agent-managed-env', deploymentId: 'dep-managed-env', status: 'active' }, 201);
+      }
+      throw new Error(`unexpected URL ${url}`);
+    }
+  });
+
+  assert.equal(planAlias.handle.id, 'agent-managed-env');
+});
+
+test('cloud harness prompt default chooses managed provider credentials', async () => {
+  // The probe must actually RUN for this test to mean anything: it asserts what
+  // happens when the probe reports nothing connected. Stub the stored login
+  // rather than leaning on the developer's own — without this the test passes
+  // on a machine that happens to be logged in and takes a different path in CI,
+  // where there is no stored auth and the probe is simply unavailable.
+  const restoreDeps = configureCloudCredentialDepsForTest({
+    readStoredAuth: async () => ({
+      apiUrl: 'https://cloud.example.test',
+      accessToken: 'tok',
+      refreshToken: 'refresh',
+      accessTokenExpiresAt: '2999-01-01T00:00:00.000Z'
+    }),
+    createCloudApiClient() {
+      return {
+        async fetch(pathname: string) {
+          assert.equal(pathname, '/api/v1/cloud-agents');
+          return okJson({ agents: [] });
+        }
+      };
+    }
+  });
+
+  const prompted = await launch({
+    defaultManagedCredential: false,
+    env: {
+      WORKFORCE_DEPLOY_CLOUD_URL: 'https://cloud.example.test',
+      WORKFORCE_DEPLOY_HARNESS_SOURCE: undefined
+    },
+    fetch(url, init) {
+      if (url.endsWith('/provider-credentials/managed?provider=openai')) {
+        assert.equal(init?.method, 'POST');
+        return okJson({ providerCredentialId: 'cred-managed-prompt' });
+      }
+      if (init?.method === 'GET' && url.endsWith('/deployments')) return okJson({ agents: [] });
+      if (url.endsWith('/deployments')) {
+        const body = JSON.parse(String(init?.body));
+        assert.deepEqual(body.credentialSelections, { openai: 'cred-managed-prompt' });
+        return okJson({ agentId: 'agent-managed-prompt', deploymentId: 'dep-managed-prompt', status: 'active' }, 201);
+      }
+      throw new Error(`unexpected URL ${url}`);
+    }
+  }).finally(restoreDeps);
+
+  assert.equal(prompted.handle.id, 'agent-managed-prompt');
+});
+
 test('cloud BYOK provider detection avoids substring false positives', async () => {
+  // A bare model name without a provider separator (/) should not match
+  // "openai" via substring — the harness-derived provider wins.
+  // The default test persona has harness: 'codex' → HARNESS_TO_PROVIDER → 'openai'.
   await launch({
-    defaultPlanCredential: false,
+    defaultManagedCredential: false,
     persona: persona({ model: 'my-openai-alternative' }),
     env: { WORKFORCE_DEPLOY_CLOUD_URL: 'https://cloud.example.test' },
     input: { harnessSource: 'byok', byokKey: 'sk-test' },
     fetch(url, init) {
       if (url.endsWith('/provider-credentials/byok')) {
-        assert.equal(JSON.parse(String(init?.body)).modelProvider, 'my-openai-alternative');
+        assert.equal(JSON.parse(String(init?.body)).modelProvider, 'openai');
+        return okJson({ providerCredentialId: 'cred-byok' });
+      }
+      if (init?.method === 'GET' && url.endsWith('/deployments')) return okJson({ agents: [] });
+      if (url.endsWith('/deployments')) {
+        return okJson({ agentId: 'agent-byok', deploymentId: 'dep-byok', status: 'active' }, 201);
+      }
+      throw new Error(`unexpected URL ${url}`);
+    }
+  });
+});
+
+test('cloud BYOK opencode harness derives opencode provider', async () => {
+  await launch({
+    defaultManagedCredential: false,
+    persona: persona({ harness: 'opencode', model: 'deepseek-v4-flash-free' }),
+    env: { WORKFORCE_DEPLOY_CLOUD_URL: 'https://cloud.example.test' },
+    input: { harnessSource: 'byok', byokKey: 'sk-or-test' },
+    fetch(url, init) {
+      if (url.endsWith('/provider-credentials/byok')) {
+        assert.equal(JSON.parse(String(init?.body)).modelProvider, 'opencode');
         return okJson({ providerCredentialId: 'cred-byok' });
       }
       if (init?.method === 'GET' && url.endsWith('/deployments')) return okJson({ agents: [] });
@@ -298,7 +530,7 @@ test('cloud harness OAuth probe hits /api/v1/cloud-agents and honors no-prompt f
   const restoreDeps = configureCloudCredentialDepsForTest({
     readStoredAuth: async () => ({
       apiUrl: 'https://cloud.example.test',
-      accessToken: 'access',
+      accessToken: 'tok',
       refreshToken: 'refresh',
       accessTokenExpiresAt: '2999-01-01T00:00:00.000Z'
     }),
@@ -315,7 +547,7 @@ test('cloud harness OAuth probe hits /api/v1/cloud-agents and honors no-prompt f
   });
   await assert.rejects(
     launch({
-      defaultPlanCredential: false,
+      defaultManagedCredential: false,
       env: {
         WORKFORCE_DEPLOY_CLOUD_URL: 'https://cloud.example.test',
         WORKFORCE_DEPLOY_NO_PROMPT: '1'
@@ -338,7 +570,7 @@ test('cloud harness OAuth probe treats a matching connected entry as ready (skip
   const restoreDeps = configureCloudCredentialDepsForTest({
     readStoredAuth: async () => ({
       apiUrl: 'https://cloud.example.test',
-      accessToken: 'access',
+      accessToken: 'tok',
       refreshToken: 'refresh',
       accessTokenExpiresAt: '2999-01-01T00:00:00.000Z'
     }),
@@ -385,6 +617,185 @@ test('cloud harness OAuth probe treats a matching connected entry as ready (skip
   assert.ok(!calls.some((c) => c.url.includes('/cli/auth')));
 });
 
+test('cloud harness OAuth probe retains authority when its stored token refreshes', async () => {
+  let storedAuth = {
+    apiUrl: 'https://cloud.example.test',
+    accessToken: 'tok',
+    refreshToken: 'refresh',
+    accessTokenExpiresAt: '2000-01-01T00:00:00.000Z'
+  };
+  let storedAuthReads = 0;
+  let refreshes = 0;
+  const restoreDeps = configureCloudCredentialDepsForTest({
+    readStoredAuth: async () => {
+      storedAuthReads += 1;
+      return storedAuth;
+    },
+    refreshStoredAuth: async (auth) => {
+      refreshes += 1;
+      assert.equal(auth.accessToken, 'tok');
+      storedAuth = {
+        ...storedAuth,
+        accessToken: 'rotated-token',
+        accessTokenExpiresAt: '2999-01-01T00:00:00.000Z'
+      };
+      return storedAuth;
+    },
+    createCloudApiClient(auth) {
+      assert.equal(auth.accessToken, 'rotated-token');
+      return {
+        async fetch(pathname: string) {
+          assert.equal(pathname, '/api/v1/cloud-agents');
+          return okJson({
+            agents: [{ id: 'pc-anthropic-rotated', harness: 'claude', status: 'connected' }]
+          });
+        }
+      };
+    }
+  });
+
+  try {
+    const { handle } = await launch({
+      persona: persona({ harness: 'claude', model: 'claude-sonnet-4-6' }),
+      defaultManagedCredential: false,
+      env: {
+        WORKFORCE_DEPLOY_CLOUD_URL: 'https://cloud.example.test',
+        WORKFORCE_DEPLOY_HARNESS_SOURCE: 'oauth',
+        WORKFORCE_DEPLOY_NO_PROMPT: '1'
+      },
+      fetch(url, init) {
+        if (init?.method === 'GET' && url.endsWith('/deployments')) return okJson({ agents: [] });
+        if (url.endsWith('/deployments')) {
+          const body = JSON.parse(String(init?.body)) as Record<string, unknown>;
+          assert.deepEqual(body.credentialSelections, { anthropic: 'pc-anthropic-rotated' });
+          return okJson({ agentId: 'agent-refreshed-probe', deploymentId: 'dep-1', status: 'active' }, 201);
+        }
+        throw new Error(`unexpected URL ${url}`);
+      }
+    });
+    assert.equal(handle.id, 'agent-refreshed-probe');
+    assert.equal(refreshes, 1);
+    assert.equal(storedAuthReads, 1, 'the verified probe client is reused after token rotation');
+  } finally {
+    restoreDeps();
+  }
+});
+
+test('cloud harness source resolves a connected Claude setup-token without an operator override', async () => {
+  const restoreDeps = configureCloudCredentialDepsForTest({
+    readStoredAuth: async () => ({
+      apiUrl: 'https://cloud.example.test',
+      accessToken: 'tok',
+      refreshToken: 'refresh',
+      accessTokenExpiresAt: '2999-01-01T00:00:00.000Z'
+    }),
+    createCloudApiClient() {
+      return {
+        async fetch(pathname: string) {
+          assert.equal(pathname, '/api/v1/cloud-agents');
+          return okJson({
+            agents: [
+              {
+                id: 'pc-claude-setup-token',
+                harness: 'claude',
+                modelProvider: 'anthropic',
+                authType: 'oauth_token',
+                status: 'connected',
+                isActive: true,
+                credentialExpiresAt: null,
+                lastError: null
+              }
+            ]
+          });
+        }
+      };
+    }
+  });
+
+  const { handle } = await launch({
+    persona: persona({ harness: 'claude', model: 'claude-sonnet-4-6' }),
+    defaultManagedCredential: false,
+    env: {
+      WORKFORCE_DEPLOY_CLOUD_URL: 'https://cloud.example.test',
+      WORKFORCE_DEPLOY_HARNESS_SOURCE: undefined,
+      WORKFORCE_DEPLOY_NO_PROMPT: '1'
+    },
+    fetch(url, init) {
+      if (init?.method === 'GET' && url.endsWith('/deployments')) return okJson({ agents: [] });
+      if (url.endsWith('/deployments')) {
+        const body = JSON.parse(String(init?.body)) as Record<string, unknown>;
+        assert.deepEqual(body.credentialSelections, {
+          anthropic: 'pc-claude-setup-token'
+        });
+        return okJson(
+          { agentId: 'agent-claude-setup-token', deploymentId: 'dep-1', status: 'active' },
+          201
+        );
+      }
+      throw new Error(`unexpected URL ${url}`);
+    }
+  }).finally(restoreDeps);
+
+  assert.equal(handle.id, 'agent-claude-setup-token');
+});
+
+test('cloud harness OAuth probe maps a grok persona to the connected xai credential', async () => {
+  // Regression: a grok persona declares `model: "grok-build"`, but the
+  // connected credential `relay cloud connect xai` stores is keyed
+  // `harness: "grok"` (modelProvider "xai"). deriveModelProvider used to
+  // return the literal model string "grok-build" — which matched neither
+  // "grok" nor "xai" — so the probe reported "not connected", re-prompted
+  // for a browser reconnect that never matched, and the deploy looped.
+  // With grok/xai mapped to provider "xai" (alias "grok"), the connected
+  // entry is recognized and the deploy proceeds.
+  const restoreDeps = configureCloudCredentialDepsForTest({
+    readStoredAuth: async () => ({
+      apiUrl: 'https://cloud.example.test',
+      accessToken: 'tok',
+      refreshToken: 'refresh',
+      accessTokenExpiresAt: '2999-01-01T00:00:00.000Z'
+    }),
+    createCloudApiClient() {
+      return {
+        async fetch(pathname: string) {
+          assert.equal(pathname, '/api/v1/cloud-agents');
+          return okJson({
+            agents: [
+              {
+                id: 'cloud-agent-grok',
+                harness: 'grok', // xai credential is stored under the grok harness alias
+                status: 'connected',
+                credentialStoredAt: '2026-06-15T19:15:44.561Z'
+              }
+            ]
+          });
+        }
+      };
+    }
+  });
+
+  const { calls, handle } = await launch({
+    defaultManagedCredential: false,
+    env: {
+      WORKFORCE_DEPLOY_CLOUD_URL: 'https://cloud.example.test',
+      WORKFORCE_DEPLOY_NO_PROMPT: '1'
+    },
+    input: { harnessSource: 'oauth' },
+    persona: persona({ harness: 'grok', model: 'grok-build' }),
+    fetch(url, init) {
+      if (init?.method === 'GET' && url.endsWith('/deployments')) return okJson({ agents: [] });
+      if (url.endsWith('/deployments')) {
+        return okJson({ agentId: 'agent-grok', deploymentId: 'dep-grok', status: 'active' }, 201);
+      }
+      throw new Error(`unexpected URL ${url}`);
+    }
+  }).finally(restoreDeps);
+
+  assert.equal(handle.id, 'agent-grok');
+  // The connected entry was recognized, so no browser reconnect fired.
+  assert.ok(!calls.some((c) => c.url.includes('/cli/auth')));
+});
+
 test('cloud harness OAuth probe ignores entries with the wrong harness', async () => {
   // If the user has openai connected but the persona's provider is
   // anthropic, the probe must NOT treat that as readiness — otherwise
@@ -393,7 +804,7 @@ test('cloud harness OAuth probe ignores entries with the wrong harness', async (
   const restoreDeps = configureCloudCredentialDepsForTest({
     readStoredAuth: async () => ({
       apiUrl: 'https://cloud.example.test',
-      accessToken: 'access',
+      accessToken: 'tok',
       refreshToken: 'refresh',
       accessTokenExpiresAt: '2999-01-01T00:00:00.000Z'
     }),
@@ -415,7 +826,7 @@ test('cloud harness OAuth probe ignores entries with the wrong harness', async (
   // Override the persona to claude/anthropic so the expected provider mismatches.
   await assert.rejects(
     launch({
-      defaultPlanCredential: false,
+      defaultManagedCredential: false,
       env: {
         WORKFORCE_DEPLOY_CLOUD_URL: 'https://cloud.example.test',
         WORKFORCE_DEPLOY_NO_PROMPT: '1'
@@ -436,7 +847,7 @@ test('cloud harness OAuth starts auth and polls /cloud-agents until the harness 
   const restoreDeps = configureCloudCredentialDepsForTest({
     readStoredAuth: async () => ({
       apiUrl: 'https://cloud.example.test',
-      accessToken: 'access',
+      accessToken: 'tok',
       refreshToken: 'refresh',
       accessTokenExpiresAt: '2999-01-01T00:00:00.000Z'
     }),
@@ -482,6 +893,7 @@ test('cloud harness OAuth starts auth and polls /cloud-agents until the harness 
       WORKFORCE_DEPLOY_RETRY_BACKOFF_MS: '0'
     }, () => cloudLauncher.launch({
       persona: persona(),
+      agent: agentSpec,
       bundle,
       workspace: 'ws-test',
       io
@@ -493,8 +905,145 @@ test('cloud harness OAuth starts auth and polls /cloud-agents until the harness 
     await cleanup();
   }
 
-  assert.equal(credentialChecks, 3);
+  // 3 connection polls + 1 post-connect selections lookup (the oauth leg
+  // re-reads /cloud-agents to stamp credentialSelections — workforce#196).
+  assert.equal(credentialChecks, 4);
   assert.deepEqual(connected, ['openai']);
+});
+
+// Cloud marks a credential row `connected` even after its OAuth token is
+// revoked server-side, so a plain redeploy short-circuits and never refreshes
+// a dead harness credential. `--reconnect <provider>` is the escape hatch.
+test('cloud --reconnect forces a fresh harness connect even when already connected', async () => {
+  const connected: string[] = [];
+  const restoreDeps = configureCloudCredentialDepsForTest({
+    readStoredAuth: async () => ({
+      apiUrl: 'https://cloud.example.test',
+      accessToken: 'tok',
+      refreshToken: 'refresh',
+      accessTokenExpiresAt: '2999-01-01T00:00:00.000Z'
+    }),
+    connectProvider: async (options: { provider: string }) => {
+      connected.push(options.provider);
+      return { provider: options.provider, success: true };
+    },
+    createCloudApiClient() {
+      return {
+        async fetch(pathname: string) {
+          assert.equal(pathname, '/api/v1/cloud-agents');
+          return okJson({
+            agents: [{ id: 'cloud-agent-openai', harness: 'openai', status: 'connected' }]
+          });
+        }
+      };
+    }
+  });
+  const io = createBufferedIO();
+  const { bundle, cleanup } = await withBundle();
+  const fetchMock = installFetch((url, init) => {
+    if (init?.method === 'GET' && url.endsWith('/deployments')) return okJson({ agents: [] });
+    if (url.endsWith('/deployments')) {
+      return okJson({ agentId: 'agent-reconnect', deploymentId: 'dep-reconnect', status: 'active' }, 201);
+    }
+    throw new Error(`unexpected URL ${url}`);
+  });
+  try {
+    const handle = await withEnv({
+      WORKFORCE_WORKSPACE_TOKEN: 'tok',
+      WORKFORCE_DEPLOY_CLOUD_URL: 'https://cloud.example.test',
+      WORKFORCE_DEPLOY_HARNESS_SOURCE: 'oauth',
+      WORKFORCE_DEPLOY_POLL_INTERVAL_MS: '0',
+      WORKFORCE_DEPLOY_POLL_TIMEOUT_MS: '50',
+      WORKFORCE_DEPLOY_RETRY_BACKOFF_MS: '0'
+    }, () => cloudLauncher.launch({
+      persona: persona(),
+      agent: agentSpec,
+      bundle,
+      workspace: 'ws-test',
+      io,
+      // The harness name ("codex") resolves to provider "openai"; pass the
+      // harness alias to prove both spellings trigger the reconnect.
+      reconnectProviders: ['codex']
+    }));
+    assert.equal(handle.id, 'agent-reconnect');
+  } finally {
+    fetchMock.restore();
+    restoreDeps();
+    await cleanup();
+  }
+  // Despite cloud reporting the harness already connected, the reconnect flag
+  // forced a fresh connectProvider call that overwrites the stored token.
+  assert.deepEqual(connected, ['openai']);
+});
+
+test('cloud --reconnect fails fast when the deploy credential cannot verify completion', async () => {
+  let connectCalled = false;
+  const restoreDeps = configureCloudCredentialDepsForTest({
+    readStoredAuth: async () => ({
+      apiUrl: 'https://cloud.example.test',
+      accessToken: 'stored-user-login',
+      refreshToken: 'refresh',
+      accessTokenExpiresAt: '2999-01-01T00:00:00.000Z'
+    }),
+    connectProvider: async () => {
+      connectCalled = true;
+      return { provider: 'openai', success: true };
+    },
+    createCloudApiClient() {
+      throw new Error('an unrelated stored login must not run the deploy probe');
+    }
+  });
+
+  await assert.rejects(
+    launch({
+      defaultManagedCredential: false,
+      env: { WORKFORCE_DEPLOY_CLOUD_URL: 'https://cloud.example.test' },
+      input: { harnessSource: 'oauth', reconnectProviders: ['openai'] },
+      fetch(url) {
+        throw new Error(`unexpected URL ${url}`);
+      }
+    }),
+    /--reconnect openai cannot verify completion.*deploy credential cannot authoritatively list/s
+  ).finally(restoreDeps);
+
+  assert.equal(connectCalled, false, 'must fail before starting a connection it can never verify');
+});
+
+test('cloud --reconnect with --no-prompt fails with actionable guidance', async () => {
+  const restoreDeps = configureCloudCredentialDepsForTest({
+    readStoredAuth: async () => ({
+      apiUrl: 'https://cloud.example.test',
+      accessToken: 'tok',
+      refreshToken: 'refresh',
+      accessTokenExpiresAt: '2999-01-01T00:00:00.000Z'
+    }),
+    connectProvider: async () => {
+      throw new Error('connectProvider must not run under --no-prompt');
+    },
+    createCloudApiClient() {
+      return {
+        async fetch() {
+          return okJson({
+            agents: [{ id: 'cloud-agent-openai', harness: 'openai', status: 'connected' }]
+          });
+        }
+      };
+    }
+  });
+  await assert.rejects(
+    launch({
+      defaultManagedCredential: false,
+      env: {
+        WORKFORCE_DEPLOY_CLOUD_URL: 'https://cloud.example.test',
+        WORKFORCE_DEPLOY_NO_PROMPT: '1'
+      },
+      input: { harnessSource: 'oauth', reconnectProviders: ['openai'] },
+      fetch(url) {
+        throw new Error(`unexpected URL ${url}`);
+      }
+    }),
+    /re-run without --no-prompt/
+  ).finally(restoreDeps);
 });
 
 test('cloud launcher maps 401 deploy responses to the workforce login guidance', async () => {
@@ -554,12 +1103,13 @@ test('cloud polling resolves done with code 0 on active and 1 on failed', async 
       const handle = await withEnv({
         WORKFORCE_WORKSPACE_TOKEN: 'tok',
         WORKFORCE_DEPLOY_CLOUD_URL: `https://${finalStatus}.example.test`,
-        WORKFORCE_DEPLOY_HARNESS_SOURCE: 'plan',
+        WORKFORCE_DEPLOY_HARNESS_SOURCE: 'managed',
         WORKFORCE_DEPLOY_POLL_INTERVAL_MS: '0',
         WORKFORCE_DEPLOY_POLL_TIMEOUT_MS: '50',
         WORKFORCE_DEPLOY_RETRY_BACKOFF_MS: '0'
       }, () => cloudLauncher.launch({
         persona: persona(),
+        agent: agentSpec,
         bundle,
         workspace: 'ws-test',
         io,
@@ -592,11 +1142,12 @@ test('cloud stop calls the destroy agent endpoint', async () => {
     const handle = await withEnv({
       WORKFORCE_WORKSPACE_TOKEN: 'tok',
       WORKFORCE_DEPLOY_CLOUD_URL: 'https://cloud.example.test',
-      WORKFORCE_DEPLOY_HARNESS_SOURCE: 'plan',
+      WORKFORCE_DEPLOY_HARNESS_SOURCE: 'managed',
       WORKFORCE_DEPLOY_POLL_INTERVAL_MS: '0',
       WORKFORCE_DEPLOY_POLL_TIMEOUT_MS: '50'
     }, () => cloudLauncher.launch({
       persona: persona(),
+      agent: agentSpec,
       bundle,
       workspace: 'ws-test',
       io
@@ -625,11 +1176,12 @@ test('cloud launcher leaves integration preflight to the deploy orchestrator', a
     await withEnv({
       WORKFORCE_WORKSPACE_TOKEN: 'tok',
       WORKFORCE_DEPLOY_CLOUD_URL: 'https://cloud.example.test',
-      WORKFORCE_DEPLOY_HARNESS_SOURCE: 'plan',
+      WORKFORCE_DEPLOY_HARNESS_SOURCE: 'managed',
       WORKFORCE_DEPLOY_POLL_INTERVAL_MS: '0',
       WORKFORCE_DEPLOY_POLL_TIMEOUT_MS: '50'
     }, () => cloudLauncher.launch({
-      persona: persona({ integrations: { github: { triggers: [{ on: 'pull_request.opened' }] } } }),
+      persona: persona({ integrations: { github: {} } }),
+      agent: { triggers: { github: [{ on: 'pull_request.opened' }] } },
       bundle,
       workspace: 'ws-test',
       io
@@ -705,6 +1257,184 @@ test('cloud existing-persona stage honors destroy and cancel choices', async () 
     cancel.calls.some((call) => call.init?.method === 'POST' && call.url.endsWith('/deployments')),
     false
   );
+});
+
+test('cloud update inherits stored inputs and applies current overrides, including empty strings', async () => {
+  const completeAgent = {
+    triggers: {
+      github: [
+        {
+          on: 'pull_request.opened',
+          paths: ['/github/repos/AgentWorkforce/workforce/pulls/**'],
+          futureTriggerOption: { delivery: 'batched' }
+        }
+      ]
+    },
+    watch: [
+      {
+        paths: ['/github/repos/AgentWorkforce/workforce/**'],
+        events: ['created'],
+        conditions: { branch: 'main' }
+      }
+    ]
+  } satisfies import('@agentworkforce/persona-kit').AgentSpec;
+  await launch({
+    env: {
+      WORKFORCE_DEPLOY_CLOUD_URL: 'https://cloud.example.test',
+      WORKFORCE_DEPLOY_ON_EXISTS: 'update'
+    },
+    input: {
+      agent: completeAgent,
+      inputs: { REGION: 'eu-west-1', CLEAR_ME: '' }
+    },
+    fetch(url, init) {
+      if (init?.method === 'GET' && url.endsWith('/deployments')) {
+        return okJson({
+          agents: [
+            {
+              agentId: 'agent-other',
+              deployedName: 'other-persona',
+              status: 'active',
+              inputValues: { MUST_NOT_LEAK: 'wrong-agent' }
+            },
+            {
+              agentId: 'agent-old',
+              deployedName: 'demo',
+              status: 'active',
+              inputValues: {
+                SLACK_CHANNEL: 'C_STORED',
+                REGION: 'us-east-1',
+                CLEAR_ME: 'previous'
+              }
+            }
+          ]
+        });
+      }
+      if (init?.method === 'POST' && url.endsWith('/deployments')) {
+        const body = JSON.parse(String(init.body)) as Record<string, unknown>;
+        assert.deepEqual(body.agent, completeAgent, 'the complete agent spec stays authoritative');
+        assert.deepEqual(body.inputs, {
+          SLACK_CHANNEL: 'C_STORED',
+          REGION: 'eu-west-1',
+          CLEAR_ME: ''
+        });
+        return okJson({ agentId: 'agent-old', deploymentId: 'dep-update', status: 'active' }, 201);
+      }
+      throw new Error(`unexpected URL ${url} (${init?.method})`);
+    }
+  });
+});
+
+test('cloud update without current inputs sends the stored effective input record', async () => {
+  await launch({
+    env: {
+      WORKFORCE_DEPLOY_CLOUD_URL: 'https://cloud.example.test',
+      WORKFORCE_DEPLOY_ON_EXISTS: 'update'
+    },
+    fetch(url, init) {
+      if (init?.method === 'GET' && url.endsWith('/deployments')) {
+        return okJson({
+          agents: [{
+            agentId: 'agent-old',
+            deployedName: 'demo',
+            status: 'active',
+            inputValues: { SLACK_CHANNEL: 'C_STORED', TOPIC: 'daily' }
+          }]
+        });
+      }
+      if (init?.method === 'POST' && url.endsWith('/deployments')) {
+        const body = JSON.parse(String(init.body)) as Record<string, unknown>;
+        assert.deepEqual(body.inputs, { SLACK_CHANNEL: 'C_STORED', TOPIC: 'daily' });
+        return okJson({ agentId: 'agent-old', deploymentId: 'dep-update', status: 'active' }, 201);
+      }
+      throw new Error(`unexpected URL ${url} (${init?.method})`);
+    }
+  });
+});
+
+test('cloud input inheritance is update-only and malformed stored values degrade to current inputs', async () => {
+  const destroyed = await launch({
+    env: {
+      WORKFORCE_DEPLOY_CLOUD_URL: 'https://cloud.example.test',
+      WORKFORCE_DEPLOY_ON_EXISTS: 'destroy'
+    },
+    input: { inputs: { CURRENT: 'new' } },
+    fetch(url, init) {
+      if (init?.method === 'GET' && url.endsWith('/deployments')) {
+        return okJson({
+          agents: [{
+            agentId: 'agent-old',
+            deployedName: 'demo',
+            status: 'active',
+            inputValues: { STORED: 'must-not-inherit' }
+          }]
+        });
+      }
+      if (url.endsWith('/agents/agent-old/destroy')) return okJson({ ok: true });
+      if (init?.method === 'POST' && url.endsWith('/deployments')) {
+        const body = JSON.parse(String(init.body)) as Record<string, unknown>;
+        assert.deepEqual(body.inputs, { CURRENT: 'new' });
+        return okJson({ agentId: 'agent-new', deploymentId: 'dep-new', status: 'active' }, 201);
+      }
+      throw new Error(`unexpected URL ${url} (${init?.method})`);
+    }
+  });
+  assert.equal(destroyed.handle.id, 'agent-new');
+
+  await launch({
+    env: {
+      WORKFORCE_DEPLOY_CLOUD_URL: 'https://cloud.example.test',
+      WORKFORCE_DEPLOY_ON_EXISTS: 'update'
+    },
+    input: { inputs: { CURRENT: 'safe' } },
+    fetch(url, init) {
+      if (init?.method === 'GET' && url.endsWith('/deployments')) {
+        return okJson({
+          agents: [{
+            agentId: 'agent-old',
+            deployedName: 'demo',
+            status: 'active',
+            inputValues: ['not', 'a', 'record']
+          }]
+        });
+      }
+      if (init?.method === 'POST' && url.endsWith('/deployments')) {
+        const body = JSON.parse(String(init.body)) as Record<string, unknown>;
+        assert.deepEqual(body.inputs, { CURRENT: 'safe' });
+        return okJson({ agentId: 'agent-old', deploymentId: 'dep-update', status: 'active' }, 201);
+      }
+      throw new Error(`unexpected URL ${url} (${init?.method})`);
+    }
+  });
+
+  await launch({
+    env: {
+      WORKFORCE_DEPLOY_CLOUD_URL: 'https://cloud.example.test',
+      WORKFORCE_DEPLOY_ON_EXISTS: 'update'
+    },
+    fetch(url, init) {
+      if (init?.method === 'GET' && url.endsWith('/deployments')) {
+        return okJson({
+          agents: [{
+            agentId: 'agent-old',
+            deployedName: 'demo',
+            status: 'active'
+            // Older list contracts may omit inputValues entirely.
+          }]
+        });
+      }
+      if (init?.method === 'POST' && url.endsWith('/deployments')) {
+        const body = JSON.parse(String(init.body)) as Record<string, unknown>;
+        assert.equal(
+          Object.prototype.hasOwnProperty.call(body, 'inputs'),
+          false,
+          'unknown stored inputs must remain omitted, never become an authoritative empty map'
+        );
+        return okJson({ agentId: 'agent-old', deploymentId: 'dep-update', status: 'active' }, 201);
+      }
+      throw new Error(`unexpected URL ${url} (${init?.method})`);
+    }
+  });
 });
 
 test('findExistingAgent: parses the new /deployments shape ({agentId, personaId, status})', async () => {
@@ -924,3 +1654,441 @@ test('findExistingAgent: malformed array entries (null/empty) are skipped withou
 function callsForUrl(calls: FetchCall[], suffix: string): number {
   return calls.filter((call) => call.url.endsWith(suffix)).length;
 }
+
+test('cloud oauth deploy stamps anthropic credentialSelections from the connected row', async () => {
+  // workforce#196: the byok/managed legs stamp the credential they create, but
+  // the oauth leg deployed with empty selections, so ctx.llm stubbed on
+  // every fire. The connected row id comes back through
+  // /api/v1/cloud-agents (cloud selects it straight from
+  // provider_credentials). Note the row's harness field holds the
+  // OAuth-completion alias 'claude', not the model-provider string
+  // 'anthropic' — the lookup must match both spellings.
+  const restoreDeps = configureCloudCredentialDepsForTest({
+    readStoredAuth: async () => ({
+      apiUrl: 'https://cloud.example.test',
+      accessToken: 'tok',
+      refreshToken: 'refresh',
+      accessTokenExpiresAt: '2999-01-01T00:00:00.000Z'
+    }),
+    createCloudApiClient() {
+      return {
+        async fetch(pathname: string) {
+          assert.equal(pathname, '/api/v1/cloud-agents');
+          return okJson({
+            agents: [
+              { id: 'pc-anthropic-1', harness: 'claude', status: 'connected' }
+            ]
+          });
+        }
+      };
+    }
+  });
+  try {
+    const { handle, io } = await launch({
+      persona: persona({ harness: 'claude', model: 'claude-sonnet-4-6' }),
+      defaultManagedCredential: false,
+      env: {
+        WORKFORCE_DEPLOY_CLOUD_URL: 'https://cloud.example.test',
+        WORKFORCE_DEPLOY_HARNESS_SOURCE: 'oauth',
+        WORKFORCE_DEPLOY_NO_PROMPT: '1'
+      },
+      fetch(url, init) {
+        if (init?.method === 'GET' && url.endsWith('/deployments')) return okJson({ agents: [] });
+        if (url.endsWith('/deployments')) {
+          const body = JSON.parse(String(init?.body)) as Record<string, unknown>;
+          assert.deepEqual(body.credentialSelections, { anthropic: 'pc-anthropic-1' });
+          assert.deepEqual(body.credential_selections, { anthropic: 'pc-anthropic-1' });
+          return okJson({ agentId: 'agent-oauth-anthropic', deploymentId: 'dep-1', status: 'active' }, 201);
+        }
+        throw new Error(`unexpected URL ${url}`);
+      }
+    });
+    assert.equal(handle.id, 'agent-oauth-anthropic');
+    assert.ok(
+      io.messages.some((entry) => entry.message.includes('selected connected anthropic credential')),
+      'expected the selected-credential info line'
+    );
+  } finally {
+    restoreDeps();
+  }
+});
+
+test('cloud oauth deploy does NOT stamp openai selections and prints the harness-only message', async () => {
+  // ChatGPT/codex OAuth tokens are harness-only: cloud's runtime credential
+  // resolution rejects them for env injection, so stamping one would turn
+  // the ctx.llm stub into a failed delivery. The deploy must stay
+  // unstamped and tell the user the working alternatives.
+  const restoreDeps = configureCloudCredentialDepsForTest({
+    readStoredAuth: async () => ({
+      apiUrl: 'https://cloud.example.test',
+      accessToken: 'tok',
+      refreshToken: 'refresh',
+      accessTokenExpiresAt: '2999-01-01T00:00:00.000Z'
+    }),
+    createCloudApiClient() {
+      return {
+        async fetch(pathname: string) {
+          assert.equal(pathname, '/api/v1/cloud-agents');
+          return okJson({
+            agents: [
+              { id: 'pc-openai-1', harness: 'openai', status: 'connected' }
+            ]
+          });
+        }
+      };
+    }
+  });
+  try {
+    const { io } = await launch({
+      defaultManagedCredential: false,
+      env: {
+        WORKFORCE_DEPLOY_CLOUD_URL: 'https://cloud.example.test',
+        WORKFORCE_DEPLOY_HARNESS_SOURCE: 'oauth',
+        WORKFORCE_DEPLOY_NO_PROMPT: '1'
+      },
+      fetch(url, init) {
+        if (init?.method === 'GET' && url.endsWith('/deployments')) return okJson({ agents: [] });
+        if (url.endsWith('/deployments')) {
+          const body = JSON.parse(String(init?.body)) as Record<string, unknown>;
+          assert.deepEqual(body.credentialSelections, {});
+          assert.deepEqual(body.credential_selections, {});
+          return okJson({ agentId: 'agent-oauth-openai', deploymentId: 'dep-1', status: 'active' }, 201);
+        }
+        throw new Error(`unexpected URL ${url}`);
+      }
+    });
+    assert.ok(
+      io.messages.some((entry) => entry.message.includes('harness-only')),
+      'expected the harness-only guidance line'
+    );
+  } finally {
+    restoreDeps();
+  }
+});
+
+test('cloud oauth deploy falls back to unstamped when the connected row has no id', async () => {
+  // Defensive split between the probe and the stamp: a connected entry
+  // missing its id must still count as connected (no reconnect prompt)
+  // while the selection stamp degrades to today's unstamped behavior with
+  // an explanatory line instead of failing the deploy.
+  const restoreDeps = configureCloudCredentialDepsForTest({
+    readStoredAuth: async () => ({
+      apiUrl: 'https://cloud.example.test',
+      accessToken: 'tok',
+      refreshToken: 'refresh',
+      accessTokenExpiresAt: '2999-01-01T00:00:00.000Z'
+    }),
+    createCloudApiClient() {
+      return {
+        async fetch(pathname: string) {
+          assert.equal(pathname, '/api/v1/cloud-agents');
+          return okJson({
+            agents: [{ harness: 'claude', status: 'connected' }]
+          });
+        }
+      };
+    }
+  });
+  try {
+    const { handle, io } = await launch({
+      persona: persona({ harness: 'claude', model: 'claude-sonnet-4-6' }),
+      defaultManagedCredential: false,
+      env: {
+        WORKFORCE_DEPLOY_CLOUD_URL: 'https://cloud.example.test',
+        WORKFORCE_DEPLOY_HARNESS_SOURCE: 'oauth',
+        WORKFORCE_DEPLOY_NO_PROMPT: '1'
+      },
+      fetch(url, init) {
+        if (init?.method === 'GET' && url.endsWith('/deployments')) return okJson({ agents: [] });
+        if (url.endsWith('/deployments')) {
+          const body = JSON.parse(String(init?.body)) as Record<string, unknown>;
+          assert.deepEqual(body.credentialSelections, {});
+          return okJson({ agentId: 'agent-oauth-noid', deploymentId: 'dep-1', status: 'active' }, 201);
+        }
+        throw new Error(`unexpected URL ${url}`);
+      }
+    });
+    assert.equal(handle.id, 'agent-oauth-noid');
+    assert.ok(
+      io.messages.some((entry) => entry.message.includes('no connected anthropic credential row')),
+      'expected the unstamped-fallback info line'
+    );
+  } finally {
+    restoreDeps();
+  }
+});
+
+test('cloud oauth deploy stamps the ACTIVE anthropic row over a newer inactive one', async () => {
+  // The web wizard selects on is_active (cloud keeps one active row per
+  // provider), not recency — cloud lists rows most-recently-updated first,
+  // so a newer-but-inactive row precedes the active one in the response.
+  // The stamp must prefer the flagged row and only fall back to list order
+  // when no row carries the flag.
+  const restoreDeps = configureCloudCredentialDepsForTest({
+    readStoredAuth: async () => ({
+      apiUrl: 'https://cloud.example.test',
+      accessToken: 'tok',
+      refreshToken: 'refresh',
+      accessTokenExpiresAt: '2999-01-01T00:00:00.000Z'
+    }),
+    createCloudApiClient() {
+      return {
+        async fetch(pathname: string) {
+          assert.equal(pathname, '/api/v1/cloud-agents');
+          return okJson({
+            agents: [
+              { id: 'pc-newer-inactive', harness: 'claude', status: 'connected', isActive: false },
+              { id: 'pc-older-active', harness: 'claude', status: 'connected', is_active: true }
+            ]
+          });
+        }
+      };
+    }
+  });
+  try {
+    await launch({
+      persona: persona({ harness: 'claude', model: 'claude-sonnet-4-6' }),
+      defaultManagedCredential: false,
+      env: {
+        WORKFORCE_DEPLOY_CLOUD_URL: 'https://cloud.example.test',
+        WORKFORCE_DEPLOY_HARNESS_SOURCE: 'oauth',
+        WORKFORCE_DEPLOY_NO_PROMPT: '1'
+      },
+      fetch(url, init) {
+        if (init?.method === 'GET' && url.endsWith('/deployments')) return okJson({ agents: [] });
+        if (url.endsWith('/deployments')) {
+          const body = JSON.parse(String(init?.body)) as Record<string, unknown>;
+          assert.deepEqual(body.credentialSelections, { anthropic: 'pc-older-active' });
+          return okJson({ agentId: 'agent-oauth-active', deploymentId: 'dep-1', status: 'active' }, 201);
+        }
+        throw new Error(`unexpected URL ${url}`);
+      }
+    });
+  } finally {
+    restoreDeps();
+  }
+});
+
+test('cloud oauth deploy cross-stamps a connected anthropic credential for an openai-family persona', async () => {
+  // The codex/ChatGPT OAuth credential cannot back ctx.llm, but the runtime
+  // already falls back to whichever provider env IS present and swaps in
+  // that family's default model — so the deploy stamps the connected
+  // anthropic credential instead of leaving the deployment selection-less.
+  const restoreDeps = configureCloudCredentialDepsForTest({
+    readStoredAuth: async () => ({
+      apiUrl: 'https://cloud.example.test',
+      accessToken: 'tok',
+      refreshToken: 'refresh',
+      accessTokenExpiresAt: '2999-01-01T00:00:00.000Z'
+    }),
+    createCloudApiClient() {
+      return {
+        async fetch(pathname: string) {
+          assert.equal(pathname, '/api/v1/cloud-agents');
+          return okJson({
+            agents: [
+              { id: 'pc-openai-oauth', harness: 'openai', status: 'connected' },
+              { id: 'pc-anthropic-1', harness: 'claude', status: 'connected', isActive: true }
+            ]
+          });
+        }
+      };
+    }
+  });
+  try {
+    const { io } = await launch({
+      defaultManagedCredential: false,
+      env: {
+        WORKFORCE_DEPLOY_CLOUD_URL: 'https://cloud.example.test',
+        WORKFORCE_DEPLOY_HARNESS_SOURCE: 'oauth',
+        WORKFORCE_DEPLOY_NO_PROMPT: '1'
+      },
+      fetch(url, init) {
+        if (init?.method === 'GET' && url.endsWith('/deployments')) return okJson({ agents: [] });
+        if (url.endsWith('/deployments')) {
+          const body = JSON.parse(String(init?.body)) as Record<string, unknown>;
+          assert.deepEqual(body.credentialSelections, { anthropic: 'pc-anthropic-1' });
+          assert.deepEqual(body.credential_selections, { anthropic: 'pc-anthropic-1' });
+          return okJson({ agentId: 'agent-cross-stamp', deploymentId: 'dep-1', status: 'active' }, 201);
+        }
+        throw new Error(`unexpected URL ${url}`);
+      }
+    });
+    assert.ok(
+      io.messages.some((entry) =>
+        entry.message.includes('stamping your connected anthropic credential instead')
+      ),
+      'expected the cross-stamp info line'
+    );
+  } finally {
+    restoreDeps();
+  }
+});
+
+test('a headless deploy proceeds when the harness probe cannot run at all', async () => {
+  // Regression for the false negative that blocked EVERY CI deploy: the probe
+  // reads /api/v1/cloud-agents, which needs the user's stored CLI login
+  // (session or cli:auth scope). A headless deploy authenticates with a
+  // workspace deploy token and has no stored login, so the probe cannot run —
+  // and "cannot check" was being collapsed into "not connected", failing with
+  // `credentials are not connected` no matter what the workspace actually had.
+  const restoreDeps = configureCloudCredentialDepsForTest({
+    readStoredAuth: async () => null,
+    createCloudApiClient() {
+      throw new Error('the probe must not be attempted without stored auth');
+    }
+  });
+
+  const { handle, io } = await launch({
+    env: {
+      WORKFORCE_DEPLOY_CLOUD_URL: 'https://cloud.example.test',
+      WORKFORCE_DEPLOY_NO_PROMPT: '1',
+      WORKFORCE_DEPLOY_HARNESS_SOURCE: undefined
+    },
+    fetch(url, init) {
+      if (init?.method === 'GET' && url.endsWith('/deployments')) return okJson({ agents: [] });
+      if (url.endsWith('/deployments')) {
+        return okJson({ agentId: 'agent-headless', deploymentId: 'dep-1', status: 'active' }, 201);
+      }
+      throw new Error(`unexpected URL ${url}`);
+    }
+  }).finally(restoreDeps);
+
+  assert.equal(handle.id, 'agent-headless');
+  assert.ok(
+    io.messages.some((m) => /credential check is unavailable here/.test(m.message)),
+    'the deploy says why it could not check, instead of asserting "not connected"'
+  );
+  // The stamping lookup reads the same unavailable route, so this deployment
+  // carries no ctx.llm selection. That is survivable for a ctx.harness.run
+  // persona and fatal for a ctx.llm one, so it must WARN, not read like the
+  // ordinary "checked, found nothing" info line.
+  assert.ok(
+    io.messages.some(
+      (m) => m.level === 'warn' && /NO ctx\.llm credential selection/.test(m.message)
+    ),
+    'an unstamped deployment is surfaced as a warning'
+  );
+});
+
+test('a workspace deploy token does not trust a stored user login credential listing', async () => {
+  // Regression: the deployment uses WORKFORCE_WORKSPACE_TOKEN (`tok`), while
+  // fetchCloudAgents used an unrelated stored user login. Cloud scopes the
+  // successful response to that login's (user, current workspace), so an empty
+  // list was not evidence about the deployment workspace and must be null, not
+  // false. Do not even issue the misleading request with the other identity.
+  let storedLoginRequests = 0;
+  const restoreDeps = configureCloudCredentialDepsForTest({
+    readStoredAuth: async () => ({
+      apiUrl: 'https://cloud.example.test',
+      accessToken: 'stored-user-login',
+      refreshToken: 'refresh',
+      accessTokenExpiresAt: '2999-01-01T00:00:00.000Z'
+    }),
+    createCloudApiClient() {
+      return {
+        async fetch() {
+          storedLoginRequests += 1;
+          return okJson({ agents: [] });
+        }
+      };
+    }
+  });
+
+  const { handle, io } = await launch({
+    env: {
+      WORKFORCE_DEPLOY_CLOUD_URL: 'https://cloud.example.test',
+      WORKFORCE_DEPLOY_HARNESS_SOURCE: undefined,
+      WORKFORCE_DEPLOY_NO_PROMPT: '1'
+    },
+    fetch(url, init) {
+      if (init?.method === 'GET' && url.endsWith('/deployments')) return okJson({ agents: [] });
+      if (url.endsWith('/deployments')) {
+        return okJson({ agentId: 'agent-ci-token', deploymentId: 'dep-1', status: 'active' }, 201);
+      }
+      throw new Error(`unexpected URL ${url}`);
+    }
+  }).finally(restoreDeps);
+
+  assert.equal(handle.id, 'agent-ci-token');
+  assert.equal(storedLoginRequests, 0);
+  assert.ok(
+    io.messages.some((entry) => /credential check is unavailable here/.test(entry.message)),
+    'the CLI reports an indeterminate probe instead of declaring the credential missing'
+  );
+});
+
+test('a deployment credential forbidden from listing user credentials is undeterminable', async () => {
+  let probeCalls = 0;
+  const restoreDeps = configureCloudCredentialDepsForTest({
+    readStoredAuth: async () => ({
+      apiUrl: 'https://cloud.example.test',
+      accessToken: 'tok',
+      refreshToken: 'refresh',
+      accessTokenExpiresAt: '2999-01-01T00:00:00.000Z'
+    }),
+    createCloudApiClient() {
+      return {
+        async fetch() {
+          probeCalls += 1;
+          return okJson({ error: 'Forbidden' }, 403);
+        }
+      };
+    }
+  });
+
+  const { handle } = await launch({
+    env: {
+      WORKFORCE_DEPLOY_CLOUD_URL: 'https://cloud.example.test',
+      WORKFORCE_DEPLOY_HARNESS_SOURCE: undefined,
+      WORKFORCE_DEPLOY_NO_PROMPT: '1'
+    },
+    fetch(url, init) {
+      if (init?.method === 'GET' && url.endsWith('/deployments')) return okJson({ agents: [] });
+      if (url.endsWith('/deployments')) {
+        return okJson({ agentId: 'agent-ci-forbidden', deploymentId: 'dep-1', status: 'active' }, 201);
+      }
+      throw new Error(`unexpected URL ${url}`);
+    }
+  }).finally(restoreDeps);
+
+  assert.equal(handle.id, 'agent-ci-forbidden');
+  assert.ok(probeCalls >= 1, 'the deployment credential reached the cloud route');
+});
+
+test('a probe that CAN run and reports nothing connected still fails closed', async () => {
+  // The complement of the test above: "cannot check" must not become a blanket
+  // bypass. When the stored login IS the credential used for this deploy, the
+  // probe is authoritative and an empty list is a real negative that must still
+  // stop a --no-prompt deploy.
+  const restoreDeps = configureCloudCredentialDepsForTest({
+    readStoredAuth: async () => ({
+      apiUrl: 'https://cloud.example.test',
+      accessToken: 'tok',
+      refreshToken: 'refresh',
+      accessTokenExpiresAt: '2999-01-01T00:00:00.000Z'
+    }),
+    createCloudApiClient() {
+      return {
+        async fetch() {
+          return okJson({ agents: [] });
+        }
+      };
+    }
+  });
+
+  await assert.rejects(
+    launch({
+      env: {
+        WORKFORCE_DEPLOY_CLOUD_URL: 'https://cloud.example.test',
+        WORKFORCE_DEPLOY_NO_PROMPT: '1',
+        WORKFORCE_DEPLOY_HARNESS_SOURCE: undefined
+      },
+      fetch(url, init) {
+        if (init?.method === 'GET' && url.endsWith('/deployments')) return okJson({ agents: [] });
+        throw new Error(`unexpected URL ${url}`);
+      }
+    }).finally(restoreDeps),
+    /credentials are not connected/
+  );
+});

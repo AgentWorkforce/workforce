@@ -9,14 +9,18 @@ import {
   CLEAN_IGNORED_PATTERNS,
   CREATE_SELECTOR,
   SKILL_INSTALL_IGNORED_PATTERNS,
+  acquireSkillCacheLock,
   applyAcceptedPatches,
   assertSafeRelativePath,
   buildPickCandidates,
   buildRelayfileMountPatterns,
+  buildPersonaMountTargets,
   buildMountGitExcludeBlock,
+  buildSpawnSummary,
   buildSidecarBody,
   configureGitForMount,
   decideCleanMode,
+  formatSandboxMountReadyMessage,
   loadSidecarForSelection,
   parseAgentArgs,
   parseInstallArgs,
@@ -24,11 +28,12 @@ import {
   parseProposals,
   promptYesNoSync,
   readSingleCharChoice,
+  resolveEnvCheckIntervalMs,
   resolveSystemPromptPlaceholders,
   stripAgentFlag,
   type ImproverProposal,
   type ResolvedSidecar
-} from './cli.js';
+} from './cli-impl.js';
 
 // The conflict-detection path inside parseAgentArgs uses the module-local
 // `die()` helper, which calls process.exit(1) after writing to stderr. Tests
@@ -137,6 +142,58 @@ test('parseAgentArgs: --dry-run sets flag and preserves positional selector', ()
   assert.equal(flags.installInRepo, false);
   assert.equal(flags.noLaunchMetadata, false);
   assert.deepEqual(positional, ['local-codex@best']);
+});
+
+test('parseAgentArgs: --no-skill-cache and --refresh-skills set flags', () => {
+  // parseAgentArgs reads AGENTWORKFORCE_NO_SKILL_CACHE for the default; isolate
+  // it so the env on the running machine can't make the default-false cases flaky.
+  const prevNoCache = process.env.AGENTWORKFORCE_NO_SKILL_CACHE;
+  delete process.env.AGENTWORKFORCE_NO_SKILL_CACHE;
+  try {
+    const a = parseAgentArgs(['--no-skill-cache', 'persona@best']);
+    assert.equal(a.flags.noSkillCache, true);
+    assert.equal(a.flags.refreshSkills, false);
+    assert.deepEqual(a.positional, ['persona@best']);
+
+    const b = parseAgentArgs(['--refresh-skills', 'persona@best']);
+    assert.equal(b.flags.refreshSkills, true);
+    assert.equal(b.flags.noSkillCache, false);
+    assert.deepEqual(b.positional, ['persona@best']);
+
+    // Both compose with each other and with the existing flags.
+    const c = parseAgentArgs([
+      '--no-skill-cache',
+      '--refresh-skills',
+      '--install-in-repo',
+      'persona@best'
+    ]);
+    assert.equal(c.flags.noSkillCache, true);
+    assert.equal(c.flags.refreshSkills, true);
+    assert.equal(c.flags.installInRepo, true);
+  } finally {
+    if (prevNoCache === undefined) delete process.env.AGENTWORKFORCE_NO_SKILL_CACHE;
+    else process.env.AGENTWORKFORCE_NO_SKILL_CACHE = prevNoCache;
+  }
+});
+
+test('parseAgentArgs: --check-upstream and --no-check-upstream set flags', () => {
+  const a = parseAgentArgs(['--check-upstream', 'p@best']);
+  assert.equal(a.flags.checkUpstream, true);
+  assert.equal(a.flags.noCheckUpstream, false);
+
+  const b = parseAgentArgs(['--no-check-upstream', 'p@best']);
+  assert.equal(b.flags.noCheckUpstream, true);
+  assert.equal(b.flags.checkUpstream, false);
+
+  const c = parseAgentArgs([
+    '--check-upstream',
+    '--refresh-skills',
+    '--no-skill-cache',
+    'p@best'
+  ]);
+  assert.equal(c.flags.checkUpstream, true);
+  assert.equal(c.flags.refreshSkills, true);
+  assert.equal(c.flags.noSkillCache, true);
 });
 
 test('parseAgentArgs: --dry-run composes with other flags', () => {
@@ -348,6 +405,40 @@ test('decideCleanMode: codex defaults to mount (parity with claude/opencode)', (
   assert.deepEqual(decideCleanMode('codex', true), { useClean: false });
 });
 
+test('decideCleanMode: grok defaults to mount', () => {
+  assert.deepEqual(decideCleanMode('grok'), { useClean: true });
+  assert.deepEqual(decideCleanMode('grok', true), { useClean: false });
+});
+
+test('formatSandboxMountReadyMessage: appends mount metrics when available', () => {
+  assert.equal(
+    formatSandboxMountReadyMessage('/tmp/mount', {
+      initialMountDurationMs: 123,
+      initialFileCount: 456
+    }),
+    'Sandbox mount ready (123ms, 456 files) → /tmp/mount'
+  );
+});
+
+test('formatSandboxMountReadyMessage: omits metrics when linked against an older mount handle', () => {
+  assert.equal(
+    formatSandboxMountReadyMessage('/tmp/mount', {
+      initialMountDurationMs: 123
+    }),
+    'Sandbox mount ready → /tmp/mount'
+  );
+  assert.equal(
+    formatSandboxMountReadyMessage('/tmp/mount', {
+      initialFileCount: 456
+    }),
+    'Sandbox mount ready → /tmp/mount'
+  );
+  assert.equal(
+    formatSandboxMountReadyMessage('/tmp/mount', {}),
+    'Sandbox mount ready → /tmp/mount'
+  );
+});
+
 test('stripAgentFlag: removes --agent <name> pair preserving surrounding args', () => {
   // Degrade path: when the CLI cannot materialize opencode.json (non-mount
   // --install-in-repo), it strips the --agent selector so opencode launches
@@ -450,6 +541,7 @@ test('SKILL_INSTALL_IGNORED_PATTERNS: keeps skill-install artifacts out of the r
     '.agents',
     '.claude/skills',
     '.factory/skills',
+    '.grok/skills',
     '.kiro/skills',
     'skills',
     '.opencode',
@@ -505,6 +597,75 @@ test('buildRelayfileMountPatterns: merges Relayfile dotfiles with built-in claud
   } finally {
     rmSync(dir, { recursive: true, force: true });
   }
+});
+
+test('buildPersonaMountTargets: single-root keeps session patterns, aliases do not', () => {
+  const sessionPatterns = {
+    ignoredPatterns: ['CLAUDE.md', '.claude', 'node_modules', 'opencode.json'],
+    readonlyPatterns: ['AGENTS.md']
+  };
+  const single = buildPersonaMountTargets({
+    projectDir: '/repo',
+    mountDir: '/session/mount',
+    personaId: 'release-bot',
+    sessionPatterns,
+    personaMount: { ignoredPatterns: ['node_modules'] }
+  });
+  assert.deepEqual(single, [
+    {
+      source: '/repo',
+      dest: '/session/mount',
+      ignoredPatterns: sessionPatterns.ignoredPatterns,
+      readonlyPatterns: sessionPatterns.readonlyPatterns,
+      agentName: 'release-bot'
+    }
+  ]);
+
+  const multi = buildPersonaMountTargets({
+    projectDir: '/repo',
+    mountDir: '/session/mount',
+    personaId: 'release-bot',
+    sessionPatterns,
+    personaMount: { ignoredPatterns: ['dist'], readonlyPatterns: ['docs/**'] },
+    resolvedRoots: [
+      {
+        alias: 'api',
+        path: '/src/api',
+        readonly: true,
+        ignoredPatterns: ['.env'],
+        readonlyPatterns: ['**']
+      },
+      {
+        alias: 'web',
+        path: '/src/web',
+        readonly: false,
+        ignoredPatterns: [],
+        readonlyPatterns: []
+      }
+    ],
+    readRootDotfiles: () => ({
+      ignoredPatterns: ['coverage/'],
+      readonlyPatterns: ['package.json']
+    })
+  });
+  assert.deepEqual(
+    multi.map((target) => target.dest),
+    ['/session/mount/api', '/session/mount/web']
+  );
+  for (const target of multi) {
+    assert.equal(target.ignoredPatterns.includes('CLAUDE.md'), false);
+    assert.equal(target.ignoredPatterns.includes('.claude'), false);
+    assert.equal(target.ignoredPatterns.includes('opencode.json'), false);
+    assert.equal(target.readonlyPatterns.includes('AGENTS.md'), false);
+    assert.ok(target.ignoredPatterns.includes('dist'));
+    assert.ok(target.ignoredPatterns.includes('coverage/'));
+    assert.ok(target.readonlyPatterns.includes('docs/**'));
+    assert.ok(target.readonlyPatterns.includes('package.json'));
+  }
+  assert.ok(multi[0].ignoredPatterns.includes('.env'));
+  assert.ok(multi[0].readonlyPatterns.includes('**'));
+  assert.equal(multi[0].agentName, 'release-bot:api');
+  assert.equal(multi[1].agentName, 'release-bot:web');
 });
 
 // Integration-ish subprocess helper: spawn the built CLI, collect stderr,
@@ -603,11 +764,211 @@ test('main: --version prints the package version', async () => {
   try {
     const { stderr, stdout, exitCode } = await runCliCapturingStderr(
       ['--version'],
-      { AGENT_WORKFORCE_HOME: workforceHome }
+      {
+        AGENT_WORKFORCE_HOME: workforceHome,
+        // Keep the registry out of this assertion; the update check has its
+        // own tests below.
+        AGENTWORKFORCE_NO_UPDATE_CHECK: '1'
+      }
     );
     assert.equal(exitCode, 0);
     assert.equal(stderr, '');
     assert.equal(stdout, `${CLI_VERSION}\n`);
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+/**
+ * Neutralizes both update-check opt-outs for a child process, so a test that
+ * asserts on the notice does not depend on the environment it runs in.
+ */
+const UPDATE_CHECK_ENABLED = {
+  AGENTWORKFORCE_NO_UPDATE_CHECK: '',
+  NO_UPDATE_NOTIFIER: ''
+} as const;
+
+/**
+ * Stand-in npm registry serving one `dist-tags` response, so the `--version`
+ * update check can be exercised end to end without the network.
+ */
+async function withStubRegistry<T>(
+  latest: string,
+  run: (registry: string) => Promise<T>
+): Promise<T> {
+  const { createServer } = await import('node:http');
+  const server = createServer((req, res) => {
+    if (req.url === '/-/package/agentworkforce/dist-tags') {
+      res.writeHead(200, { 'content-type': 'application/json' });
+      res.end(JSON.stringify({ latest }));
+      return;
+    }
+    res.writeHead(404).end('{}');
+  });
+  await new Promise<void>((resolve) => server.listen(0, '127.0.0.1', resolve));
+  const address = server.address();
+  const port = typeof address === 'object' && address ? address.port : 0;
+  try {
+    return await run(`http://127.0.0.1:${port}`);
+  } finally {
+    await new Promise<void>((resolve) => server.close(() => resolve()));
+  }
+}
+
+test('main: --version reports a newer published release and how to install it', async () => {
+  const root = mkdtempSync(join(tmpdir(), 'aw-version-update-'));
+  const workforceHome = join(root, 'home', '.agentworkforce', 'workforce');
+  mkdirSync(join(workforceHome, 'personas'), { recursive: true });
+  try {
+    const { stderr, stdout, exitCode } = await withStubRegistry('999.0.0', (registry) =>
+      runCliCapturingStderr(['--version'], {
+        AGENT_WORKFORCE_HOME: workforceHome,
+        AGENTWORKFORCE_REGISTRY: registry,
+        // The child inherits this process's env, and CI images commonly set
+        // NO_UPDATE_NOTIFIER=1 — which would make this assertion vacuous.
+        ...UPDATE_CHECK_ENABLED
+      })
+    );
+    assert.equal(exitCode, 0);
+    // stdout stays exactly the version so `$(agentworkforce --version)` keeps
+    // working; the notice goes to stderr.
+    assert.equal(stdout, `${CLI_VERSION}\n`);
+    assert.ok(
+      stderr.includes(`Update available: ${CLI_VERSION} → 999.0.0`),
+      `expected an update notice on stderr, got: ${JSON.stringify(stderr)}`
+    );
+    assert.match(stderr, /npm install (-g )?agentworkforce@latest/);
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test('main: --version says nothing when the installed build is current', async () => {
+  const root = mkdtempSync(join(tmpdir(), 'aw-version-current-'));
+  const workforceHome = join(root, 'home', '.agentworkforce', 'workforce');
+  mkdirSync(join(workforceHome, 'personas'), { recursive: true });
+  try {
+    const { stderr, stdout, exitCode } = await withStubRegistry(CLI_VERSION, (registry) =>
+      runCliCapturingStderr(['--version'], {
+        AGENT_WORKFORCE_HOME: workforceHome,
+        AGENTWORKFORCE_REGISTRY: registry,
+        ...UPDATE_CHECK_ENABLED
+      })
+    );
+    assert.equal(exitCode, 0);
+    assert.equal(stdout, `${CLI_VERSION}\n`);
+    assert.equal(stderr, '');
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test('main: --version still prints when the registry is unreachable', async () => {
+  const root = mkdtempSync(join(tmpdir(), 'aw-version-offline-'));
+  const workforceHome = join(root, 'home', '.agentworkforce', 'workforce');
+  mkdirSync(join(workforceHome, 'personas'), { recursive: true });
+  const { createServer } = await import('node:net');
+  // A port we own that hangs up on contact, rather than a low port guessed to
+  // be free: the failure is then the same on any host.
+  const dead = createServer((socket) => socket.destroy());
+  await new Promise<void>((resolve) => dead.listen(0, '127.0.0.1', resolve));
+  const address = dead.address();
+  const port = typeof address === 'object' && address ? address.port : 0;
+  try {
+    const { stderr, stdout, exitCode } = await runCliCapturingStderr(['--version'], {
+      AGENT_WORKFORCE_HOME: workforceHome,
+      AGENTWORKFORCE_REGISTRY: `http://127.0.0.1:${port}`,
+      AGENTWORKFORCE_UPDATE_CHECK_TIMEOUT_MS: '750',
+      ...UPDATE_CHECK_ENABLED
+    });
+    assert.equal(exitCode, 0);
+    assert.equal(stdout, `${CLI_VERSION}\n`);
+    assert.equal(stderr, '');
+  } finally {
+    await new Promise<void>((resolve) => dead.close(() => resolve()));
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test('main: persona compile dispatches to the typed persona compiler', async () => {
+  const root = mkdtempSync(join(tmpdir(), 'aw-persona-compile-cli-'));
+  const workforceHome = join(root, 'home', '.agentworkforce', 'workforce');
+  mkdirSync(join(workforceHome, 'personas'), { recursive: true });
+  const personaPath = join(root, 'persona.ts');
+  writeFileSync(
+    personaPath,
+    `export default {
+  id: 'cli-compiled',
+  intent: 'review',
+  description: 'Compiled through the CLI dispatcher.',
+  onEvent: './agent.ts',
+  harnessSettings: { reasoning: 'medium', timeoutSeconds: 60 }
+};
+`,
+    'utf8'
+  );
+
+  try {
+    const { stderr, stdout, exitCode } = await runCliCapturingStderr(
+      ['persona', 'compile', personaPath],
+      { AGENT_WORKFORCE_HOME: workforceHome }
+    );
+    assert.equal(exitCode, 0);
+    assert.equal(stderr, '');
+    assert.match(
+      stdout,
+      /Compiled .*persona\.ts -> .*persona\.json, .*agent-card\.json \(cli-compiled\)/
+    );
+    const compiled = JSON.parse(readFileSync(join(root, 'persona.json'), 'utf8')) as {
+      id: string;
+    };
+    const agentCard = JSON.parse(
+      readFileSync(join(root, 'agent-card.json'), 'utf8')
+    ) as { name: string };
+    assert.equal(compiled.id, 'cli-compiled');
+    assert.equal(agentCard.name, 'cli-compiled');
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test('main: deploy dry-run accepts an authored persona.ts path', async () => {
+  const root = mkdtempSync(join(tmpdir(), 'aw-persona-deploy-cli-'));
+  const workforceHome = join(root, 'home', '.agentworkforce', 'workforce');
+  mkdirSync(join(workforceHome, 'personas'), { recursive: true });
+  const personaPath = join(root, 'persona.ts');
+  writeFileSync(
+    join(root, 'agent.ts'),
+    `import { defineAgent } from '@agentworkforce/runtime';
+export default defineAgent({
+  schedules: [{ name: 'daily', cron: '0 9 * * *' }],
+  handler: async () => {}
+});
+`,
+    'utf8'
+  );
+  writeFileSync(
+    personaPath,
+    `export default {
+  id: 'cli-deploy-source',
+  intent: 'review',
+  description: 'Deploy through the CLI dispatcher.',
+  cloud: true,
+  onEvent: './agent.ts',
+  harnessSettings: { reasoning: 'medium', timeoutSeconds: 60 }
+};
+`,
+    'utf8'
+  );
+
+  try {
+    const { stderr, stdout, exitCode } = await runCliCapturingStderr(
+      ['deploy', personaPath, '--mode', 'dev', '--dry-run'],
+      { AGENT_WORKFORCE_HOME: workforceHome }
+    );
+    assert.equal(exitCode, 0);
+    assert.equal(stderr, '');
+    assert.match(stdout, /ok: cli-deploy-source \(dry-run\)/);
   } finally {
     rmSync(root, { recursive: true, force: true });
   }
@@ -687,8 +1048,11 @@ test('main: sources add/list/remove manages persona source dirs', async () => {
       sources: Array<{ source: string; config: string; dir: string }>;
     };
     assert.deepEqual(parsed.personaDirs, [userPersonaDir]);
+    // The two working-tree dirs are fixed and always lead the cascade;
+    // configurable dirs are appended after them.
     assert.equal(parsed.sources[0]?.source, 'cwd');
-    assert.equal(parsed.sources[1]?.source, 'user');
+    assert.equal(parsed.sources[1]?.source, 'cwd:agents');
+    assert.equal(parsed.sources[2]?.source, 'user');
 
     res = await runCliCapturingStderr(
       ['sources', 'add', customDir, '--position', '1'],
@@ -701,8 +1065,8 @@ test('main: sources add/list/remove manages persona source dirs', async () => {
     assert.equal(res.exitCode, 0);
     parsed = JSON.parse(res.stdout) as typeof parsed;
     assert.deepEqual(parsed.personaDirs, [customDir, userPersonaDir]);
-    assert.equal(parsed.sources[1]?.source, 'dir:1');
-    assert.equal(parsed.sources[2]?.source, 'user');
+    assert.equal(parsed.sources[2]?.source, 'dir:1');
+    assert.equal(parsed.sources[3]?.source, 'user');
 
     res = await runCliCapturingStderr(['sources', 'remove', '1'], env);
     assert.equal(res.exitCode, 0);
@@ -726,6 +1090,26 @@ test('buildMountGitExcludeBlock: emits a header comment and one line per pattern
   assert.match(out, /^# agentworkforce:/m);
   assert.match(out, /^CLAUDE\.md$/m);
   assert.match(out, /^\.claude$/m);
+});
+
+test('buildSpawnSummary uses final spec MCP servers, including broker-injected relaycast', () => {
+  const summary = buildSpawnSummary({
+    harness: 'claude',
+    model: 'claude-sonnet-4-6',
+    spec: {
+      initialPrompt: null,
+      mcpServers: {
+        relaycast: { type: 'stdio', command: 'npx', args: ['-y', '@relaycast/mcp'] }
+      }
+    },
+    useClean: true
+  });
+
+  assert.deepEqual(summary, [
+    'model=claude-sonnet-4-6',
+    'mcp-strict=relaycast',
+    'mount=on'
+  ]);
 });
 
 test('configureGitForMount: marks tracked hidden paths as skip-worktree and appends to .git/info/exclude', async () => {
@@ -898,6 +1282,23 @@ test('loadSidecarForSelection: opencode picks agentsMd, not claudeMd', () => {
     personaId: 'p',
     harness: 'opencode' as const,
     model: 'gpt-5.2',
+    systemPrompt: 'X',
+    harnessSettings: { reasoning: 'medium' as const, timeoutSeconds: 300 },
+    skills: [],
+    rationale: 'test',
+    claudeMdContent: '# claude\n',
+    agentsMdContent: '# agents\n'
+  };
+  const { sidecar } = loadSidecarForSelection(selection);
+  assert.equal(sidecar?.mountFile, 'AGENTS.md');
+  assert.equal(sidecar?.personaContent, '# agents\n');
+});
+
+test('loadSidecarForSelection: grok picks agentsMd, not claudeMd', () => {
+  const selection = {
+    personaId: 'p',
+    harness: 'grok' as const,
+    model: 'grok-build-0.1',
     systemPrompt: 'X',
     harnessSettings: { reasoning: 'medium' as const, timeoutSeconds: 300 },
     skills: [],
@@ -1389,4 +1790,96 @@ test('readSingleCharChoice: invalid input loops until valid arrives', () => {
   // Saw two "invalid choice" reprompts before the valid 'q'.
   const invalidLines = writes.filter((w) => w.includes('invalid choice'));
   assert.equal(invalidLines.length, 2);
+});
+
+// --- resolveEnvCheckIntervalMs (PR #124 review: `never` must disable) ----
+
+test('resolveEnvCheckIntervalMs: unset → 24h default', () => {
+  const prev = process.env.AGENTWORKFORCE_SKILL_CACHE_CHECK_INTERVAL;
+  delete process.env.AGENTWORKFORCE_SKILL_CACHE_CHECK_INTERVAL;
+  try {
+    assert.equal(resolveEnvCheckIntervalMs(), 24 * 3_600_000);
+  } finally {
+    if (prev === undefined) delete process.env.AGENTWORKFORCE_SKILL_CACHE_CHECK_INTERVAL;
+    else process.env.AGENTWORKFORCE_SKILL_CACHE_CHECK_INTERVAL = prev;
+  }
+});
+
+test('resolveEnvCheckIntervalMs: never/off → null (NOT coalesced to default)', () => {
+  const prev = process.env.AGENTWORKFORCE_SKILL_CACHE_CHECK_INTERVAL;
+  try {
+    for (const v of ['never', 'off', 'false']) {
+      process.env.AGENTWORKFORCE_SKILL_CACHE_CHECK_INTERVAL = v;
+      assert.equal(resolveEnvCheckIntervalMs(), null, `"${v}" must disable checks`);
+    }
+    process.env.AGENTWORKFORCE_SKILL_CACHE_CHECK_INTERVAL = '0';
+    assert.equal(resolveEnvCheckIntervalMs(), 0); // 0 = always, distinct from null
+    process.env.AGENTWORKFORCE_SKILL_CACHE_CHECK_INTERVAL = '30m';
+    assert.equal(resolveEnvCheckIntervalMs(), 1_800_000);
+    process.env.AGENTWORKFORCE_SKILL_CACHE_CHECK_INTERVAL = 'garbage';
+    assert.equal(resolveEnvCheckIntervalMs(), 24 * 3_600_000); // unparseable → default
+  } finally {
+    if (prev === undefined) delete process.env.AGENTWORKFORCE_SKILL_CACHE_CHECK_INTERVAL;
+    else process.env.AGENTWORKFORCE_SKILL_CACHE_CHECK_INTERVAL = prev;
+  }
+});
+
+// --- acquireSkillCacheLock (PR #124 review: per-fingerprint locking) -----
+
+test('acquireSkillCacheLock: acquires, blocks re-acquire, releases', async () => {
+  const dir = mkdtempSync(join(tmpdir(), 'cli-lock-'));
+  try {
+    const cacheDir = join(dir, 'fp');
+    const lock = await acquireSkillCacheLock(cacheDir);
+    assert.ok(lock, 'first acquire succeeds');
+    assert.equal(existsSync(`${cacheDir}.lock`), true);
+
+    // A held, fresh lock from a live pid (us) is not stolen → second acquire
+    // blocks; assert it doesn't resolve within a short window.
+    const second = acquireSkillCacheLock(cacheDir);
+    const raced = await Promise.race([
+      second.then(() => 'acquired'),
+      new Promise((r) => setTimeout(() => r('still-blocked'), 600))
+    ]);
+    assert.equal(raced, 'still-blocked');
+
+    lock.release();
+    assert.equal(existsSync(`${cacheDir}.lock`), false);
+
+    // Now the pending second acquire (250ms poll) can proceed.
+    const lock2 = await second;
+    assert.ok(lock2);
+    lock2.release();
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test('acquireSkillCacheLock: steals a stale (old-timestamp) lock', async () => {
+  const dir = mkdtempSync(join(tmpdir(), 'cli-lock-stale-'));
+  try {
+    const cacheDir = join(dir, 'fp');
+    // Live pid, but timestamp ~16min old → stale, must be stolen.
+    const old = Date.now() - 16 * 60_000;
+    writeFileSync(`${cacheDir}.lock`, `${process.pid}\n${old}\n`);
+    const lock = await acquireSkillCacheLock(cacheDir);
+    assert.ok(lock, 'stale lock stolen and re-acquired');
+    lock.release();
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test('acquireSkillCacheLock: steals a lock held by a dead pid', async () => {
+  const dir = mkdtempSync(join(tmpdir(), 'cli-lock-deadpid-'));
+  try {
+    const cacheDir = join(dir, 'fp');
+    // Fresh timestamp but an almost-certainly-dead pid → stolen via pid check.
+    writeFileSync(`${cacheDir}.lock`, `999999999\n${Date.now()}\n`);
+    const lock = await acquireSkillCacheLock(cacheDir);
+    assert.ok(lock, 'dead-pid lock stolen and re-acquired');
+    lock.release();
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
 });
