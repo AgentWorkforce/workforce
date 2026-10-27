@@ -300,6 +300,10 @@ test('a repo agents dir already listed in personaDirs keeps its configured rank'
     join(agents, 'repo-only', 'persona.json'),
     JSON.stringify({ id: 'repo-only', extends: 'persona-maker', description: 'only in the repo' })
   );
+  writeFileSync(
+    join(agents, 'flat-scout.json'),
+    JSON.stringify({ id: 'flat-scout', extends: 'persona-maker', description: 'top-level json' })
+  );
 
   const options = {
     cwd: nested,
@@ -311,14 +315,21 @@ test('a repo agents dir already listed in personaDirs keeps its configured rank'
     const loaded = loadLocalPersonas(options);
     assert.equal(loaded.byId.get('proposal-agent')?.description, 'company override');
     assert.equal(loaded.sources.get('proposal-agent'), 'dir:1');
+    assert.equal(loaded.byId.get('flat-scout')?.description, 'top-level json');
+    assert.equal(loaded.sources.get('flat-scout'), 'dir:2');
     assert.equal(loaded.byId.get('repo-only')?.description, 'only in the repo');
-    assert.equal(loaded.sources.get('repo-only'), 'dir:2');
+    assert.equal(loaded.sources.get('repo-only'), 'repo:agents');
     const dirs = buildPersonaSourceDirectories(options).directories;
-    assert.equal(dirs.some((d) => d.source === 'repo:agents'), false);
     const agentEntries = dirs.filter((d) => resolve(d.dir) === resolve(agents));
-    assert.equal(agentEntries.length, 1);
+    assert.equal(agentEntries.length, 2);
     assert.equal(agentEntries[0]?.source, 'dir:2');
-    assert.equal(agentEntries[0]?.nested, true);
+    assert.equal(agentEntries[0]?.nested, undefined);
+    assert.equal(agentEntries[1]?.source, 'repo:agents');
+    assert.equal(agentEntries[1]?.nested, true);
+    const companyIdx = dirs.findIndex((d) => d.source === 'dir:1');
+    const flatIdx = dirs.findIndex((d) => d.source === 'dir:2');
+    const nestedIdx = dirs.findIndex((d) => d.source === 'repo:agents');
+    assert.ok(companyIdx >= 0 && companyIdx < flatIdx && flatIdx < nestedIdx);
   } finally {
     rmSync(root, { recursive: true, force: true });
   }

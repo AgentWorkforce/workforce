@@ -441,9 +441,10 @@ function repoSourceDirectories(
   if (existsSync(agents) && !configured.has(resolvePath(agents))) {
     dirs.push({ source: 'repo:agents', dir: agents, configurable: false, nested: true });
   }
-  // When `agents` is already configured, the caller marks that entry nested.
-  // A flat configured read would only see top-level JSON and drop every
-  // `<name>/persona.json`.
+  // When `agents` is already configured, the nested read is inserted beside
+  // that entry in `buildPersonaSourceDirectories` instead of here. Putting it
+  // here would outrank every configured source, and replacing the configured
+  // entry with a nested one would hide top-level JSON in that directory.
   return dirs;
 }
 
@@ -476,20 +477,23 @@ export function buildPersonaSourceDirectories(
       const entry: PersonaSourceDirectory = {
         source: sourceForPersonaDir(dir, idx, config.userPersonaDir),
         dir,
-        configurable: true,
-        // `repo:agents` is omitted above when this directory is already
-        // configured. Keep the nested read here so `<name>/persona.json`
-        // still loads, at the rank the config chose.
-        ...(repoAgentDir !== undefined && resolvePath(dir) === repoAgentDir
-          ? { nested: true }
-          : {})
+        configurable: true
       };
+      // The configured entry stays a flat read, so top-level JSON keeps the
+      // rank the user chose. Nested `<name>/persona.json` files in the
+      // repository agents directory are not visible to that flat read, so
+      // they follow immediately after it — still behind every earlier
+      // configured source.
+      const nestedRepoAgents: PersonaSourceDirectory[] =
+        repoAgentDir !== undefined && resolvePath(dir) === repoAgentDir
+          ? [{ source: 'repo:agents', dir, configurable: false, nested: true }]
+          : [];
       // The personal agents dir rides directly behind the personal personas
       // dir, the same way cwd:agents rides behind cwd, so the pair keeps its
       // relative rank wherever the user has moved it in the cascade.
       return dir === config.userPersonaDir
-        ? [entry, userAgentSourceDir(config.userPersonaDir)]
-        : [entry];
+        ? [entry, ...nestedRepoAgents, userAgentSourceDir(config.userPersonaDir)]
+        : [entry, ...nestedRepoAgents];
     }),
     // A user who dropped their personal personas dir from the cascade still
     // gets their personal agents, ranked last among file layers.
