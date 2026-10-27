@@ -381,7 +381,11 @@ test('cloud harness runner materializes AGENTS.md for cursor personas', async ()
       'text'
     ]);
     assert.equal(parsed.prompt, 'say hello');
-    assert.equal(parsed.agents, 'Cursor agents sidecar\n');
+    assert.equal(
+      parsed.agents,
+      'Cursor system prompt\n\nWhen no visible reply is useful, make the final message exactly [[NO_REPLY]].\n\n---\n\nCursor agents sidecar\n'
+    );
+    assert.ok(parsed.agents.indexOf('Cursor system prompt') < parsed.agents.indexOf('Cursor agents sidecar'));
     assert.ok(logs.find((l) => l.message === 'harness.sidecar.materialized'));
   } finally {
     restoreEnv(envSnapshot);

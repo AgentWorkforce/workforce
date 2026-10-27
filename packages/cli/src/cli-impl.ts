@@ -39,6 +39,7 @@ import {
   MissingPersonaInputError,
   parseCheckInterval,
   PERSONA_TAGS,
+  composeCursorAgentsMd,
   readSkillCacheMarker,
   renderPersonaInputs,
   resolveAiMemory,
@@ -1395,6 +1396,20 @@ export function loadSidecarForSelection(
 }
 
 /**
+ * Cursor writes `systemPrompt` and an `agentsMd` sidecar to the same
+ * `AGENTS.md`. Return the sidecar body with the prompt kept in front so
+ * overwrite and extend cannot drop it. Other harnesses pass the sidecar
+ * body through unchanged by leaving `systemPrompt` empty.
+ */
+export function mergeCursorAgentsMd(
+  systemPrompt: string | undefined,
+  sidecarBody: string
+): string {
+  if (!systemPrompt?.trim()) return sidecarBody;
+  return composeCursorAgentsMd(systemPrompt, sidecarBody);
+}
+
+/**
  * Compute the bytes to write into the mount for a sidecar. In `extend`
  * mode, prepends the user's real-cwd file (if any) joined to the persona
  * content with `\n\n---\n\n`. Pure — exposed for unit tests.
@@ -2543,7 +2558,15 @@ async function runInteractive(
         writeFileSync(target, file.contents, 'utf8');
       }
       if (resolvedSidecar) {
-        const body = buildSidecarBody(resolvedSidecar, process.cwd());
+        const sidecarBody = buildSidecarBody(resolvedSidecar, process.cwd());
+        // Extend reads the real repo, not the prompt file this loop just
+        // wrote into the mount. Put the Cursor system prompt back in front
+        // so both the prompt and the sidecar survive overwrite and extend.
+        const cursorPrompt =
+          harness === 'cursor' && resolvedSidecar.mountFile === 'AGENTS.md'
+            ? spec.configFiles.find((file) => file.path === 'AGENTS.md')?.contents
+            : undefined;
+        const body = mergeCursorAgentsMd(cursorPrompt, sidecarBody);
         writeFileSync(join(handle.mountDir, resolvedSidecar.mountFile), body, 'utf8');
       }
       perfMark('mount: config files + sidecar written');

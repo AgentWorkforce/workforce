@@ -99,9 +99,16 @@ export async function executePersonaSpawnPlan(
     );
     handles.push(configHandle);
 
+    const cursorSystemPrompt =
+      plan.persona.harness === 'cursor'
+        ? plan.configFiles.find((file) => file.path === 'AGENTS.md')?.contents
+        : undefined;
     const sidecarHandle: PersonaSidecarHandle = await writePersonaSidecars(
       plan.sidecars,
-      { cwd: childCwd }
+      {
+        cwd: childCwd,
+        ...(cursorSystemPrompt ? { cursorSystemPrompt } : {})
+      }
     );
     handles.push(sidecarHandle);
 

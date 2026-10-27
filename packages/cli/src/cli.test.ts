@@ -17,6 +17,7 @@ import {
   buildMountGitExcludeBlock,
   buildSpawnSummary,
   buildSidecarBody,
+  mergeCursorAgentsMd,
   configureGitForMount,
   decideCleanMode,
   formatSandboxMountReadyMessage,
@@ -1166,6 +1167,35 @@ test('configureGitForMount: empty patterns is a no-op', () => {
   // Defensive: callers that compute patterns dynamically may end up with
   // an empty list; we should not touch the index in that case.
   assert.doesNotThrow(() => configureGitForMount('/nonexistent-path', []));
+});
+
+test('cursor AGENTS.md keeps systemPrompt together with an agentsMd sidecar', () => {
+  const dir = mkdtempSync(join(tmpdir(), 'aw-cursor-agents-'));
+  try {
+    writeFileSync(join(dir, 'AGENTS.md'), '# Real repo\n', 'utf8');
+    const sidecar: ResolvedSidecar = {
+      mountFile: 'AGENTS.md',
+      personaContent: '# Sidecar\n',
+      mode: 'overwrite'
+    };
+    assert.equal(
+      mergeCursorAgentsMd('System prompt\n', buildSidecarBody(sidecar, dir)),
+      'System prompt\n\n---\n\n# Sidecar\n'
+    );
+
+    const extended = mergeCursorAgentsMd(
+      'System prompt\n',
+      buildSidecarBody({ ...sidecar, mode: 'extend' }, dir)
+    );
+    assert.equal(
+      extended,
+      'System prompt\n\n---\n\n# Real repo\n\n\n---\n\n# Sidecar\n'
+    );
+    assert.ok(extended.indexOf('System prompt') < extended.indexOf('# Real repo'));
+    assert.ok(extended.indexOf('# Real repo') < extended.indexOf('# Sidecar'));
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
 });
 
 test('buildSidecarBody: overwrite mode returns persona content as-is', () => {
