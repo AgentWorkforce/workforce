@@ -112,6 +112,9 @@ export type PersonaSource = string;
  *   - `cwd:agents` → same — `<cwd>/.agentworkforce/workforce/agents/<name>/persona.json`,
  *                  agents that keep their persona next to their handler.
  *                  Also a precise pointer, so also kept as-is.
+ *   - `user:agents` → `personal:agents` — the `agents/` sibling of the personal
+ *                  personas dir; personal agents-with-handlers, available in
+ *                  any repo. Renamed to follow `user` → `personal`.
  *   - `dir:N`    → `dir:N`    — extra configurable persona dirs (passed
  *                  through unchanged so position is still legible).
  *
@@ -121,6 +124,7 @@ export type PersonaSource = string;
 export function formatPersonaSourceLabel(source: PersonaSource): string {
   if (source === 'library') return 'built-in';
   if (source === 'user') return 'personal';
+  if (source === 'user:agents') return 'personal:agents';
   return source;
 }
 
@@ -219,6 +223,16 @@ export function defaultCwdPersonaDir(cwd: string): string {
  */
 export function defaultCwdAgentDir(cwd: string): string {
   return join(cwd, '.agentworkforce', 'workforce', 'agents');
+}
+
+/**
+ * Personal counterpart to {@link defaultCwdAgentDir}: agents-with-handlers a
+ * user keeps across every repo. Derived from wherever their personal personas
+ * live so the pair travels together, including under
+ * `AGENT_WORKFORCE_CONFIG_DIR` and test overrides.
+ */
+export function userAgentDirFor(userPersonaDir: string): string {
+  return join(dirname(userPersonaDir), 'agents');
 }
 
 /** Persona filename read from each subdirectory of a nested source dir. */
@@ -388,13 +402,35 @@ export function buildPersonaSourceDirectories(
       configurable: false,
       nested: true
     },
-    ...config.personaDirs.map((dir, idx) => ({
-      source: sourceForPersonaDir(dir, idx, config.userPersonaDir),
-      dir,
-      configurable: true
-    }))
+    ...config.personaDirs.flatMap((dir, idx) => {
+      const entry: PersonaSourceDirectory = {
+        source: sourceForPersonaDir(dir, idx, config.userPersonaDir),
+        dir,
+        configurable: true
+      };
+      // The personal agents dir rides directly behind the personal personas
+      // dir, the same way cwd:agents rides behind cwd, so the pair keeps its
+      // relative rank wherever the user has moved it in the cascade.
+      return dir === config.userPersonaDir
+        ? [entry, userAgentSourceDir(config.userPersonaDir)]
+        : [entry];
+    }),
+    // A user who dropped their personal personas dir from the cascade still
+    // gets their personal agents, ranked last among file layers.
+    ...(config.personaDirs.includes(config.userPersonaDir)
+      ? []
+      : [userAgentSourceDir(config.userPersonaDir)])
   ];
   return { directories, config };
+}
+
+function userAgentSourceDir(userPersonaDir: string): PersonaSourceDirectory {
+  return {
+    source: 'user:agents',
+    dir: userAgentDirFor(userPersonaDir),
+    configurable: false,
+    nested: true
+  };
 }
 
 /** One persona file to read, with the directory its relative paths resolve against. */
@@ -429,18 +465,38 @@ function readNestedLayerEntries(
   for (const name of names) {
     const sourceDir = join(dir, name);
     const path = join(sourceDir, NESTED_PERSONA_FILENAME);
-    if (isFile(path)) {
-      entries.push({ label: `${name}/${NESTED_PERSONA_FILENAME}`, path, sourceDir });
+    // Compare against the NEWEST authoring file, not the first one that
+    // exists: a directory that still carries an old persona.ts after moving to
+    // persona.js would otherwise be measured against the file nobody edits.
+    const authoredCandidate = NESTED_PERSONA_SOURCE_FILENAMES.map((file) => ({
+      file: join(sourceDir, file),
+      mtimeMs: fileMtimeMs(join(sourceDir, file))
+    }))
+      .filter((candidate): candidate is { file: string; mtimeMs: number } => candidate.mtimeMs !== undefined)
+      .sort((a, b) => b.mtimeMs - a.mtimeMs)[0];
+    const authored = authoredCandidate?.file;
+    const compiledAt = fileMtimeMs(path);
+
+    if (compiledAt === undefined) {
+      if (authored) {
+        warnings.push(
+          `[${layer.source}] ${name}: ${basename(authored)} has no compiled ${NESTED_PERSONA_FILENAME}; run \`agentworkforce persona compile ${authored}\` to make it loadable.`
+        );
+      }
       continue;
     }
-    const authored = NESTED_PERSONA_SOURCE_FILENAMES.find((file) =>
-      isFile(join(sourceDir, file))
-    );
-    if (authored) {
+
+    // A stale artifact is the quieter failure: the persona still loads, so
+    // nothing looks wrong while the edits sitting in the authoring file are
+    // simply absent. Say so, and keep serving the compiled spec — dropping it
+    // would turn a forgotten compile into a missing persona.
+    const authoredAt = authoredCandidate?.mtimeMs;
+    if (authored !== undefined && authoredAt !== undefined && authoredAt > compiledAt) {
       warnings.push(
-        `[${layer.source}] ${name}: ${authored} has no compiled ${NESTED_PERSONA_FILENAME}; run \`agentworkforce persona compile ${join(sourceDir, authored)}\` to make it loadable.`
+        `[${layer.source}] ${name}: ${NESTED_PERSONA_FILENAME} is older than ${basename(authored)}, so this persona is loading without the latest edits; re-run \`agentworkforce persona compile ${authored}\`.`
       );
     }
+    entries.push({ label: `${name}/${NESTED_PERSONA_FILENAME}`, path, sourceDir });
   }
   return entries;
 }
@@ -1054,6 +1110,16 @@ function isFile(path: string): boolean {
     return statSync(path).isFile();
   } catch {
     return false;
+  }
+}
+
+/** Modification time of a regular file, or undefined if it is not one. */
+function fileMtimeMs(path: string): number | undefined {
+  try {
+    const st = statSync(path);
+    return st.isFile() ? st.mtimeMs : undefined;
+  } catch {
+    return undefined;
   }
 }
 
