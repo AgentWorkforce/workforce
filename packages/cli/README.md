@@ -157,9 +157,15 @@ agentworkforce agent <persona>[@<tier>]
 - `<persona>` — matches, in order:
   1. A **cwd-local** id (files in `<cwd>/.agentworkforce/workforce/personas/*.json`)
   2. A **cwd agent** id (`<cwd>/.agentworkforce/workforce/agents/<name>/persona.json`)
-  3. A configured persona source dir, in order. The default is
+  3. A **repository** id (`<repo root>/.agentworkforce/workforce/personas/*.json`),
+     when the command runs below the repository root and that directory exists
+     and is not already a configured source.
+  4. A **repository agent** id
+     (`<repo root>/.agentworkforce/workforce/agents/<name>/persona.json`), on the
+     same terms.
+  5. A configured persona source dir, in order. The default is
      `~/.agentworkforce/workforce/personas/*.json`.
-  4. An internal **library** persona — by intent first, then by id. The built-in
+  6. An internal **library** persona — by intent first, then by id. The built-in
      library is system-only; optional personas such as `code-reviewer` come from
      installed persona packs.
 - `<tier>` — `best` | `best-value` | `minimum`. Defaults to `best-value`.
@@ -443,9 +449,11 @@ agentworkforce sources remove <dir|config-position>
 
 Two fixed project sources always lead the cascade:
 `<cwd>/.agentworkforce/workforce/personas/*.json`, then
-`<cwd>/.agentworkforce/workforce/agents/<name>/persona.json`. A third fixed
-source, `~/.agentworkforce/workforce/agents/<name>/persona.json`, carries
-personal agents and follows the personal personas dir wherever it ranks.
+`<cwd>/.agentworkforce/workforce/agents/<name>/persona.json`. When the command
+runs from a subdirectory, the same two directories at the repository root
+follow, but only when they exist and are not already listed in `personaDirs`.
+A further fixed source, `~/.agentworkforce/workforce/agents/<name>/persona.json`,
+carries personal agents and follows the personal personas dir wherever it ranks.
 
 After that, the CLI reads an ordered list of configurable persona directories
 from `~/.agentworkforce/workforce/config.json`. If no config exists, the list
@@ -472,7 +480,9 @@ the override without editing JSON by hand.
 
 `sources add` appends by default. `--position <n>` inserts at the 1-based
 position among configurable directories, so `--position 1` gives that directory
-the highest priority after the fixed `cwd` and `cwd:agents` sources. `sources
+the highest priority after the fixed `cwd`, `cwd:agents`, and (when present)
+repository sources. A repository directory that is already in `personaDirs` is
+not inserted again, so its configured position stays authoritative. `sources
 remove` accepts either that configurable position or an exact path.
 
 Examples:
@@ -541,24 +551,32 @@ wins):
 
 1. `<cwd>/.agentworkforce/workforce/personas/*.json` — **cwd**
 2. `<cwd>/.agentworkforce/workforce/agents/<name>/persona.json` — **cwd:agents**
-3. Configurable persona source dirs, in order. Default:
+3. `<repo root>/.agentworkforce/workforce/personas/*.json` — **repo**, when the
+   command runs below the repository root and the directory exists and is not
+   already configured. From the root itself these files are the **cwd** layer.
+4. `<repo root>/.agentworkforce/workforce/agents/<name>/persona.json` —
+   **repo:agents**, on the same terms.
+5. Configurable persona source dirs, in order. Default:
    `~/.agentworkforce/workforce/personas/*.json` — **user**
-4. `~/.agentworkforce/workforce/agents/<name>/persona.json` — **user:agents**,
+6. `~/.agentworkforce/workforce/agents/<name>/persona.json` — **user:agents**,
    the personal mirror of `cwd:agents`. It rides directly behind the personal
    personas dir, so moving that dir in the cascade moves both. The tables
    printed by `list` and `sources list` show it as **personal:agents**,
    following `user` → `personal`; `user:agents` is the value `--json` emits.
-5. Internal built-in system personas in `/personas/` — **library**
+7. Internal built-in system personas in `/personas/` — **library**
 
 Local files are **partial overlays**: only the fields you set replace the
 inherited value. Everything else cascades through from below.
 
 ### Agents that ship their own handler
 
-The same directory layout works in a repo (`cwd:agents`) and in your personal
-config (`user:agents`), so an agent you want everywhere lives in
-`~/.agentworkforce/workforce/agents/<name>/` and a repo's own agents live in its
-working tree. A repo agent outranks a personal one of the same id.
+The same directory layout works in a repo (`cwd:agents` at the directory you
+are in, `repo:agents` at the repository root when you are in a subdirectory)
+and in your personal config (`user:agents`). An agent you want everywhere lives
+in `~/.agentworkforce/workforce/agents/<name>/`, and a repo's own agents live at
+its root. A repo agent outranks a personal one of the same id. The walk stops
+at the home directory, so a dotfiles checkout at `$HOME` stays the personal
+layer rather than becoming `repo`.
 
 An agent with code of its own keeps persona, handler, tests, and README in one
 directory:
