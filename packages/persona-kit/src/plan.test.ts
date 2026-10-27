@@ -1,10 +1,11 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdtempSync, mkdirSync, rmSync } from 'node:fs';
+import { mkdtempSync, mkdirSync, realpathSync, rmSync, symlinkSync } from 'node:fs';
 import { tmpdir, homedir } from 'node:os';
 import { join } from 'node:path';
 
 import {
+  buildMountResolutionEnv,
   buildPersonaSpawnPlan,
   resolveMountRoots,
   type ResolvedPersona
@@ -364,6 +365,89 @@ test('resolveMountRoots returns undefined when every optional root is missing', 
   };
   const roots = resolveMountRoots(mount, {} as NodeJS.ProcessEnv);
   assert.equal(roots, undefined);
+});
+
+test('resolveMountRoots appends ** after per-root readonly patterns', () => {
+  const repo = mkdtempSync(join(tmpdir(), 'aw-plan-ro-'));
+  try {
+    const roots = resolveMountRoots(
+      {
+        roots: [
+          {
+            alias: 'api',
+            path: repo,
+            readonly: true,
+            readonlyPatterns: ['!version.ts']
+          }
+        ]
+      },
+      {} as NodeJS.ProcessEnv
+    );
+    assert.deepEqual(roots?.[0].readonlyPatterns, ['!version.ts', '**']);
+  } finally {
+    rmSync(repo, { recursive: true, force: true });
+  }
+});
+
+test('resolveMountRoots rejects a root and a symlink or trailing slash to the same directory', () => {
+  const repo = mkdtempSync(join(tmpdir(), 'aw-plan-dup-real-'));
+  const linkParent = mkdtempSync(join(tmpdir(), 'aw-plan-dup-link-'));
+  const link = join(linkParent, 'alias');
+  symlinkSync(repo, link);
+  try {
+    assert.throws(
+      () =>
+        resolveMountRoots(
+          {
+            roots: [
+              { alias: 'a', path: `${repo}/` },
+              { alias: 'b', path: link }
+            ]
+          },
+          {} as NodeJS.ProcessEnv
+        ),
+      /already used by another root/
+    );
+  } finally {
+    rmSync(linkParent, { recursive: true, force: true });
+    rmSync(repo, { recursive: true, force: true });
+  }
+});
+
+test('buildPersonaSpawnPlan resolves mount paths by input name and env name', () => {
+  const repo = mkdtempSync(join(tmpdir(), 'aw-plan-input-alias-'));
+  try {
+    const byInputName = buildPersonaSpawnPlan(
+      persona({
+        inputs: { REPO: { env: 'REPO_DIR', default: repo } },
+        mount: { roots: [{ alias: 'repo', path: '$REPO' }] }
+      }),
+      { processEnv: cleanEnv }
+    );
+    assert.equal(byInputName.mount?.roots?.[0]?.path, realpathSync(repo));
+
+    const byEnvName = buildPersonaSpawnPlan(
+      persona({
+        inputs: { REPO: { env: 'REPO_DIR', default: repo } },
+        mount: { roots: [{ alias: 'repo', path: '$REPO_DIR' }] }
+      }),
+      { processEnv: cleanEnv }
+    );
+    assert.equal(byEnvName.mount?.roots?.[0]?.path, realpathSync(repo));
+  } finally {
+    rmSync(repo, { recursive: true, force: true });
+  }
+});
+
+test('buildMountResolutionEnv lets persona env win over either input key', () => {
+  const env = buildMountResolutionEnv({
+    processEnv: { REPO_DIR: '/from-process' } as NodeJS.ProcessEnv,
+    inputs: { REPO: { env: 'REPO_DIR', default: '/from-default' } },
+    inputValues: { REPO: '/from-input' },
+    personaEnv: { REPO_DIR: '/from-persona' }
+  });
+  assert.equal(env.REPO, '/from-input');
+  assert.equal(env.REPO_DIR, '/from-persona');
 });
 
 test('resolveMountRoots rejects two roots that resolve to the same absolute path', () => {

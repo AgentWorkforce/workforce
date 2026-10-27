@@ -1,4 +1,4 @@
-import { existsSync } from 'node:fs';
+import { existsSync, realpathSync } from 'node:fs';
 import { homedir } from 'node:os';
 
 import { makeEnvRefResolver } from './env-refs.js';
@@ -161,6 +161,41 @@ function resolveAiHistConfig(env: NodeJS.ProcessEnv, dbPathOverride?: string): A
   };
 }
 
+/**
+ * Env used to expand `mount.roots[].path`. Declared inputs are visible under
+ * both their name (prompt templates and the interactive CLI) and their `env`
+ * name (what {@link buildPersonaSpawnPlan} injects into the harness).
+ * Precedence matches the spawn plan: ambient process env, then those input
+ * bindings, then `envOverrides`, then persona `env`.
+ */
+export function buildMountResolutionEnv(options: {
+  processEnv?: NodeJS.ProcessEnv;
+  inputs?: Record<string, PersonaInputSpec>;
+  inputValues?: Record<string, string>;
+  envOverrides?: Record<string, string>;
+  personaEnv?: Record<string, string>;
+}): NodeJS.ProcessEnv {
+  const env: NodeJS.ProcessEnv = {};
+  if (options.processEnv) {
+    for (const [key, value] of Object.entries(options.processEnv)) {
+      if (typeof value === 'string') env[key] = value;
+    }
+  }
+  const inputValues = options.inputValues ?? {};
+  if (options.inputs) {
+    for (const [name, spec] of Object.entries(options.inputs)) {
+      const value = inputValues[name];
+      if (value === undefined) continue;
+      const envName = spec.env ?? name;
+      env[envName] = value;
+      env[name] = value;
+    }
+  }
+  if (options.envOverrides) Object.assign(env, options.envOverrides);
+  if (options.personaEnv) Object.assign(env, options.personaEnv);
+  return env;
+}
+
 function resolvedInputBindings(
   inputs: Record<string, PersonaInputSpec> | undefined,
   values: Record<string, string>
@@ -266,17 +301,25 @@ function resolveMountRoot(
   }
   const readonly = root.readonly === true;
   // Convert `readonly: true` into the gitignore-style "**" pattern relayfile
-  // understands. Doing it here keeps `applyPersonaMount` agnostic of the
-  // sugar and lets per-root pattern overrides compose cleanly.
+  // understands. Append it after the author's patterns: gitignore last-match
+  // wins, so a leading "**" would let a later "!file" negation reopen writes.
   const readonlyPatterns = [
-    ...(readonly ? ['**'] : []),
-    ...(root.readonlyPatterns ?? [])
+    ...(root.readonlyPatterns ?? []),
+    ...(readonly ? ['**'] : [])
   ];
+  let canonical: string;
+  try {
+    canonical = realpathSync(withHome);
+  } catch (err) {
+    const message = `${context}.path resolved to "${withHome}" but could not be canonicalized: ${(err as Error).message}`;
+    if (root.optional) return { kind: 'skip', reason: message };
+    throw new Error(message);
+  }
   return {
     kind: 'ok',
     root: {
       alias: root.alias,
-      path: withHome,
+      path: canonical,
       readonly,
       ignoredPatterns: [...(root.ignoredPatterns ?? [])],
       readonlyPatterns
@@ -306,6 +349,8 @@ export function resolveMountRoots(
   mount.roots.forEach((root, idx) => {
     const result = resolveMountRoot(root, processEnv, `${context}.roots[${idx}]`);
     if (result.kind === 'skip') return;
+    // `path` is realpath'd, so `/repo`, `/repo/`, and a symlink to `/repo`
+    // collapse to one mount instead of two write-back watchers.
     if (seen.has(result.root.path)) {
       throw new Error(
         `${context}.roots[${idx}].path resolves to "${result.root.path}" which is already used by another root`
@@ -406,21 +451,15 @@ export function buildPersonaSpawnPlan(
 
   const inputBindings = resolvedInputBindings(persona.inputs, inputResolution.values);
   const sidecars = resolveSidecarWrite(persona);
-  // Build the env-ref source for mount.roots[].path the same way the plan
-  // builds the harness env: ambient processEnv (when opted-in) layered with
-  // resolved inputs and overrides. Persona-level `env` wins last, matching
-  // the spawn-env precedence below.
-  const mountEnv: NodeJS.ProcessEnv = {};
-  const ambientForMount =
-    options.processEnv ?? (options.includeProcessEnv ? process.env : undefined);
-  if (ambientForMount) {
-    for (const [k, v] of Object.entries(ambientForMount)) {
-      if (typeof v === 'string') mountEnv[k] = v;
-    }
-  }
-  for (const binding of inputBindings) mountEnv[binding.envName] = binding.value;
-  if (options.envOverrides) Object.assign(mountEnv, options.envOverrides);
-  if (persona.env) Object.assign(mountEnv, persona.env);
+  // Same precedence as `plan.env` below, plus each input's own name so
+  // `$REPO` and `$REPO_DIR` both resolve when `inputs.REPO.env` is `REPO_DIR`.
+  const mountEnv = buildMountResolutionEnv({
+    processEnv: options.processEnv ?? (options.includeProcessEnv ? process.env : undefined),
+    inputs: persona.inputs,
+    inputValues: inputResolution.values,
+    envOverrides: options.envOverrides,
+    personaEnv: persona.env
+  });
   const mount = resolveMountPolicy(persona.mount, mountEnv, 'mount');
 
   // Env precedence (later wins):

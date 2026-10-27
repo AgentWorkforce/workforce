@@ -9,7 +9,10 @@ side-by-side (`./api/` and `./web/`) under a single sandbox.
 export ACME_API_DIR=~/work/acme-api
 export ACME_WEB_DIR=~/work/acme-web
 
-agentworkforce agent multi-repo-release
+# From the repo root. A bare id is only resolved from configured persona
+# directories and the built-in catalog; this example is neither, so pass
+# the persona file and the CLI loads it directly.
+agentworkforce agent examples/multi-repo-release/persona.json
 ```
 
 The harness starts with `cwd = <session>/mount/` and sees:

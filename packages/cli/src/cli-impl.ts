@@ -43,6 +43,7 @@ import {
   renderPersonaInputs,
   resolveAiMemory,
   resolveMcpServersLenient,
+  buildMountResolutionEnv,
   resolveMountRoots,
   resolvePersonaInputs,
   resolveSidecar,
@@ -2387,10 +2388,15 @@ async function runInteractive(
     // fallback to the launcher cwd.
     let resolvedMountRoots: ResolvedMountRoot[] | undefined;
     if (declaredMountRoots && declaredMountRoots.length > 0) {
-      const mountResolveEnv: NodeJS.ProcessEnv = {
-        ...process.env,
-        ...(resolvedEnv ?? {})
-      };
+      // Same input-name and env-name rules as buildPersonaSpawnPlan. Persona
+      // env still wins over resolved inputs; both `$INPUT` and `$INPUT_ENV`
+      // see the resolved value when persona env does not override that key.
+      const mountResolveEnv = buildMountResolutionEnv({
+        processEnv: process.env,
+        inputs: effectiveSelection.inputs,
+        inputValues: inputResolution.values,
+        personaEnv: envResolution.value
+      });
       try {
         resolvedMountRoots = resolveMountRoots(effectiveSelection.mount, mountResolveEnv);
       } catch (err) {

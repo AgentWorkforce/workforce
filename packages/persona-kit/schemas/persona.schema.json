@@ -455,7 +455,7 @@
         },
         "readonly": {
           "type": "boolean",
-          "description": "When true, every file under this root is treated as readonly inside the mount (relayfile injects `**` into this root's readonly patterns). The agent can still read but writes do not sync back."
+          "description": "When true, every file under this root is treated as readonly inside the mount (`**` is appended after this root's `readonlyPatterns`). The agent can still read but writes do not sync back."
         },
         "optional": {
           "type": "boolean",
@@ -480,7 +480,7 @@
         "alias",
         "path"
       ],
-      "description": "A single source root inside a multi-root  {@link  PersonaMount } . Each root becomes a subdirectory of the mount keyed by `alias` (so a persona with `roots: [{ alias: 'api', ... }, { alias: 'web', ... }]` exposes `api/` and `web/` side-by-side to the harness).\n\n`path` is resolved at plan-build time:   - `$VAR` / `${VAR}` references are expanded against the harness env +     persona inputs (same machinery as `env` / `mcpServers`),   - leading `~` is expanded to the caller's home directory,   - the result must be an absolute path that exists on disk.\n\n`optional: true` lets a root be silently skipped when its path is missing or unset; non-optional roots fail loudly at `executePersonaSpawnPlan` / the CLI mount stage (not at `parsePersonaSpec`, so cloud-side validation doesn't need teammate paths to exist).\n\nPer-root `ignoredPatterns` / `readonlyPatterns` extend the persona-wide lists at mount time. `readonly: true` short-circuits readonly handling by injecting `**` into this root's readonly patterns, mirroring relayfile's gitignore semantics."
+      "description": "A single source root inside a multi-root  {@link  PersonaMount } . Each root becomes a subdirectory of the mount keyed by `alias` (so a persona with `roots: [{ alias: 'api', ... }, { alias: 'web', ... }]` exposes `api/` and `web/` side-by-side to the harness).\n\n`path` is resolved at plan-build time:   - `$VAR` / `${VAR}` references are expanded against the harness env +     persona inputs (same machinery as `env` / `mcpServers`),   - leading `~` is expanded to the caller's home directory,   - the result must be an absolute path that exists on disk.\n\n`optional: true` lets a root be silently skipped when its path is missing or unset; non-optional roots fail loudly at `executePersonaSpawnPlan` / the CLI mount stage (not at `parsePersonaSpec`, so cloud-side validation doesn't need teammate paths to exist).\n\nPer-root `ignoredPatterns` / `readonlyPatterns` extend the persona-wide lists at mount time. `readonly: true` short-circuits readonly handling by appending `**` after this root's readonly patterns. Gitignore last-match wins, so a negation in `readonlyPatterns` cannot reopen writes."
     },
     "SidecarMdMode": {
       "type": "string",

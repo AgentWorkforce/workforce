@@ -169,8 +169,8 @@ export interface PersonaPermissions {
  *
  * Per-root `ignoredPatterns` / `readonlyPatterns` extend the persona-wide
  * lists at mount time. `readonly: true` short-circuits readonly handling by
- * injecting `**` into this root's readonly patterns, mirroring relayfile's
- * gitignore semantics.
+ * appending `**` after this root's readonly patterns. Gitignore last-match
+ * wins, so a negation in `readonlyPatterns` cannot reopen writes.
  */
 export interface PersonaMountRoot {
   /**
@@ -187,7 +187,7 @@ export interface PersonaMountRoot {
   path: string;
   /**
    * When true, every file under this root is treated as readonly inside the
-   * mount (relayfile injects `**` into this root's readonly patterns). The
+   * mount (`**` is appended after this root's `readonlyPatterns`). The
    * agent can still read but writes do not sync back.
    */
   readonly?: boolean;

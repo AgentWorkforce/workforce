@@ -259,6 +259,7 @@ export {
 
 // Plan builder + plan types
 export {
+  buildMountResolutionEnv,
   buildPersonaSpawnPlan,
   resolveMountRoots,
   type PersonaSpawnPlan,
