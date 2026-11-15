@@ -9,6 +9,9 @@
 # It uploads one `pnpm pack` tarball per package (workspace:* deps rewritten to
 # the versions in package.json) as the workflow artifact workforce-npm-<sha>.
 # It never bumps versions, commits, tags git or moves a dist-tag.
+#
+# Caches are restore-only: this builds unreviewed refs, so it never saves into
+# a cache that normal CI or release workflows restore.
 name: fast-path
 run-name: fast-path ${{ inputs.ref }} (${{ inputs.reason }})
 on:
@@ -24,7 +27,8 @@ on:
 permissions:
   contents: read
 concurrency:
-  group: fast-path-${{ inputs.ref }}
+  # run_id: a run waiting for approval must not let a later dispatch cancel it.
+  group: fast-path-${{ inputs.ref }}-${{ github.run_id }}
   cancel-in-progress: false
 jobs:
   check:
@@ -42,7 +46,6 @@ jobs:
       - uses: actions/setup-node@v4
         with:
           node-version: '26.5.0'
-          cache: 'pnpm'
       - name: Install deps
         run: pnpm install --frozen-lockfile
       - name: Build
@@ -64,7 +67,6 @@ jobs:
       - uses: actions/setup-node@v4
         with:
           node-version: '26.5.0'
-          cache: 'pnpm'
       - name: Install deps
         run: pnpm install --frozen-lockfile
       - name: Build
