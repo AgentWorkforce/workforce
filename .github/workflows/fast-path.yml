@@ -1,0 +1,105 @@
+# Fast path: build, lint, typecheck and test the workspace (the same checks as
+# ci.yml) and pack every publishable package on Blacksmith runners, outside the
+# shared GitHub-hosted queue. Anyone with write access (people or agents) may
+# start it; nothing runs until Khaliq approves the fast-path environment.
+#
+# It does not publish to npm: publish.yml, publish-persona.yml and
+# publish-internal-personas.yml use npm trusted publishing (OIDC) bound to
+# those workflow files, so this workflow cannot authenticate to the registry.
+# It uploads one `pnpm pack` tarball per package (workspace:* deps rewritten to
+# the versions in package.json) as the workflow artifact workforce-npm-<sha>.
+# It never bumps versions, commits, tags git or moves a dist-tag.
+name: fast-path
+run-name: fast-path ${{ inputs.ref }} (${{ inputs.reason }})
+on:
+  workflow_dispatch:
+    inputs:
+      ref:
+        description: Branch, tag or commit to build (a PR branch is fine)
+        required: true
+        default: main
+      reason:
+        description: Why this needs the fast path
+        required: true
+permissions:
+  contents: read
+concurrency:
+  group: fast-path-${{ inputs.ref }}
+  cancel-in-progress: false
+jobs:
+  check:
+    environment: fast-path
+    runs-on: blacksmith-4vcpu-ubuntu-2404
+    outputs:
+      sha: ${{ steps.sha.outputs.sha }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ inputs.ref }}
+      - id: sha
+        run: echo "sha=$(git rev-parse HEAD)" >> "$GITHUB_OUTPUT"
+      - uses: pnpm/action-setup@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '26.5.0'
+          cache: 'pnpm'
+      - name: Install deps
+        run: pnpm install --frozen-lockfile
+      - name: Build
+        run: pnpm -r run build
+      - name: Lint
+        run: pnpm run lint
+      - name: Typecheck
+        run: pnpm run typecheck
+      - name: Test
+        run: pnpm run test
+  pack:
+    needs: check
+    runs-on: blacksmith-4vcpu-ubuntu-2404
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ needs.check.outputs.sha }}
+      - uses: pnpm/action-setup@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '26.5.0'
+          cache: 'pnpm'
+      - name: Install deps
+        run: pnpm install --frozen-lockfile
+      - name: Build
+        run: pnpm -r run build
+      - name: Pack every publishable package
+        run: |
+          set -euo pipefail
+          PACK_DIR="$RUNNER_TEMP/packs"
+          mkdir -p "$PACK_DIR"
+          for dir in packages/*/; do
+            NPM_NAME=$(node -p "require('./${dir}package.json').name")
+            PRIVATE=$(node -p "require('./${dir}package.json').private === true")
+            if [ "$PRIVATE" = "true" ]; then
+              echo "==> Skipping private $NPM_NAME"
+              continue
+            fi
+            echo "==> Packing $NPM_NAME"
+            pnpm --filter "$NPM_NAME" pack --pack-destination "$PACK_DIR"
+          done
+          ls "$PACK_DIR" > "$RUNNER_TEMP/pack-list.txt"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: workforce-npm-${{ needs.check.outputs.sha }}
+          path: ${{ runner.temp }}/packs/*.tgz
+          if-no-files-found: error
+      - name: Summary
+        env:
+          REF: ${{ inputs.ref }}
+          SHA: ${{ needs.check.outputs.sha }}
+          REASON: ${{ inputs.reason }}
+        run: |
+          {
+            echo "### workforce fast path"
+            echo "- ref: \`$REF\` at \`$SHA\`"
+            echo "- reason: $REASON"
+            echo "- npm tarballs in artifact \`workforce-npm-$SHA\` (not published: npm trusted publishing is bound to the publish workflows):"
+            while read -r f; do echo "  - \`$f\`"; done < "$RUNNER_TEMP/pack-list.txt"
+          } >> "$GITHUB_STEP_SUMMARY"
